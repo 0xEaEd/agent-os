@@ -777,6 +777,15 @@ reference `@modelcontextprotocol/server-*` servers work unmodified. Replies are
 matched to their request id, so notifications a server interleaves with them are
 skipped rather than mistaken for a result.
 
+`sse` is the legacy HTTP+SSE transport from the 2024-11-05 spec revision; prefer
+`streamable_http` for new servers. On `sse`, `url` is the endpoint AgentOS opens
+the event stream against — the URI it POSTs JSON-RPC to is chosen by the server
+and announced in the stream's `endpoint` event, so there is nothing to configure
+for it. A relative endpoint resolves against `url`; one pointing at a different
+scheme or host is refused and nothing is posted to it. If the server opens the
+stream but never advertises an endpoint, the connection fails after
+`tool_timeout_seconds`.
+
 The HTTP transports accept `http://` and `https://` URLs only, and both connect
 through the same SSRF guard the built-in HTTP tools use. `http://localhost:PORT`
 and LAN-hosted servers keep working — the guard blocks cloud metadata endpoints
