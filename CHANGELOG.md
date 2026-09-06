@@ -177,6 +177,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   is resolved by the proxy rather than in-process, so there is no local rebinding
   window there to close
   ([#725](https://github.com/use-agent-os/agent-os/issues/725)).
+- The Telegram webhook verifies its secret token in constant time.
+  `TelegramChannel._handle_webhook` compared the inbound
+  `X-Telegram-Bot-Api-Secret-Token` header with `!=`, which returns as soon as
+  two bytes differ; the response latency then tracks how long a prefix matched,
+  letting an unauthenticated remote caller recover the configured token one
+  byte at a time and post forged updates into the channel. The header now goes
+  through `hmac.compare_digest` over UTF-8 bytes, with a missing header
+  treated as an empty candidate rather than skipping the comparison — the same
+  guarantee `gateway/auth.py` and `channels/slack.py` already give
+  ([#962](https://github.com/use-agent-os/agent-os/issues/962)).
 - The intent approval cache grades a delete by how destructive it is, so an
   approval never silently covers a stronger operation on the same path. Flags
   were dropped during normalisation, which made `rm /tmp/logs` and
