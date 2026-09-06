@@ -300,7 +300,12 @@ copy_disp  = round(copy_score  * SELF_DEAL_DISCOUNT) if self_dealing else copy_s
 
 # ── 7. Copy-trade backtest ───────────────────────────────────
 wallet_pct = (w['realized_profit'] / w['bought_cost']) if w['bought_cost'] > 0 else w['roi']
-wallet_pct = _clamp(wallet_pct or 0.0001, -0.9, 3.0)   # clamp: dev wallets have near-zero bought_cost, ratio blows up
+# clamp: dev wallets have near-zero bought_cost, so the ratio blows up. No
+# `or 0.0001` floor here: wallet_pct is always a float, so `or` only ever fired
+# on an exact 0.0 -- a real 0% ROI -- and 0.0001 then became the divisor below,
+# turning a break-even wallet into a six-figure loss. A genuine 0.0 belongs in
+# the `else 0.0` branch of copy_7d.
+wallet_pct = _clamp(wallet_pct, -0.9, 3.0)
 LOW_MCAP_DRIFT_PER_S = 0.015
 drift_per_s = LOW_MCAP_DRIFT_PER_S * (0.3 + 0.7 * summ['entry_under_100k'])
 drift = LATENCY_S * drift_per_s

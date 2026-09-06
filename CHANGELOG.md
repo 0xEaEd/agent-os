@@ -86,6 +86,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   read whole, where `readline` would raise and discard it, and a server that
   never sends a delimiter is cut off at 16 MiB rather than buffered without
   bound ([#894](https://github.com/use-agent-os/agent-os/issues/894)).
+- The bundled `gmgn-wallet-score` copy-trade backtest reports `$0.00` for a
+  wallet at exactly 0% return instead of a six-figure fantasy. `score.py`
+  floored the wallet's per-trade return with `wallet_pct or 0.0001`, but
+  `wallet_pct` is always a float, so `or` only ever fired on an exact `0.0` —
+  a real break-even wallet, or a dev wallet whose `bought_cost` is 0 and whose
+  ROI the API reports as 0. That 0.0001 then became the divisor in
+  `copy_7d = realized_profit * (copy_pct / wallet_pct)`, so a wallet that
+  realised $800 on no recorded cost was printed as a $567K copy-trade gain and
+  one that lost $500 as a $567K profit — sign and magnitude both wrong, in the
+  headline number the report shows the user. The floor is gone; the
+  `if wallet_pct else 0.0` guard already next to it now handles a genuine zero,
+  and the clamp still bounds the blow-up the surrounding comment was about
+  ([#971](https://github.com/use-agent-os/agent-os/issues/971)).
 - The MCP bridge clamps the arguments an MCP client supplies instead of
   forwarding them to the gateway verbatim. `events_wait` caps `timeout_ms` at
   5 minutes — applied before the deadline is computed, so the cap reaches
