@@ -167,9 +167,21 @@ def _parse_path_prompt(command: str, prefix: str, usage: str) -> tuple[Path, str
         token = rest[1:end]
         prompt = rest[end + 1 :].strip()
     else:
-        parts = rest.split(None, 1)
-        token = parts[0]
-        prompt = parts[1] if len(parts) > 1 else ""
+        words = rest.split()
+        token = ""
+        prompt = ""
+        for count in range(len(words), 0, -1):
+            candidate = " ".join(words[:count])
+            try:
+                if Path(candidate).expanduser().exists():
+                    token = candidate
+                    prompt = " ".join(words[count:]).strip()
+                    break
+            except (OSError, ValueError):
+                continue
+        if not token and words:
+            token = words[0]
+            prompt = rest[len(token) :].strip()
 
     if not token:
         raise ValueError(usage)
