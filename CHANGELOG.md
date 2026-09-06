@@ -45,6 +45,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   iterations inside a turn still weighs recorded spend only, so no turn is
   stopped by its own reservation
   ([#823](https://github.com/use-agent-os/agent-os/issues/823)).
+- The bundled `gmgn-holder-analysis` script prints usage instead of crashing
+  when it is run without arguments. `analyze.py` read `sys.argv[1]` and
+  `sys.argv[2]` at import time with no length check, so `analyze.py` on its own
+  and `analyze.py --help` both died with an unhandled `IndexError` traceback
+  rather than telling the caller what the script wants. It now answers `-h` and
+  `--help` on stdout with exit 0, and a missing token address or chain with
+  `Usage: analyze.py <token_address> <chain> [zh|en]` on stderr and exit 2 —
+  the same guard its sibling `gmgn-wallet-score` script already carries
+  ([#957](https://github.com/use-agent-os/agent-os/issues/957)).
 - The MCP `stdio` client speaks the transport's newline framing instead of
   LSP-style `Content-Length` headers. `MCPStdioClient` wrote
   `Content-Length: N\r\n\r\n<body>` to the server's stdin and rejected any
