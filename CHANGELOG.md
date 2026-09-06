@@ -182,6 +182,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   so retries at the same destructiveness do not re-prompt. `/forget <path>`
   clears every grade for the path, not just the plain one
   ([#849](https://github.com/use-agent-os/agent-os/issues/849)).
+- The bundled `robinhood-rwa-addresses` lookup pins `--rpc-url` to `http` and
+  `https`, closing a local-file read. `rwa_lookup.py` passed the flag straight
+  into `urllib.request.urlopen` under a blanket `# noqa: S310` — and `urlopen`
+  also speaks `file:`, `ftp:` and `data:`, so `--rpc-url file:///etc/hosts`
+  made the process read and parse that path. In an agent workflow the endpoint
+  can be steered by model output, which turns an unchecked flag into arbitrary
+  local reads. A new `validate_rpc_url()` applies the same scheme allowlist the
+  bundled `http_fetch` script uses: `main()` rejects a bad scheme with a usage
+  error and exit 2 before any network or filesystem work, and `_rpc_batch()`
+  re-checks at the one call site that reaches `urlopen`, so no caller can route
+  around it ([#968](https://github.com/use-agent-os/agent-os/issues/968)).
 
 ## [2026.9.5] - 2026-09-05
 
