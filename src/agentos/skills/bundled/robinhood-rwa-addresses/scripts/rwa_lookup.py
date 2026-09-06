@@ -30,6 +30,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -71,6 +72,25 @@ _STATUS_RANK = {
 
 class RpcError(RuntimeError):
     """A JSON-RPC call returned an error or an unusable result."""
+
+
+ALLOWED_RPC_SCHEMES = ("http", "https")
+
+
+def validate_rpc_url(rpc_url: str) -> str:
+    """Return ``rpc_url`` if it is an ``http(s)`` URL, else raise ``ValueError``.
+
+    ``urllib.request.urlopen`` also speaks ``file:``, ``ftp:`` and (via the
+    default opener) ``data:``, so an unchecked ``--rpc-url`` turns this script
+    into a local-file reader: ``--rpc-url file:///etc/passwd`` makes the
+    process read and parse that path. The endpoint can be steered by model
+    output in an agent workflow, so the scheme is pinned here rather than
+    trusted. Same allowlist the bundled ``http_fetch`` script applies.
+    """
+    scheme = urllib.parse.urlsplit(rpc_url.strip()).scheme.lower()
+    if scheme not in ALLOWED_RPC_SCHEMES:
+        raise ValueError(f"invalid --rpc-url {rpc_url!r}: must start with http:// or https://")
+    return rpc_url.strip()
 
 
 def _fetch_tokens(timeout: float) -> list[dict[str, Any]]:
@@ -190,8 +210,12 @@ def _rpc_batch(rpc_url: str, calls: list[dict[str, Any]], timeout: float) -> dic
     candidates are being checked.
     """
     payload = json.dumps(calls).encode("utf-8")
-    req = urllib.request.Request(  # noqa: S310 - operator-supplied RPC endpoint
-        rpc_url,
+    # Re-validated here, not only in main(): this is the only place the URL
+    # reaches urlopen, so the scheme allowlist that makes the S310 suppression
+    # below safe has to hold for every caller.
+    checked_url = validate_rpc_url(rpc_url)
+    req = urllib.request.Request(  # noqa: S310 - scheme pinned to http(s) above
+        checked_url,
         data=payload,
         headers={
             "Content-Type": "application/json",
@@ -344,6 +368,15 @@ def main() -> int:
         help="Do not write the card artifact (JSON on stdout only).",
     )
     args = parser.parse_args()
+
+    # Reject a non-http(s) endpoint before any network or filesystem work, so
+    # the caller gets a usage error rather than a degraded "unverified" result.
+    if not args.no_verify:
+        try:
+            args.rpc_url = validate_rpc_url(args.rpc_url)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
 
     try:
         tokens = _fetch_tokens(args.timeout)
