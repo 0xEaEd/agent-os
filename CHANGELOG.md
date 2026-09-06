@@ -28,6 +28,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   files through the CLI and fails if one does not exit 0
   ([#840](https://github.com/use-agent-os/agent-os/issues/840),
   [#835](https://github.com/use-agent-os/agent-os/issues/835)).
+- Memory search stops re-scanning the workspace on every query once a session
+  delta is pending. `MemorySyncManager.sync()` lets a pending delta bypass the
+  clean-search fast path, but it consumed that delta only when a session
+  indexer was configured. Session indexing is off by default, and with it off
+  `_do_session_sync()` is a successful no-op, so nothing ever cleared the
+  delta: after a single message every later search took the slow path and
+  walked the workspace tree again, even with no new messages and no file
+  changes. The reset now keys off whether the sync succeeded rather than
+  whether an indexer exists, so one completed search-time sync settles the
+  delta and the next unchanged search takes the fast path. New message
+  notifications, dirty file state, and `force=True` still sync as before, and
+  an enabled indexer that fails mid-search still keeps its delta pending for
+  the next retry
+  ([#956](https://github.com/use-agent-os/agent-os/issues/956)).
 - Turn admission reserves spend headroom instead of only checking it, so a
   concurrent subagent fan-out can no longer overshoot a `[budgets]` ceiling by
   the width of the fan-out. Spend is recorded by `UsageTracker.add()` only as a
