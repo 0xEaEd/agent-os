@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.6] - 2026-09-06
+
 ### Fixed
 
 - Two commands AgentOS printed or documented now work when followed.
