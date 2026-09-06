@@ -667,6 +667,28 @@ class DiscordChannel:
         )
         self.enqueue(msg)
 
+    @staticmethod
+    def _flatten_interaction_options(options: list[Any]) -> list[str]:
+        """Recursively flatten Discord slash command options, preserving subcommands,
+        subcommand groups, and falsy values (e.g. 0, 0.0, False)."""
+        parts: list[str] = []
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            opt_type = opt.get("type")
+            sub_options = opt.get("options")
+            if opt_type in (1, 2) or "value" not in opt:
+                name = opt.get("name")
+                if name:
+                    parts.append(str(name))
+                if isinstance(sub_options, list):
+                    parts.extend(DiscordChannel._flatten_interaction_options(sub_options))
+            else:
+                val = opt.get("value")
+                if val is not None and val != "":
+                    parts.append(str(val))
+        return parts
+
     async def _handle_interaction(self, data: dict[str, Any]) -> None:
         """Parse a slash command interaction into IncomingMessage."""
         interaction_data = data.get("data")
@@ -692,10 +714,8 @@ class DiscordChannel:
         # Build content from command name and options
         raw_options = interaction_data.get("options")
         options = raw_options if isinstance(raw_options, list) else []
-        option_parts = [
-            opt.get("value", "") for opt in options if isinstance(opt, dict) and opt.get("value")
-        ]
-        content = f"/{command_name} {' '.join(str(v) for v in option_parts)}".strip()
+        option_parts = self._flatten_interaction_options(options)
+        content = f"/{command_name} {' '.join(option_parts)}".strip()
         channel_type = self._channel_type(data.get("channel_type"))
         thread_id = self._native_thread_id(data, channel_type)
         conversation_kind = self._conversation_kind(data, channel_type, thread_id)

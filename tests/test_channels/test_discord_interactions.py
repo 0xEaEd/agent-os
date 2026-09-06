@@ -44,6 +44,8 @@ def _application_command(
     *,
     interaction_id: str = "interaction-1",
     interaction_type: int = 2,
+    command_name: str = "status",
+    options: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": interaction_id,
@@ -56,8 +58,8 @@ def _application_command(
         "member": {"user": {"id": "user-1"}},
         "data": {
             "type": 1,
-            "name": "status",
-            "options": [],
+            "name": command_name,
+            "options": [] if options is None else options,
         },
     }
 
@@ -179,3 +181,116 @@ async def test_discord_non_command_interaction_types_are_ignored(
 
     assert channel._queue.empty()
     assert client.calls == []
+
+
+@pytest.mark.parametrize(
+    ("options", "expected_content"),
+    [
+        ([{"name": "value", "type": 4, "value": 0}], "/temperature 0"),
+        ([{"name": "value", "type": 10, "value": 0.0}], "/temperature 0.0"),
+        ([{"name": "enabled", "type": 5, "value": False}], "/temperature False"),
+        (
+            [
+                {"name": "temp", "value": 0},
+                {"name": "verbose", "value": False},
+                {"name": "query", "value": "test"},
+            ],
+            "/temperature 0 False test",
+        ),
+    ],
+)
+async def test_discord_slash_command_preserves_falsy_values(
+    options: list[dict[str, Any]], expected_content: str
+) -> None:
+    client = _FakeDiscordClient()
+    channel = DiscordChannel(DiscordChannelConfig(token="bot-token"))
+    channel._client = client
+
+    payload = _application_command(command_name="temperature", options=options)
+    await channel._handle_dispatch("INTERACTION_CREATE", payload)
+
+    message = await channel.receive()
+    assert message.content == expected_content
+
+
+async def test_discord_slash_command_traverses_subcommands() -> None:
+    client = _FakeDiscordClient()
+    channel = DiscordChannel(DiscordChannelConfig(token="bot-token"))
+    channel._client = client
+
+    # Subcommand with no arguments: /agentos status
+    payload1 = _application_command(
+        interaction_id="subcmd-1",
+        command_name="agentos",
+        options=[{"name": "status", "type": 1, "options": []}],
+    )
+    await channel._handle_dispatch("INTERACTION_CREATE", payload1)
+    message1 = await channel.receive()
+    assert message1.content == "/agentos status"
+
+    # Subcommand with arguments: /agentos configure openrouter
+    payload2 = _application_command(
+        interaction_id="subcmd-2",
+        command_name="agentos",
+        options=[
+            {
+                "name": "configure",
+                "type": 1,
+                "options": [{"name": "provider", "type": 3, "value": "openrouter"}],
+            }
+        ],
+    )
+    await channel._handle_dispatch("INTERACTION_CREATE", payload2)
+    message2 = await channel.receive()
+    assert message2.content == "/agentos configure openrouter"
+
+
+async def test_discord_slash_command_traverses_subcommand_groups() -> None:
+    client = _FakeDiscordClient()
+    channel = DiscordChannel(DiscordChannelConfig(token="bot-token"))
+    channel._client = client
+
+    # Subcommand with key-value arguments including 0: /config set temperature 0
+    payload1 = _application_command(
+        interaction_id="group-1",
+        command_name="config",
+        options=[
+            {
+                "name": "set",
+                "type": 1,
+                "options": [
+                    {"name": "key", "type": 3, "value": "temperature"},
+                    {"name": "value", "type": 4, "value": 0},
+                ],
+            }
+        ],
+    )
+    await channel._handle_dispatch("INTERACTION_CREATE", payload1)
+    message1 = await channel.receive()
+    assert message1.content == "/config set temperature 0"
+
+    # Subcommand group (type 2) nesting subcommand (type 1) and options:
+    # /config server set 8080 False
+    payload2 = _application_command(
+        interaction_id="group-2",
+        command_name="config",
+        options=[
+            {
+                "name": "server",
+                "type": 2,
+                "options": [
+                    {
+                        "name": "set",
+                        "type": 1,
+                        "options": [
+                            {"name": "port", "type": 4, "value": 8080},
+                            {"name": "debug", "type": 5, "value": False},
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+    await channel._handle_dispatch("INTERACTION_CREATE", payload2)
+    message2 = await channel.receive()
+    assert message2.content == "/config server set 8080 False"
