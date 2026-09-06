@@ -65,8 +65,9 @@ def test_merge_split_extract_round_trip(tmp_path: Path) -> None:
     _make_one_page_pdf(b, "BRAVO")
 
     combined = tmp_path / "combined.pdf"
-    written = merge.merge([{"file": str(a)}, {"file": str(b)}], combined)
-    assert written == 2
+    result = merge.merge([{"file": str(a)}, {"file": str(b)}], combined)
+    assert result.pages_written == 2
+    assert result.skipped == []
     assert combined.exists()
 
     out_dir = tmp_path / "split_out"

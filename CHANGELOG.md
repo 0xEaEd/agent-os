@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `pdf-toolkit` `merge.py`: a manifest range running past an input's last page
+  no longer contributes fewer pages — or none at all — while reporting success.
+  The JSON summary now carries `skipped_pages` (per input file) and
+  `missing_files` alongside `pages_written`, dropped pages are warned on
+  stderr, and a merge in which no requested page exists exits 2 instead of
+  writing a valid zero-page PDF. This matches the contract `split.py` already
+  holds in the same skill.
+
 ## [2026.9.14] - 2026-09-14
 
 ### Added
