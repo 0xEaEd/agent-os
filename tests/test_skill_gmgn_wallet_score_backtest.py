@@ -8,17 +8,23 @@ break-even wallet into a six-figure loss shown straight to the user. The
 ``if wallet_pct else 0.0`` guard already in the code handles that case
 correctly once the floor is gone.
 
-Everything here is offline: ``gmgn-cli`` is replaced by a stub on ``PATH``.
+``score.py`` is a flat script that does its work at import time, so it is run
+here the way the sibling robinhood-rwa test runs its script: loaded through
+``importlib`` with ``sys.argv`` and ``subprocess.run`` patched, stdout
+captured. Nothing spawns a process and nothing touches the network, which also
+keeps the test honest on Windows.
 """
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import io
 import json
-import os
-import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -27,46 +33,8 @@ SCRIPT = (
     ROOT / "src" / "agentos" / "skills" / "bundled" / "gmgn-wallet-score" / "scripts" / "score.py"
 )
 
-STUB = '''#!/usr/bin/env python3
-"""Stand-in for gmgn-cli: answers from a fixture file, never touches network."""
-import json, os, sys
 
-fixture = json.loads(open(os.environ["GMGN_FIXTURE"], encoding="utf-8").read())
-argv = sys.argv[1:]
-if argv[:2] == ["portfolio", "stats"]:
-    print(json.dumps(fixture["stats"]))
-elif argv[:2] == ["portfolio", "activity"]:
-    print(json.dumps({"activities": [], "next": None}))
-else:
-    print("unexpected gmgn-cli invocation: " + " ".join(argv), file=sys.stderr)
-    sys.exit(1)
-'''
-
-
-def _run_score(tmp_path: Path, stats: dict) -> subprocess.CompletedProcess[str]:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    stub = bin_dir / "gmgn-cli"
-    stub.write_text(STUB, encoding="utf-8")
-    stub.chmod(0o755)
-
-    fixture = tmp_path / "fixture.json"
-    fixture.write_text(json.dumps({"stats": stats}), encoding="utf-8")
-
-    env = dict(os.environ)
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    env["GMGN_FIXTURE"] = str(fixture)
-
-    return subprocess.run(
-        [sys.executable, str(SCRIPT), "0xWalletAddress", "bsc", "en"],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=120,
-    )
-
-
-def _stats(*, realized_profit: float, bought_cost: float, roi: float) -> dict:
+def _stats(*, realized_profit: float, bought_cost: float, roi: float) -> dict[str, Any]:
     return {
         "buy": 1,
         "sell": 1,
@@ -87,26 +55,69 @@ def _stats(*, realized_profit: float, bought_cost: float, roi: float) -> dict:
     }
 
 
+class _FakeCompleted:
+    def __init__(self, stdout: str) -> None:
+        self.returncode = 0
+        self.stdout = stdout
+        self.stderr = ""
+
+
+def _run_score(monkeypatch: pytest.MonkeyPatch, stats: dict[str, Any]) -> str:
+    """Execute score.py with a stubbed ``gmgn-cli`` and return its stdout."""
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
+        seen.append(cmd)
+        assert cmd[0] == "gmgn-cli", cmd
+        argv = cmd[1:]
+        if argv[:2] == ["portfolio", "stats"]:
+            return _FakeCompleted(json.dumps(stats))
+        if argv[:2] == ["portfolio", "activity"]:
+            return _FakeCompleted(json.dumps({"activities": [], "next": None}))
+        raise AssertionError(f"unexpected gmgn-cli invocation: {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "0xWalletAddress", "bsc", "en"])
+
+    spec = importlib.util.spec_from_file_location("gmgn_score_under_test", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        spec.loader.exec_module(module)
+
+    assert seen, "score.py never called gmgn-cli"
+    return buf.getvalue()
+
+
 def _copy_estimate(stdout: str) -> str:
-    match = re.search(r"copy estimate (\S+)", stdout)
-    assert match is not None, f"no backtest line in output:\n{stdout}"
-    return match.group(1)
+    """Pull the formatted copy-trade estimate out of the backtest line.
+
+    Returned as printed rather than parsed: the buggy value renders as
+    ``$567.0K``, so a string comparison shows exactly what the user would have
+    seen instead of blowing up in a float conversion.
+    """
+    for line in stdout.splitlines():
+        if "copy estimate" in line:
+            return line.split("copy estimate")[1].split("(")[0].strip()
+    raise AssertionError(f"no backtest line in output:\n{stdout}")
 
 
-def test_zero_roi_dev_wallet_reports_a_zero_copy_estimate(tmp_path: Path) -> None:
+def test_zero_roi_dev_wallet_reports_a_zero_copy_estimate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """bought_cost == 0 and roi == 0.0: the divisor guard must fire, not a floor."""
-    result = _run_score(tmp_path, _stats(realized_profit=800.0, bought_cost=0.0, roi=0.0))
+    stdout = _run_score(monkeypatch, _stats(realized_profit=800.0, bought_cost=0.0, roi=0.0))
 
-    assert result.returncode == 0, result.stderr
-    assert "Wallet per-trade return  +0.0%" in result.stdout
-    assert _copy_estimate(result.stdout) == "$0.00"
+    assert "Wallet per-trade return  +0.0%" in stdout
+    assert _copy_estimate(stdout) == "$0.00"
 
 
-def test_zero_roi_with_a_loss_also_reports_zero(tmp_path: Path) -> None:
-    result = _run_score(tmp_path, _stats(realized_profit=-500.0, bought_cost=0.0, roi=0.0))
+def test_zero_roi_with_a_loss_also_reports_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = _run_score(monkeypatch, _stats(realized_profit=-500.0, bought_cost=0.0, roi=0.0))
 
-    assert result.returncode == 0, result.stderr
-    assert _copy_estimate(result.stdout) == "$0.00"
+    assert _copy_estimate(stdout) == "$0.00"
 
 
 @pytest.mark.parametrize(
@@ -118,12 +129,15 @@ def test_zero_roi_with_a_loss_also_reports_zero(tmp_path: Path) -> None:
     ],
 )
 def test_nonzero_returns_are_unaffected(
-    tmp_path: Path, realized_profit: float, bought_cost: float, roi: float
+    monkeypatch: pytest.MonkeyPatch,
+    realized_profit: float,
+    bought_cost: float,
+    roi: float,
 ) -> None:
     """Removing the floor must not move any wallet whose return is not 0.0."""
-    result = _run_score(
-        tmp_path, _stats(realized_profit=realized_profit, bought_cost=bought_cost, roi=roi)
+    stdout = _run_score(
+        monkeypatch,
+        _stats(realized_profit=realized_profit, bought_cost=bought_cost, roi=roi),
     )
 
-    assert result.returncode == 0, result.stderr
-    assert _copy_estimate(result.stdout) != "$0.00"
+    assert _copy_estimate(stdout) != "$0.00"
