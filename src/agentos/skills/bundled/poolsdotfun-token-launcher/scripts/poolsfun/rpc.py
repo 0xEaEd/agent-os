@@ -67,12 +67,19 @@ USER_AGENT = "poolsdotfun-token-launcher/1.0"
 
 
 class RpcError(RuntimeError):
-    """A JSON-RPC error response. ``data`` carries the revert blob when present."""
+    """A JSON-RPC error response. ``data`` carries the revert blob when present.
 
-    def __init__(self, method: str, error: dict) -> None:
-        super().__init__(f"{method}: {error.get('message', error)}")
-        self.code = error.get("code")
-        self.data = error.get("data")
+    ``error`` is an object in the JSON-RPC spec, but nodes and proxies do answer
+    with a bare string (``"error": "rate limit exceeded"``) or null. Reading it
+    as a dict unconditionally turned every one of those into an AttributeError
+    that killed the whole command instead of the RpcError callers handle.
+    """
+
+    def __init__(self, method: str, error: Any) -> None:
+        fields = error if isinstance(error, dict) else {}
+        super().__init__(f"{method}: {fields.get('message', error)}")
+        self.code = fields.get("code")
+        self.data = fields.get("data")
         self.raw = error
 
 
