@@ -166,8 +166,10 @@ def run_gateway(
         for entry in recovery_entries:
             console.print(f"{entry['label']}: {entry['command']}")
         if config.config_path:
+            from agentos.onboarding.next_steps import _config_cli_arg
+
             console.print(
-                f"Inspect onboarding: agentos onboard status --config {config.config_path}"
+                f"Inspect onboarding: agentos onboard status{_config_cli_arg(config.config_path)}"
             )
         raise typer.Exit(code=1) from exc
     except KeyboardInterrupt:

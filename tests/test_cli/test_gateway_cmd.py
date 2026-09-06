@@ -126,14 +126,89 @@ def test_gateway_run_turns_missing_onboarding_env_into_recovery_hint(
         f"Set memory key: {_env_hint('OPENAI_EMBEDDINGS_API_KEY')}".replace(" ", "")
         in compact
     )
-    expected_config = str(target).replace("\\", "/")
+    compact_config = "".join(str(target).replace("\\", "/").split())
     normalized = compact.replace("\\", "/")
     assert "agentosonboardstatus--config" in normalized
-    assert expected_config in normalized
+    assert compact_config in normalized
     assert normalized.index("agentosonboardstatus--config") < normalized.index(
-        expected_config
+        compact_config
     )
     assert "Traceback" not in output
+
+
+def test_gateway_run_recovery_hint_quotes_config_path_with_spaces(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    spaced_dir = tmp_path / "spaced workspace"
+    spaced_dir.mkdir(parents=True, exist_ok=True)
+    target = spaced_dir / "custom.toml"
+    target.write_text(
+        "[llm]\n"
+        'provider = "openrouter"\n'
+        'model = "deepseek/deepseek-v4-flash"\n'
+        'api_key = "sk-or"\n'
+        "\n"
+        "[memory.embedding]\n"
+        'provider = "openai"\n'
+        "\n"
+        "[memory.embedding.remote]\n"
+        'api_key_env = "OPENAI_EMBEDDINGS_API_KEY"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENTOS_STATE_DIR", str(tmp_path / "home"))
+    monkeypatch.delenv("OPENAI_EMBEDDINGS_API_KEY", raising=False)
+
+    async def fail_start_gateway_server(**_kwargs):
+        raise ValueError("memory.embedding.remote.api_key missing")
+
+    monkeypatch.setattr(gateway_cmd, "start_gateway_server", fail_start_gateway_server)
+
+    result = runner.invoke(app, ["gateway", "run", "--config", str(target)])
+
+    assert result.exit_code == 1
+    output = result.stdout + (result.stderr or "")
+    from agentos.onboarding.next_steps import quote_cli_arg
+
+    expected_quoted = quote_cli_arg(str(target))
+    compact = "".join(output.split())
+    compact_expected = "".join(f"--config{expected_quoted}".split()).replace("\\", "/")
+    assert compact_expected in compact.replace("\\", "/")
+
+    # Ensure platform-appropriate quotation marks were used:
+    # Windows requires double quotes for cmd.exe/PowerShell compatibility
+    if platform.system().lower().startswith("win"):
+        assert compact_expected.startswith('--config"') and compact_expected.endswith(
+            'custom.toml"'
+        )
+        assert "'" not in compact_expected
+    else:
+        assert compact_expected.startswith("--config'") and compact_expected.endswith(
+            "custom.toml'"
+        )
+
+
+def test_quote_cli_arg_platform_behavior(monkeypatch) -> None:
+    from agentos.onboarding.next_steps import _config_cli_arg, quote_cli_arg
+
+    # On Windows: paths with spaces must use double quotes for cmd.exe / PowerShell compatibility
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    assert quote_cli_arg(r"C:\Users\John Doe\custom.toml") == r'"C:\Users\John Doe\custom.toml"'
+    assert (
+        _config_cli_arg(r"C:\Users\John Doe\custom.toml")
+        == r' --config "C:\Users\John Doe\custom.toml"'
+    )
+    # On Windows: paths without spaces remain unquoted
+    assert quote_cli_arg(r"C:\Users\John\custom.toml") == r"C:\Users\John\custom.toml"
+    assert _config_cli_arg(r"C:\Users\John\custom.toml") == r" --config C:\Users\John\custom.toml"
+    assert _config_cli_arg(None) == ""
+
+    # On POSIX: shlex.quote standard behavior
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    assert quote_cli_arg("/home/john doe/custom.toml") == "'/home/john doe/custom.toml'"
+    assert _config_cli_arg("/home/john doe/custom.toml") == " --config '/home/john doe/custom.toml'"
+    assert quote_cli_arg("/home/john/custom.toml") == "/home/john/custom.toml"
+    assert _config_cli_arg("/home/john/custom.toml") == " --config /home/john/custom.toml"
 
 
 def test_gateway_run_refuses_wildcard_bind_without_auth(tmp_path, monkeypatch) -> None:
