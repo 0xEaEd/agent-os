@@ -111,6 +111,35 @@ class _GatewayState:
     last_heartbeat_ack: bool = True
 
 
+_SUBCOMMAND_OPTION_TYPES = frozenset({1, 2})  # SUB_COMMAND, SUBCOMMAND_GROUP
+
+
+def _command_content_from_options(command_name: str, options: object) -> str:
+    """Reconstruct the normalized ``/command`` string from interaction data.
+
+    Keeps falsy option values (``0``, ``False``, ``""``) instead of dropping
+    them, and descends into subcommands (type 1) and subcommand groups
+    (type 2), whose names belong to the command path rather than the
+    argument list.
+    """
+    parts = [f"/{command_name}"]
+
+    def _walk(opts: object) -> None:
+        if not isinstance(opts, list):
+            return
+        for opt in opts:
+            if not isinstance(opt, dict):
+                continue
+            if opt.get("type") in _SUBCOMMAND_OPTION_TYPES and isinstance(opt.get("name"), str):
+                parts.append(opt["name"])
+                _walk(opt.get("options"))
+            elif "value" in opt:
+                parts.append(str(opt["value"]))
+
+    _walk(options)
+    return " ".join(parts).strip()
+
+
 @dataclass
 class DiscordChannel:
     """Channel adapter for Discord via Gateway WebSocket and REST API.
@@ -692,10 +721,7 @@ class DiscordChannel:
         # Build content from command name and options
         raw_options = interaction_data.get("options")
         options = raw_options if isinstance(raw_options, list) else []
-        option_parts = [
-            opt.get("value", "") for opt in options if isinstance(opt, dict) and opt.get("value")
-        ]
-        content = f"/{command_name} {' '.join(str(v) for v in option_parts)}".strip()
+        content = _command_content_from_options(command_name, options)
         channel_type = self._channel_type(data.get("channel_type"))
         thread_id = self._native_thread_id(data, channel_type)
         conversation_kind = self._conversation_kind(data, channel_type, thread_id)
