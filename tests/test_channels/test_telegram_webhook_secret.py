@@ -28,7 +28,7 @@ def _client(channel: TelegramChannel) -> TestClient:
 
 def _channel() -> TelegramChannel:
     return TelegramChannel(
-        TelegramChannelConfig(token="token", mode="webhook", webhook_secret_token=SECRET)
+        TelegramChannelConfig(token="token", transport_name="webhook", webhook_secret_token=SECRET)
     )
 
 
