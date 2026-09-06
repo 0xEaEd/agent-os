@@ -120,3 +120,90 @@ async def test_telegram_send_falls_back_to_plain_text_on_entity_parse_error() ->
         "chat_id": "42",
         "text": "**Ready**: `agentos status`",
     }
+
+
+# ── Issue #1031: ragged table rows ──────────────────────────────────────
+
+
+def test_two_column_table_with_short_row_pads_missing_cell() -> None:
+    """A 2-column table row with only 1 cell should be padded, not dropped."""
+    markdown = (
+        "| Header A | Header B |\n"
+        "| --- | --- |\n"
+        "| Row 1 Only |\n"
+        "| x | y |\n"
+    )
+    rendered = render_telegram_html(markdown)
+
+    # Both rows must appear — the old `break` dropped "| x | y |".
+    assert "<b>Header A — Header B</b>" in rendered
+    assert "<b>Row 1 Only:</b>" in rendered
+    assert "<b>x:</b> y" in rendered
+    # No raw pipe characters should leak through.
+    assert "| x | y |" not in rendered
+    assert "| Row 1 Only |" not in rendered
+
+
+def test_three_column_table_with_short_row_pads_missing_cells() -> None:
+    """A 3-column table row missing trailing cells should be padded."""
+    markdown = (
+        "| A | B | C |\n"
+        "| --- | --- | --- |\n"
+        "| only-a |\n"
+        "| x | y | z |\n"
+    )
+    rendered = render_telegram_html(markdown)
+
+    assert "<b>A · B · C</b>" in rendered
+    # The short row has only column A filled; B and C are empty → filtered out.
+    assert "<b>A:</b> only-a" in rendered
+    # The well-formed row after the ragged one must also render.
+    assert "<b>A:</b> x" in rendered
+    assert "<b>B:</b> y" in rendered
+    assert "<b>C:</b> z" in rendered
+    assert "| x | y | z |" not in rendered
+
+
+def test_table_row_with_extra_columns_is_truncated() -> None:
+    """A row with more cells than headers should be truncated, not break."""
+    markdown = (
+        "| A | B |\n"
+        "| --- | --- |\n"
+        "| 1 | 2 | 3 | 4 |\n"
+        "| x | y |\n"
+    )
+    rendered = render_telegram_html(markdown)
+
+    assert "<b>A — B</b>" in rendered
+    # Extra columns (3, 4) should be silently truncated.
+    assert "<b>1:</b> 2" in rendered
+    assert "<b>x:</b> y" in rendered
+    assert "3" not in rendered
+    assert "4" not in rendered
+
+
+def test_mixed_ragged_rows_all_render_without_raw_pipes() -> None:
+    """Mix of short, exact, and long rows — none should leak raw Markdown."""
+    markdown = (
+        "| Name | Status | Notes |\n"
+        "| --- | --- | --- |\n"
+        "| alpha | ok | fine |\n"
+        "| beta |\n"
+        "| gamma | fail | bad | extra |\n"
+        "| delta | ok | good |\n"
+    )
+    rendered = render_telegram_html(markdown)
+
+    # All four data rows must be rendered (no break/abort).
+    assert "<b>Name:</b> alpha" in rendered
+    assert "<b>Status:</b> ok" in rendered
+    assert "<b>Notes:</b> fine" in rendered
+    assert "<b>Name:</b> beta" in rendered
+    assert "<b>Name:</b> gamma" in rendered
+    assert "<b>Status:</b> fail" in rendered
+    assert "<b>Notes:</b> bad" in rendered
+    assert "<b>Name:</b> delta" in rendered
+    # "extra" from the long row should be truncated.
+    assert "extra" not in rendered
+    # No raw pipe characters.
+    assert "|" not in rendered

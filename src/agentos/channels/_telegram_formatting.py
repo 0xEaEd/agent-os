@@ -120,14 +120,24 @@ def _is_table_start(lines: list[str], index: int) -> bool:
     )
 
 
+def _normalize_row(row: list[str], column_count: int) -> list[str]:
+    """Pad short rows or truncate long ones to exactly *column_count* cells."""
+    if len(row) < column_count:
+        return row + [""] * (column_count - len(row))
+    return row[:column_count]
+
+
 def _render_table(headers: list[str], rows: list[list[str]]) -> list[str]:
     clean_headers = [_plain_inline(header) for header in headers]
-    if len(headers) == 2:
+    column_count = len(headers)
+    if column_count == 2:
         rendered = [
             f"<b>{html.escape(clean_headers[0])} — {html.escape(clean_headers[1])}</b>"
         ]
         for row in rows:
-            label, value = row
+            normalised = _normalize_row(row, column_count)
+            label = normalised[0]
+            value = normalised[1]
             clean_label = _plain_inline(label)
             if clean_label:
                 rendered.append(f"<b>{html.escape(clean_label)}:</b> {_render_inline(value)}")
@@ -137,9 +147,10 @@ def _render_table(headers: list[str], rows: list[list[str]]) -> list[str]:
 
     rendered = [f"<b>{' · '.join(html.escape(header) for header in clean_headers)}</b>"]
     for row in rows:
+        normalised = _normalize_row(row, column_count)
         cells = [
             f"<b>{html.escape(header)}:</b> {_render_inline(value)}"
-            for header, value in zip(clean_headers, row, strict=True)
+            for header, value in zip(clean_headers, normalised)
             if value
         ]
         if cells:
@@ -177,8 +188,6 @@ def render_telegram_html(markdown: str) -> str:
             index += 2
             while index < len(lines) and "|" in lines[index] and lines[index].strip():
                 row = _split_table_row(lines[index])
-                if len(row) != len(headers):
-                    break
                 rows.append(row)
                 index += 1
             rendered.extend(_render_table(headers, rows))
