@@ -96,7 +96,9 @@ _GLOB_ONLY_CHARS = frozenset("*?.")
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 
 _TOKEN_EDGE_CHARS = " \t\r\n'\"`$(){}[]<>;,|&"
-_ABSOLUTE_OR_TILDE_PATH_RE = re.compile(r"(?:~)?/(?:[^\s'\"`$(){}\[\]<>;,|&]+)")
+_ABSOLUTE_OR_TILDE_PATH_RE = re.compile(
+    r"(?:~|[A-Za-z]:)?[/\\](?:[^\s'\"`$(){}\[\]<>;,|&]+)"
+)
 _DOTENV_LITERAL_RE = re.compile(
     r"(?i)(?:^|[\s'\"`$(){}\[\]<>;,|&])"
     r"(?P<path>(?:[^\s'\"`$(){}\[\]<>;,|&]*/)?\.env(?:\.[A-Za-z0-9_.-]+)?)"
@@ -326,7 +328,20 @@ def sensitive_path_in_text(
     candidates: list[str] = []
     with_context: list[tuple[str, int]] = []
     try:
-        candidates.extend(shlex.split(text))
+        home_str = str(Path.home())
+        if home_str:
+            home_pat = re.escape(home_str).replace(r"\\", r"[/\\]")
+            home_re = re.compile(
+                home_pat + r"(?:[/\\][^\s'\"`$(){}\[\]<>;,|&]+)?",
+                re.IGNORECASE if os.name == "nt" else 0,
+            )
+            for match in home_re.finditer(text):
+                candidates.append(match.group(0))
+    except (OSError, RuntimeError):
+        pass
+
+    try:
+        candidates.extend(shlex.split(text, posix=os.name != "nt"))
     except ValueError:
         candidates.extend(text.split())
     candidates.extend(text.split())

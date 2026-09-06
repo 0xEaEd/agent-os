@@ -22,6 +22,10 @@ def test_sensitive_path_in_text_matches_native_separator_paths() -> None:
     assert sensitive_path_in_text(f"type {key_path}") == "~/.ssh"
 
 
+def test_sensitive_path_in_text_preserves_windows_backslashes() -> None:
+    assert sensitive_path_in_text(r"type C:\Users\target\.ssh\id_rsa") == "/id_rsa"
+
+
 def test_active_workspace_under_root_is_not_blocked_by_root_prefix() -> None:
     workspace = Path("/root/.agentos/workspace")
 
