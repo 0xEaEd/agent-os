@@ -204,11 +204,16 @@ class MemorySyncManager:
                 self._pending_changes or self._pending_deletes or session_sync_failed
             )
 
+        # Consume the delta whenever the sync that just ran covered it. A
+        # search-time sync with session indexing disabled is a successful
+        # no-op, not a skipped one: gating the reset on an indexer being
+        # present left the delta pending forever, so every later search --
+        # unchanged workspace, no new messages -- took the slow path and
+        # rescanned the tree again. ``_do_session_sync`` reports failure
+        # only when an indexer actually ran and raised, so an enabled
+        # indexer still keeps its delta pending for the next retry.
         if reason == "session-delta" or (
-            is_search_reason
-            and session_delta_pending
-            and self._session_indexer is not None
-            and not session_sync_failed
+            is_search_reason and session_delta_pending and not session_sync_failed
         ):
             self._delta.reset()
 
