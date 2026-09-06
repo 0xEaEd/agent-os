@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -693,7 +694,12 @@ class TelegramChannel:
         secret = self.config.webhook_secret_token
         if not secret:
             return Response(status_code=503)
-        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != secret:
+        # Constant-time: ``!=`` returns as soon as two bytes differ, which
+        # leaks the length of the matching prefix through response latency and
+        # lets a remote caller walk the secret out one byte at a time. Same
+        # guarantee ``gateway/auth.py`` and ``channels/slack.py`` already give.
+        provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
+        if not hmac.compare_digest(provided.encode("utf-8"), secret.encode("utf-8")):
             return Response(status_code=401)
         try:
             update = await request.json()
