@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -167,9 +168,31 @@ def _parse_path_prompt(command: str, prefix: str, usage: str) -> tuple[Path, str
         token = rest[1:end]
         prompt = rest[end + 1 :].strip()
     else:
-        parts = rest.split(None, 1)
-        token = parts[0]
-        prompt = parts[1] if len(parts) > 1 else ""
+        spans = [(match.start(), match.end()) for match in re.finditer(r"\S+", rest)]
+        token = rest[: spans[0][1]]
+        prompt = rest[spans[0][1] :].strip()
+        # Unquoted paths arrive from drag-and-drop or pasted terminal input
+        # and often contain spaces. Scan shortest-first and take the first
+        # existing regular file so typed prompts survive when the path has
+        # no spaces; the longest existing prefix is the fallback target so
+        # spaced paths still resolve. When nothing exists, keep the first
+        # token so the caller reports its usual not-found error.
+        longest_existing: str | None = None
+        for start, end in spans:
+            candidate = rest[:end]
+            resolved = Path(candidate).expanduser()
+            if not resolved.exists():
+                continue
+            if resolved.is_file():
+                token = candidate
+                prompt = rest[end:].strip()
+                longest_existing = None
+                break
+            if longest_existing is None:
+                longest_existing = candidate
+        if longest_existing is not None:
+            token = longest_existing
+            prompt = rest[len(longest_existing) :].strip()
 
     if not token:
         raise ValueError(usage)

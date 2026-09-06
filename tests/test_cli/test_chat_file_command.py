@@ -83,6 +83,61 @@ def test_file_command_rejects_unclosed_quoted_path() -> None:
         _file_prompt_and_attachments('/file "unterminated', upload_callable=None)
 
 
+def test_file_command_parses_unquoted_path_with_spaces(tmp_path: Path) -> None:
+    """Issue #1228 — unquoted paths (drag-and-drop, pasted) may contain
+    spaces; the longest existing on-disk prefix must win over the first
+    whitespace token."""
+    csv_bytes = b"a,b\n1,2\n"
+    path = _write(tmp_path, "data set.csv", csv_bytes)
+
+    prompt, attachments = _file_prompt_and_attachments(
+        f"/file {path} summarise this", upload_callable=None
+    )
+
+    assert prompt == "summarise this"
+    assert len(attachments) == 1
+    assert attachments[0]["name"] == "data set.csv"
+    assert base64.b64decode(attachments[0]["data"]) == csv_bytes
+
+
+def test_file_command_unquoted_path_without_prompt(tmp_path: Path) -> None:
+    path = _write(tmp_path, "my notes.txt", b"hello")
+
+    prompt, attachments = _file_prompt_and_attachments(
+        f"/file {path}", upload_callable=None
+    )
+
+    assert prompt == "Read this file"
+    assert attachments[0]["name"] == "my notes.txt"
+
+
+def test_file_command_unquoted_missing_path_keeps_first_token_error(tmp_path) -> None:
+    """Nothing on disk matches any prefix — the caller must still see the
+    familiar not-found error for the first whitespace token."""
+    missing = tmp_path / "does not exist.txt"
+
+    with pytest.raises(ValueError, match="File not found"):
+        _file_prompt_and_attachments(
+            f"/file {missing} some prompt", upload_callable=None
+        )
+
+
+def test_file_command_unquoted_ambiguous_joined_name_prefers_typed_path(tmp_path) -> None:
+    """Documented trade-off of shortest-existing-file matching: when both the
+    typed path and the path+prompt join exist as files, the typed path wins
+    and the words after it stay a prompt (same as pre-fix behavior)."""
+    joined = tmp_path / "data.csv notes"
+    joined.write_bytes(b"ambiguous on purpose")
+    path = _write(tmp_path, "data.csv", b"a,b\n")
+
+    prompt, attachments = _file_prompt_and_attachments(
+        f"/file {path} notes", upload_callable=None
+    )
+
+    assert prompt == "notes"
+    assert attachments[0]["name"] == "data.csv"
+
+
 def test_image_command_parses_quoted_path_with_spaces(tmp_path: Path) -> None:
     png_bytes = b"\x89PNG\r\n\x1a\n" + b"payload"
     path = _write(tmp_path, "screen shot.png", png_bytes)
