@@ -442,3 +442,22 @@ def test_credential_file_list_stays_in_sync_with_redact() -> None:
     # name is added to one layer and not carried to the other.
     assert set(_HOST_CREDENTIAL_FILES) == set(CREDENTIAL_FILE_NAMES) - {"credentials"}
     assert "credentials" not in _HOST_CREDENTIAL_FILES
+
+
+def test_backslash_home_spelling_reports_the_prefix_not_the_tail(fixed_home: Path) -> None:
+    """A backslash-spelled home path must still report the home prefix.
+
+    Mixed separators are what `$HOME` expansion produces on Windows:
+    `C:\\Users\\me` + `/` + `.npmrc`. `shlex.split` in POSIX mode eats the
+    backslashes, leaving `C:Usersme/.npmrc` -- still carrying a `/`, so it
+    matches the credential *tail* and short-circuits the scan before the
+    intact token from `text.split()` is reached, reporting `/.npmrc` instead
+    of `~/.npmrc`. Both block, but #985 exists to keep every spelling on the
+    same marker.
+
+    An all-backslash spelling does NOT reproduce this: every separator is
+    eaten, the mangled token has no `/` left, and it matches nothing.
+    """
+    backslash_home = str(fixed_home).replace("/", "\\")
+    for name in ("_netrc", ".npmrc", ".pgpass", ".git-credentials"):
+        assert sensitive_path_in_text(f"cat {backslash_home}/{name}") == f"~/{name}", name

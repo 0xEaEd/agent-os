@@ -443,8 +443,18 @@ def sensitive_path_in_text(
     # report that instead of the `~/.npmrc` prefix the expansion resolves to.
     # Both block, but the two spellings must report the same marker.
     expanded = _expand_env_vars(text)
-    if expanded != text:
-        marker = _scan_text_for_marker(expanded, workspace=workspace)
+    candidates = [expanded] if expanded != text else []
+    # On Windows the expansion lands a drive-rooted path in the middle of the
+    # text (`cat C:\Users\me/.npmrc`). The path pattern starts at `/`, so it
+    # can only see the trailing `/.npmrc` and reports that tail instead of the
+    # `~/.npmrc` the home prefix would give. Swapping separators lets the whole
+    # path be picked up; the drive letter is dropped, and the drive-relative
+    # remainder resolves back to the same file.
+    normalized = expanded.replace("\\", "/")
+    if normalized != expanded:
+        candidates.append(normalized)
+    for candidate in candidates:
+        marker = _scan_text_for_marker(candidate, workspace=workspace)
         if marker is not None:
             return marker
     return _scan_text_for_marker(text, workspace=workspace)
