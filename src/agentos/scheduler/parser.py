@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -109,6 +110,37 @@ class CronExpression:
         return day_of_month_ok or day_of_week_ok
 
 
+_NAME_TOKEN_SPLIT_RE = re.compile(r"([-/])")
+
+
+def _substitute_names(part: str, names: dict[str, int], field_name: str) -> str:
+    """Replace month / day-of-week names in one comma-free field token.
+
+    POSIX: month and day-of-week names are case-insensitive ("case doesn't
+    matter"), so the token is lowercased before lookup and Mon-Fri / JAN / jan
+    all resolve. Substitution is per *token* rather than a whole-string
+    replace, because the numeric value a name maps to depends on where it sits:
+    Sunday is both 0 and 7, and only the position tells them apart.
+    """
+
+    tokens = _NAME_TOKEN_SPLIT_RE.split(part.lower())
+    values = [names.get(token) for token in tokens]
+
+    # POSIX lets Sunday be written 0 or 7, and cron/croniter read a trailing
+    # SUN as 7 — "SAT-SUN" is 6-7, not the reversed 6-0 that _parse_field would
+    # reject outright. Only the *upper* bound flips, and only when the range
+    # does not already start at Sunday, so "SUN-WED" stays 0-3 and "SUN-SUN"
+    # stays the single day it names.
+    if field_name == "day_of_week" and len(tokens) >= 3 and tokens[1] == "-":
+        if tokens[2] == "sun" and tokens[0] not in ("sun", "0", "7"):
+            values[2] = 7
+
+    return "".join(
+        str(value) if value is not None else token
+        for token, value in zip(tokens, values, strict=True)
+    )
+
+
 def _parse_field(token: str, field_name: str, names: dict[str, int] | None = None) -> CronField:
     lo, hi = _FIELD_RANGES[field_name]
     values: set[int] = set()
@@ -116,15 +148,7 @@ def _parse_field(token: str, field_name: str, names: dict[str, int] | None = Non
     for part in token.split(","):
         part = part.strip()
         if names:
-            # POSIX: month and day-of-week names are case-insensitive ("case
-            # doesn't matter"). Lowercase the token before substituting so
-            # Mon-Fri / JAN / jan all resolve; digits and the -, /, * ,
-            # separators are unaffected by lower().
-            part = part.lower()
-            sub_parts = part.replace("/", "§").replace("-", "¶")
-            for name, val in names.items():
-                sub_parts = sub_parts.replace(name, str(val))
-            part = sub_parts.replace("§", "/").replace("¶", "-")
+            part = _substitute_names(part, names, field_name)
 
         if "/" in part:
             range_part, step_str = part.split("/", 1)

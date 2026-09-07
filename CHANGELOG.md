@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Day-of-week ranges that end at `SUN` parse again. `_parse_field` substituted
+  every day name with a single number, and `sun` is always 0 there, so
+  `SAT-SUN` reached the range check as `6-0` and `MON-SUN` as `1-0` — reversed
+  ranges, rejected with `CronParseError: Range start > end in field
+  'day_of_week'`. POSIX cron spells Sunday both 0 and 7 and reads the trailing
+  one as 7, which the parser already honoured for the numeric spelling: `WED-7`
+  worked while the `WED-SUN` a user would actually type did not. Names are now
+  substituted per token instead of by whole-string replace, so a `SUN` at the
+  upper bound of a range resolves to 7 unless the range already starts at
+  Sunday — `SAT-SUN` is `{0, 6}`, `MON-SUN` the whole week, and `SUN-WED` /
+  `SUN-SUN` keep the days they name
+  ([#1063](https://github.com/use-agent-os/agent-os/issues/1063)).
 - A JSON-RPC error whose `error` member is not an object no longer kills the
   command with an `AttributeError`. `RpcError.__init__` in
   `senior-unilp-manager` and `poolsdotfun-token-launcher` read the payload as
