@@ -13,6 +13,7 @@ keeps the run offline and the port is picked by the OS.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -69,15 +70,26 @@ def base_url(state_dir):
 
 
 def _run(script: str, *args: str, env_home: Path) -> subprocess.CompletedProcess[str]:
+    # A deliberately small environment, so a watcher cannot reach the
+    # developer's own state. Windows is the exception: a child started without
+    # the system variables cannot initialise Winsock, and every fetch then dies
+    # with `WinError 10106` before it reaches the fixture server. State stays
+    # isolated either way — the watermark store reads AGENTOS_STATE_DIR first.
+    if os.name == "nt":
+        env = dict(os.environ)
+        env["USERPROFILE"] = str(env_home)
+    else:
+        env = {"PATH": "/usr/bin:/bin"}
+    env["AGENTOS_STATE_DIR"] = str(env_home / "state")
+    env["HOME"] = str(env_home)
+    # Loopback must never go through a proxy the runner happens to configure.
+    env["NO_PROXY"] = "127.0.0.1,localhost"
+    env["no_proxy"] = "127.0.0.1,localhost"
     return subprocess.run(
         [sys.executable, str(SCRIPTS / script), *args],
         capture_output=True,
         text=True,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "AGENTOS_STATE_DIR": str(env_home / "state"),
-            "HOME": str(env_home),
-        },
+        env=env,
         timeout=60,
     )
 
