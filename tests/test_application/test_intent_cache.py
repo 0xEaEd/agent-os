@@ -15,6 +15,17 @@ import pytest
 from agentos.application.intent_cache import IntentApprovalCache, _extract_intents
 
 
+def _names_etc(targets: list[str]) -> bool:
+    """Whether any extracted target names ``/etc``, on either path separator.
+
+    Windows resolves a drive-relative ``/etc`` against the working drive, so
+    the extracted target arrives as ``D:\\etc`` on the CI runner. Normalising
+    the separator keeps one assertion honest on every platform, rather than
+    gating the case behind ``skipif`` and losing it on half of CI.
+    """
+    return any(target.replace("\\", "/").endswith("/etc") for target in targets)
+
+
 class TestCompoundCommandSeparatorBypass:
     """Every shell separator must be caught by the permission cache.
 
@@ -369,14 +380,14 @@ class TestQuotedRmIsNotACommand:
         # or follow a separator reads as tighter but drops every one of these
         # command prefixes, trading a false positive for a bypass.
         targets = [target for _kind, target in _extract_intents(command)]
-        assert any(target.endswith("/etc") for target in targets), targets
+        assert _names_etc(targets), targets
 
     def test_quoted_and_real_rm_in_one_command(self) -> None:
         # The quoted mention is skipped; the real invocation after the
         # separator is not.
         intents = _extract_intents('echo "rm this later"; rm -rf /etc')
         targets = [target for _kind, target in intents]
-        assert any(target.endswith("/etc") for target in targets), targets
+        assert _names_etc(targets), targets
         assert not any(target.endswith("later") for target in targets), targets
 
     def test_unbalanced_quote_leaves_the_rest_quoted(self) -> None:
