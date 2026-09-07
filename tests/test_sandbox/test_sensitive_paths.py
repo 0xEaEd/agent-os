@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from agentos.redact import CREDENTIAL_FILE_NAMES
 from agentos.sandbox.sensitive_paths import (
+    _HOST_CREDENTIAL_FILES,
     _is_root_target,
     is_sensitive_path,
     sensitive_path_in_text,
@@ -375,3 +377,68 @@ def test_new_credential_paths_are_caught_in_free_form_text() -> None:
 
     assert sensitive_path_in_text(f"nvim {home / '.config' / 'nvim' / 'init.lua'}") is None
     assert sensitive_path_in_text("cat /var/secrets/vault-token") is None
+# --- host credential files (#981) -------------------------------------------
+#
+# `Path.home()` and `expanduser()` both read the platform's home variable, so
+# pinning HOME/USERPROFILE fixes the expected marker on POSIX and Windows
+# alike. Reading the real home would make these assertions depend on whoever
+# runs them.
+
+_FIXED_HOME = "/home/agentos-test"
+
+
+@pytest.fixture()
+def fixed_home(monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("HOME", _FIXED_HOME)
+    monkeypatch.setenv("USERPROFILE", _FIXED_HOME)
+    return Path(_FIXED_HOME)
+
+
+def test_host_credential_files_are_blocked_in_home(fixed_home: Path) -> None:
+    for name in _HOST_CREDENTIAL_FILES:
+        assert is_sensitive_path(str(fixed_home / name)) == f"~/{name}", name
+
+
+def test_host_credential_files_are_blocked_as_tails_anywhere() -> None:
+    # Deliberately wider than the home prefixes: moving one of these out of the
+    # home directory must not shake the block off, and a project-local copy is
+    # covered too. Same shape as the existing `/.env` tail.
+    for name in _HOST_CREDENTIAL_FILES:
+        assert is_sensitive_path(f"/srv/project/{name}") == f"/{name}", name
+
+
+def test_host_credential_files_in_commands_are_blocked(fixed_home: Path) -> None:
+    # Two different gates: sensitive_target_in_command covers DESTRUCTIVE
+    # targets, sensitive_path_in_text covers a path merely appearing in a
+    # command (a read). Both must catch these files.
+    assert (
+        sensitive_target_in_command(f"rm {fixed_home / '.git-credentials'}") == "~/.git-credentials"
+    )
+    assert sensitive_path_in_text(f"cat {fixed_home / '.pgpass'}") == "~/.pgpass"
+
+
+def test_host_credential_tails_match_windows_separators() -> None:
+    # Backslash spelling of a tail, written as a Windows-style path rather than
+    # by replacing separators in a POSIX one -- that produces a string which is
+    # not a path on either platform.
+    assert is_sensitive_path(r"C:\srv\project\.pgpass") == "/.pgpass"
+    assert sensitive_path_in_text(r"type C:\srv\project\.npmrc") == "/.npmrc"
+
+
+def test_active_workspace_exception_keeps_credential_blocks(fixed_home: Path) -> None:
+    # The workspace carve-out must not reopen credential files that happen to
+    # sit inside it.
+    workspace = Path("/srv/project")
+
+    assert sensitive_target_in_command("rm /srv/project/scratch.txt", workspace=workspace) is None
+    assert (
+        sensitive_target_in_command("rm /srv/project/.git-credentials", workspace=workspace)
+        == "/.git-credentials"
+    )
+
+
+def test_credential_file_list_stays_in_sync_with_redact() -> None:
+    # The denylist derives from the redaction list on purpose; this fails if a
+    # name is added to one layer and not carried to the other.
+    assert set(_HOST_CREDENTIAL_FILES) == set(CREDENTIAL_FILE_NAMES) - {"credentials"}
+    assert "credentials" not in _HOST_CREDENTIAL_FILES

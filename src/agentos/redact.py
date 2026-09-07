@@ -797,6 +797,11 @@ _CREDENTIAL_FILE_NAMES: frozenset[str] = frozenset(
     }
 )
 
+#: Public name for the set above. The sandbox's sensitive-path denylist derives
+#: its credential-file entries from this so the two layers cannot drift; the
+#: private name stays as-is for this module's own callers.
+CREDENTIAL_FILE_NAMES: frozenset[str] = _CREDENTIAL_FILE_NAMES
+
 #: Directories whose every file is credential material, for the ones that name
 #: their config plainly (``~/.kube/config``, ``~/.docker/config.json``).
 _CREDENTIAL_DIR_NAMES: frozenset[str] = frozenset(
