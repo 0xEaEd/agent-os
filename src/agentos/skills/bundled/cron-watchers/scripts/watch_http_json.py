@@ -26,6 +26,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from _url import require_http_url  # noqa: E402
 from _watermark import select_new  # noqa: E402
 
 USER_AGENT = "AgentOS-cron-watcher/1.0"
@@ -84,9 +85,15 @@ def main() -> int:
         if key.strip() and value.strip():
             headers[key.strip()] = value.strip()
 
-    request = urllib.request.Request(args.url, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        target = require_http_url(args.url, "--url")
+    except ValueError as exc:
+        print(f"Refusing to fetch: {exc}", file=sys.stderr)
+        return 1
+
+    request = urllib.request.Request(target, headers=headers)  # noqa: S310 - http(s) only
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8", errors="replace"))
     except (urllib.error.URLError, TimeoutError) as exc:
         print(f"Request failed for {args.url}: {exc}", file=sys.stderr)

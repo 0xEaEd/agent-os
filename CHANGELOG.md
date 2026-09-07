@@ -36,6 +36,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   what `robinhood-chain-stocks` already does; `raw` still carries whatever
   came back and the dict path is unchanged
   ([#974](https://github.com/use-agent-os/agent-os/issues/974)).
+- Bundled skill scripts refuse endpoints that are not `http(s)`. Every one of
+  them reaches `urllib.request.urlopen`, which speaks `file:`, `ftp:` and
+  `data:` just as happily as HTTP, so an endpoint taken from argv or the
+  environment was an arbitrary local-file read: `watch_http_json.py --url
+  file:///etc/passwd` reported the file's contents on every cron tick, and
+  `--rpc file://…` did the same through the `poolsdotfun-token-launcher` and
+  `senior-unilp-manager` JSON-RPC clients. The `senior-unilp-manager` client
+  was doubly exposed — it took `rpc_url or resolve_rpc_url(chain)`, so an
+  override skipped the resolver and every check in it. Each entry point now
+  validates the scheme and host with `urlsplit` before the URL reaches
+  `urlopen`, matching the guard `robinhood-chain-stocks` already carries, and
+  the watcher tests serve their fixtures over loopback HTTP instead of
+  `file://` ([#1065](https://github.com/use-agent-os/agent-os/issues/1065)).
 - The sensitive-path denylist now expands `$VAR`/`${VAR}` before it decides,
   so the hard block cannot be side-stepped by spelling a home directory as a
   variable. Tool dispatch ends in a shell, so `cat $HOME/.ssh/config` reaches
