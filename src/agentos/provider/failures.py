@@ -31,30 +31,24 @@ class ProviderRecoveryAction(StrEnum):
     SURFACE = "surface"
 
 
-_OPENAI_COMPAT_PROVIDERS = {
-    "opencap",
-    "surplus",
-    "openrouter",
-    "openai",
-    "azure",
-    "deepseek",
-    "gemini",
-    "dashscope",
-    "bailian_coding",
-    "moonshot",
-    "mistral",
-    "groq",
-    "zhipu",
-    "qianfan",
-    "siliconflow",
-    "aihubmix",
-    "minimax_openai",
-    "volcengine",
-    "byteplus",
-    "vllm",
-    "lm_studio",
-    "ovms",
-}
+def _openai_compat_provider_ids() -> frozenset[str]:
+    """Provider ids whose registry spec declares the OpenAI-compatible family.
+
+    Derived from ``provider/registry.py`` rather than hand-kept. The literal
+    list this replaces drifted twice — a provider was registered with
+    ``failure_family="openai_compat"`` and never added here, so its 401/402/429
+    fell through to ``UNKNOWN`` and lost the retry and credit semantics every
+    sibling gets. ``failure_family`` is already the field that answers this
+    question; reading it keeps the two files from disagreeing a third time.
+    """
+    from agentos.provider.registry import list_provider_specs
+
+    return frozenset(
+        spec.provider_id for spec in list_provider_specs() if spec.failure_family == "openai_compat"
+    )
+
+
+_OPENAI_COMPAT_PROVIDERS: frozenset[str] = _openai_compat_provider_ids()
 
 _GATEWAY_TRANSIENT_STATUS_CODES = {499, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529}
 _GATEWAY_CODES = r"(?:499|500|502|503|504|520|521|522|523|524|529)"

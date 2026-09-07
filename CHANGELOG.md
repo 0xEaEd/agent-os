@@ -112,6 +112,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   resolves to a private or metadata address — otherwise `'base' + '//a/b'`
   would be refused as readily as `'//127.0.0.1/x'`
   ([#1092](https://github.com/use-agent-os/agent-os/issues/1092)).
+- `bankr` and `openai_responses` failures classify like every other
+  OpenAI-compatible provider instead of falling through to `UNKNOWN`. Both are
+  real registered providers, and both declare `failure_family="openai_compat"`
+  in `provider/registry.py`, but neither appeared in the hand-kept
+  `_OPENAI_COMPAT_PROVIDERS` literal in `provider/failures.py`, so their 401,
+  402 and 429 lost the auth / credit / rate-limit semantics the runtime uses to
+  choose `FAIL_CONFIG` or `FALLBACK_PROVIDER`. The literal was the wrong shape
+  rather than merely two names short: it had drifted to six missing providers
+  (`bankr`, `openai_responses`, `github_copilot`, `openai_codex`,
+  `byteplus_coding_plan`, `volcengine_coding_plan`), and #775 reported the
+  `bankr` half a while ago without the fix landing. It is now derived from the
+  registry's own `failure_family` field, with a test asserting the two files
+  agree in both directions
+  ([#1126](https://github.com/use-agent-os/agent-os/issues/1126)).
 - `code_exec` removes its ephemeral working directory on every exit, not just
   the one path that happened to own the cleanup. `execute_code` creates the
   directory with `tempfile.mkdtemp(prefix="agentos_exec_")` whenever no
