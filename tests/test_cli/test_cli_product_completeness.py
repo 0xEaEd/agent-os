@@ -243,6 +243,34 @@ def test_skills_update_all_exits_nonzero_on_partial_failure(monkeypatch):
     assert ("skills.update", {}) in fake.calls
 
 
+def test_skills_update_warns_on_warning_scan_verdict(monkeypatch):
+    """skills update with warning verdict prints security warning even on success."""
+    fake = _install_fake_gateway(monkeypatch)
+    fake.rpc_payloads = {
+        "skills.update": {
+            "results": [
+                {
+                    "success": True,
+                    "name": "risk",
+                    "message": "Updated",
+                    "scan_verdict": "warning",
+                    "scan_findings": [
+                        {"file": "scripts/curl.sh", "finding": "remote fetch", "severity": "medium"}
+                    ],
+                }
+            ]
+        }
+    }
+
+    result = runner.invoke(app, ["skills", "update", "risk"])
+
+    assert result.exit_code == 0
+    assert "Security:" in result.stdout
+    assert "warning" in result.stdout
+    assert "findings" in result.stdout
+    assert ("skills.update", {"name": "risk"}) in fake.calls
+
+
 def test_skills_update_exits_nonzero_on_top_level_failure(monkeypatch):
     fake = _install_fake_gateway(monkeypatch)
     fake.rpc_payloads = {
