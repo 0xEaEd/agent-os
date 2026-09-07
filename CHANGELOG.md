@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A JSON-RPC error whose `error` member is not an object no longer kills the
+  command with an `AttributeError`. `RpcError.__init__` in
+  `senior-unilp-manager` and `poolsdotfun-token-launcher` read the payload as
+  a dict unconditionally — `error.get("message", error)`. The spec says
+  `error` is an object, but nodes and proxies really do answer with a bare
+  string (`{"error": "rate limit exceeded"}`) or null, and each of those
+  raised `AttributeError: 'str' object has no attribute 'get'` *inside the
+  exception constructor*, so the traceback escaped every `except RpcError`
+  that `plan.py`, `pools_write.py` and `rpc.batch()` already have. `batch()`
+  was the worst case: a per-call error is meant to land in its own result slot
+  so one bad pool cannot abort a 40-pool sweep, and a string payload aborted
+  it anyway. The constructor now reads `code`/`data` only when the payload is
+  a mapping and falls back to the payload itself for the message, matching
+  what `robinhood-chain-stocks` already does; `raw` still carries whatever
+  came back and the dict path is unchanged
+  ([#974](https://github.com/use-agent-os/agent-os/issues/974)).
+
 ## [2026.9.6] - 2026-09-06
 
 ### Fixed
