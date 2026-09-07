@@ -128,6 +128,25 @@ def _comparison_path_candidates(path: str) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
+def _expand_env_vars(text: str) -> str:
+    """Expand ``$VAR`` / ``${VAR}`` the way the shell will before execution.
+
+    Tool dispatch ends in a shell (``create_subprocess_shell``), so the text
+    this module scans is not what the kernel eventually opens:
+    ``cat $HOME/.ssh/config`` reaches the syscall as ``~/.ssh/config``.
+    Scanning only the literal text let every prefix in
+    :data:`_SENSITIVE_PREFIXES` be side-stepped by spelling the home directory
+    as a variable. Undefined names are left as written, so nothing new matches
+    on a host where the variable does not exist.
+    """
+    if "$" not in text and "%" not in text:
+        return text
+    try:
+        return os.path.expandvars(text)
+    except (KeyError, TypeError, ValueError):
+        return text
+
+
 def _looks_like_rooted_path_text(path: str) -> bool:
     normalized = str(path).strip().replace("\\", "/")
     return normalized.startswith(("/", "~/")) and not normalized.startswith("//")
@@ -169,7 +188,9 @@ def _is_root_target(path: str) -> bool:
     covering ``/``, ``//``, ``/.``, ``/..``, ``/*``, ``/**``, ``/.*`` and
     ``/*/*``.
     """
-    normalized = str(path).strip().replace("\\", "/")
+    # Expanded first for the same reason the prefix scan does it: the shell
+    # resolves `rm -rf $ROOTDIR` to a root wipe that the literal text hides.
+    normalized = _expand_env_vars(str(path).strip()).replace("\\", "/")
     normalized = _DRIVE_PREFIX_RE.sub("", normalized, count=1)
     if not normalized.startswith("/"):
         return False
@@ -284,7 +305,10 @@ def sensitive_path_marker(
     such as ``.env`` and private-key names remain blocked.
     """
 
-    text = str(path).strip()
+    # Expand first: `$HOME/.ssh` is a relative-looking token that the shell
+    # turns into an absolute sensitive path, and the narrow leaf-marker
+    # fallback below would be the only check it ever faced.
+    text = _expand_env_vars(str(path).strip())
     raw = Path(text).expanduser()
     if (
         text
@@ -294,35 +318,22 @@ def sensitive_path_marker(
     ):
         return _sensitive_leaf_marker(text)
 
-    marker = is_sensitive_path(path)
+    marker = is_sensitive_path(text)
     if marker is None:
         return None
-    if _workspace_contains(path, workspace) and _workspace_nested_under_marker(
+    if _workspace_contains(text, workspace) and _workspace_nested_under_marker(
         workspace, marker
     ):
-        leaf_marker = _sensitive_leaf_marker(path)
+        leaf_marker = _sensitive_leaf_marker(text)
         return leaf_marker
     return marker
 
 
-def sensitive_path_in_text(
+def _scan_text_for_marker(
     text: str,
     *,
     workspace: str | Path | None = None,
 ) -> str | None:
-    """Return the first sensitive path marker appearing in free-form text.
-
-    This is intentionally conservative glue for shell/Python-code scanners.
-    Structured callers should still resolve concrete paths and call
-    :func:`is_sensitive_path` directly.
-
-    Honors :data:`_DISABLED` (env var ``AGENTOS_SENSITIVE_PATHS_DISABLED``).
-    """
-    if _DISABLED:
-        return None
-    if not text:
-        return None
-
     candidates: list[str] = []
     with_context: list[tuple[str, int]] = []
     try:
@@ -358,6 +369,36 @@ def sensitive_path_in_text(
         if marker is not None:
             return marker
 
+    return None
+
+
+def sensitive_path_in_text(
+    text: str,
+    *,
+    workspace: str | Path | None = None,
+) -> str | None:
+    """Return the first sensitive path marker appearing in free-form text.
+
+    This is intentionally conservative glue for shell/Python-code scanners.
+    Structured callers should still resolve concrete paths and call
+    :func:`is_sensitive_path` directly.
+
+    Honors :data:`_DISABLED` (env var ``AGENTOS_SENSITIVE_PATHS_DISABLED``).
+    """
+    if _DISABLED:
+        return None
+    if not text:
+        return None
+
+    marker = _scan_text_for_marker(text, workspace=workspace)
+    if marker is not None:
+        return marker
+    # `$HOME/.ssh/config` survives token scanning as the relative-looking
+    # `HOME/.ssh/config` (the leading `$` is stripped as a token edge), so the
+    # expanded spelling has to be scanned in its own right.
+    expanded = _expand_env_vars(text)
+    if expanded != text:
+        return _scan_text_for_marker(expanded, workspace=workspace)
     return None
 
 
