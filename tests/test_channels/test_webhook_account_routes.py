@@ -231,6 +231,10 @@ def test_same_path_with_disjoint_methods_is_not_a_collision() -> None:
 async def test_automatic_slack_routes_are_account_named_and_survive_config_reload(
     monkeypatch: pytest.MonkeyPatch, reverse: bool, roundtrip: bool
 ) -> None:
+    """The first configured Slack webhook entry keeps the bare default path;
+    only accounts added after it get an auto-derived, name-suffixed path
+    (#1022, #1130's sibling bug: an already-configured account must not be
+    silently re-pathed when a second account is added)."""
     monkeypatch.setattr("agentos.channels.slack.time.time", lambda: _NOW)
     entries = [
         SlackChannelEntry(name=name, token="test-token", signing_secret=f"secret-{name}")
@@ -238,6 +242,7 @@ async def test_automatic_slack_routes_are_account_named_and_survive_config_reloa
     ]
     if reverse:
         entries.reverse()
+    first_name, second_name = (entry.name for entry in entries)
     if roundtrip:
         entries = [
             SlackChannelEntry.model_validate_json(entry.model_dump_json()) for entry in entries
@@ -245,15 +250,17 @@ async def test_automatic_slack_routes_are_account_named_and_survive_config_reloa
     manager = ChannelManager.from_config(entries, turn_runner=None, session_manager=None)
     try:
         routes = manager.collect_webhook_routes()
-        assert {route.path for route in routes} == {"/slack/events/team-a", "/slack/events/team-b"}
+        expected_paths = {"/slack/events", f"/slack/events/{second_name}"}
+        assert {route.path for route in routes} == expected_paths
         assert [route.path for route in manager.collect_webhook_routes()] == [
             route.path for route in routes
         ]
+        name_to_path = {first_name: "/slack/events", second_name: f"/slack/events/{second_name}"}
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=Starlette(routes=routes)),
             base_url="https://example.test",
         ) as client:
-            for name in ("team-a", "team-b"):
+            for name in (first_name, second_name):
                 body = json.dumps(
                     {
                         "type": "event_callback",
@@ -266,7 +273,7 @@ async def test_automatic_slack_routes_are_account_named_and_survive_config_reloa
                     }
                 ).encode()
                 headers = {**_headers(body, f"secret-{name}"), "content-type": "application/json"}
-                response = await client.post(f"/slack/events/{name}", content=body, headers=headers)
+                response = await client.post(name_to_path[name], content=body, headers=headers)
                 assert response.status_code == 200
                 channel = manager.get(name)
                 assert isinstance(channel, SlackChannel)
@@ -276,6 +283,37 @@ async def test_automatic_slack_routes_are_account_named_and_survive_config_reloa
         assert all(not entry.webhook_path for entry in entries)
     finally:
         for entry in entries:
+            manager._unregister_tool_channel(entry.name, manager.get(entry.name))
+
+
+async def test_adding_a_second_account_keeps_the_first_on_the_default_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator with one Slack app already pointed at /slack/events must
+    not have that account silently re-pathed to /slack/events/<name> just
+    because a second account was enabled (#1022 review blocker)."""
+    monkeypatch.setattr("agentos.channels.slack.time.time", lambda: _NOW)
+    solo_only = [SlackChannelEntry(name="acme", token="test-token", signing_secret="secret-acme")]
+    manager = ChannelManager.from_config(solo_only, turn_runner=None, session_manager=None)
+    try:
+        assert [route.path for route in manager.collect_webhook_routes()] == ["/slack/events"]
+    finally:
+        manager._unregister_tool_channel("acme", manager.get("acme"))
+
+    with_second_account = [
+        SlackChannelEntry(name="acme", token="test-token", signing_secret="secret-acme"),
+        SlackChannelEntry(name="beta", token="test-token", signing_secret="secret-beta"),
+    ]
+    manager = ChannelManager.from_config(
+        with_second_account, turn_runner=None, session_manager=None
+    )
+    try:
+        assert {route.path for route in manager.collect_webhook_routes()} == {
+            "/slack/events",
+            "/slack/events/beta",
+        }
+    finally:
+        for entry in with_second_account:
             manager._unregister_tool_channel(entry.name, manager.get(entry.name))
 
 
@@ -311,9 +349,12 @@ def test_explicit_slack_path_cannot_shadow_an_automatic_account() -> None:
 
 @pytest.mark.parametrize("name", ["team/a", "{account}", "..", ""])
 def test_automatic_slack_paths_reject_names_that_change_url_routing(name: str) -> None:
+    # The first Slack webhook entry never needs its name embedded in a URL
+    # (it keeps the bare default), so the unsafe name must be the *second*
+    # entry here to exercise the derivation path that validates it.
     entries = [
+        SlackChannelEntry(name="first", token="test-token"),
         SlackChannelEntry(name=name, token="test-token"),
-        SlackChannelEntry(name="second", token="test-token"),
     ]
     with pytest.raises(ValueError, match="explicit webhook_path"):
         ChannelManager.from_config(entries, turn_runner=None, session_manager=None)

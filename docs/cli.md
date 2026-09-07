@@ -398,15 +398,16 @@ retired built-in channel types are removed only after AgentOS creates the
 normal secure config backup.
 
 Slack webhook entries accept `--field webhook_path=/slack/team-a/events`
-when added with `channels add slack`. An omitted or empty field selects
-`/slack/events` for one enabled webhook account, or
-`/slack/events/<account_name>` for multiple enabled webhook accounts. Automatic
-paths are stable across restarts and config reordering; disabled and Socket Mode
-entries do not count. An explicit path takes precedence. To preserve an existing
-Request URL when adding another account, set `--field webhook_path=/slack/events`
-on the existing account. Configure each Slack app's Request URLs to match its
-path. Duplicate webhook paths with overlapping HTTP methods are rejected at
-gateway startup. See [Slack modes](channels.md#slack-modes).
+when added with `channels add slack`. An omitted or empty field selects the
+automatic path: the first enabled webhook account in config order keeps
+`/slack/events` regardless of how many other webhook accounts are enabled, so
+adding a second account never changes an already-configured account's Request
+URL; every other enabled webhook account with no explicit path gets
+`/slack/events/<account_name>`. Disabled and Socket Mode entries do not count,
+or count as "first". An explicit path takes precedence. Configure each Slack
+app's Request URLs to match its path. Duplicate webhook paths with overlapping
+HTTP methods are rejected at gateway startup. See
+[Slack modes](channels.md#slack-modes).
 
 ```sh
 agentos channels types

@@ -98,15 +98,27 @@ class ChannelManager:
             and getattr(entry, "connection_mode", "webhook") == "webhook"
             for entry in entries
         )
+        # The first Slack webhook entry encountered keeps whatever path it
+        # already resolves to (explicit, or the bare "/slack/events" default
+        # when unset) instead of being auto-derived. Without this, adding a
+        # second account silently re-paths an already-configured account
+        # (webhook_path unset -> "/slack/events/<name>"), 404ing a Slack app
+        # that is already pointed at the old default with no error at
+        # startup. Only accounts added *after* the first are named.
+        seen_first_slack_webhook = False
         for entry in entries:
             if not entry.enabled:
                 log.info("channel.skipped_disabled", name=entry.name)
                 continue
 
-            if (
+            is_slack_webhook = (
+                entry.type == "slack" and getattr(entry, "connection_mode", "webhook") == "webhook"
+            )
+            if is_slack_webhook and not seen_first_slack_webhook:
+                seen_first_slack_webhook = True
+            elif (
                 slack_webhook_count > 1
-                and entry.type == "slack"
-                and getattr(entry, "connection_mode", "webhook") == "webhook"
+                and is_slack_webhook
                 and not getattr(entry, "webhook_path", "")
             ):
                 if entry.name in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9._~-]+", entry.name):
