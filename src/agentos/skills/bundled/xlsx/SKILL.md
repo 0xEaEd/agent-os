@@ -97,6 +97,7 @@ python {baseDir}/scripts/edit_xlsx.py book.xlsx ops.json --out edited.xlsx
 [
   {"op": "set_cell", "sheet": "Q3", "row": 2, "col": 2, "value": "=SUM(B3:B10)"},
   {"op": "set_cell", "sheet": "Q3", "row": 5, "col": 1, "value": "Net margin"},
+  {"op": "set_cell", "sheet": "Q3", "row": 6, "col": 1, "value": null},
   {"op": "rename_sheet", "old": "Sheet1", "new": "Summary"}
 ]
 ```
@@ -104,6 +105,13 @@ python {baseDir}/scripts/edit_xlsx.py book.xlsx ops.json --out edited.xlsx
 Rules:
 
 - Rows and columns are 1-based (Excel convention).
+- An explicit `"value": null` **clears** the cell and keeps its style. It is
+  the only way to empty a cell through this op list.
+- Omitting `value` entirely is a malformed operation: it is skipped and not
+  counted in `applied`, so a typo cannot silently wipe a cell.
+- `0`, `false` and `""` are values, not absence. Note that Excel has no
+  empty-string cell, so `""` reads back as empty — use `null` when you mean
+  "clear this cell".
 - Strings starting with `=` are written as formulas (`cell.value = "=..."`),
   matching openpyxl behavior. To write a literal `=hello`, pass
   `as_text: true` — either as `{"value": "=hello", "as_text": true}` or with
