@@ -65,6 +65,44 @@ def test_parse_cron_dow_ranges_may_end_at_7() -> None:
     assert expr.day_of_week.values == frozenset({0, 3, 4, 5, 6})
 
 
+def test_parse_cron_dow_ranges_may_end_at_sun_by_name() -> None:
+    # POSIX spells Sunday 0 or 7, and at the *upper* bound of a range it is 7 —
+    # "SAT-SUN" is 6-7. Substituting the name with 0 unconditionally made it
+    # 6-0, which _parse_field rejects as reversed, so every weekend-ish
+    # schedule a user would write by name died with CronParseError while its
+    # numeric spelling parsed fine.
+    assert parse_cron("0 0 * * SAT-SUN").day_of_week.values == frozenset({0, 6})
+    assert parse_cron("0 0 * * WED-SUN").day_of_week.values == frozenset({0, 3, 4, 5, 6})
+    assert parse_cron("0 0 * * MON-SUN").day_of_week.values == frozenset({0, 1, 2, 3, 4, 5, 6})
+    # Named and numeric spellings of the same range must agree.
+    assert parse_cron("0 0 * * WED-SUN").day_of_week.values == (
+        parse_cron("0 0 * * WED-7").day_of_week.values
+    )
+    assert parse_cron("0 0 * * sat-sun").day_of_week.values == frozenset({0, 6})
+
+
+def test_parse_cron_dow_sun_at_range_start_is_still_zero() -> None:
+    # Only the upper bound flips to 7. A range that *starts* at Sunday keeps
+    # 0, so "SUN-WED" stays four days and "SUN-SUN" stays one — reading the
+    # trailing SUN as 7 there would silently turn it into the whole week.
+    assert parse_cron("0 0 * * SUN-WED").day_of_week.values == frozenset({0, 1, 2, 3})
+    assert parse_cron("0 0 * * SUN-SUN").day_of_week.values == frozenset({0})
+    assert parse_cron("0 0 * * 0-SUN").day_of_week.values == frozenset({0})
+
+
+def test_parse_cron_dow_sun_range_with_step() -> None:
+    # The step branch parses the same range, so it must see 6-7 too.
+    assert parse_cron("0 0 * * SAT-SUN/2").day_of_week.values == frozenset({6})
+    assert parse_cron("0 0 * * MON-SUN/2").day_of_week.values == frozenset({0, 1, 3, 5})
+
+
+def test_parse_cron_sat_sun_matches_the_weekend() -> None:
+    expr = parse_cron("0 0 * * SAT-SUN")
+    assert expr.matches(datetime(2026, 8, 29, 0, 0))  # a Saturday
+    assert expr.matches(datetime(2026, 8, 30, 0, 0))  # the Sunday after it
+    assert not expr.matches(datetime(2026, 8, 31, 0, 0))  # the Monday after that
+
+
 def test_parse_cron_dow_7_dedups_with_0_and_names() -> None:
     assert parse_cron("0 0 * * 0,7").day_of_week.values == frozenset({0})
     assert parse_cron("0 0 * * MON,7").day_of_week.values == frozenset({0, 1})
