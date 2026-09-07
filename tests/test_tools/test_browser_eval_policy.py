@@ -97,6 +97,73 @@ class TestUrlPreScan:
     def test_no_url_literal(self) -> None:
         assert expression_targets_private_url("document.title") is None
 
+    def test_flags_protocol_relative_metadata_endpoint(self) -> None:
+        # `//host/…` inherits the page's scheme and reaches the same address.
+        # The scan only matched `http(s)://` literals, so this spelling of the
+        # metadata endpoint walked straight past the eval action's only network
+        # guard — the post-eval page-URL recheck fires on navigation, and a
+        # bare fetch never navigates.
+        blocked = expression_targets_private_url("fetch('//169.254.169.254/latest/meta-data/')")
+        assert blocked is not None
+        assert "169.254.169.254" in blocked
+
+    def test_flags_protocol_relative_loopback(self) -> None:
+        blocked = expression_targets_private_url("fetch('//127.0.0.1:8080/admin')")
+        assert blocked is not None
+        assert "127.0.0.1" in blocked
+
+    def test_flags_split_protocol(self) -> None:
+        # Splitting the scheme across two literals defeated a scan that only
+        # looked at the raw expression text.
+        blocked = expression_targets_private_url(
+            "fetch('htt' + 'p://169.254.169.254/latest/meta-data/')"
+        )
+        assert blocked is not None
+        assert "169.254.169.254" in blocked
+
+    def test_flags_split_protocol_relative_host(self) -> None:
+        blocked = expression_targets_private_url("fetch('//169.254.' + '169.254/latest/')")
+        assert blocked is not None
+        assert "169.254.169.254" in blocked
+
+    def test_line_comment_is_not_a_url(self) -> None:
+        # `//` starts a JS line comment far more often than a URL, so the
+        # protocol-relative match is confined to string literals. Without that
+        # confinement an ordinary comment would be scanned as a hostname and
+        # refused when it failed to resolve.
+        assert expression_targets_private_url("// grab the title\ndocument.title") is None
+        assert expression_targets_private_url("//no-space-comment\ndocument.title") is None
+
+    def test_dynamically_built_url_is_not_refused(self) -> None:
+        # Concatenating every literal to defeat a split protocol also glues
+        # together the fragments of a URL whose host is a variable. The result
+        # (`https:///api`) has no host, names no address, and must not be read
+        # as a private target.
+        assert expression_targets_private_url("fetch('https://' + host + '/api')") is None
+
+    def test_unresolvable_derived_host_is_not_refused(self) -> None:
+        # A `//…` fragment concatenated onto a base URL is indistinguishable
+        # from a protocol-relative target until the host is resolved, so a
+        # derived candidate only counts once it resolves to a private or
+        # metadata address. `.invalid` never resolves (RFC 2606).
+        assert expression_targets_private_url("fetch(base + '//not-a-host.invalid/x')") is None
+
+    def test_unresolvable_plain_literal_is_still_refused(self) -> None:
+        # Deliberate asymmetry: a URL the model wrote out in full is not a
+        # guess, so the strict pre-scan keeps failing closed on it.
+        assert expression_targets_private_url("fetch('http://not-a-host.invalid/x')") is not None
+
+    def test_division_is_not_a_url(self) -> None:
+        assert expression_targets_private_url("var r = a / b / c; r") is None
+
+    def test_dom_extraction_still_allowed(self) -> None:
+        assert (
+            expression_targets_private_url(
+                "[...document.querySelectorAll('a')].map(a => a.textContent)"
+            )
+            is None
+        )
+
 
 class TestRedaction:
     def test_masks_string_secret(self) -> None:
