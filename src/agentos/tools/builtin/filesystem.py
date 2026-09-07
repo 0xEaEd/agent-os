@@ -6,6 +6,7 @@ import asyncio
 import csv
 import fnmatch
 import functools
+import io
 import json
 import os
 import posixpath
@@ -592,7 +593,7 @@ def _read_delimited_rows(path: Path, delimiter: str) -> list[tuple[str, list[lis
         text = path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ToolError(f"Cannot read spreadsheet as UTF-8 text: {path}") from exc
-    rows = [[cell for cell in row] for row in csv.reader(text.splitlines(), delimiter=delimiter)]
+    rows = [list(row) for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
     return [(path.name, rows)]
 
 
