@@ -445,8 +445,8 @@ def sensitive_path_in_text(
     expanded = _expand_env_vars(text)
     candidates = [expanded] if expanded != text else []
     # On Windows the expansion lands a drive-rooted path in the middle of the
-    # text (`cat C:\Users\me/.npmrc`). The path pattern starts at `/`, so it
-    # can only see the trailing `/.npmrc` and reports that tail instead of the
+    # text (`cat C:\Users\<name>/.npmrc`). The path pattern starts at `/`, so
+    # it can only see the trailing `/.npmrc` and reports that tail instead of the
     # `~/.npmrc` the home prefix would give. Swapping separators lets the whole
     # path be picked up; the drive letter is dropped, and the drive-relative
     # remainder resolves back to the same file.
