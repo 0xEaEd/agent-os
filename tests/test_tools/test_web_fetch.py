@@ -69,3 +69,27 @@ def test_resolve_effective_max_chars_allows_uncapped_run_policy() -> None:
         assert _resolve_effective_max_chars(999_999) == 999_999
     finally:
         current_tool_context.reset(token)
+
+
+def test_resolve_effective_max_chars_clamps_below_minimum_instead_of_disabling_cap() -> None:
+    """Issue #1400: a max_chars below the documented minimum (100) must be
+    clamped up to it, not treated as "no cap" — requesting 1 char should
+    never come back with more text than requesting 1,000 would."""
+    assert _resolve_effective_max_chars(1) == 100
+    assert _resolve_effective_max_chars(0) == 100
+    assert _resolve_effective_max_chars(-5) == 100
+    assert _resolve_effective_max_chars(100) == 100
+    assert _resolve_effective_max_chars(150) == 150
+
+
+def test_apply_max_chars_actually_truncates_a_below_minimum_request() -> None:
+    result = {
+        "url": "https://example.test",
+        "final_url": "https://example.test",
+        "text": _wrap_content("https://example.test", "x" * 50_000),
+    }
+
+    effective = _resolve_effective_max_chars(1)
+    truncated = _apply_max_chars(result, effective)
+
+    assert truncated["returned_length"] <= 100
