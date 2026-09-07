@@ -24,6 +24,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   what `robinhood-chain-stocks` already does; `raw` still carries whatever
   came back and the dict path is unchanged
   ([#974](https://github.com/use-agent-os/agent-os/issues/974)).
+- The sensitive-path denylist now expands `$VAR`/`${VAR}` before it decides,
+  so the hard block cannot be side-stepped by spelling a home directory as a
+  variable. Tool dispatch ends in a shell, so `cat $HOME/.ssh/config` reaches
+  the syscall as `~/.ssh/config` while the scanner only ever saw the literal
+  text — a display-vs-executor drift that gave all 19 entries in
+  `_SENSITIVE_PREFIXES` a second, unguarded spelling. The leading `$` is
+  stripped as a token edge, so `$HOME/.ssh/config` arrived at the matcher as
+  the relative-looking `HOME/.ssh/config` and faced only the narrow
+  leaf-marker fallback; `cat $HOME/.aws/credentials`, `cp $HOME/.kube/config
+  /tmp/leak.txt`, `cat ${HOME}/.gnupg/secring.gpg` and `rm -rf $HOME/.ssh` all
+  ran at the real `exec_command` boundary, past a block that is meant to
+  survive user approval. `sensitive_path_marker()` expands before choosing a
+  matcher, `sensitive_path_in_text()` re-scans the expanded text when the
+  literal scan comes up empty, and `_is_root_target()` expands for the same
+  reason — `rm -rf $ROOTDIR` is a root wipe the literal text hides. Undefined
+  names are left as written, so nothing new matches on a host where the
+  variable does not exist, and the workspace exception still applies to the
+  expanded path
+  ([#985](https://github.com/use-agent-os/agent-os/issues/985)).
+- A tool result too large for the whole disk budget is refused before the
+  store is pruned, instead of after every record in it has been deleted.
+  `_prune_to_fit` took the oldest records off one at a time chasing room for a
+  snapshot that could never fit, and raised `ToolResultStoreBudgetError` only
+  once the store was empty; the caller in `agent.py` logs a `skipped` metric
+  and carries on, so unrelated records went to zero with nothing in the
+  transcript to say so. The budget check now runs first and nothing on disk is
+  touched. Pruning is unchanged for writes that can fit — the oldest records
+  still come off, and only as many as needed — and the trailing raise it
+  replaces was unreachable in every other case, since an emptied store always
+  satisfies the loop's own exit test
+  ([#996](https://github.com/use-agent-os/agent-os/issues/996)).
+- `code_exec` removes its ephemeral working directory on every exit, not just
+  the one path that happened to own the cleanup. `execute_code` creates the
+  directory with `tempfile.mkdtemp(prefix="agentos_exec_")` whenever no
+  workspace is configured, but the `shutil.rmtree` hung off the `finally` of
+  the non-sandbox branch alone. Every exit from the sandbox branch — gate
+  denial, a backend that raised, an escalation denial, a subprocess timeout, a
+  spawn error, and the success path too — returned past it and left one
+  directory behind per call, growing without bound on a long-running agent.
+  The whole execution now sits inside the try whose `finally` owns the
+  cleanup, so there is one exit path for the tempdir instead of six that skip
+  it. A configured workspace still sets no `cleanup_dir` and is never removed
+  ([#1010](https://github.com/use-agent-os/agent-os/issues/1010)).
+- A replacement agent task stays in `AgentTaskRegistry` when its predecessor
+  finishes winding down. Cancellation is not synchronous: `register()` may put
+  a new task under a session key while the cancelled one is still settling,
+  and the predecessor's done-callback then popped the key unconditionally —
+  evicting a task that is still running. Abort and status queries went blind
+  to it, so a session could be left with an unreachable agent turn that no
+  later cancel could reach. `_on_done` now removes the entry only when the
+  registry still holds the task the callback belongs to, leaving a replacement
+  registered
+  ([#1026](https://github.com/use-agent-os/agent-os/issues/1026)).
 
 ## [2026.9.6] - 2026-09-06
 

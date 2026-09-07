@@ -46,7 +46,12 @@ class AgentTaskRegistry:
         self._tasks[session_key] = task
 
         def _on_done(t: asyncio.Task) -> None:
-            self._tasks.pop(session_key, None)
+            # Cancellation is not synchronous: a replacement registered under
+            # this session key while the predecessor was still winding down is
+            # already in ``_tasks``, and an unconditional pop would drop a task
+            # that is still running, leaving abort/status queries blind to it.
+            if self._tasks.get(session_key) is t:
+                del self._tasks[session_key]
             try:
                 if t.cancelled():
                     log.info("agent_task.cancelled", session_key=session_key)
