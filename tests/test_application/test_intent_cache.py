@@ -330,3 +330,56 @@ class TestDocumentedAsymmetries:
         cache.record("rm /tmp/d")
         assert cache.check("rm -d /tmp/d") is True
         assert cache.check('os.rmdir("/tmp/d")') is True
+
+
+class TestQuotedRmIsNotACommand:
+    """A ``rm`` inside a quoted argument is text, not a delete (#1349).
+
+    The hard block these intents feed survives user approval, so a false
+    positive here cannot be approved past — only ``/elevated full`` clears it.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'grep -rn "rm" /etc/passwd',
+            'git commit -m "rm the old config" /etc/hosts',
+            'echo "use rm carefully" >> /root/notes.md',
+            "echo 'rm -rf /' > note.txt",
+            'rg --fixed-strings "rm -rf" /var/log/syslog',
+        ],
+    )
+    def test_read_only_command_mentioning_rm_extracts_nothing(self, command: str) -> None:
+        assert _extract_intents(command) == []
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rm -rf /etc",
+            "sudo rm -rf /etc",
+            "env FOO=1 rm -rf /etc",
+            "time rm -rf /etc",
+            "nohup rm -rf /etc",
+            "find . -name '*.log' | xargs rm -rf /etc",
+            "cd /tmp && rm -rf /etc",
+        ],
+    )
+    def test_real_deletes_are_still_extracted(self, command: str) -> None:
+        # Guards against the tempting fix: requiring `rm` to start the string
+        # or follow a separator reads as tighter but drops every one of these
+        # command prefixes, trading a false positive for a bypass.
+        targets = [target for _kind, target in _extract_intents(command)]
+        assert any(target.endswith("/etc") for target in targets), targets
+
+    def test_quoted_and_real_rm_in_one_command(self) -> None:
+        # The quoted mention is skipped; the real invocation after the
+        # separator is not.
+        intents = _extract_intents('echo "rm this later"; rm -rf /etc')
+        targets = [target for _kind, target in intents]
+        assert any(target.endswith("/etc") for target in targets), targets
+        assert not any(target.endswith("later") for target in targets), targets
+
+    def test_unbalanced_quote_leaves_the_rest_quoted(self) -> None:
+        # An unclosed quote quotes the remainder, which is what the shell does
+        # with it too, so nothing after it is read as a command.
+        assert _extract_intents('echo "rm -rf /etc') == []

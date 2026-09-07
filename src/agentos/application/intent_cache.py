@@ -183,6 +183,28 @@ def _rm_invocation_targets(tokens: list[str]) -> list[str]:
     return targets
 
 
+def _unquoted_spans(command: str) -> list[tuple[int, int]]:
+    """Ranges of *command* that sit outside single or double quotes.
+
+    A quote opened and never closed leaves the rest of the string quoted, which
+    is what the shell does with it too.
+    """
+    spans: list[tuple[int, int]] = []
+    start = 0
+    quote: str | None = None
+    for index, char in enumerate(command):
+        if quote is None:
+            if char in "'\"":
+                spans.append((start, index))
+                quote = char
+        elif char == quote:
+            quote = None
+            start = index + 1
+    if quote is None:
+        spans.append((start, len(command)))
+    return spans
+
+
 def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
     """Pull every ``rm`` argument out, tagged with that invocation's flags.
 
@@ -192,12 +214,26 @@ def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
     set, so the ``-rf`` on the second does not leak onto the first. Does not
     try to be a full shell parser — falls back to whitespace split on shlex
     errors (unbalanced quotes).
+
+    A ``rm`` inside a quoted argument is text, not a command: without that
+    check ``grep -rn "rm" /etc/passwd`` extracted ``/etc/passwd`` and was
+    hard-blocked as a delete, and the operator could not approve past it.
     """
     # Match each ``rm`` invocation, stopping at shell separators.
     # ``[^;\n&|]*`` captures everything from ``rm`` up to the next separator
     # or end-of-expression, so each ``rm`` is tokenized independently.
     pattern = re.compile(r"\brm\b([^;\n&|]*)")
-    matches = list(pattern.finditer(command))
+    # Position, not quoting, is what tells a command from a word here. Requiring
+    # ``rm`` to start the string or follow a separator would look tighter but
+    # drops ``sudo rm -rf /etc``, ``env FOO=1 rm …``, ``time rm …`` and
+    # ``xargs rm`` — a command prefix is ordinary, so that spelling trades a
+    # false positive for a bypass.
+    unquoted = _unquoted_spans(command)
+    matches = [
+        match
+        for match in pattern.finditer(command)
+        if any(start <= match.start() < end for start, end in unquoted)
+    ]
     if not matches:
         return []
 
