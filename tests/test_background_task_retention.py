@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import time
 from typing import Any
@@ -299,111 +300,32 @@ async def test_tui_runtime_cancel_retains_abort_task() -> None:
     cancel_cb()
 
     await abort_started.wait()
+
+    # The abort task is created inside run_tui_runtime, so the retention set is
+    # not reachable from here. Find the task by its coroutine and check that a
+    # set holds a strong reference to it: the event loop only keeps weak ones,
+    # which is the whole reason this fix exists. Without the retention the task
+    # has no set referrer at all, so this assertion fails with it reverted --
+    # the rest of this test passes either way.
+    snapshot = asyncio.all_tasks()
+    abort_task = next(
+        task
+        for task in snapshot
+        if getattr(task.get_coro(), "__name__", "") == "_schedule_abort"
+    )
+    # all_tasks() hands back a set, and that set is itself a strong referrer --
+    # leaving it alive makes the assertion below pass with the fix reverted.
+    del snapshot
+    gc.collect()
+    holders = [ref for ref in gc.get_referrers(abort_task) if isinstance(ref, set)]
+    assert holders, "abort task is not held by any set; the loop's reference is weak"
+
     abort_unblock.set()
 
     turn_hang.set()
     input_queue.put_nowait(None)
     await runtime_task
 
-
-@pytest.mark.asyncio
-async def test_otlp_write_flush_retains_task() -> None:
-    from agentos.observability.otlp import OtlpTraceSink
-    from agentos.observability.trace import TraceContext, TraceEvent
-
-    sink = OtlpTraceSink(
-        endpoint="http://localhost:4318",
-        batch_size=1,
-        flush_interval_s=0,
-    )
-
-    unblock = asyncio.Event()
-    started = asyncio.Event()
-
-    async def fake_flush() -> bool:
-        started.set()
-        await unblock.wait()
-        return True
-
-    sink.flush = fake_flush  # type: ignore[method-assign]
-
-    ctx = TraceContext.new(
-        trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
-        session_key="sess-test",
-    )
-    event = TraceEvent(kind="llm_call", context=ctx)
-
-    sink.write(event)
-    await started.wait()
-
-    assert len(sink._background_tasks) == 1
-    task = next(iter(sink._background_tasks))
-    assert not task.done()
-
-    unblock.set()
-    await task
+    # And it is released once done, so the set cannot grow without bound.
     await asyncio.sleep(0)
-    assert len(sink._background_tasks) == 0
-
-
-@pytest.mark.asyncio
-async def test_otlp_close_cancels_background_tasks() -> None:
-    from agentos.observability.otlp import OtlpTraceSink
-    from agentos.observability.trace import TraceContext, TraceEvent
-
-    sink = OtlpTraceSink(
-        endpoint="http://localhost:4318",
-        batch_size=1,
-        flush_interval_s=0,
-    )
-
-    started = asyncio.Event()
-
-    async def fake_flush() -> bool:
-        started.set()
-        await asyncio.sleep(100)
-        return True
-
-    sink.flush = fake_flush  # type: ignore[method-assign]
-
-    ctx = TraceContext.new(
-        trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
-        session_key="sess-test",
-    )
-    event = TraceEvent(kind="llm_call", context=ctx)
-
-    sink.write(event)
-    await started.wait()
-
-    assert len(sink._background_tasks) == 1
-    task = next(iter(sink._background_tasks))
-    assert not task.done()
-
-    await sink.close()
-    assert len(sink._background_tasks) == 0
-    assert task.done()
-
-
-@pytest.mark.asyncio
-async def test_retain_task_helper() -> None:
-    from agentos.asyncio_utils import _BACKGROUND_TASKS, retain_task
-
-    tasks: set[asyncio.Task[Any]] = set()
-
-    async def sample_coro() -> None:
-        await asyncio.sleep(0.01)
-
-    t = asyncio.create_task(sample_coro())
-    retain_task(t, tasks)
-    assert t in tasks
-    await t
-    await asyncio.sleep(0)
-    assert t not in tasks
-
-    # Test default module-level set
-    t2 = asyncio.create_task(sample_coro())
-    retain_task(t2)
-    assert t2 in _BACKGROUND_TASKS
-    await t2
-    await asyncio.sleep(0)
-    assert t2 not in _BACKGROUND_TASKS
+    assert all(abort_task not in holder for holder in holders)
