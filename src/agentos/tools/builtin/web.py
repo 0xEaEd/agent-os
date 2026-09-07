@@ -466,8 +466,11 @@ def _search_provider_kwargs(provider_name: str) -> dict[str, object]:
     }
     if provider_name in {"brave", "tavily"} and _active_search_api_key:
         kwargs["api_key"] = _active_search_api_key
-    if _active_search_diagnostics or provider_name == "duckduckgo":
-        kwargs["diagnostics"] = _active_search_diagnostics
+    # Only ever turns diagnostics *on*. Passing the flag through when it is off
+    # used to force ``diagnostics=False`` onto DuckDuckGo, which re-buried the
+    # HTTP failure the provider now reports by default.
+    if _active_search_diagnostics:
+        kwargs["diagnostics"] = True
     return kwargs
 
 

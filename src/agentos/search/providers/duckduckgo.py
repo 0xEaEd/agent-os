@@ -28,10 +28,14 @@ class DuckDuckGoProvider:
         self,
         proxy: str = "",
         use_env_proxy: bool = False,
-        diagnostics: bool = False,
+        diagnostics: bool = True,
     ) -> None:
         self._proxy = proxy or None
         self._trust_env = bool(use_env_proxy) and not self._proxy
+        # Default on, so an upstream 403/429/timeout is distinguishable from
+        # "no organic results" the way Brave and Tavily already make it.
+        # ``diagnostics=False`` is the explicit opt-out for a caller that
+        # relies on ``search()`` never raising.
         self._diagnostics = bool(diagnostics)
 
     async def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
@@ -47,18 +51,41 @@ class DuckDuckGoProvider:
                     headers=_HEADERS,
                 )
                 response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            if not self._diagnostics:
+                return []
+            raise SearchProviderError(
+                provider=self.name,
+                kind="timeout",
+                message=str(exc) or "DuckDuckGo search request timed out.",
+                retryable=True,
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            if not self._diagnostics:
+                return []
+            status_code = exc.response.status_code
+            if status_code in {401, 403}:
+                kind: SearchErrorKind = "auth"
+            elif status_code == 429:
+                kind = "rate_limit"
+            else:
+                kind = "http"
+            raise SearchProviderError(
+                provider=self.name,
+                kind=kind,
+                message=str(exc) or f"DuckDuckGo search failed with HTTP {status_code}.",
+                retryable=kind in {"rate_limit", "http"},
+                status_code=status_code,
+            ) from exc
         except httpx.HTTPError as exc:
-            if self._diagnostics:
-                kind: SearchErrorKind = (
-                    "timeout" if isinstance(exc, httpx.TimeoutException) else "network"
-                )
-                raise SearchProviderError(
-                    provider=self.name,
-                    kind=kind,
-                    message=str(exc) or "DuckDuckGo search network request failed.",
-                    retryable=True,
-                ) from exc
-            return []
+            if not self._diagnostics:
+                return []
+            raise SearchProviderError(
+                provider=self.name,
+                kind="network",
+                message=str(exc) or "DuckDuckGo search network request failed.",
+                retryable=True,
+            ) from exc
 
         soup = BeautifulSoup(response.text, "html.parser")
         results: list[SearchResult] = []
