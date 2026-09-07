@@ -140,6 +140,61 @@ def test_hardened_path_appends_login_dirs() -> None:
     assert "/home/u/.local/bin" in parts
 
 
+def test_hardened_path_preserves_windows_path_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Windows env vars are case-insensitive and the OS spells the search path
+    # "Path". Copying that environment into a plain dict makes it
+    # case-sensitive, so env.get("PATH") returned "" and env["PATH"] = ... added
+    # a *second* key holding only the fallback dirs — the operator's real
+    # binaries were dropped from the PATH the upgrade subprocess reads.
+    monkeypatch.setattr(im, "_CASE_INSENSITIVE_ENV_KEYS", True)
+    env = {"Path": r"C:\Program Files\uv\bin", "HOME": "/home/u"}
+    out = im.hardened_path_env(env)
+    assert "PATH" not in out  # no competing duplicate key
+    # Asserted with startswith rather than a pathsep split: os.pathsep is ":"
+    # when this runs on POSIX, which would cut the drive letter off.
+    assert out["Path"].startswith(r"C:\Program Files\uv\bin")
+    assert "/opt/homebrew/bin" in out["Path"]  # fallback dirs still appended
+
+
+def test_hardened_path_windows_prefers_exact_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An exact "PATH" wins even when a differently-cased key is also present,
+    # so the lookup never silently moves to the wrong variable.
+    monkeypatch.setattr(im, "_CASE_INSENSITIVE_ENV_KEYS", True)
+    env = {"Path": "/wrong", "PATH": "/right", "HOME": "/home/u"}
+    out = im.hardened_path_env(env)
+    assert out["Path"] == "/wrong"
+    assert out["PATH"].split(os.pathsep)[0] == "/right"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX treats PATH and Path as different variables; the case-folding "
+    "lookup is Windows-only by design",
+)
+def test_hardened_path_posix_does_not_case_fold() -> None:
+    env = {"Path": "/not/the/search/path", "HOME": "/home/u"}
+    out = im.hardened_path_env(env)
+    assert out["Path"] == "/not/the/search/path"  # untouched
+    assert "/not/the/search/path" not in out["PATH"].split(os.pathsep)
+
+
+def test_resolve_tool_uses_windows_path_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # resolve_tool read hardened["PATH"] directly, so on Windows it handed
+    # shutil.which a None path and fell back to the process environment —
+    # exactly the un-hardened PATH this helper exists to replace.
+    monkeypatch.setattr(im, "_CASE_INSENSITIVE_ENV_KEYS", True)
+    seen: dict[str, str | None] = {}
+
+    def fake_which(tool: str, path: str | None = None) -> str | None:
+        seen["path"] = path
+        return None
+
+    monkeypatch.setattr(im.shutil, "which", fake_which)
+    assert im.resolve_tool("uv", {"Path": "/some/bin", "HOME": "/home/u"}) is None
+    assert seen["path"] is not None
+    assert "/some/bin" in str(seen["path"]).split(os.pathsep)
+
+
 def test_hardened_path_no_duplicates() -> None:
     env = {"PATH": "/opt/homebrew/bin:/x", "HOME": "/home/u"}
     parts = im.hardened_path_env(env)["PATH"].split(os.pathsep)

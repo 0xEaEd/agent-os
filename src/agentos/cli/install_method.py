@@ -252,24 +252,53 @@ def detect_install_method(
     return InstallMethod.UNKNOWN
 
 
+#: Windows environment variables are case-insensitive; POSIX ones are not.
+#: Read through this rather than ``os.name`` so the case rule can be exercised
+#: from either platform's test run.
+_CASE_INSENSITIVE_ENV_KEYS = os.name == "nt"
+
+
+def _env_key(env: dict[str, str], name: str) -> str:
+    """The key in ``env`` that spells ``name``, honouring Windows case rules.
+
+    Windows environment variables are case-insensitive and the OS hands the
+    canonical ``Path`` spelling to child processes. Copying such an environment
+    into a plain ``dict`` makes it case-*sensitive*, so a literal ``"PATH"``
+    lookup misses and a literal ``"PATH"`` assignment adds a second, competing
+    key. POSIX keeps the exact-match behaviour: there ``PATH`` and ``Path`` are
+    genuinely different variables and only ``PATH`` is the search path.
+    """
+
+    if name in env or not _CASE_INSENSITIVE_ENV_KEYS:
+        return name
+    folded = name.casefold()
+    for key in env:
+        if key.casefold() == folded:
+            return key
+    return name
+
+
 def hardened_path_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
     """Return an env copy whose ``PATH`` includes the standard login dirs.
 
     The augmented directories are *appended* so an operator's own ordering is
-    preserved; only genuinely-missing login locations are added.
+    preserved; only genuinely-missing login locations are added. The existing
+    key is reused verbatim, so a Windows environment spelling it ``Path`` keeps
+    its real entries instead of being shadowed by an empty ``PATH``.
     """
 
     env = dict(base_env if base_env is not None else os.environ)
-    current = env.get("PATH", "")
+    path_key = _env_key(env, "PATH")
+    current = env.get(path_key, "")
     entries = [p for p in current.split(os.pathsep) if p]
     seen = set(entries)
-    home = env.get("HOME") or str(Path.home())
+    home = env.get(_env_key(env, "HOME")) or str(Path.home())
     login_dirs = list(_LOGIN_PATH_DIRS) + [str(Path(home) / ".local" / "bin")]
     for extra in login_dirs:
         if extra not in seen:
             entries.append(extra)
             seen.add(extra)
-    env["PATH"] = os.pathsep.join(entries)
+    env[path_key] = os.pathsep.join(entries)
     return env
 
 
@@ -282,7 +311,11 @@ def resolve_tool(tool: str, env: dict[str, str] | None = None) -> str | None:
     """
 
     hardened = hardened_path_env(env)
-    resolved = shutil.which(tool, path=hardened.get("PATH"))
+    # Same case rule as the hardening itself: on Windows the search path may be
+    # spelled ``Path``, and a literal ``"PATH"`` miss here would silently hand
+    # ``shutil.which`` a ``None`` path and fall back to the un-hardened
+    # ``os.environ``, which is the PATH gap this function exists to close.
+    resolved = shutil.which(tool, path=hardened.get(_env_key(hardened, "PATH")))
     if resolved:
         return str(Path(resolved).resolve())
     return None
