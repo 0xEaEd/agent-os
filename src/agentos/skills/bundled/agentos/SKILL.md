@@ -121,6 +121,9 @@ non-TTY contexts fall back automatically.
 Top-level: `init`, `onboard`, `configure`, `doctor`, `upgrade`, `chat`,
 `agent`, `reset`, plus these groups (each supports `--help`):
 
+`agentos --version` prints the installed version and exits — use it rather
+than reading a version out of `uv tool list` or `pip show`.
+
 | Group | Subcommands |
 | --- | --- |
 | `gateway` | `run`, `start`, `status`, `stop`, `restart` (`--port`, `--bind`, `--listen`, `--config`, `--json`, `--debug`) |
