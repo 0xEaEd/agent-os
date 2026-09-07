@@ -68,6 +68,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   variable does not exist, and the workspace exception still applies to the
   expanded path
   ([#985](https://github.com/use-agent-os/agent-os/issues/985)).
+- `agentos upgrade` keeps the operator's real `PATH` on Windows. Windows
+  environment variables are case-insensitive and the OS spells the search path
+  `Path`, but `hardened_path_env` copied the environment into a plain dict —
+  which is case-*sensitive* — then read `env.get("PATH", "")` and got nothing.
+  It wrote the fallback login dirs back under a brand-new `PATH` key, so the
+  environment carried two competing variables and the one the upgrade
+  subprocess reads no longer contained `uv`, `pipx`, or anything else the user
+  had installed. `resolve_tool` compounded it by reading `hardened["PATH"]`
+  directly: the miss handed `shutil.which` a `None` path, falling back to the
+  un-hardened process environment the helper exists to replace. Both now
+  resolve the key case-insensitively on Windows and write back to whichever
+  spelling was already there; POSIX still treats `PATH` and `Path` as the
+  different variables they are
+  ([#1069](https://github.com/use-agent-os/agent-os/issues/1069)).
 - A tool result too large for the whole disk budget is refused before the
   store is pruned, instead of after every record in it has been deleted.
   `_prune_to_fit` took the oldest records off one at a time chasing room for a
