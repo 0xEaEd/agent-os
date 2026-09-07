@@ -67,8 +67,9 @@ def _make_conn(*, enabled: bool = True, maxsize: int = 16) -> WsConnection:
 
 async def _flush_writer(conn: WsConnection, *, deadline: float = 1.0) -> None:
     """Wait until the writer's outbox is fully drained or deadline elapses."""
-    end = asyncio.get_event_loop().time() + deadline
-    while asyncio.get_event_loop().time() < end:
+    loop = asyncio.get_running_loop()
+    end = loop.time() + deadline
+    while loop.time() < end:
         if conn._outbox is None or conn._outbox.empty():
             await asyncio.sleep(0)
             return
@@ -248,9 +249,10 @@ async def test_writer_cancel_during_blocked_send_within_budget() -> None:
         await asyncio.wait_for(fake._send_event.wait(), timeout=1.0)
 
         with structlog.testing.capture_logs() as logs:
-            start = asyncio.get_event_loop().time()
+            loop = asyncio.get_running_loop()
+            start = loop.time()
             await conn._force_close(reason="test_stuck", code=1011)
-            elapsed = asyncio.get_event_loop().time() - start
+            elapsed = loop.time() - start
 
         # Bounded by wait_for(2.0) + close overhead. Allow up to 3s.
         assert elapsed < 3.0, f"force_close took {elapsed:.2f}s, exceeded 3s"
