@@ -13,6 +13,7 @@ any other module.
 from __future__ import annotations
 
 import os
+import urllib.parse
 from pathlib import Path
 
 # Env var names this skill declares in its SKILL.md frontmatter. Keep the two in
@@ -149,14 +150,39 @@ def resolve_chain(key_or_id: str | int | None = None) -> dict:
     raise ValueError(f'unknown chain "{key_or_id}". Known: {known} (or their chain ids)')
 
 
+def require_http_url(url: str, label: str) -> str:
+    """Return *url* if it is an ``http(s)`` URL with a host, else raise ValueError.
+
+    ``urllib.request.urlopen`` also speaks ``file:``, ``ftp:`` and ``data:``, so
+    an unchecked endpoint turns this script into an arbitrary local-file reader:
+    ``file:///etc/passwd`` reads the file and hands the contents back to the
+    agent. Parsed with ``urlsplit`` rather than a ``startswith`` prefix test, so
+    neither ``HTTP://`` casing nor leading whitespace decides the answer.
+    """
+    cleaned = (url or "").strip()
+    if not cleaned:
+        raise ValueError(f"empty {label}")
+    try:
+        parsed = urllib.parse.urlsplit(cleaned)
+    except ValueError as exc:
+        raise ValueError(f"invalid {label} {url!r}: {exc}") from exc
+    if parsed.scheme.lower() not in ("http", "https"):
+        raise ValueError(
+            f"invalid {label} scheme {parsed.scheme!r} in {url!r}: must be http:// or https://"
+        )
+    if not parsed.netloc:
+        raise ValueError(f"{label} {url!r} has no host: must be http:// or https://")
+    return cleaned
+
+
 def resolve_rpc_url(chain: dict, override: str | None = None) -> str:
     if override:
-        return override
+        return require_http_url(override, "--rpc")
     load_env()
     for name in chain["rpcEnv"]:
         value = os.environ.get(name)
         if value:
-            return value
+            return require_http_url(value, name)
     names = " or ".join(chain["rpcEnv"])
     raise RuntimeError(
         f"no RPC url for {chain['name']}. Set {names} in the agent environment "

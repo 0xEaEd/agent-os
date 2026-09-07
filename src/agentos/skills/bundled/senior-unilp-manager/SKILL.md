@@ -62,6 +62,8 @@ Every command below is written `python3 "$S"/<script>`. Use that form verbatim �
 `<S>` is not a variable, and in a shell it reads as a redirect from a file named `S`.
 
 Chain endpoints come from `RPC_ROBINHOOD_URL` and `RPC_BASE_URL`; `--rpc <url>` overrides.
+Both must be `http://` or `https://`; any other scheme is refused, because the
+JSON-RPC transport would otherwise read local files through `file://`.
 
 ---
 
@@ -718,6 +720,7 @@ different branches at every layer, and a hook can answer differently on each.
 | Symptom | Cause / fix |
 |---|---|
 | `no RPC url for …` | Set `RPC_ROBINHOOD_URL` / `RPC_BASE_URL`, or pass `--rpc <url>` |
+| `invalid --rpc scheme …` | The endpoint must be `http://` or `https://` |
 | `env var UNIV4_LP_PRIVATE_KEY is not set` | Set it in the agent environment — never as a flag |
 | `Base cannot serve a wide eth_getLogs range …` | Give the PoolKey directly (`--currency0 --currency1 --fee --tick-spacing`), or `--token <addr>` to derive it, or `--scan-logs` |
 | `could not derive the PoolKey for … from token …` | Not a launch pool, and not a hook-less pool at a conventional tier. Spell the PoolKey out, or `--scan-logs` |

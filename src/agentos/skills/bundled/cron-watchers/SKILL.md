@@ -37,6 +37,10 @@ All three also take `--limit` (max lines per run, default 10) and
 `--first-run-reports` (report everything on the first run instead of starting
 quiet).
 
+`--url` must be `http://` or `https://`. Any other scheme is refused with exit
+code 1 — `urlopen` speaks `file:`, `ftp:` and `data:` too, and a watcher
+pointed at `file:///etc/passwd` would report the file's contents on every run.
+
 ## Install them first
 
 A cron job may only run files under `~/.agentos/scripts/`, so copy the ones you
@@ -44,12 +48,13 @@ need there before scheduling:
 
 ```sh
 mkdir -p ~/.agentos/scripts
-cp {baseDir}/scripts/_watermark.py ~/.agentos/scripts/
+cp {baseDir}/scripts/_watermark.py {baseDir}/scripts/_url.py ~/.agentos/scripts/
 cp {baseDir}/scripts/watch_rss.py ~/.agentos/scripts/
 ```
 
-`_watermark.py` is shared state-keeping used by all three — copy it alongside
-whichever watcher you install.
+`_watermark.py` (shared state-keeping) and `_url.py` (the `http(s)` check on
+`--url`) are used by all three — copy both alongside whichever watcher you
+install, or it will fail to start with an `ImportError`.
 
 ## Schedule one
 
