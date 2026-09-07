@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.7] - 2026-09-07
+
 ### Fixed
 
 - Day-of-week ranges that end at `SUN` parse again. `_parse_field` substituted
@@ -134,6 +136,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   registry still holds the task the callback belongs to, leaving a replacement
   registered
   ([#1026](https://github.com/use-agent-os/agent-os/issues/1026)).
+- `code_exec` blocks destructive calls reached through `compile`, `getattr`
+  and `builtins.__import__`. The AST scan added in #848 read `eval`/`exec`
+  arguments as string expressions only, so wrapping the same source in a code
+  carrier walked straight past it: `exec(compile("import os; os.remove('/x')",
+  "<s>", "exec"))` was allowed, and so was the renamed carrier `c = compile;
+  exec(c(...))`. Two more spellings of the same call bypassed the module
+  resolver — `getattr(os, "sys" + "tem")("rm -rf /")`, whose callee is a
+  `Call` rather than an `Attribute` and therefore never reached the attribute
+  branch, and `builtins.__import__("os")` / `getattr(builtins,
+  "__import__")("os")`, which the resolver only recognised in its bare
+  `__import__` spelling. `_eval_const_str` now resolves a `compile(...)` call
+  to its `source` argument (positional or keyword) with local aliases tracked
+  through `visit_Assign`, a new `_resolve_getattr_target` resolves both halves
+  of a `getattr` statically, and the module resolver accepts `__import__`
+  through an attribute or a dynamically fetched callee
+  ([#1102](https://github.com/use-agent-os/agent-os/issues/1102)).
+- The fork-bomb hard block matches the fork bomb. `:(){ :|:& };:` was written
+  into `_HARD_BLOCK_PATTERNS` as a raw string, so `re` read `(){ :\|:& }` as a
+  *group* and `{ … }` as a quantifier: the pattern compiled to an empty
+  capture followed by literal text, and the classic one-liner a scheduled
+  prompt could carry went unblocked. The parens, braces and separators are now
+  escaped and joined with `\s*`, so the bomb is caught with or without the
+  whitespace variations it is usually pasted with
+  ([#998](https://github.com/use-agent-os/agent-os/issues/998)).
+- `read_spreadsheet` no longer shreds CSV and TSV rows that contain a
+  multiline quoted field. `_read_delimited_rows` handed `csv.reader` the
+  output of `text.splitlines()`, which cuts on the newline *inside* a quoted
+  cell — a perfectly valid `"line one\nline two"` address or note field became
+  two half-parsed rows, silently misaligning every column after it. The reader
+  now consumes an `io.StringIO` over the whole text, which is what
+  `csv.reader` expects, so embedded newlines stay inside their cell
+  ([#1023](https://github.com/use-agent-os/agent-os/issues/1023)).
+- A Markdown table with a ragged row renders on Telegram instead of raising.
+  `_render_table` unpacked two-column rows as `label, value = row` and used
+  `zip(..., strict=True)` for wider ones, so any row whose cell count differed
+  from the header — routine in model-generated Markdown, where a trailing
+  empty cell or an extra pipe is common — raised `ValueError` out of the
+  formatter and cost the user the whole message. Rows are now padded or
+  truncated to the header's column count, and the parser stops discarding the
+  remainder of a table at the first ragged row
+  ([#1031](https://github.com/use-agent-os/agent-os/issues/1031)).
+- Microsoft Teams streaming sends the text of the chunk it was called for.
+  The `_send` closure read `accumulated` from the enclosing scope while its
+  sibling `_edit` bound the same value as a default argument; because the
+  callback runs inside `adapter.continue_conversation` after the loop has
+  moved on, the first message of a stream could go out carrying a later
+  chunk's text — or, if the turn finished first, the whole answer duplicated.
+  `_send` now binds the text by value the way `_edit` does
+  ([#1046](https://github.com/use-agent-os/agent-os/issues/1046)).
+- `agentos skills publish` reports a failed fork as a failure and exits
+  non-zero. The publisher called `gh repo fork` and then `await proc.wait()`
+  without ever reading the return code, so a missing `gh` auth, a rate limit
+  or a repo that cannot be forked still produced `Fork created, use branch
+  'skill/<name>' to submit` — advice for a fork that does not exist. The CLI
+  compounded it by printing `Failed:` and exiting 0, so scripted publishes
+  reported success. The fork's exit status and stderr are now checked and
+  surfaced in the message, and the command raises `typer.Exit(1)` on failure
+  ([#1050](https://github.com/use-agent-os/agent-os/issues/1050)).
+- Bundled skill scripts create the parent directory of their `--out` /
+  `--output` path. Seven entry points — `docx`, `xlsx`, `pdf-toolkit`,
+  `multi-search-engine`, and the `robinhood-chain-stocks` and
+  `robinhood-rwa-addresses` card writers — went straight to `write_text`, so
+  the natural `--out reports/summary.json` died with `FileNotFoundError` after
+  the expensive work was already done, losing the result. Each now calls
+  `mkdir(parents=True, exist_ok=True)` on the parent before writing
+  ([#1055](https://github.com/use-agent-os/agent-os/issues/1055)).
 
 ## [2026.9.6] - 2026-09-06
 
