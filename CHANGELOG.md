@@ -55,6 +55,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   replaces was unreachable in every other case, since an emptied store always
   satisfies the loop's own exit test
   ([#996](https://github.com/use-agent-os/agent-os/issues/996)).
+- The browser `eval` SSRF pre-scan now sees obfuscated targets. It matched
+  only literal `http(s)://` text, so three spellings of a private or
+  cloud-metadata URL reached the evaluator unblocked: protocol-relative
+  `fetch('//169.254.169.254/latest/meta-data/')`, which inherits the page's
+  scheme and lands on exactly the same address; the loopback form
+  `fetch('//127.0.0.1:8080/admin')`; and a protocol split across literals,
+  `fetch('htt' + 'p://169.254.169.254/…')`. This scan is the *only* network
+  guard the eval action gets — the post-eval page-URL recheck fires when the
+  page navigates, and a direct `fetch` never navigates — while the denylist
+  layer that would otherwise catch `fetch` is opt-in and off by default. The
+  scan now also screens protocol-relative targets and the concatenation of
+  every decoded string literal, reusing the split-token technique the denylist
+  already had. A protocol-relative target is read only from a string literal
+  that is entirely the URL, so a `//` line comment stays a comment, and a
+  candidate the scan *derived* rather than read counts only once its host
+  resolves to a private or metadata address — otherwise `'base' + '//a/b'`
+  would be refused as readily as `'//127.0.0.1/x'`
+  ([#1092](https://github.com/use-agent-os/agent-os/issues/1092)).
 - `code_exec` removes its ephemeral working directory on every exit, not just
   the one path that happened to own the cleanup. `execute_code` creates the
   directory with `tempfile.mkdtemp(prefix="agentos_exec_")` whenever no

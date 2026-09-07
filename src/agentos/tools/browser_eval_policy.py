@@ -8,7 +8,8 @@ the same two-tier eval guard Hermes ships:
   expressions touching sensitive browser primitives — matched both as bare
   identifiers and as string-literal property names so ``document["coo"+"kie"]``
   cannot slip past a check on ``document.cookie``;
-* an SSRF pre-scan of ``http(s)://`` literals in the expression, so a
+* an SSRF pre-scan of the URL targets in the expression — plain,
+  protocol-relative, and split across string literals — so a
   ``fetch('http://169.254.169.254/…')`` that never updates ``location.href`` is
   refused before it runs.
 
@@ -28,6 +29,7 @@ from typing import Any
 
 from agentos.redact import redact_sensitive_text
 from agentos.tools.ssrf import assert_not_metadata_endpoint, validate_http_url_for_fetch
+from agentos.tools.types import SSRFBlockedError
 
 # ---------------------------------------------------------------------------
 # Denylist (opt-in): risky primitives, as regexes and as bare token names.
@@ -87,6 +89,13 @@ _JS_STRING_LITERAL_RE = re.compile(
 #: targets the model may have written). The post-eval page-URL recheck can't see
 #: a direct fetch that never touches ``location.href``, so pre-screen here.
 _JS_URL_LITERAL_RE = re.compile(r"""https?://[^\s'"`)\]<>]+""", re.IGNORECASE)
+
+#: Protocol-relative targets — ``fetch('//169.254.169.254/…')`` inherits the
+#: page's scheme and reaches the same address, so it has to be screened too.
+#: Matched only against a whole string literal: a ``//`` in the middle of some
+#: text is a path separator or a line comment far more often than a target, and
+#: the shape that reaches ``fetch`` is a literal that *is* the URL.
+_JS_PROTOCOL_RELATIVE_RE = re.compile(r"""//[^\s'"`)\]<>/][^\s'"`)\]<>]*""")
 
 
 def _decode_js_string_literal(literal: str) -> str:
@@ -182,18 +191,79 @@ def _url_is_blocked(url: str) -> bool:
     return False
 
 
-def expression_targets_private_url(expression: str) -> str | None:
-    """Return the first private/internal URL literal in *expression*, if any.
+def _derived_url_is_blocked(url: str) -> bool:
+    """Like :func:`_url_is_blocked`, but an unresolvable host is not evidence.
 
-    Best-effort scan for ``http(s)://…`` literals; returns the first that targets
-    a private/internal address or the always-blocked cloud-metadata floor, else
-    ``None``.
+    A *derived* candidate — reassembled from string fragments, or read from a
+    protocol-relative literal — is a guess about intent, and the guess and an
+    ordinary string look identical until the host is resolved:
+    ``'//double/slash'`` appended to a base URL has exactly the shape of
+    ``'//127.0.0.1/x'``. Failing closed on a name that resolves to nothing
+    would refuse plain concatenation, so only a positive answer counts here —
+    the host resolved, and it is private or metadata. This is the same rule
+    :func:`agentos.tools.ssrf.assert_not_metadata_endpoint` already applies.
+    """
+    try:
+        assert_not_metadata_endpoint(url)
+        validate_http_url_for_fetch(url)
+    except SSRFBlockedError:
+        return True
+    except Exception:  # noqa: BLE001 - unresolvable/malformed names prove nothing
+        return False
+    return False
+
+
+def _url_candidates(text: str, *, protocol_relative: bool) -> list[str]:
+    """URL spellings in *text*, each normalized to an ``http(s)://`` form.
+
+    ``protocol_relative`` additionally reads *text* as a whole ``//host/…``
+    target. It is anchored rather than searched so that ordinary text keeps its
+    ordinary meaning: ``https://example.com//a`` and a ``// comment`` both hold
+    a ``//`` that names no host.
+    """
+    found = [str(match).rstrip(".,;") for match in _JS_URL_LITERAL_RE.findall(text)]
+    stripped = text.strip()
+    if protocol_relative and _JS_PROTOCOL_RELATIVE_RE.fullmatch(stripped):
+        found.append("http:" + stripped.rstrip(".,;"))
+    return found
+
+
+def expression_targets_private_url(expression: str) -> str | None:
+    """Return the first private/internal URL target in *expression*, if any.
+
+    Best-effort scan; returns the first candidate that targets a
+    private/internal address or the always-blocked cloud-metadata floor, else
+    ``None``. Three spellings all have to reach ``_url_is_blocked``, because
+    this scan is the only network guard the eval action gets — the post-eval
+    page-URL recheck fires only when the page navigates, so a plain ``fetch``
+    never touches it:
+
+    * plain ``http(s)://…`` written straight into the expression;
+    * protocol-relative ``//host/…``, which inherits the page's scheme and so
+      reaches exactly the same address — read only from a string literal that
+      is entirely the URL, since a bare ``//`` in JavaScript source is a line
+      comment;
+    * a protocol split across literals (``'htt' + 'p://169.254.169.254/'``),
+      caught by re-scanning the concatenation of every decoded literal, the
+      same technique :func:`_sensitive_eval_token_reason` already uses.
     """
     if not isinstance(expression, str):
         return None
-    for match in _JS_URL_LITERAL_RE.findall(expression):
-        candidate = str(match).rstrip(".,;")
+
+    seen: set[str] = set()
+    for candidate in _url_candidates(expression, protocol_relative=False):
+        seen.add(candidate)
         if _url_is_blocked(candidate):
+            return candidate
+
+    literals = _decoded_js_string_literals(expression)
+    derived = [c for lit in literals for c in _url_candidates(lit, protocol_relative=True)]
+    derived += _url_candidates("".join(literals), protocol_relative=True)
+    for candidate in derived:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if _derived_url_is_blocked(candidate):
             return candidate
     return None
 
