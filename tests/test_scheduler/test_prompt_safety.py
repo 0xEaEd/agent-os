@@ -82,3 +82,25 @@ def test_allowed_whitespace_controls_remain_allowed(character: str) -> None:
 
     assert blocked is False
     assert reason == ""
+
+
+# ── Issue #998: fork-bomb regex ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        ":(){ :|:& };:",       # canonical
+        ":(){:|:&};:",         # no spaces
+        ":() { :|:& };:",     # space after ()
+        ":(){ :|:& } ;:",     # space before ;
+        ":(){ :|:& }; :",     # space after ;
+    ],
+)
+def test_fork_bomb_variants_are_blocked(task: str) -> None:
+    """All common whitespace variants of the bash fork bomb must be caught."""
+    blocked, reason = scan_cron_prompt(task)
+
+    assert blocked is True
+    assert "dangerous pattern" in reason
+
