@@ -289,3 +289,36 @@ def test_format_spreadsheet_multi_sheet_empty_sheet_is_not_reported_as_starved()
     )
     assert "Empty (0 rows x 0 columns)" in out
     assert "exceeds" not in out
+
+
+def test_read_xlsx_worksheet_crafted_row_beyond_ceiling() -> None:
+    """A crafted or corrupt r="99999999999" row index must not make the
+    padding loop try to build a list of that size -- bound row indices to
+    the real .xlsx row ceiling (1,048,576) before padding."""
+    xml = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        <sheetData>
+            <row r="1">
+                <c r="A1" t="inlineStr"><is><t>Header</t></is></c>
+            </row>
+            <row r="20000000">
+                <c r="A20000000" t="inlineStr"><is><t>Huge Row</t></is></c>
+            </row>
+            <row r="99999999999">
+                <c r="A99999999999" t="inlineStr"><is><t>Gigantic Row</t></is></c>
+            </row>
+            <row r="0">
+                <c r="A0" t="inlineStr"><is><t>Zero Row</t></is></c>
+            </row>
+        </sheetData>
+    </worksheet>"""
+
+    import time
+
+    start = time.perf_counter()
+    rows = fs._read_xlsx_worksheet(xml, [])
+    elapsed = time.perf_counter() - start
+
+    assert len(rows) == 1
+    assert rows[0] == ["Header"]
+    assert elapsed < 0.5

@@ -50,6 +50,7 @@ _BINARY_EXTENSIONS = {
 _XLSX_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _XLSX_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _XLSX_OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_XLSX_MAX_ROWS = 1_048_576
 _BOOTSTRAP_SOURCE_FILENAMES = frozenset(BOOTSTRAP_FILENAMES)
 
 
@@ -665,9 +666,14 @@ def _read_xlsx_worksheet(raw_xml: bytes, shared_strings: list[str]) -> list[list
     root = ET.fromstring(raw_xml)
     rows: list[list[str]] = []
     for row_el in root.findall(f".//{{{_XLSX_MAIN_NS}}}row"):
+        if len(rows) >= _XLSX_MAX_ROWS:
+            break
         row_r = row_el.attrib.get("r")
         if row_r and row_r.isdigit():
-            target_row_idx = max(0, int(row_r) - 1)
+            row_num = int(row_r)
+            if row_num < 1 or row_num > _XLSX_MAX_ROWS:
+                continue
+            target_row_idx = min(row_num - 1, _XLSX_MAX_ROWS - 1)
             while len(rows) < target_row_idx:
                 rows.append([])
         row: list[str] = []
