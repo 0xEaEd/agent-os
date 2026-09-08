@@ -711,7 +711,7 @@ restrict_evaluate = false
 | `browser.binary_path` | `""` | Optional explicit path to `agent-browser`; otherwise found on `PATH`. |
 | `browser.cdp_port` | `0` | `0` = managed. `>0` = attach to your Chrome's debug port. Localhost only; a URL is never accepted. |
 | `browser.attach_confirmed` | `false` | Must be `true` for attach mode to run — it can drive signed-in sessions. |
-| `browser.allowed_domains` | `[]` | `[]` = open web (SSRF still blocks private ranges). A non-empty list bounds navigation in AgentOS and in the engine. |
+| `browser.allowed_domains` | `[]` | `[]` = open web (SSRF still blocks private ranges). A non-empty list bounds navigation in AgentOS and in the engine. Entries are hostnames and cover subdomains — `["example.com"]` allows `example.com` and `www.example.com`, but not `evil-example.com`. A leading `.` or `*.`, a scheme, a port, userinfo and a path are accepted and reduced to the hostname, so `https://example.com/x` and `*.example.com` mean the same as `example.com`. An entry that cannot be reduced to a hostname is ignored with a `browser.allowed_domain_ignored` warning. |
 | `browser.persist_profile` | `false` | `true` keeps cookies/login between sessions (written to disk). |
 | `browser.session_ttl_minutes` | `15` | Idle sessions are reaped after this. Range 1-1440. |
 | `browser.max_sessions` | `3` | Concurrent browser sessions; oldest-idle evicted. Range 1-20. |

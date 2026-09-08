@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 
@@ -104,7 +105,18 @@ def configure_browser(config: Any | None = None) -> None:
         return default if value is None else value
 
     domains = _get("allowed_domains", ()) or ()
-    _allowed_domains = tuple(str(d).strip().lower() for d in domains if str(d).strip())
+    normalized: list[str] = []
+    for raw in domains:
+        host = _normalize_allowed_domain(raw)
+        if host:
+            if host not in normalized:
+                normalized.append(host)
+        elif str(raw).strip():
+            # Never drop one in silence: an entry that cannot be a hostname
+            # would otherwise bound navigation to nothing with no way to tell
+            # that from a working allowlist.
+            log.warning("browser.allowed_domain_ignored", entry=str(raw).strip())
+    _allowed_domains = tuple(normalized)
     _restrict_evaluate = bool(_get("restrict_evaluate", False))
     _allow_unsafe_evaluate = bool(_get("allow_unsafe_evaluate", False))
     _snapshot_max_chars = max(1000, int(_get("snapshot_max_chars", _DEFAULT_SNAPSHOT_MAX_CHARS)))
@@ -157,6 +169,38 @@ def _session_key() -> str:
 
 def _fail(message: str) -> str:
     return json.dumps({"success": False, "error": message}, ensure_ascii=False)
+
+
+def _normalize_allowed_domain(value: str) -> str:
+    """Reduce one ``allowed_domains`` entry to the bare hostname it means.
+
+    The match in :func:`_domain_allowed` compares against
+    ``urlparse(url).hostname``, so an entry has to be a hostname and nothing
+    else. Only lowercasing it left every other conventional spelling matching
+    nothing at all -- and failing closed, so the operator saw a refusal naming
+    the very domain they had allowlisted:
+
+        Refused to navigate to 'example.com': not in browser.allowed_domains
+        (.example.com).
+
+    A leading ``.`` and a leading ``*.`` are the usual ways to write "this
+    domain and its subdomains", which is already what the match does, so both
+    are accepted and reduce to the same host. A scheme, port, userinfo, path or
+    query is what an operator gets by copying from the address bar; ``urlparse``
+    is reused to strip them so the entry lands on exactly the value the
+    navigation side derives.
+    """
+    text = str(value).strip().lower()
+    if not text:
+        return ""
+    candidate = text if "//" in text else f"//{text}"
+    try:
+        host = urlparse(candidate).hostname or ""
+    except ValueError:
+        host = ""
+    if not host:
+        host = text.split("/", 1)[0]
+    return host.removeprefix("*.").strip(".")
 
 
 def _host_of(url: str) -> str:
