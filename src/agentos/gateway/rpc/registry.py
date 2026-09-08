@@ -78,6 +78,24 @@ class RpcMethodEntry:
     audiences: frozenset[ConnectionSurface]
 
 
+def require_params_dict(params: Any) -> dict[str, Any]:
+    """Return ``params`` as a mapping, or raise ``ValueError``.
+
+    Handlers used to narrow ``params: dict | None`` with
+    ``assert isinstance(params, dict)``. ``python -O`` and ``PYTHONOPTIMIZE``
+    strip assertions, so under an optimized interpreter that narrowing is a
+    comment: a non-mapping payload reaches the subscripts below it and leaves
+    the handler as an unhandled ``TypeError`` — reported as ``INTERNAL_ERROR``
+    rather than the ``INVALID_REQUEST`` the protocol promises for a malformed
+    request. A plain ``raise`` holds in every interpreter mode, and
+    :meth:`RpcRegistry.dispatch` already maps ``ValueError`` to
+    ``INVALID_REQUEST``.
+    """
+    if not isinstance(params, dict):
+        raise ValueError("params must be an object")
+    return params
+
+
 class RpcUnavailableError(RuntimeError):
     """Raised when a method exists but its backing capability is not wired."""
 
