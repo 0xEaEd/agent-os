@@ -455,8 +455,12 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
 
     Returns the new list of lines.
     """
-    # old_start is 1-indexed; convert to 0-indexed
-    pos = hunk.old_start - 1
+    # old_start is 1-indexed; convert to 0-indexed. A hunk that prepends to
+    # the file is spelled ``@@@ -0,0 +1,N @@@`` — a shape _parse_hunk_header
+    # explicitly accepts — and 0 - 1 = -1 would splice against the *end* of
+    # the list, inserting the new lines before the last one instead of the
+    # first. Clamp so a zero start means "before line 1".
+    pos = max(hunk.old_start - 1, 0)
     result = list(file_lines)
 
     # Verify context and deleted lines match
