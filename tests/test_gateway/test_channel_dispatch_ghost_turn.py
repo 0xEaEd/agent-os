@@ -159,7 +159,7 @@ async def test_ac1_2_3_concurrent_no_ghost_turns() -> None:
     sends_per_iter = 8
     iterations = 50
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     for iteration in range(iterations):
         sm = _FakeSessionManager()

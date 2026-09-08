@@ -105,8 +105,9 @@ async def test_no_head_blocking_with_idle_slots() -> None:
         handles.append(h)
 
     # Give the event loop enough ticks for all 4 tasks to reach their handler.
-    deadline = asyncio.get_event_loop().time() + start_deadline
-    while len(started_at) < 4 and asyncio.get_event_loop().time() < deadline:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + start_deadline
+    while len(started_at) < 4 and loop.time() < deadline:
         await asyncio.sleep(0.05)
 
     # Release all tasks so they can finish cleanly.
