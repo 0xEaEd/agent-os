@@ -18,6 +18,7 @@ from agentos.gateway.channel_dispatch import (
     _ChannelInFlightSet,
     _compute_channel_cap,
     _deliver_runtime_channel_reply,
+    _make_reply_done_callback,
     _resolve_channel_overflow_policy,
 )
 
@@ -212,55 +213,103 @@ async def test_relay_close_on_success() -> None:
 # ── done_callback surfaces exceptions ────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_ac2_3_done_callback_logs_error_and_counter() -> None:
-    """done_callback on a failing reply task logs error + turn_cancellations_total."""
-    metric_calls: list[str] = []
+async def _run_reply_done(coro: Any, *, session_key: str = "s:cb-test") -> tuple[Any, Any, Any]:
+    """Drive one reply task through the real done callback.
 
-    def _fake_emit(name: str, value: int = 1, **labels: Any) -> None:
-        metric_calls.append(name)
+    Returns the in-flight set, the recorded ``_emit_metric`` calls, and the
+    patched module logger.
+    """
+    metric_calls: list[tuple[str, dict[str, Any]]] = []
 
-    # Build a reply task that raises
-    async def _failing_reply() -> None:
-        raise ValueError("reply boom")
+    def _fake_emit(name: str, **labels: Any) -> None:
+        metric_calls.append((name, labels))
 
     ifs = _ChannelInFlightSet(cap=8)
 
-    session_key = "s:cb-test"
-
     with patch("agentos.gateway.channel_dispatch._emit_metric", side_effect=_fake_emit):
         with patch("agentos.gateway.channel_dispatch.log") as mock_log:
-            task = asyncio.create_task(_failing_reply())
+            task = asyncio.create_task(coro)
             ifs.add(task)
-
-            def _reply_done(t: asyncio.Task[Any], _sk: str = session_key) -> None:
-                ifs.discard(t)
-                exc = t.exception() if not t.cancelled() else None
-                if exc is not None:
-                    mock_log.error(
-                        "channel_dispatch.reply_task_error",
-                        session_key=_sk,
-                        error_type=type(exc).__name__,
-                        error=str(exc),
-                        exc_info=exc,
-                    )
-                    _fake_emit(
-                        "turn_cancellations_total",
-                        value=1,
-                        reason="reply_task_error",
-                        session_key=_sk,
-                    )
-
-            task.add_done_callback(_reply_done)
-            # Wait for task to complete
+            task.add_done_callback(_make_reply_done_callback(ifs, session_key))
+            # Let the task reach its first await point before cancelling it.
+            await asyncio.sleep(0)
+            if not task.done():
+                task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            # Give callbacks a chance to fire
+            # Give the done callback a chance to fire.
             await asyncio.sleep(0)
 
+    return ifs, metric_calls, mock_log
+
+
+@pytest.mark.asyncio
+async def test_ac2_3_done_callback_logs_error_and_counter() -> None:
+    """done_callback on a failing reply task logs error + turn_cancellations_total."""
+
+    async def _failing_reply() -> None:
+        raise ValueError("reply boom")
+
+    ifs, metric_calls, mock_log = await _run_reply_done(_failing_reply())
+
     assert mock_log.error.called, "log.error must be called on reply task exception"
-    assert "turn_cancellations_total" in metric_calls, (
-        "turn_cancellations_total counter must be incremented"
-    )
+    assert metric_calls == [
+        (
+            "turn_cancellations_total",
+            {"value": 1, "reason": "reply_task_error", "session_key": "s:cb-test"},
+        )
+    ]
+    assert not ifs._tasks
+
+
+@pytest.mark.asyncio
+async def test_done_callback_counts_a_cancelled_reply_task() -> None:
+    """A cancelled reply is a cancellation — issue #1190 recorded nothing at all."""
+
+    async def _long_reply() -> None:
+        await asyncio.sleep(60)
+
+    ifs, metric_calls, mock_log = await _run_reply_done(_long_reply())
+
+    assert metric_calls == [
+        (
+            "turn_cancellations_total",
+            {"value": 1, "reason": "reply_task_cancelled", "session_key": "s:cb-test"},
+        )
+    ]
+    assert not mock_log.error.called, "a cancellation is not a delivery error"
+    assert mock_log.info.called
+    assert not ifs._tasks
+
+
+@pytest.mark.asyncio
+async def test_done_callback_separates_cancellation_from_delivery_error() -> None:
+    """The two outcomes carry different reason labels on the same counter."""
+
+    async def _failing_reply() -> None:
+        raise ValueError("reply boom")
+
+    async def _long_reply() -> None:
+        await asyncio.sleep(60)
+
+    _ifs, error_calls, _log = await _run_reply_done(_failing_reply())
+    _ifs2, cancel_calls, _log2 = await _run_reply_done(_long_reply())
+
+    assert error_calls[0][1]["reason"] == "reply_task_error"
+    assert cancel_calls[0][1]["reason"] == "reply_task_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_done_callback_is_silent_for_a_successful_reply() -> None:
+    """A delivered reply is retired from the in-flight set without a counter."""
+
+    async def _ok_reply() -> None:
+        return None
+
+    ifs, metric_calls, mock_log = await _run_reply_done(_ok_reply())
+
+    assert metric_calls == []
+    assert not mock_log.error.called
+    assert not ifs._tasks
 
 
 # ── stop_channel cancels all in-flight tasks ────────────────────────────────

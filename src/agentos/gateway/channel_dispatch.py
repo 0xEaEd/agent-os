@@ -208,6 +208,54 @@ class _ChannelInFlightSet:
         self._tasks.clear()
 
 
+def _make_reply_done_callback(
+    in_flight: _ChannelInFlightSet,
+    session_key: str,
+) -> Callable[[asyncio.Task[Any]], None]:
+    """Build the done callback that retires a finished reply delivery task.
+
+    Both terminal outcomes are worth a counter, and they are different
+    outcomes: a cancelled reply is a turn that was interrupted, an exception
+    is a delivery that broke. They carry distinct ``reason`` labels so an
+    operator reading ``turn_cancellations_total`` can tell them apart.
+    """
+
+    def _reply_done(t: asyncio.Task[Any]) -> None:
+        in_flight.discard(t)
+        if t.cancelled():
+            # ``t.exception()`` raises CancelledError on a cancelled task, so
+            # the guard that avoided that used to skip the metric as well —
+            # real cancellations were the one outcome recorded nowhere.
+            log.info(
+                "channel_dispatch.reply_task_cancelled",
+                session_key=session_key,
+            )
+            _emit_metric(
+                "turn_cancellations_total",
+                value=1,
+                reason="reply_task_cancelled",
+                session_key=session_key,
+            )
+            return
+        exc = t.exception()
+        if exc is not None:
+            log.error(
+                "channel_dispatch.reply_task_error",
+                session_key=session_key,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                exc_info=exc,
+            )
+            _emit_metric(
+                "turn_cancellations_total",
+                value=1,
+                reason="reply_task_error",
+                session_key=session_key,
+            )
+
+    return _reply_done
+
+
 def _compute_channel_cap(config: Any) -> int:
     """Compute the effective per-channel in-flight cap.
 
@@ -629,25 +677,7 @@ async def run_channel_dispatch(
                 )
                 _in_flight.add(reply_task)
 
-                def _reply_done(t: asyncio.Task[Any], _sk: str = session_key) -> None:
-                    _in_flight.discard(t)
-                    exc = t.exception() if not t.cancelled() else None
-                    if exc is not None:
-                        log.error(
-                            "channel_dispatch.reply_task_error",
-                            session_key=_sk,
-                            error_type=type(exc).__name__,
-                            error=str(exc),
-                            exc_info=exc,
-                        )
-                        _emit_metric(
-                            "turn_cancellations_total",
-                            value=1,
-                            reason="reply_task_error",
-                            session_key=_sk,
-                        )
-
-                reply_task.add_done_callback(_reply_done)
+                reply_task.add_done_callback(_make_reply_done_callback(_in_flight, session_key))
             continue
 
         # Gap 3: Start typing indicator (background task). On a streaming
