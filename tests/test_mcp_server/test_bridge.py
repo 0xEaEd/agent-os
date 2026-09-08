@@ -357,6 +357,27 @@ async def test_events_wait_clamps_effective_deadline() -> None:
 
 
 @pytest.mark.asyncio
+async def test_events_wait_clamps_deadline_on_a_coarse_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Windows' monotonic clock has ~15ms granularity, so two reads inside the
+    # same tick return the same float and ``deadline - now`` reduces to
+    # ``(t + cap) - t``, which rounds above ``cap`` for many values of ``t``.
+    frozen = 32554.749911971794
+    assert (frozen + 300.0) - frozen > 300.0
+    monkeypatch.setattr(bridge_module.time, "monotonic", lambda: frozen)
+
+    client = RecordingEventClient()
+    bridge = AgentOSMCPBridge(gateway_client_factory=lambda: client)
+
+    await bridge.events_wait("agent:main:main", timeout_ms=3_600_000)
+
+    first_timeout = client.recv_timeouts[0]
+    assert first_timeout is not None
+    assert first_timeout <= bridge_module._MAX_EVENTS_WAIT_TIMEOUT_MS / 1000
+
+
+@pytest.mark.asyncio
 async def test_events_wait_preserves_timeout_below_the_cap() -> None:
     client = RecordingEventClient()
     bridge = AgentOSMCPBridge(gateway_client_factory=lambda: client)
