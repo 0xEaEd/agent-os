@@ -156,6 +156,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   cleanup, so there is one exit path for the tempdir instead of six that skip
   it. A configured workspace still sets no `cleanup_dir` and is never removed
   ([#1010](https://github.com/use-agent-os/agent-os/issues/1010)).
+- A local version label containing `dev` or `post` no longer demotes a final
+  release. `parse_version()` in `compat/version_utils.py` already captured
+  `+local` into its own regex group, but the fallbacks for a bare `.post` /
+  `.dev` segment re-scanned the *whole* raw string with `re.search`, and the
+  optional `[._-]?` delimiter let those patterns match anywhere — including
+  inside the label. `2026.7.18+dev` parsed as `.dev0` and `2026.7.18+postgres`
+  as `.post0`, so a released build sorted as a pre-release and `is_newer()`
+  inverted, producing spurious upgrade notices and wrong version-skew answers.
+  PEP 440 says a local label must not affect ordering. The regex now names the
+  `post` and `dev` literals (`post_l` / `dev_l`), so "was the segment present"
+  is answered by the anchored match instead of a re-scan; a bare `.post` /
+  `.dev` still means 0, and `+dev`, `+postgres`, `+device` and `+local.post1`
+  are ignored for ordering
+  ([#1130](https://github.com/use-agent-os/agent-os/issues/1130)).
 - A replacement agent task stays in `AgentTaskRegistry` when its predecessor
   finishes winding down. Cancellation is not synchronous: `register()` may put
   a new task under a session key while the cancelled one is still settling,

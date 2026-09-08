@@ -113,3 +113,75 @@ def test_ordering_is_total_and_sortable() -> None:
         "2026.7.18.post1",
         "2026.7.19",
     ]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "2026.7.18+dev",
+        "2026.7.18+postgres",
+        "2026.7.18+device",
+        "2026.7.18+local.post1",
+        "2026.7.18+devpost",
+        "2026.7.18+post.dev",
+        "2026.7.18+unknown",
+    ],
+)
+def test_local_label_never_sets_post_or_dev(raw: str) -> None:
+    """A ``+local`` label is metadata; it must not turn a final release into a
+    ``.dev0`` pre-release or a ``.post0`` post-release."""
+    v = parse_version(raw)
+
+    assert v.parsed is True
+    assert v.release == (2026, 7, 18)
+    assert v.post is None
+    assert v.dev is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "2026.7.18+dev",
+        "2026.7.18+postgres",
+        "2026.7.18+device",
+        "2026.7.18+local.post1",
+    ],
+)
+def test_local_label_is_ignored_for_ordering(raw: str) -> None:
+    assert compare_versions("2026.7.18", raw) == 0
+    assert is_newer("2026.7.18", raw) is False
+    assert is_newer(raw, "2026.7.18") is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "post", "dev"),
+    [
+        # Controls: a real .post / .dev segment still parses.
+        ("2026.7.18.post1", 1, None),
+        ("2026.7.18.dev1", None, 1),
+        ("2026.7.18.post", 0, None),
+        ("2026.7.18.dev", None, 0),
+        ("2026.7.18post1", 1, None),
+        ("2026.7.18-dev2", None, 2),
+        ("2026.7.18.post1.dev2", 1, 2),
+        # A real segment plus an unrelated local label.
+        ("2026.7.18.dev1+postgres", None, 1),
+        ("2026.7.18.post1+dev", 1, None),
+    ],
+)
+def test_real_post_and_dev_segments_still_parse(
+    raw: str, post: int | None, dev: int | None
+) -> None:
+    v = parse_version(raw)
+
+    assert v.parsed is True
+    assert v.release == (2026, 7, 18)
+    assert v.post == post
+    assert v.dev == dev
+
+
+def test_local_labelled_release_outranks_a_real_dev_build() -> None:
+    """The regression that inverted ``is_newer``: ``+dev`` sorted as ``.dev0``."""
+    assert is_newer("2026.7.18+dev", "2026.7.18.dev1") is True
+    assert is_newer("2026.7.18.dev1", "2026.7.18+dev") is False
+    assert compare_versions("2026.7.18+postgres", "2026.7.17") == 1

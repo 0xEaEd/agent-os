@@ -27,8 +27,8 @@ _VERSION_RE = re.compile(
     r"^\s*v?"
     r"(?P<release>\d+(?:\.\d+)*)"
     r"(?:[._-]?(?P<pre_l>a|b|c|rc|alpha|beta|pre|preview)[._-]?(?P<pre_n>\d+)?)?"
-    r"(?:[._-]?post[._-]?(?P<post>\d+)?)?"
-    r"(?:[._-]?dev[._-]?(?P<dev>\d+)?)?"
+    r"(?:[._-]?(?P<post_l>post)[._-]?(?P<post>\d+)?)?"
+    r"(?:[._-]?(?P<dev_l>dev)[._-]?(?P<dev>\d+)?)?"
     r"(?:\+(?P<local>[a-zA-Z0-9.]+))?"
     r"\s*$",
     re.IGNORECASE,
@@ -100,11 +100,15 @@ def parse_version(value: str | None) -> Version:
     if match.group("pre_l"):
         pre_tag = match.group("pre_l").lower()
         pre = (_PRE_ORDER.get(pre_tag, 2), int(match.group("pre_n") or 0))
+    # ``post_l`` / ``dev_l`` mark that the *segment* was present, so a bare
+    # ``.post`` / ``.dev`` with no number still means 0. Re-scanning ``raw``
+    # instead would also match the label in ``+dev``, ``+postgres`` or
+    # ``+local.post1``, which PEP 440 says must not affect ordering.
     post = int(match.group("post")) if match.group("post") is not None else None
-    if post is None and re.search(r"[._-]?post", raw, re.IGNORECASE):
+    if post is None and match.group("post_l"):
         post = 0
     dev = int(match.group("dev")) if match.group("dev") is not None else None
-    if dev is None and re.search(r"[._-]?dev", raw, re.IGNORECASE):
+    if dev is None and match.group("dev_l"):
         dev = 0
     return Version(raw=raw, release=release, pre=pre, post=post, dev=dev, parsed=True)
 
