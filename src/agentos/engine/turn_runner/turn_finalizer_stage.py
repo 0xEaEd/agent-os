@@ -106,7 +106,7 @@ class TranscriptAppendPort(Protocol):
 
     Wraps the inline ``await self._session_manager.append_message(...)``.
     The adapter folds the
-    ``_accepts_keyword_arg(..., "token_count")`` introspection so the
+    ``accepts_keyword_arg(..., "token_count")`` introspection so the
     stage body has no ``inspect`` dependency, and the
     ``session_manager is None`` guard so the stage body has no
     conditional on manager presence. Returns ``True`` if the append
