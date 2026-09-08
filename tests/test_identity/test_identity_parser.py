@@ -42,6 +42,7 @@ def test_underscores_inside_a_value_are_preserved(value: str) -> None:
 @pytest.mark.parametrize(
     ("written", "expected"),
     [
+        ("_italic_", "italic"),
         ("_cyberpunk_", "cyberpunk"),
         ("__bold__", "bold"),
         ("**strong**", "strong"),
