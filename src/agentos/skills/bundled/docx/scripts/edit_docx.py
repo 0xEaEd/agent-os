@@ -27,15 +27,47 @@ def _replace_run(para: Paragraph, run_idx: int, text: str) -> None:
 
 
 def _replace_text_in_paragraph(para: Paragraph, find: str, replacement: str) -> bool:
-    if not para.runs:
+    """Replace ``find`` in a paragraph without moving text between runs.
+
+    A run is where Word keeps character formatting, so which run a character
+    ends up in is not cosmetic. Collapsing the paragraph into ``runs[0]`` and
+    emptying the rest -- what this did before -- gave every character run 0's
+    formatting and left the other runs as empty shells: bold, italic, font,
+    size and colour were discarded for the whole paragraph, silently, even when
+    a single word needed changing.
+
+    Every character therefore stays with the run it came from. A replacement is
+    written into the run that owns the first character of its match, which also
+    covers a ``find`` spanning several runs: the matched characters leave the
+    runs they spanned and the surrounding runs are untouched.
+    """
+    runs = para.runs
+    if not runs:
         return False
-    full = "".join(run.text for run in para.runs)
-    if find not in full:
+    texts = [run.text or "" for run in runs]
+    full = "".join(texts)
+    if not find or find not in full:
         return False
-    new_full = full.replace(find, replacement)
-    para.runs[0].text = new_full
-    for run in para.runs[1:]:
-        run.text = ""
+
+    # Character position -> owning run index.
+    owner: list[int] = []
+    for index, text in enumerate(texts):
+        owner.extend([index] * len(text))
+
+    pieces: list[list[str]] = [[] for _ in runs]
+    cursor = 0
+    while cursor < len(full):
+        if full.startswith(find, cursor):
+            pieces[owner[cursor]].append(replacement)
+            cursor += len(find)
+            continue
+        pieces[owner[cursor]].append(full[cursor])
+        cursor += 1
+
+    for run, parts in zip(runs, pieces, strict=True):
+        rebuilt = "".join(parts)
+        if run.text != rebuilt:
+            run.text = rebuilt
     return True
 
 
