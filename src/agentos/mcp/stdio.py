@@ -30,6 +30,7 @@ class MCPStdioClient(MCPClient):
         super().__init__(config)
         self._process: asyncio.subprocess.Process | None = None
         self._request_id = 0
+        self._lock = asyncio.Lock()
 
     @staticmethod
     def _encode_message(message: dict[str, Any]) -> bytes:
@@ -155,24 +156,26 @@ class MCPStdioClient(MCPClient):
         assert self._process.stdin is not None
         assert self._process.stdout is not None
 
-        req_id = self._next_id()
-        request: dict[str, Any] = {"jsonrpc": "2.0", "id": req_id, "method": method}
-        if params is not None:
-            request["params"] = params
+        async with self._lock:
+            req_id = self._next_id()
+            request: dict[str, Any] = {"jsonrpc": "2.0", "id": req_id, "method": method}
+            if params is not None:
+                request["params"] = params
 
-        self._process.stdin.write(self._encode_message(request))
-        await self._process.stdin.drain()
+            self._process.stdin.write(self._encode_message(request))
+            await self._process.stdin.drain()
 
-        return await self._read_response(req_id)
+            return await self._read_response(req_id)
 
     async def _send_notification(self, method: str) -> None:
         """Send a JSON-RPC notification (no response expected)."""
         assert self._process is not None
         assert self._process.stdin is not None
 
-        notification = {"jsonrpc": "2.0", "method": method}
-        self._process.stdin.write(self._encode_message(notification))
-        await self._process.stdin.drain()
+        async with self._lock:
+            notification = {"jsonrpc": "2.0", "method": method}
+            self._process.stdin.write(self._encode_message(notification))
+            await self._process.stdin.drain()
 
     async def _read_response(self, req_id: int) -> dict[str, Any]:
         """Read newline-delimited messages until the reply to ``req_id`` arrives.

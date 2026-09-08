@@ -393,3 +393,26 @@ async def test_connects_to_a_spec_compliant_newline_delimited_server(tmp_path: P
     assert [t.name for t in tools] == ["echo"]
     assert result.content == "multi\nline"
     assert result.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_concurrent_tool_calls_serialized_safely(tmp_path: Path) -> None:
+    """Concurrent tool calls on the same stdio client must be safely serialized."""
+    server = tmp_path / "server.py"
+    server.write_text(_SPEC_COMPLIANT_SERVER)
+    client = MCPStdioClient(
+        MCPServerConfig(name="demo", transport="stdio", command=sys.executable, args=[str(server)])
+    )
+
+    try:
+        await client.connect()
+        # Fire 10 concurrent tool calls
+        results = await asyncio.gather(
+            *[client.call_tool("echo", {"text": f"msg-{i}"}) for i in range(10)]
+        )
+    finally:
+        await client.close()
+
+    assert len(results) == 10
+    assert [r.content for r in results] == [f"msg-{i}" for i in range(10)]
+    assert all(not r.is_error for r in results)
