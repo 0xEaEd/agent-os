@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json as _json
-import shlex
 import tomllib
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from agentos.cli.ui import (
     markup_escape,
     warning_panel,
 )
+from agentos.cli_quoting import config_cli_arg
 from agentos.onboarding.config_store import load_config, resolve_config_path
 from agentos.onboarding.flow import (
     OnboardOptions,
@@ -229,7 +229,7 @@ def _status_cockpit_summary(status: OnboardingStatus) -> str:
 def _config_cli_arg(config_path: Path | None) -> str:
     if config_path is None:
         return ""
-    return f" --config {shlex.quote(str(config_path))}"
+    return config_cli_arg(config_path)
 
 
 def _headless_section_paths(

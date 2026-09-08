@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agentos.cli_quoting import quote_cli_arg
 from agentos.health.evaluator import (
     evaluate_browser,
     evaluate_channels,
@@ -506,8 +507,11 @@ def test_channels_evaluator_quotes_channel_names_in_recovery_commands() -> None:
     )
 
     commands = [step.command for step in findings[0].fix_steps]
-    assert "agentos channels restart 'feishu work' --yes" in commands
-    assert "agentos channels status 'feishu work' --json" in commands
+    # Quoted for the platform the reader will paste into, not always POSIX.
+    name = quote_cli_arg("feishu work")
+    assert name != "feishu work", "a name with a space must be quoted"
+    assert f"agentos channels restart {name} --yes" in commands
+    assert f"agentos channels status {name} --json" in commands
 
 
 def test_channels_evaluator_treats_disabled_channel_as_optional_info() -> None:

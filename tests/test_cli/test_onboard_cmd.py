@@ -5,13 +5,13 @@ from __future__ import annotations
 import json as _json
 import platform
 import re
-import shlex
 import tomllib
 
 import pytest
 from typer.testing import CliRunner
 
 from agentos.cli.main import app
+from agentos.cli_quoting import quote_cli_arg
 
 runner = CliRunner()
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -32,7 +32,8 @@ def _env_hint(env_key: str) -> str:
 
 
 def _config_arg(path) -> str:
-    return shlex.quote(str(path))
+    # Platform-aware, like the hints themselves -- see test_cli_quoting.py.
+    return quote_cli_arg(str(path))
 
 
 def test_onboard_noninteractive_provider(tmp_path, monkeypatch):

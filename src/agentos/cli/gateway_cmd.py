@@ -19,6 +19,7 @@ from agentos.cli.gateway_lifecycle import (
     remote_gateway_status,
 )
 from agentos.cli.ui import ACCENT_MARKUP, console
+from agentos.cli_quoting import config_cli_arg
 from agentos.gateway.boot import start_gateway_server
 from agentos.gateway.config import GatewayConfig, is_public_bind, resolve_listen_address
 from agentos.gateway.config_persist import read_raw_bind_overrides, set_runtime_overrides
@@ -167,7 +168,8 @@ def run_gateway(
             console.print(f"{entry['label']}: {entry['command']}")
         if config.config_path:
             console.print(
-                f"Inspect onboarding: agentos onboard status --config {config.config_path}"
+                "Inspect onboarding: agentos onboard status"
+                f"{config_cli_arg(config.config_path)}"
             )
         raise typer.Exit(code=1) from exc
     except KeyboardInterrupt:
