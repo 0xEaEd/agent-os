@@ -155,7 +155,10 @@ class _ChannelInFlightSet:
 
     def __init__(self, cap: int) -> None:
         self._cap = cap
-        self._tasks: set[asyncio.Task[Any]] = set()
+        # Holds real tasks *and* the bare reservation tokens ``try_acquire``
+        # parks here to make the cap check atomic. Anything that treats a
+        # member as a task has to filter first.
+        self._tasks: set[asyncio.Task[Any] | object] = set()
 
     @property
     def cap(self) -> int:
@@ -178,18 +181,26 @@ class _ChannelInFlightSet:
         runs on a single thread, this check-then-add pair is atomic — no await
         occurs between the guard and the mutation.
         """
-        if len(self._tasks) >= self._cap:  # type: ignore[arg-type]
+        if len(self._tasks) >= self._cap:
             return False
-        self._tasks.add(token)  # type: ignore[arg-type]
+        self._tasks.add(token)
         return True
 
     def release(self, token: object) -> None:
         """Release a reservation previously acquired via try_acquire."""
-        self._tasks.discard(token)  # type: ignore[arg-type]
+        self._tasks.discard(token)
 
     async def cancel_all(self) -> None:
-        """Cancel every in-flight task and await completion (for shutdown)."""
-        tasks = list(self._tasks)
+        """Cancel every in-flight task and await completion (for shutdown).
+
+        The set also holds the bare ``object()`` reservation tokens parked by
+        ``try_acquire``, which have no ``cancel``. Cancelling them raised
+        ``AttributeError`` mid-loop, so the tasks after the token were never
+        cancelled and the ``gather`` never ran — a shutdown that left real
+        work running. Filter to actual tasks, then clear the whole set so the
+        reservations do not leak either.
+        """
+        tasks = [t for t in self._tasks if isinstance(t, asyncio.Task)]
         for t in tasks:
             t.cancel()
         if tasks:
