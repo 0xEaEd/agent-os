@@ -6,15 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Fixed
+## [2026.9.9] - 2026-09-09
 
-- `events_wait` no longer hands `recv_event` a timeout above the five-minute
-  cap. On coarse clocks (Windows ticks at ~15ms) two `time.monotonic()` reads
-  inside one tick reduce the remaining wait to `(t + cap) - t`, which rounds a
-  hair above `cap` for many values of `t`; the remaining wait is now re-clamped
-  to the capped timeout on every loop iteration.
+### Changed
 
-## [2026.9.7] - 2026-09-07
+- Signature probing has one home. `_accepts_keyword_arg` had been copy-pasted
+  into four modules that gave three different answers when `inspect.signature`
+  raised: `gateway/rpc_sessions.py` returned `True` and passed the keyword
+  anyway, `gateway/channel_dispatch.py` and `gateway/context_overflow.py`
+  returned `False`, and `engine/runtime.py` had no `try` at all, so the
+  exception escaped into its caller. The canonical
+  `agentos.compat.inspect_utils.accepts_keyword_arg` returns `False` — the safe
+  direction, and what three of the four sites already did, since passing a
+  keyword the target does not take raises `TypeError` and fails the turn while
+  omitting an optional one leaves the target on its own default. Compaction
+  provider resolution is unified the same way
+  ([#1201](https://github.com/use-agent-os/agent-os/issues/1201)).
 
 ### Fixed
 
@@ -23,6 +30,309 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   at error level and skipped so later messages can proceed; repeated callback
   IDs are deduplicated before approval handling.
   ([#1027](https://github.com/use-agent-os/agent-os/issues/1027))
+
+- Background tasks spawned with `asyncio.create_task()` keep a strong
+  reference for their lifetime. The event loop holds only weak references, so
+  a task nothing else points at may be collected mid-execution: Slack's
+  interactive-approval dispatch in `_handle_socket_frame` and `_handle_webhook`
+  fired `self._handle_slack_interactive(payload)` and dropped the handle, and
+  several other fire-and-forget sites did the same. Each now stores its task in
+  a set and discards it from a done callback, so an approval press cannot
+  vanish between the button and the handler
+  ([#1033](https://github.com/use-agent-os/agent-os/issues/1033)).
+
+- A DuckDuckGo outage now reads as an outage instead of a quiet zero-result
+  search. `DuckDuckGoProvider.search()` swallowed every `httpx.HTTPError` and
+  returned `[]` unless it was built with `diagnostics=True`, so a 403, a 429 or
+  a timeout was indistinguishable from "nothing matched" — and nothing set that
+  flag: `_search_provider_kwargs()` in `tools/builtin/web.py` singled
+  DuckDuckGo out to receive `diagnostics=_active_search_diagnostics`, which is
+  `False` on a default gateway, so the constructor default was overridden to
+  off at the one call site that mattered. Both layers move: the provider
+  defaults to reporting and classifies the failure the way its Brave and Tavily
+  siblings already do (401/403 `auth`, 429 `rate_limit`, other statuses `http`,
+  plus `timeout` and `network`, each carrying `status_code` and `retryable`),
+  and the tool boundary only ever turns diagnostics *on*. `diagnostics=False`
+  stays as an explicit opt-out for a caller that depends on `search()` never
+  raising; `run_web_search_payload` already routes anything raised into its
+  `ok: false` envelope, so the tool contract is unchanged
+  ([#1122](https://github.com/use-agent-os/agent-os/issues/1122)).
+
+- `bankr` and `openai_responses` failures classify like every other
+  OpenAI-compatible provider instead of falling through to `UNKNOWN`. Both are
+  real registered providers, and both declare `failure_family="openai_compat"`
+  in `provider/registry.py`, but neither appeared in the hand-kept
+  `_OPENAI_COMPAT_PROVIDERS` literal in `provider/failures.py`, so their 401,
+  402 and 429 lost the auth / credit / rate-limit semantics the runtime uses to
+  choose `FAIL_CONFIG` or `FALLBACK_PROVIDER`. The literal was the wrong shape
+  rather than merely two names short: it had drifted to six missing providers
+  (`bankr`, `openai_responses`, `github_copilot`, `openai_codex`,
+  `byteplus_coding_plan`, `volcengine_coding_plan`), and #775 reported the
+  `bankr` half a while ago without the fix landing. It is now derived from the
+  registry's own `failure_family` field, with a test asserting the two files
+  agree in both directions
+  ([#1126](https://github.com/use-agent-os/agent-os/issues/1126)).
+
+- A local version label containing `dev` or `post` no longer demotes a final
+  release. `parse_version()` in `compat/version_utils.py` already captured
+  `+local` into its own regex group, but the fallbacks for a bare `.post` /
+  `.dev` segment re-scanned the *whole* raw string with `re.search`, and the
+  optional `[._-]?` delimiter let those patterns match anywhere — including
+  inside the label. `2026.7.18+dev` parsed as `.dev0` and `2026.7.18+postgres`
+  as `.post0`, so a released build sorted as a pre-release and `is_newer()`
+  inverted, producing spurious upgrade notices and wrong version-skew answers.
+  PEP 440 says a local label must not affect ordering. The regex now names the
+  `post` and `dev` literals (`post_l` / `dev_l`), so "was the segment present"
+  is answered by the anchored match instead of a re-scan; a bare `.post` /
+  `.dev` still means 0, and `+dev`, `+postgres`, `+device` and `+local.post1`
+  are ignored for ordering
+  ([#1130](https://github.com/use-agent-os/agent-os/issues/1130)).
+
+- The Discord channel reconnects with bounded exponential backoff instead of
+  dying on the first failed attempt. `DiscordChannelConfig` declared
+  `reconnect_max_retries` and `reconnect_base_delay_s` and nothing consumed
+  them: the reconnects triggered by `ConnectionClosed`, Op 7 (Reconnect) and
+  Op 9 (Invalid Session) ran with no exception handling and no delay, so one
+  transient outage, bad resume URL or handshake timeout raised out of
+  `_dispatch_loop` and silently terminated `_dispatch_task`. `_connected` was
+  cleared only in `stop()`, so `is_connected()` kept answering `True` for a
+  channel that was completely deaf. Both settings are now wired into
+  `_reconnect()`, consecutive failures back off as
+  `min(60.0, base_delay * 2 ** (failures - 1))` and reset on success, and a
+  done callback on the dispatch task marks the channel dead and cancels the
+  heartbeat so `is_connected()` reports the truth
+  ([#1133](https://github.com/use-agent-os/agent-os/issues/1133)).
+
+- Coroutines call `asyncio.get_running_loop()` rather than the deprecated
+  `asyncio.get_event_loop()`. Inside a running coroutine the latter is
+  deprecated from Python 3.10 on and raises `RuntimeError` in a background
+  worker thread that has no OS-thread default loop. The replacement covers the
+  filesystem tools (`read_file`, `read_spreadsheet`, `write_file`, `edit_file`,
+  `list_dir`, `glob_search`, `grep_search`), the media tools, `apply_patch`,
+  the CDP browser supervisor, `load_workspace_files_async`, memory sync polling
+  and the coalesced-message drain in `channel_dispatch`
+  ([#1136](https://github.com/use-agent-os/agent-os/issues/1136)).
+
+- The email channel addresses messages by IMAP UID instead of sequence number.
+  `search`, `fetch` and `store` operate on sequence numbers, which shift
+  whenever any other client expunges the monitored mailbox (RFC 3501
+  §2.3.1.2) — so an expunge during a poll could make `_fetch_one` read the
+  wrong message and `_mark_seen` flag the wrong one, and flagging an oversized
+  message shifted the numbers for the rest of the batch. `_fetch_unseen` now
+  issues `uid("SEARCH", "UNSEEN")`, and the fetch and store paths use their
+  `uid` equivalents, so an identifier stays bound to the message it named
+  ([#1162](https://github.com/use-agent-os/agent-os/issues/1162)).
+
+- `DiscordChannel.send_file` reopens the upload body on every retry. The file
+  handle was opened outside `retry_request` and the same object handed to each
+  attempt, but `retry_request` re-invokes its callable on 429, on
+  500/502/503/504 and on `ConnectError`/`TimeoutException` — by then the first
+  attempt has read the stream to EOF, so httpx sent a 0-byte body, Discord
+  stored an empty file, and `raise_for_status()` saw the 200 for that empty
+  upload. Nothing raised: silent corruption, on the rate-limit path that is by
+  far Discord's most likely retry trigger. The body is now opened inside the
+  retried callable, the way `SlackChannel.send_file` already did it
+  ([#1164](https://github.com/use-agent-os/agent-os/issues/1164)).
+
+- A prepend hunk lands at the top of the file. `_parse_hunk_header` already
+  anticipates `old_start == 0`, so `@@ -0,0 +1,N @@` is a supported input
+  shape, but `_apply_hunk` converted it with `pos = hunk.old_start - 1`, and
+  the resulting `-1` made the splice `result[:pos] + new_lines +
+  result[pos + hunk.old_count :]` resolve to `result[:-1] + new_lines +
+  result[-1:]` — the new lines were inserted *before the last line* of the
+  file, and the tool reported `1 file(s) modified` and exited clean either way.
+  `pos` is now clamped with `max(hunk.old_start - 1, 0)`, so a zero start means
+  the top of the file
+  ([#1166](https://github.com/use-agent-os/agent-os/issues/1166)).
+
+- `apply_patch` applies its operations atomically. `_apply_ops` wrote each
+  operation to disk as it iterated, so a patch whose second op failed left the
+  first one committed — and because the exception escapes `apply_patch` before
+  the bookkeeping at the end of the call, `_record_workspace_file_writes`,
+  `_notify_memory_source_writes` and `_notify_bootstrap_source_writes` were all
+  skipped, leaving the filesystem mutated while the runtime's view of it was
+  not, so artifact delivery and memory indexing silently disagreed with disk.
+  A new `_plan_ops` resolves every op and runs every hunk in memory before
+  anything is written, so the predictable failures — missing file, existing
+  file, context mismatch — are raised against a clean workspace
+  ([#1169](https://github.com/use-agent-os/agent-os/issues/1169)).
+
+- Cancelling in-flight tasks skips the reservation tokens parked alongside
+  them. `try_acquire` inserts a bare `object()` into `self._tasks` to make the
+  cap check atomic — the `# type: ignore[arg-type]` on that insert was the set
+  knowingly violating its own `set[asyncio.Task[Any]]` annotation — and
+  `cancel_all` then called `.cancel()` on every member. The token raised
+  `AttributeError: 'object' object has no attribute 'cancel'` partway through
+  the loop, which aborted both the remaining cancellations and the `gather`,
+  leaving real work running through a shutdown; `_dispatch` calls
+  `try_acquire(_reservation_token)` with a bare `object()`, so the path is
+  live. `cancel_all` now filters to `isinstance(t, asyncio.Task)` before
+  cancelling ([#1172](https://github.com/use-agent-os/agent-os/issues/1172)).
+
+- Printed command hints are quoted for the platform they will be pasted into.
+  Every "next step" line AgentOS prints is meant to go straight back into the
+  user's shell, and each site built it with `shlex.quote`, which knows only
+  POSIX rules — on Windows a config path with a space came back as
+  `--config 'C:\Program Files\Agent OS\x.toml'`, which neither `cmd.exe` nor
+  PowerShell parses as one argument, and Windows is where paths with spaces are
+  most common, so the hint broke exactly where it was needed most. A new
+  `src/agentos/cli_quoting.py` holds one `quote_cli_arg` (POSIX `shlex.quote`;
+  on Windows, double quotes only when the value actually needs them) and one
+  `config_cli_arg` for the ` --config <path>` suffix that five call sites had
+  each been assembling by hand
+  ([#1180](https://github.com/use-agent-os/agent-os/issues/1180)).
+
+- `sessions.preview` reads a bounded window of each transcript. The
+  120-character snippet of the last message was built by calling
+  `get_transcript(session_id, limit=-1)` for every session in the list, so
+  previewing 50 long-running sessions read and deserialized 50 complete
+  histories to look at their tails. The preview now reads through
+  `get_recent_transcript`: 10 entries first, widened once to 50 when the tail
+  is all tool traffic and holds no user or assistant message to show, and
+  stopped early once the window already covers the whole session. Storage
+  without a `get_recent_transcript` keeps the full read rather than losing the
+  preview entirely, and the snippet itself is unchanged
+  ([#1186](https://github.com/use-agent-os/agent-os/issues/1186)).
+
+- `_emit_metric` logs the recording failures it used to swallow. It writes the
+  metric log line, then records to Prometheus inside a `try` whose
+  `except Exception` was a bare `pass`, so a metric that never reached the
+  registry looked exactly like one that did — the line above says it was
+  emitted either way, and an operator chasing a counter that stopped moving had
+  nothing to go on. The failure is now logged at debug with the metric name and
+  the exception type and message. Debug rather than warning because this is an
+  observability gap, not a turn failure, and it must not add noise to a working
+  turn: `record_metric` already swallows and debug-logs its own registry
+  errors, so what actually reaches this handler is the deferred import or the
+  label build failing — exactly the case where the counter silently stops and
+  nothing says why
+  ([#1188](https://github.com/use-agent-os/agent-os/issues/1188)).
+
+- A cancelled channel reply is counted, and labelled apart from a delivery
+  error. `_reply_done` read the outcome as
+  `exc = t.exception() if not t.cancelled() else None` — the guard is needed,
+  since `exception()` raises on a cancelled task, but it also sent a real
+  cancellation down the `exc is None` path, which emitted nothing. So
+  `turn_cancellations_total` never counted an actual cancelled reply, and
+  delivery exceptions were the only thing it did count. Both terminal outcomes
+  now record on the same counter with distinct `reason` labels —
+  `reply_task_cancelled`, logged at info, and `reply_task_error`, logged at
+  error with `exc_info` as before — so an operator can tell an interrupted turn
+  from a broken delivery. The metric name is unchanged
+  ([#1190](https://github.com/use-agent-os/agent-os/issues/1190)).
+
+- A gateway with no session backend answers `UNAVAILABLE` rather than
+  `NOT_FOUND`. Every session handler guarded `ctx.session_manager` and its
+  storage with `raise KeyError("No session manager available")`, and
+  `RpcRegistry.dispatch` maps `KeyError` to `NOT_FOUND` — a permanent,
+  non-retryable verdict for a condition that is neither permanent nor about the
+  key, and indistinguishable from a real lookup miss for any caller whose
+  `except KeyError:` was written to catch only the latter. The handlers now
+  raise `RpcUnavailableError`, which is already what
+  `rpc_chat._require_chat_session_manager`, `rpc_memory` and `rpc_sessions`
+  itself raise for exactly this shape
+  ([#1192](https://github.com/use-agent-os/agent-os/issues/1192)).
+
+- RPC parameter validation no longer rests on a bare `assert`. Four handlers
+  narrowed `params: dict | None` with `assert isinstance(params, dict)`, and
+  `python -O` / `PYTHONOPTIMIZE=1` strip assertions, so on an optimized
+  interpreter the narrowing promised to mypy is not the narrowing the runtime
+  gets. Scoped honestly: in all four the assert is preceded by
+  `_require_key(params)` or `_require_name(params)`, both of which already
+  raise `ValueError` on a non-mapping, so the `TypeError` was not reachable
+  today — the defect is that the `INVALID_REQUEST` guarantee rested on that
+  call ordering plus an interpreter flag rather than on the guard itself.
+  Each site now validates explicitly
+  ([#1194](https://github.com/use-agent-os/agent-os/issues/1194)).
+
+- Router code targets match `C++`, `C#` and `.NET` regardless of what sits
+  next to them. `_CODE_TARGET_RE` wrapped all three inside one
+  `\b(?:...)\b` alternation, and since `+` and `#` are non-word characters and
+  `.net` opens with one, that group silently required a word character on the
+  *wrong* side: immediately after `c++`/`c#`, so `"Translate this to C++."`
+  never matched, and immediately before `.net`, so `"to .NET"` never matched
+  when preceded by whitespace — while `C++17` and `ASP.NET` matched by
+  accident, satisfying the wrong-side requirement. Inverting the assertion
+  would have swapped which half broke. The three names are instead pulled out
+  of the shared group and given a `\b` on their word-character edge only —
+  `+`, `#` and a leading `.` cannot blend into a surrounding identifier — so
+  the sentence-boundary spellings and the attached ones (`C++17`, `C#7`,
+  `ASP.NET`) all match
+  ([#1198](https://github.com/use-agent-os/agent-os/issues/1198)).
+
+- `git_commit(files=[])` stages nothing instead of everything. The branch was
+  chosen with `if files:`, and `bool([])` is `False`, so an explicitly empty
+  list took the same path as an omitted argument and ran `git add -A`: a caller
+  asking to commit only what it had already staged got the entire working tree
+  instead, including untracked files it never named — an untracked
+  `secret.txt` sitting beside the staged change lands in the commit. Two
+  different intents had been collapsed into one branch by a truthiness test.
+  The check is now `if files is None` for `git add -A` and `elif files` for the
+  named paths, so an empty list falls through to the commit with whatever the
+  caller had staged
+  ([#1203](https://github.com/use-agent-os/agent-os/issues/1203)).
+
+- `events_wait` no longer hands `recv_event` a timeout above the five-minute
+  cap. On coarse clocks (Windows ticks at ~15ms) two `time.monotonic()` reads
+  inside one tick reduce the remaining wait to `(t + cap) - t`, which rounds a
+  hair above `cap` for many values of `t`; the remaining wait is now re-clamped
+  to the capped timeout on every loop iteration.
+
+### Security
+
+- Host credential files are hard-blocked wherever they appear, not only under
+  the directories `_SENSITIVE_PREFIXES` already named. The denylist matched on
+  directory prefixes, so a credential file outside one of them —
+  `~/.dockercfg`, `~/.git-credentials`, `~/.htpasswd`, `~/.pgpass`, `~/_netrc`
+  — reached the executor unguarded. Those names are now derived from the
+  credential-file list in `redact.py`, the module that already knows which
+  files carry secrets, with a guard test asserting the two stay in sync, and
+  they are blocked in the destructive-target gate and the read gate alike,
+  including with Windows separators. `sensitive_path_in_text` also scans the
+  expanded spelling before the raw text: the unexpanded `${HOME}/.npmrc` yields
+  a bare `/.npmrc` because `}` is a token edge the same way `$` is, and without
+  the reorder that tail would be reported in place of the `~/.npmrc` prefix the
+  expansion resolves to — the parity #985 exists to protect. Nothing that was
+  blocked before stopped being blocked
+  ([#981](https://github.com/use-agent-os/agent-os/issues/981)).
+
+- `agentos skills update` enforces the security scan that `skills install`
+  enforces. `SkillInstaller.update()` called `self.install(..., force=True)`,
+  and `force=True` is exactly the flag that bypasses the scan verdict, so
+  updating a skill installed dangerous content that a fresh install of the same
+  skill would have refused. `update()` now passes `force=False`. The reporting
+  half is fixed with it: `_handle_skills_update` built its result from
+  `success`, `name` and `message` and dropped the `scan` object entirely, so a
+  caller had no way to see why an update was refused — it now carries
+  `scan_verdict` and `scan_findings` when present, matching
+  `_handle_skills_install`, and the CLI prints the verdict
+  ([#988](https://github.com/use-agent-os/agent-os/issues/988)).
+
+- `web_search` fences result titles and snippets before the model reads them.
+  Every other path that pulls remote text into the model's context wraps it in
+  the untrusted envelope — `web_fetch.py`, `web.py`, `browser.py` — and
+  `_search_payload` passed `title` and `snippet` through raw. Those two fields
+  are written by whoever ranks for the query, so an attacker who gets a page
+  ranked for a query the agent runs landed unfenced text next to the operator's
+  own instructions; #688 shipped the `source` tag but not this half. The tool
+  result now wraps each result's `title` and `snippet` in
+  `wrap_untrusted_boundary`, tagged with that result's own URL and falling back
+  to the provider tag and then the tool name. `url` and `source` are untouched,
+  so links stay clickable and the existing origin tag keeps working
+  ([#1132](https://github.com/use-agent-os/agent-os/issues/1132)).
+
+- `~/.config/gh`, `~/.anthropic`, `~/.openai` and `~/.vault-token` join
+  `_SENSITIVE_PREFIXES`. The denylist already guarded `~/.ssh`, `~/.aws`,
+  `~/.azure`, `~/.config/gcloud`, `~/.docker/config`, `~/.kube`, `~/.npmrc`,
+  `~/.pypirc`, `~/.netrc`, `~/.gnupg` and `~/.password-store`, but none of
+  those four. `~/.config/gh/hosts.yml` is the one that matters most: AgentOS
+  agents run `gh` routinely, so a live GitHub token sat in a path the sandbox
+  did not consider sensitive, immediately beside an entry that already protects
+  `~/.npmrc` ([#1138](https://github.com/use-agent-os/agent-os/issues/1138)).
+
+## [2026.9.7] - 2026-09-07
+
+### Fixed
 
 - Day-of-week ranges that end at `SUN` parse again. `_parse_field` substituted
   every day name with a single number, and `sun` is always 0 there, so
@@ -65,22 +375,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `urlopen`, matching the guard `robinhood-chain-stocks` already carries, and
   the watcher tests serve their fixtures over loopback HTTP instead of
   `file://` ([#1065](https://github.com/use-agent-os/agent-os/issues/1065)).
-- A DuckDuckGo outage now reads as an outage instead of a quiet zero-result
-  search. `DuckDuckGoProvider.search()` swallowed every `httpx.HTTPError` and
-  returned `[]` unless it was built with `diagnostics=True`, so a 403, a 429 or
-  a timeout was indistinguishable from "nothing matched" — and nothing set that
-  flag: `_search_provider_kwargs()` in `tools/builtin/web.py` singled
-  DuckDuckGo out to receive `diagnostics=_active_search_diagnostics`, which is
-  `False` on a default gateway, so the constructor default was overridden to
-  off at the one call site that mattered. Both layers move: the provider
-  defaults to reporting and classifies the failure the way its Brave and Tavily
-  siblings already do (401/403 `auth`, 429 `rate_limit`, other statuses `http`,
-  plus `timeout` and `network`, each carrying `status_code` and `retryable`),
-  and the tool boundary only ever turns diagnostics *on*. `diagnostics=False`
-  stays as an explicit opt-out for a caller that depends on `search()` never
-  raising; `run_web_search_payload` already routes anything raised into its
-  `ok: false` envelope, so the tool contract is unchanged
-  ([#1122](https://github.com/use-agent-os/agent-os/issues/1122)).
 - The sensitive-path denylist now expands `$VAR`/`${VAR}` before it decides,
   so the hard block cannot be side-stepped by spelling a home directory as a
   variable. Tool dispatch ends in a shell, so `cat $HOME/.ssh/config` reaches
@@ -144,20 +438,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   resolves to a private or metadata address — otherwise `'base' + '//a/b'`
   would be refused as readily as `'//127.0.0.1/x'`
   ([#1092](https://github.com/use-agent-os/agent-os/issues/1092)).
-- `bankr` and `openai_responses` failures classify like every other
-  OpenAI-compatible provider instead of falling through to `UNKNOWN`. Both are
-  real registered providers, and both declare `failure_family="openai_compat"`
-  in `provider/registry.py`, but neither appeared in the hand-kept
-  `_OPENAI_COMPAT_PROVIDERS` literal in `provider/failures.py`, so their 401,
-  402 and 429 lost the auth / credit / rate-limit semantics the runtime uses to
-  choose `FAIL_CONFIG` or `FALLBACK_PROVIDER`. The literal was the wrong shape
-  rather than merely two names short: it had drifted to six missing providers
-  (`bankr`, `openai_responses`, `github_copilot`, `openai_codex`,
-  `byteplus_coding_plan`, `volcengine_coding_plan`), and #775 reported the
-  `bankr` half a while ago without the fix landing. It is now derived from the
-  registry's own `failure_family` field, with a test asserting the two files
-  agree in both directions
-  ([#1126](https://github.com/use-agent-os/agent-os/issues/1126)).
 - `code_exec` removes its ephemeral working directory on every exit, not just
   the one path that happened to own the cleanup. `execute_code` creates the
   directory with `tempfile.mkdtemp(prefix="agentos_exec_")` whenever no
@@ -170,20 +450,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   cleanup, so there is one exit path for the tempdir instead of six that skip
   it. A configured workspace still sets no `cleanup_dir` and is never removed
   ([#1010](https://github.com/use-agent-os/agent-os/issues/1010)).
-- A local version label containing `dev` or `post` no longer demotes a final
-  release. `parse_version()` in `compat/version_utils.py` already captured
-  `+local` into its own regex group, but the fallbacks for a bare `.post` /
-  `.dev` segment re-scanned the *whole* raw string with `re.search`, and the
-  optional `[._-]?` delimiter let those patterns match anywhere — including
-  inside the label. `2026.7.18+dev` parsed as `.dev0` and `2026.7.18+postgres`
-  as `.post0`, so a released build sorted as a pre-release and `is_newer()`
-  inverted, producing spurious upgrade notices and wrong version-skew answers.
-  PEP 440 says a local label must not affect ordering. The regex now names the
-  `post` and `dev` literals (`post_l` / `dev_l`), so "was the segment present"
-  is answered by the anchored match instead of a re-scan; a bare `.post` /
-  `.dev` still means 0, and `+dev`, `+postgres`, `+device` and `+local.post1`
-  are ignored for ordering
-  ([#1130](https://github.com/use-agent-os/agent-os/issues/1130)).
 - A replacement agent task stays in `AgentTaskRegistry` when its predecessor
   finishes winding down. Cancellation is not synchronous: `register()` may put
   a new task under a session key while the cancelled one is still settling,

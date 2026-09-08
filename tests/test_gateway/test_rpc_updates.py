@@ -33,7 +33,7 @@ async def test_updates_check_control_only() -> None:
 
 @pytest.mark.asyncio
 async def test_updates_check_outdated(monkeypatch: pytest.MonkeyPatch) -> None:
-    _mock_latest(monkeypatch, "2026.9.9")
+    _mock_latest(monkeypatch, "2099.1.1")
     ctx = RpcContext(
         conn_id="test",
         config=GatewayConfig(),
@@ -41,7 +41,7 @@ async def test_updates_check_outdated(monkeypatch: pytest.MonkeyPatch) -> None:
 
     response = await get_dispatcher().dispatch("req-1", "updates.check", {}, ctx)
     assert response.ok is True
-    assert response.payload["latest"] == "2026.9.9"
+    assert response.payload["latest"] == "2099.1.1"
     assert response.payload["status"] == "outdated"
 
 
@@ -75,7 +75,7 @@ async def test_updates_check_offline(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_updates_check_respects_notify_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    _mock_latest(monkeypatch, "2026.9.9")
+    _mock_latest(monkeypatch, "2099.1.1")
     ctx = RpcContext(
         conn_id="test",
         config=GatewayConfig(updates=UpdatesConfig(notify=False)),
@@ -89,7 +89,7 @@ async def test_updates_check_respects_notify_false(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_updates_check_respects_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    _mock_latest(monkeypatch, "2026.9.9")
+    _mock_latest(monkeypatch, "2099.1.1")
     monkeypatch.setenv("AGENTOS_NO_UPDATE_NOTICE", "1")
     ctx = RpcContext(
         conn_id="test",
@@ -104,7 +104,7 @@ async def test_updates_check_respects_env_override(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_updates_check_throttling_and_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    _mock_latest(monkeypatch, "2026.9.9")
+    _mock_latest(monkeypatch, "2099.1.1")
     ctx = RpcContext(
         conn_id="test",
         config=GatewayConfig(),
@@ -112,21 +112,21 @@ async def test_updates_check_throttling_and_cache(monkeypatch: pytest.MonkeyPatc
 
     response1 = await get_dispatcher().dispatch("req-1", "updates.check", {}, ctx)
     assert response1.ok is True
-    assert response1.payload["latest"] == "2026.9.9"
+    assert response1.payload["latest"] == "2099.1.1"
     assert response1.payload["status"] == "outdated"
 
-    # Mock a newer version on PyPI, but check should hit cache and still return 2026.9.9
-    _mock_latest(monkeypatch, "2026.10.10")
+    # Mock a newer version on PyPI, but check should hit cache and still return 2099.1.1
+    _mock_latest(monkeypatch, "2099.2.2")
     response2 = await get_dispatcher().dispatch("req-2", "updates.check", {}, ctx)
     assert response2.ok is True
-    assert response2.payload["latest"] == "2026.9.9"
+    assert response2.payload["latest"] == "2099.1.1"
 
 
 @pytest.mark.asyncio
 async def test_updates_check_namespaced_from_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     from agentos.compat.pypi_client import notice_state_path, read_state
 
-    _mock_latest(monkeypatch, "2026.9.9")
+    _mock_latest(monkeypatch, "2099.1.1")
     ctx = RpcContext(
         conn_id="test",
         config=GatewayConfig(),
@@ -135,26 +135,26 @@ async def test_updates_check_namespaced_from_cli(monkeypatch: pytest.MonkeyPatch
     # 1. Run web UI update check.
     response = await get_dispatcher().dispatch("req-1", "updates.check", {}, ctx)
     assert response.ok is True
-    assert response.payload["latest"] == "2026.9.9"
+    assert response.payload["latest"] == "2099.1.1"
 
     # Verify state has "webui" namespace and "latest" at root.
     path = notice_state_path()
     state = read_state(path)
     assert "webui" in state
     assert "last_checked" in state["webui"]
-    assert state["latest"] == "2026.9.9"
+    assert state["latest"] == "2099.1.1"
 
     # 2. Run CLI update check immediately after.
     # Even though Web UI just checked, CLI check is still due since it's namespaced separately.
-    _mock_latest(monkeypatch, "2026.10.10")  # mock a newer one to verify it actually checks
+    _mock_latest(monkeypatch, "2099.2.2")  # mock a newer one to verify it actually checks
     monkeypatch.setattr(update_notice, "_stderr_is_tty", lambda: True)
     msg = update_notice.maybe_emit_update_notice(current_version="2026.7.18")
     assert msg is not None
-    assert "2026.10.10" in msg
+    assert "2099.2.2" in msg
 
     # State should now contain both "webui" and "cli" namespaces, with shared "latest".
     state = read_state(path)
     assert "cli" in state
     assert "last_checked" in state["cli"]
     assert "webui" in state
-    assert state["latest"] == "2026.10.10"
+    assert state["latest"] == "2099.2.2"
