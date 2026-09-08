@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import json
-import shlex
 from typing import Any
 
 from typer.testing import CliRunner
 
 from agentos.cli.main import app
+from agentos.cli_quoting import quote_cli_arg
 
 runner = CliRunner()
 
 
 def _config_arg(path: Any) -> str:
-    return shlex.quote(str(path))
+    # Matches the hint quoting the CLI itself uses, which is platform-aware:
+    # POSIX single quotes on POSIX, Windows double quotes on Windows. Pinning
+    # `shlex.quote` here asserted POSIX quoting of a `C:\...` path on the
+    # Windows leg -- the defect this helper exists to prevent.
+    return quote_cli_arg(str(path))
 
 
 class _FakeGatewayClient:
