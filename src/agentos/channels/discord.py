@@ -1029,14 +1029,21 @@ class DiscordChannel:
         check_channel_file_size(file_path, self.MAX_FILE_BYTES, "Discord")
         await self._rate_limiter.acquire()
         client = self._get_client()
-        with open(file_path, "rb") as f:
-            resp = await retry_request(
-                client.post,
-                f"/channels/{channel_id}/messages",
-                data={"content": content} if content else {},
-                files={"file": (Path(file_path).name, f)},
-                headers=self._auth_headers(),
-            )
+        path = Path(file_path)
+
+        async def _upload() -> httpx.Response:
+            # Reopened per attempt: retry_request re-invokes this on 429, on
+            # 5xx and on connect/timeout errors, and a handle consumed by the
+            # first attempt would upload an empty body on the second.
+            with path.open("rb") as f:
+                return await client.post(
+                    f"/channels/{channel_id}/messages",
+                    data={"content": content} if content else {},
+                    files={"file": (path.name, f)},
+                    headers=self._auth_headers(),
+                )
+
+        resp = await retry_request(_upload)
         resp.raise_for_status()
         data = resp.json()
         message_id = str(data.get("id", ""))
