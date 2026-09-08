@@ -27,6 +27,7 @@ from agentos.gateway.rpc.registry import (
     RpcUnavailableError,
     get_dispatcher,
     get_registry,
+    require_params_dict,
     validate_classification,
 )
 
@@ -41,6 +42,7 @@ __all__ = [
     "RpcUnavailableError",
     "get_dispatcher",
     "get_registry",
+    "require_params_dict",
     "validate_classification",
 ]
 

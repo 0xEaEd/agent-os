@@ -26,7 +26,7 @@ import structlog
 
 from agentos import credential_sources, env_catalog, env_policy, env_store
 from agentos.gateway.access import CONTROL_ONLY
-from agentos.gateway.rpc import RpcContext, get_dispatcher
+from agentos.gateway.rpc import RpcContext, get_dispatcher, require_params_dict
 
 log = structlog.get_logger(__name__)
 
@@ -124,7 +124,7 @@ async def _handle_env_list(params: dict | None, ctx: RpcContext) -> dict[str, An
 async def _handle_env_set(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """Write one variable. Returns its new state, without echoing the value."""
     name = _require_name(params)
-    assert isinstance(params, dict)
+    params = require_params_dict(params)
     if "value" not in params:
         raise ValueError("params.value is required")
     value = params["value"]
@@ -169,7 +169,7 @@ async def _handle_env_import(params: dict | None, ctx: RpcContext) -> dict[str, 
     get. The value goes source → store; it is not returned here.
     """
     name = _require_name(params)
-    assert isinstance(params, dict)
+    params = require_params_dict(params)
     source_id = str(params.get("sourceId") or "").strip()
     if not source_id:
         raise ValueError("params.sourceId is required")
