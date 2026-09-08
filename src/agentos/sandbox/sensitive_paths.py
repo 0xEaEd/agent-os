@@ -26,14 +26,22 @@ _DISABLED = os.environ.get(
 ).lower() in ("1", "true", "yes", "on")
 
 
-# Directory prefixes whose contents must not be read/written/deleted by the agent
+# Path prefixes whose contents must not be read/written/deleted by the agent
 # in default mode. Strings starting with ``~`` expand to the current user's
-# home at check time.
+# home at check time. Matching is anchored at a path segment boundary (an
+# entry matches the path itself or the path plus ``/``), so ``~/.config/gh``
+# guards the GitHub CLI directory without reaching ``~/.config/gh-dash`` or
+# ``~/.config`` at large.
 _SENSITIVE_PREFIXES: tuple[str, ...] = (
     "~/.ssh",
     "~/.aws",
     "~/.azure",
     "~/.config/gcloud",
+    # Agents run ``gh`` routinely, so a live GitHub token sits in
+    # ``~/.config/gh/hosts.yml`` next to entries that already guard ``~/.npmrc``.
+    "~/.config/gh",
+    "~/.anthropic",
+    "~/.openai",
     "~/.docker/config",
     "~/.kube",
     "~/.npmrc",
@@ -41,6 +49,13 @@ _SENSITIVE_PREFIXES: tuple[str, ...] = (
     "~/.netrc",
     "~/.gnupg",
     "~/.password-store",
+    # A file, not a directory — the entries above all name directories, but the
+    # prefix match already accepts an exact path, so a bare file works here and
+    # covers the token in its documented home location. Outside home the Vault
+    # token can live anywhere, which the paired ``/.vault-token`` entry in
+    # :data:`_SENSITIVE_SUFFIXES` catches; the two together are what make the
+    # file sensitive wherever it is written.
+    "~/.vault-token",
     "/etc",
     "/boot",
     "/sys",
@@ -70,6 +85,10 @@ _SENSITIVE_SUFFIXES: tuple[str, ...] = (
     "/.zsh_history",
     "/.mysql_history",
     "/.psql_history",
+    # Pairs with ``~/.vault-token`` above: this entry is what guards a Vault
+    # token written outside home. The leading dot is part of the match, so a
+    # file merely named ``vault-token`` is left alone.
+    "/.vault-token",
 )
 
 _WORKSPACE_PARENT_EXCEPTION_MARKERS: tuple[str, ...] = ("/root",)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agentos.sandbox.sensitive_paths import (
     _is_root_target,
     is_sensitive_path,
@@ -239,3 +241,137 @@ def test_root_target_detection_covers_windows_drive_roots() -> None:
         "relative/path",
     ):
         assert _is_root_target(target) is False, target
+
+
+@pytest.mark.parametrize(
+    ("relative", "marker"),
+    [
+        (".config/gh/hosts.yml", "~/.config/gh"),
+        (".config/gh/config.yml", "~/.config/gh"),
+        (".anthropic/token", "~/.anthropic"),
+        (".openai/api_key", "~/.openai"),
+        (".vault-token", "~/.vault-token"),
+    ],
+)
+def test_developer_credential_paths_in_home_are_sensitive(relative: str, marker: str) -> None:
+    """The gh/Anthropic/OpenAI/Vault credential paths are guarded by default.
+
+    ``gh`` in particular is run routinely by agents, so a live GitHub token
+    lives in a path that used to sit outside the denylist.
+    """
+    target = Path.home()
+    for part in relative.split("/"):
+        target = target / part
+
+    assert is_sensitive_path(str(target)) == marker
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/var/secrets/.vault-token",
+        "/opt/vault/.vault-token",
+        r"C:\secrets\.vault-token",
+    ],
+)
+def test_vault_token_outside_home_matches_the_suffix_entry(path: str) -> None:
+    """``~/.vault-token`` only covers the documented home location.
+
+    A Vault token written anywhere else is caught by the paired
+    ``/.vault-token`` suffix entry, which is why both exist. Backslash
+    spellings normalize, so this holds on every platform.
+    """
+    assert is_sensitive_path(path) == "/.vault-token"
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        ".config/ghost/config.json",
+        ".config/gh-dash/config.yml",
+        ".config/github/settings",
+        ".anthropic-backup/token",
+        ".openairc",
+    ],
+)
+def test_new_prefixes_are_anchored_at_a_segment_boundary(relative: str) -> None:
+    """A prefix must match a whole path segment, not a string prefix.
+
+    Without segment anchoring ``~/.config/gh`` would swallow ``~/.config/ghost``
+    and ``~/.config/gh-dash``, and ``~/.openai`` would swallow ``~/.openairc``.
+    """
+    target = Path.home()
+    for part in relative.split("/"):
+        target = target / part
+
+    assert is_sensitive_path(str(target)) is None
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        ".config",
+        ".config/nvim/init.lua",
+        ".config/htop/htoprc",
+        ".config/starship.toml",
+    ],
+)
+def test_adding_config_gh_does_not_block_config_generally(relative: str) -> None:
+    """``~/.config`` holds mostly harmless state and must stay readable.
+
+    Only the ``gh`` subdirectory is sensitive; the parent and its siblings are
+    not, so editor and shell configuration keeps working.
+    """
+    target = Path.home()
+    for part in relative.split("/"):
+        target = target / part
+
+    assert is_sensitive_path(str(target)) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/var/secrets/vault-token",
+        "/etc/vault/vault-token.bak",
+    ],
+)
+def test_a_file_merely_named_vault_token_is_not_sensitive(path: str) -> None:
+    """The leading dot is part of the suffix match.
+
+    ``vault-token`` without it is an ordinary filename and must not be blocked,
+    or the entry would over-reach onto unrelated files.
+    """
+    if path.startswith("/etc"):
+        # ``/etc`` is already a sensitive prefix on its own account, so this
+        # spelling proves nothing about the suffix; assert the reason instead.
+        assert is_sensitive_path(path) == "/etc"
+        return
+
+    assert is_sensitive_path(path) is None
+
+
+def test_new_credential_paths_are_caught_in_free_form_text() -> None:
+    """The text scanner is a separate code path from :func:`is_sensitive_path`.
+
+    Shell commands reach the sandbox as free-form strings, so each new entry
+    has to be reachable through the token scan as well as a resolved path.
+    """
+    home = Path.home()
+
+    assert sensitive_path_in_text(f"cat {home / '.config' / 'gh' / 'hosts.yml'}") == (
+        "~/.config/gh"
+    )
+    assert sensitive_path_in_text(f"cat {home / '.anthropic' / 'token'}") == "~/.anthropic"
+    assert sensitive_path_in_text(f"cat {home / '.openai' / 'api_key'}") == "~/.openai"
+    assert sensitive_path_in_text(f"cat {home / '.vault-token'}") == "~/.vault-token"
+    assert sensitive_path_in_text("cat /var/secrets/.vault-token") == "/.vault-token"
+
+    # ``$HOME`` survives the token scan as the relative-looking
+    # ``HOME/.vault-token`` once ``$`` is stripped as a token edge, so it
+    # resolves through the leaf fallback onto the paired suffix entry rather
+    # than the home prefix. Either marker means blocked.
+    assert sensitive_path_in_text("cat $HOME/.vault-token") == "/.vault-token"
+
+    assert sensitive_path_in_text(f"nvim {home / '.config' / 'nvim' / 'init.lua'}") is None
+    assert sensitive_path_in_text("cat /var/secrets/vault-token") is None
