@@ -107,6 +107,55 @@ def build_compaction_config_from_provider(
     return cfg
 
 
+def effective_compaction_model(session: Any | None) -> str | None:
+    """Return the model a compaction run for *session* should summarize with.
+
+    A per-session override wins over the session's own model; ``None`` means
+    "no opinion", and the provider's configured default applies.
+    """
+    if session is None:
+        return None
+    return getattr(session, "model_override", None) or getattr(session, "model", None)
+
+
+def resolve_compaction_provider(
+    provider_selector: Any,
+    model_override: str | None = None,
+) -> Any | None:
+    """Resolve the provider a compaction run should use, or ``None``.
+
+    Compaction must not disturb the live selector: when the selector can be
+    cloned, *model_override* is applied to the clone so the turn in flight
+    keeps its own model. Every optional step degrades rather than raises — a
+    selector that cannot clone, cannot override, or cannot resolve leaves the
+    caller with the unmodified selector or with ``None``, and compaction falls
+    back to its configured defaults instead of failing the turn.
+    """
+    if provider_selector is None:
+        return None
+    selector = provider_selector
+    clone = getattr(provider_selector, "clone", None)
+    if callable(clone):
+        try:
+            selector = clone()
+        except Exception:  # noqa: BLE001
+            selector = provider_selector
+    if model_override and selector is not provider_selector:
+        override = getattr(selector, "override_model", None)
+        if callable(override):
+            try:
+                override(model_override)
+            except Exception:  # noqa: BLE001
+                pass
+    resolver = getattr(selector, "resolve", None)
+    if not callable(resolver):
+        return None
+    try:
+        return resolver()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def compact_accepts_config(compact_fn: Any) -> bool:
     """Return whether a compact callable can accept the optional config arg."""
 

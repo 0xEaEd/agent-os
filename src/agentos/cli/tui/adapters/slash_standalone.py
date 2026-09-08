@@ -25,6 +25,7 @@ from agentos.engine.commands import Surface
 from agentos.session.compaction import (
     build_compaction_config_from_provider,
     call_compact_with_optional_config,
+    resolve_compaction_provider,
 )
 from agentos.session.naming import normalize_session_name
 
@@ -207,33 +208,9 @@ async def handle_image_command_turnrunner(
     raise RuntimeError("standalone image dependency was not configured")
 
 
-def _resolve_compaction_provider(
-    provider_selector: Any,
-    model_override: str | None = None,
-) -> Any | None:
-    if provider_selector is None:
-        return None
-    selector = provider_selector
-    clone = getattr(provider_selector, "clone", None)
-    if callable(clone):
-        try:
-            selector = clone()
-        except Exception:  # noqa: BLE001
-            selector = provider_selector
-    if model_override and selector is not provider_selector:
-        override = getattr(selector, "override_model", None)
-        if callable(override):
-            try:
-                override(model_override)
-            except Exception:  # noqa: BLE001
-                pass
-    resolver = getattr(selector, "resolve", None)
-    if not callable(resolver):
-        return None
-    try:
-        return resolver()
-    except Exception:  # noqa: BLE001
-        return None
+#: Retained as a module attribute: ``slash_bridge`` and the chat-command
+#: export map address this adapter's helper by name.
+_resolve_compaction_provider = resolve_compaction_provider
 
 
 def _coerce_transcript_result(result: Any) -> list[Any] | None:
