@@ -677,6 +677,30 @@ def _search_payload(
     return payload
 
 
+def _fence_search_results(results: list[dict]) -> list[dict]:
+    """Fence attacker-controlled result text before it reaches the model.
+
+    ``title`` and ``snippet`` are written by whoever ranks for the query, so
+    they get the same origin boundary ``web_fetch`` puts around a page body,
+    tagged with the result's own URL. Only the tool result is fenced: the
+    same payload feeds ``search.query`` and ``agentos search``, which render
+    the raw text to a human and truncate it for display.
+    """
+
+    from agentos.safety.injection_guard import wrap_untrusted_boundary
+
+    fenced: list[dict] = []
+    for result in results:
+        item = dict(result)
+        source = str(item.get("url") or item.get("source") or "web_search")
+        for field in ("title", "snippet"):
+            text = str(item.get(field) or "")
+            if text:
+                item[field] = wrap_untrusted_boundary(text, source)
+        fenced.append(item)
+    return fenced
+
+
 def _search_error_payload(
     query: str,
     provider_name: str,
@@ -721,6 +745,7 @@ def _search_error_payload(
 async def web_search(query: str, max_results: int | None = None) -> str:
     payload = await run_web_search_payload(query, max_results)
     tool_payload = dict(payload)
+    tool_payload["results"] = _fence_search_results(tool_payload.get("results") or [])
     tool_payload.pop("ok", None)
     tool_payload.pop("fallbackFrom", None)
     tool_payload.pop("errorMessage", None)
