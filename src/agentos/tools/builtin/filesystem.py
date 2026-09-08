@@ -573,7 +573,13 @@ async def read_spreadsheet(
         delimiter = "\t" if ext == ".tsv" else ","
         sheets = await loop.run_in_executor(None, _read_delimited_rows, p, delimiter)
     elif ext == ".xlsx":
-        sheets = await loop.run_in_executor(None, _read_xlsx_sheets, p)
+        # _read_xlsx_sheets parses every sheet before a single one is
+        # selected below, so the materialisation ceiling has to be the
+        # render window this call will actually show -- otherwise a
+        # crafted multi-sheet workbook multiplies the per-sheet row-padding
+        # cost by sheet count even though only one sheet gets rendered.
+        max_rows = row_offset + row_limit - 1
+        sheets = await loop.run_in_executor(None, _read_xlsx_sheets, p, max_rows)
     else:
         raise ToolError(
             f"Unsupported spreadsheet format: {ext or '(none)'}. Use .csv, .tsv, or .xlsx."
@@ -589,16 +595,18 @@ async def read_spreadsheet(
     )
 
 
-def _read_delimited_rows(path: Path, delimiter: str) -> list[tuple[str, list[list[str]]]]:
+def _read_delimited_rows(path: Path, delimiter: str) -> list[tuple[str, list[list[str]], int]]:
     try:
         text = path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ToolError(f"Cannot read spreadsheet as UTF-8 text: {path}") from exc
     rows = [list(row) for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
-    return [(path.name, rows)]
+    return [(path.name, rows, len(rows))]
 
 
-def _read_xlsx_sheets(path: Path) -> list[tuple[str, list[list[str]]]]:
+def _read_xlsx_sheets(
+    path: Path, max_rows: int = _XLSX_MAX_ROWS
+) -> list[tuple[str, list[list[str]], int]]:
     try:
         with zipfile.ZipFile(path) as zf:
             names = set(zf.namelist())
@@ -607,7 +615,7 @@ def _read_xlsx_sheets(path: Path) -> list[tuple[str, list[list[str]]]]:
             shared_strings = _read_xlsx_shared_strings(zf, names)
             workbook = ET.fromstring(zf.read("xl/workbook.xml"))
             rels = _read_xlsx_workbook_relationships(zf, names)
-            sheets: list[tuple[str, list[list[str]]]] = []
+            sheets: list[tuple[str, list[list[str]], int]] = []
             for sheet_el in workbook.findall(f".//{{{_XLSX_MAIN_NS}}}sheet"):
                 sheet_name = sheet_el.attrib.get("name") or f"Sheet{len(sheets) + 1}"
                 rel_id = sheet_el.attrib.get(f"{{{_XLSX_OFFICE_REL_NS}}}id")
@@ -617,8 +625,10 @@ def _read_xlsx_sheets(path: Path) -> list[tuple[str, list[list[str]]]]:
                 worksheet_path = _normalize_xlsx_target(target)
                 if worksheet_path not in names:
                     continue
-                rows = _read_xlsx_worksheet(zf.read(worksheet_path), shared_strings)
-                sheets.append((sheet_name, rows))
+                rows, total_rows = _read_xlsx_worksheet(
+                    zf.read(worksheet_path), shared_strings, max_rows=max_rows
+                )
+                sheets.append((sheet_name, rows, total_rows))
             if not sheets:
                 raise ToolError(f"No readable worksheets found in {path}")
             return sheets
@@ -662,19 +672,38 @@ def _normalize_xlsx_target(target: str) -> str:
     return posixpath.normpath(posixpath.join("xl", target))
 
 
-def _read_xlsx_worksheet(raw_xml: bytes, shared_strings: list[str]) -> list[list[str]]:
+def _read_xlsx_worksheet(
+    raw_xml: bytes, shared_strings: list[str], *, max_rows: int = _XLSX_MAX_ROWS
+) -> tuple[list[list[str]], int]:
+    """Parse a worksheet, padding omitted rows so indices stay 1:1 with real
+    row numbers, and return ``(rows, total_row_count)``.
+
+    ``rows`` is only ever padded/materialised up to ``max_rows`` -- the
+    caller's actual render window, not the sheet's full extent. A crafted or
+    corrupt ``r`` far beyond that window is counted into ``total_row_count``
+    (so the "N rows" header stays accurate) but never turned into empty-list
+    padding, which is what makes a huge declared row index cheap to parse
+    instead of a memory-amplification vector -- and, since a caller reading
+    a multi-sheet workbook selects one sheet only after every sheet has
+    already been parsed, that per-item bound has to be the render window,
+    not just ``_XLSX_MAX_ROWS``, or the cost multiplies by sheet count.
+    """
     root = ET.fromstring(raw_xml)
     rows: list[list[str]] = []
+    total_rows = 0
     for row_el in root.findall(f".//{{{_XLSX_MAIN_NS}}}row"):
-        if len(rows) >= _XLSX_MAX_ROWS:
-            break
         row_r = row_el.attrib.get("r")
+        row_num: int | None = None
         if row_r and row_r.isdigit():
             row_num = int(row_r)
             if row_num < 1 or row_num > _XLSX_MAX_ROWS:
                 continue
-            target_row_idx = min(row_num - 1, _XLSX_MAX_ROWS - 1)
-            while len(rows) < target_row_idx:
+            total_rows = max(total_rows, row_num)
+            if row_num > max_rows:
+                # Beyond anything this call will render -- counted above,
+                # never materialised.
+                continue
+            while len(rows) < row_num - 1:
                 rows.append([])
         row: list[str] = []
         for cell_el in row_el.findall(f"{{{_XLSX_MAIN_NS}}}c"):
@@ -685,7 +714,8 @@ def _read_xlsx_worksheet(raw_xml: bytes, shared_strings: list[str]) -> list[list
         while row and row[-1] == "":
             row.pop()
         rows.append(row)
-    return rows
+        total_rows = max(total_rows, len(rows))
+    return rows, total_rows
 
 
 def _xlsx_column_index(cell_ref: str) -> int:
@@ -717,9 +747,9 @@ def _xlsx_cell_value(cell_el: ET.Element, shared_strings: list[str]) -> str:
 
 
 def _select_spreadsheet_sheets(
-    sheets: list[tuple[str, list[list[str]]]],
+    sheets: list[tuple[str, list[list[str]], int]],
     requested: str | int | None,
-) -> list[tuple[str, list[list[str]]]]:
+) -> list[tuple[str, list[list[str]], int]]:
     if requested is None or requested == "":
         return sheets
 
@@ -729,21 +759,21 @@ def _select_spreadsheet_sheets(
             return [sheets[index]]
 
     requested_name = str(requested)
-    for name, rows in sheets:
+    for name, rows, total_rows in sheets:
         if name == requested_name:
-            return [(name, rows)]
-    for name, rows in sheets:
+            return [(name, rows, total_rows)]
+    for name, rows, total_rows in sheets:
         if name.lower() == requested_name.lower():
-            return [(name, rows)]
+            return [(name, rows, total_rows)]
 
-    available = ", ".join(name for name, _ in sheets)
+    available = ", ".join(name for name, _, _ in sheets)
     raise ToolError(f"Sheet not found: {requested_name}. Available sheets: {available}")
 
 
 def _format_spreadsheet(
     *,
     path: Path,
-    sheets: list[tuple[str, list[list[str]]]],
+    sheets: list[tuple[str, list[list[str]], int]],
     offset: int,
     limit: int,
 ) -> str:
@@ -754,25 +784,29 @@ def _format_spreadsheet(
     offset = max(1, offset)
     start = offset - 1
     multi_sheet = len(sheets) > 1
-    for sheet_name, rows in sheets:
+    for sheet_name, rows, total_rows in sheets:
+        # total_rows (the sheet's real row count) drives the header and
+        # pagination math; rows itself may only be materialised up to the
+        # render window (see _read_xlsx_worksheet) and must never be used
+        # as a stand-in for the sheet's true size.
         width = max((len(row) for row in rows), default=0)
         parts.append("")
-        parts.append(f"Sheet: {sheet_name} ({len(rows)} rows x {width} columns)")
-        if multi_sheet and rows and start >= len(rows):
+        parts.append(f"Sheet: {sheet_name} ({total_rows} rows x {width} columns)")
+        if multi_sheet and total_rows and start >= total_rows:
             # One offset is shared across every sheet in a multi-sheet read,
             # so a sheet smaller than the requested offset would otherwise
             # render as a silent, unexplained empty table.
             parts.append(
-                f"(Offset {offset} exceeds this sheet's {len(rows)} rows; no rows shown.)"
+                f"(Offset {offset} exceeds this sheet's {total_rows} rows; no rows shown.)"
             )
             continue
         selected = rows[start : start + limit]
         for idx, row in enumerate(selected, start=start + 1):
             parts.append(f"{idx}\t" + "\t".join(row))
-        if start + limit < len(rows):
+        if start + limit < total_rows:
             end = start + len(selected)
             parts.append(
-                f"(Showing rows {offset}-{end} of {len(rows)}. "
+                f"(Showing rows {offset}-{end} of {total_rows}. "
                 f"Use offset={end + 1} to continue.)"
             )
     return "\n".join(parts)

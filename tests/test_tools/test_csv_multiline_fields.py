@@ -21,7 +21,7 @@ def test_csv_multiline_quoted_field_stays_single_row(tmp_path: Path) -> None:
     csv_file = tmp_path / "multi.csv"
     csv_file.write_text(csv_content, encoding="utf-8")
 
-    [(_, rows)] = _read_delimited_rows(csv_file, ",")
+    [(_, rows, _)] = _read_delimited_rows(csv_file, ",")
 
     assert rows[0] == ["name", "description"]
     assert rows[1] == ["Alice", "Line one\nLine two\nLine three"]
@@ -42,7 +42,7 @@ def test_csv_delimiter_inside_quoted_field(tmp_path: Path) -> None:
     csv_file = tmp_path / "delim.csv"
     csv_file.write_text(csv_content, encoding="utf-8")
 
-    [(_, rows)] = _read_delimited_rows(csv_file, ",")
+    [(_, rows, _)] = _read_delimited_rows(csv_file, ",")
 
     assert rows[0] == ["key", "value"]
     assert rows[1] == ["item", "one, two, three"]
@@ -63,7 +63,7 @@ def test_csv_multiline_and_delimiter_in_same_field(tmp_path: Path) -> None:
     csv_file = tmp_path / "combo.csv"
     csv_file.write_text(csv_content, encoding="utf-8")
 
-    [(_, rows)] = _read_delimited_rows(csv_file, ",")
+    [(_, rows, _)] = _read_delimited_rows(csv_file, ",")
 
     assert rows[0] == ["id", "data"]
     assert rows[1] == ["1", "first, value\nsecond, value"]
@@ -84,7 +84,7 @@ def test_tsv_multiline_quoted_field(tmp_path: Path) -> None:
     tsv_file = tmp_path / "multi.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
-    [(_, rows)] = _read_delimited_rows(tsv_file, "\t")
+    [(_, rows, _)] = _read_delimited_rows(tsv_file, "\t")
 
     assert rows[0] == ["name", "notes"]
     assert rows[1] == ["Alice", "Line1\nLine2"]
@@ -116,7 +116,7 @@ def test_unicode_line_separator_inside_field_not_treated_as_row_break(
     csv_file = tmp_path / f"unicode_{label}.csv"
     csv_file.write_text(csv_content, encoding="utf-8")
 
-    [(_, rows)] = _read_delimited_rows(csv_file, ",")
+    [(_, rows, _)] = _read_delimited_rows(csv_file, ",")
 
     assert len(rows) == 2, f"Expected 2 rows for {label!r}, got {len(rows)}"
     assert rows[0] == ["a", "b"]

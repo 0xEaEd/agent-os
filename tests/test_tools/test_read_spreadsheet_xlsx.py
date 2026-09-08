@@ -96,7 +96,8 @@ def test_read_xlsx_worksheet_sparse_rows() -> None:
         </sheetData>
     </worksheet>"""
 
-    rows = fs._read_xlsx_worksheet(xml, [])
+    rows, total_rows = fs._read_xlsx_worksheet(xml, [])
+    assert total_rows == 6
     assert len(rows) == 6
     assert rows[0] == ["Header A", "Header B"]
     assert rows[1] == []
@@ -116,7 +117,8 @@ def test_read_xlsx_worksheet_leading_empty_rows() -> None:
         </sheetData>
     </worksheet>"""
 
-    rows = fs._read_xlsx_worksheet(xml, [])
+    rows, total_rows = fs._read_xlsx_worksheet(xml, [])
+    assert total_rows == 3
     assert len(rows) == 3
     assert rows[0] == []
     assert rows[1] == []
@@ -136,7 +138,8 @@ def test_read_xlsx_worksheet_contiguous_rows() -> None:
         </sheetData>
     </worksheet>"""
 
-    rows = fs._read_xlsx_worksheet(xml, [])
+    rows, total_rows = fs._read_xlsx_worksheet(xml, [])
+    assert total_rows == 2
     assert len(rows) == 2
     assert rows[0] == ["Row 1"]
     assert rows[1] == ["Row 2"]
@@ -196,15 +199,16 @@ async def test_read_spreadsheet_xlsx_sparse_rows_and_pagination(tmp_path: Path) 
 # ---------------------------------------------------------------------------
 
 
-def _rows(n: int, *, label: str) -> list[list[str]]:
-    return [[f"{label}{i}"] for i in range(1, n + 1)]
+def _sheet(name: str, n: int, *, label: str) -> tuple[str, list[list[str]], int]:
+    rows = [[f"{label}{i}"] for i in range(1, n + 1)]
+    return (name, rows, len(rows))
 
 
 def test_format_spreadsheet_offset_one_is_unchanged() -> None:
     """Currently-correct case: a plain offset=1 read must keep its present
     output through the offset-normalisation change."""
     out = fs._format_spreadsheet(
-        path=Path("book.xlsx"), sheets=[("Sheet1", _rows(3, label="r"))], offset=1, limit=10
+        path=Path("book.xlsx"), sheets=[_sheet("Sheet1", 3, label="r")], offset=1, limit=10
     )
     assert "1\tr1" in out
     assert "2\tr2" in out
@@ -218,7 +222,7 @@ def test_format_spreadsheet_offset_past_end_of_single_sheet_is_unchanged() -> No
     starvation note -- the header's own row count already explains it, and
     there is no second sheet for a shared offset to starve."""
     out = fs._format_spreadsheet(
-        path=Path("book.xlsx"), sheets=[("Sheet1", _rows(3, label="r"))], offset=50, limit=10
+        path=Path("book.xlsx"), sheets=[_sheet("Sheet1", 3, label="r")], offset=50, limit=10
     )
     assert "Sheet1 (3 rows x 1 columns)" in out
     assert "exceeds" not in out
@@ -229,7 +233,7 @@ def test_format_spreadsheet_workbook_with_no_empty_rows_is_unchanged() -> None:
     """Currently-correct case: a fully contiguous workbook (no padded gaps)
     must keep its present output."""
     out = fs._format_spreadsheet(
-        path=Path("book.xlsx"), sheets=[("Sheet1", _rows(2, label="r"))], offset=1, limit=10
+        path=Path("book.xlsx"), sheets=[_sheet("Sheet1", 2, label="r")], offset=1, limit=10
     )
     assert out.splitlines()[-2:] == ["1\tr1", "2\tr2"]
 
@@ -243,7 +247,7 @@ def test_format_spreadsheet_non_positive_offset_is_clamped_in_the_message(
     offset, printing e.g. "Showing rows 0-10" (#1149 / #1402)."""
     out = fs._format_spreadsheet(
         path=Path("book.xlsx"),
-        sheets=[("Sheet1", _rows(20, label="r"))],
+        sheets=[_sheet("Sheet1", 20, label="r")],
         offset=bad_offset,
         limit=10,
     )
@@ -260,8 +264,8 @@ def test_format_spreadsheet_multi_sheet_starvation_is_explained() -> None:
     out = fs._format_spreadsheet(
         path=Path("book.xlsx"),
         sheets=[
-            ("Big", _rows(50, label="b")),
-            ("Small", _rows(10, label="s")),
+            _sheet("Big", 50, label="b"),
+            _sheet("Small", 10, label="s"),
         ],
         offset=25,
         limit=10,
@@ -281,8 +285,8 @@ def test_format_spreadsheet_multi_sheet_empty_sheet_is_not_reported_as_starved()
     out = fs._format_spreadsheet(
         path=Path("book.xlsx"),
         sheets=[
-            ("Big", _rows(50, label="b")),
-            ("Empty", []),
+            _sheet("Big", 50, label="b"),
+            ("Empty", [], 0),
         ],
         offset=25,
         limit=10,
@@ -316,9 +320,56 @@ def test_read_xlsx_worksheet_crafted_row_beyond_ceiling() -> None:
     import time
 
     start = time.perf_counter()
-    rows = fs._read_xlsx_worksheet(xml, [])
+    rows, total_rows = fs._read_xlsx_worksheet(xml, [])
     elapsed = time.perf_counter() - start
 
     assert len(rows) == 1
     assert rows[0] == ["Header"]
+    # r=20000000, r=99999999999, and r=0 are all outside the format's real
+    # row range (1..1,048,576) and stay fully disregarded -- not just
+    # unmaterialised but also uncounted, same as before this change.
+    assert total_rows == 1
     assert elapsed < 0.5
+
+
+@pytest.mark.asyncio
+async def test_read_spreadsheet_selecting_one_sheet_does_not_pad_every_sheet_to_max_rows(
+    tmp_path: Path,
+) -> None:
+    """A per-sheet row-index clamp is not enough on its own: _read_xlsx_sheets
+    parses every sheet in the workbook before a single sheet is selected, so
+    a crafted multi-sheet workbook where every sheet declares a near-max row
+    index would otherwise multiply the per-sheet padding cost by sheet count
+    -- a 6.6 KB file that cost ~1.6 GB / 3+ seconds to read one sheet from,
+    even though only one sheet was ever going to be rendered.
+
+    The fix threads read_spreadsheet's own render window (offset + limit -
+    1) down as a materialisation ceiling, so only sheets -- and only rows
+    within that window -- actually get padded, while the true row count is
+    still reported."""
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        "<sheetData>"
+        '<row r="1"><c r="A1" t="inlineStr"><is><t>Header</t></is></c></row>'
+        '<row r="1048576"><c r="A1048576" t="inlineStr"><is><t>Last</t></is></c></row>'
+        "</sheetData>"
+        "</worksheet>"
+    )
+    sheets = {f"S{i}": sheet_xml for i in range(1, 21)}
+    xlsx_bytes = _build_xlsx_bytes(sheets)
+    target = tmp_path / "huge.xlsx"
+    target.write_bytes(xlsx_bytes)
+
+    import time
+
+    with tool_context(tmp_path):
+        start = time.perf_counter()
+        out = await fs.read_spreadsheet(str(target), sheet="S1", offset=1, limit=10)
+        elapsed = time.perf_counter() - start
+
+    assert "1\tHeader" in out
+    # The true row count is still reported, not the (small) materialised
+    # window's length.
+    assert "1048576 rows" in out
+    assert elapsed < 2.0
