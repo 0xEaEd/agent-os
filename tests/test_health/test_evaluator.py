@@ -505,9 +505,12 @@ def test_channels_evaluator_quotes_channel_names_in_recovery_commands() -> None:
         }
     )
 
+    from agentos.onboarding.next_steps import quote_cli_arg
+
+    expected_name = quote_cli_arg("feishu work")
     commands = [step.command for step in findings[0].fix_steps]
-    assert "agentos channels restart 'feishu work' --yes" in commands
-    assert "agentos channels status 'feishu work' --json" in commands
+    assert f"agentos channels restart {expected_name} --yes" in commands
+    assert f"agentos channels status {expected_name} --json" in commands
 
 
 def test_channels_evaluator_treats_disabled_channel_as_optional_info() -> None:

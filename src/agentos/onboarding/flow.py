@@ -46,6 +46,7 @@ from agentos.onboarding.next_steps import (
     _config_cli_arg,
     headless_setup_command,
     headless_setup_commands,
+    quote_cli_arg,
     setup_catalog_command,
 )
 from agentos.onboarding.provider_specs import (
@@ -1463,7 +1464,7 @@ def _print_channel_saved(name: str) -> None:
     console.print(
         f"  [dim]Verify after restart:[/dim] "
         f"[{ACCENT_SOFT}]agentos channels status "
-        f"{markup_escape(name)} --json[/]"
+        f"{markup_escape(quote_cli_arg(name))} --json[/]"
     )
 
 

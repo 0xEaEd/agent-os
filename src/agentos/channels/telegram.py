@@ -45,6 +45,7 @@ from agentos.channels.types import Attachment, ChannelHealth, IncomingMessage, O
 from agentos.engine.native_commands import telegram_bot_commands
 from agentos.env import trust_env as _trust_env
 from agentos.gateway.audio_transcription import MAX_TRANSCRIPTION_BYTES
+from agentos.onboarding.next_steps import quote_cli_arg
 
 log = structlog.get_logger(__name__)
 
@@ -285,7 +286,7 @@ class TelegramChannel:
                 "Pairing code: "
                 f"{code}\n\nIt expires in 1 hour. Approve this connection in "
                 "AgentOS Control UI or run: "
-                f"agentos channels pairing approve {self.config.name} {code}",
+                f"agentos channels pairing approve {quote_cli_arg(self.config.name)} {code}",
                 message,
             )
         )

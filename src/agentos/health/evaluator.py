@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import shlex
 from typing import Any
 
 from agentos.health.control_ui import BUILD_CMD
 from agentos.health.model import FixStep, HealthFinding
+from agentos.onboarding.next_steps import quote_cli_arg
 
 _LEGACY_PROVIDER_REPLACEMENTS = {
     "zai": "zhipu",
@@ -39,7 +39,7 @@ def _int_from_payload(payload: dict[str, Any], *keys: str) -> int:
 
 
 def _command_arg(value: str) -> str:
-    return shlex.quote(value)
+    return quote_cli_arg(value)
 
 
 def _diagnostic_incomplete(
