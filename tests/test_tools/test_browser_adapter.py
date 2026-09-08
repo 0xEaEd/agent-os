@@ -438,3 +438,66 @@ class TestCommandExecution:
         assert agent_browser.is_loopback_cdp_url("ws://127.0.0.1:9/x") is True
         assert agent_browser.is_loopback_cdp_url("ws://10.0.0.5:9/x") is False
         assert agent_browser.is_loopback_cdp_url("ws://0.0.0.0:9/x") is False
+
+
+class TestMaxSessionsOnReconfigure:
+    """Lowering the cap has to act on sessions that are already running.
+
+    Nothing else will: `_evict_if_over_cap` is only reached when a new session
+    is created, and reusing an existing one refreshes `last_used_at` so the
+    idle reaper never takes it. Each managed session is a Chromium process, and
+    lowering this is how an operator relieves memory pressure.
+    """
+
+    def test_lowering_max_sessions_trims_the_live_set(self) -> None:
+        agent_browser.configure_browser(_config(max_sessions=3))
+        for key in ("s1", "s2", "s3"):
+            agent_browser.get_or_create_session(key)
+        assert agent_browser.active_session_count() == 3
+
+        agent_browser.configure_browser(_config(max_sessions=1))
+
+        assert agent_browser.active_session_count() == 1
+
+    def test_the_most_recently_used_session_is_the_one_kept(self) -> None:
+        """The docs say "oldest-idle evicted"; the survivor follows that order."""
+        agent_browser.configure_browser(_config(max_sessions=3))
+        for key in ("s1", "s2", "s3"):
+            agent_browser.get_or_create_session(key)
+        agent_browser.get_or_create_session("s1")  # s1 becomes the newest
+
+        agent_browser.configure_browser(_config(max_sessions=1))
+
+        assert list(agent_browser._sessions) == ["s1"]
+
+    def test_raising_max_sessions_closes_nothing(self) -> None:
+        agent_browser.configure_browser(_config(max_sessions=1))
+        agent_browser.get_or_create_session("s1")
+
+        agent_browser.configure_browser(_config(max_sessions=5))
+
+        assert agent_browser.active_session_count() == 1
+
+    def test_an_unchanged_cap_closes_nothing(self) -> None:
+        agent_browser.configure_browser(_config(max_sessions=2))
+        agent_browser.get_or_create_session("s1")
+        agent_browser.get_or_create_session("s2")
+
+        agent_browser.configure_browser(_config(max_sessions=2))
+
+        assert agent_browser.active_session_count() == 2
+
+    def test_creating_a_session_at_the_cap_still_makes_room_for_one(self) -> None:
+        """`_evict_if_over_cap` compares with `>=` on purpose — keep it that way.
+
+        Trimming after a config change needs `>` to land exactly on the cap;
+        reusing that comparison here would evict one session too many.
+        """
+        agent_browser.configure_browser(_config(max_sessions=3))
+        for key in ("s1", "s2", "s3"):
+            agent_browser.get_or_create_session(key)
+
+        agent_browser.get_or_create_session("s4")
+
+        assert agent_browser.active_session_count() == 3
+        assert "s4" in agent_browser._sessions
