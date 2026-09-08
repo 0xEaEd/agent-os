@@ -742,11 +742,24 @@ def _format_spreadsheet(
     limit: int,
 ) -> str:
     parts = [f"Workbook: {path.name}"]
-    start = max(0, offset - 1)
+    # Normalise once so a non-positive offset can't leak into the
+    # continuation message below: the slice already floors at row 1, but a
+    # raw offset=0 used to print "Showing rows 0-10" instead of "1-10".
+    offset = max(1, offset)
+    start = offset - 1
+    multi_sheet = len(sheets) > 1
     for sheet_name, rows in sheets:
         width = max((len(row) for row in rows), default=0)
         parts.append("")
         parts.append(f"Sheet: {sheet_name} ({len(rows)} rows x {width} columns)")
+        if multi_sheet and rows and start >= len(rows):
+            # One offset is shared across every sheet in a multi-sheet read,
+            # so a sheet smaller than the requested offset would otherwise
+            # render as a silent, unexplained empty table.
+            parts.append(
+                f"(Offset {offset} exceeds this sheet's {len(rows)} rows; no rows shown.)"
+            )
+            continue
         selected = rows[start : start + limit]
         for idx, row in enumerate(selected, start=start + 1):
             parts.append(f"{idx}\t" + "\t".join(row))

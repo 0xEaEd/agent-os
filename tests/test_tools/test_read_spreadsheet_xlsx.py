@@ -188,3 +188,104 @@ async def test_read_spreadsheet_xlsx_sparse_rows_and_pagination(tmp_path: Path) 
         out_page3 = await fs.read_spreadsheet(str(target), offset=8, limit=5)
         assert "8\tValue 8" in out_page3
         assert "5\tValue 5" not in out_page3
+
+
+# ---------------------------------------------------------------------------
+# _format_spreadsheet: offset normalisation and multi-sheet pagination (#1149
+# scope note folding in #1402's non-positive-offset and multi-sheet reports)
+# ---------------------------------------------------------------------------
+
+
+def _rows(n: int, *, label: str) -> list[list[str]]:
+    return [[f"{label}{i}"] for i in range(1, n + 1)]
+
+
+def test_format_spreadsheet_offset_one_is_unchanged() -> None:
+    """Currently-correct case: a plain offset=1 read must keep its present
+    output through the offset-normalisation change."""
+    out = fs._format_spreadsheet(
+        path=Path("book.xlsx"), sheets=[("Sheet1", _rows(3, label="r"))], offset=1, limit=10
+    )
+    assert "1\tr1" in out
+    assert "2\tr2" in out
+    assert "3\tr3" in out
+    assert "Sheet1 (3 rows x 1 columns)" in out
+
+
+def test_format_spreadsheet_offset_past_end_of_single_sheet_is_unchanged() -> None:
+    """Currently-correct case: a single-sheet workbook with an offset past
+    its own row count must keep rendering an empty section with no extra
+    starvation note -- the header's own row count already explains it, and
+    there is no second sheet for a shared offset to starve."""
+    out = fs._format_spreadsheet(
+        path=Path("book.xlsx"), sheets=[("Sheet1", _rows(3, label="r"))], offset=50, limit=10
+    )
+    assert "Sheet1 (3 rows x 1 columns)" in out
+    assert "exceeds" not in out
+    assert "r1" not in out and "r2" not in out and "r3" not in out
+
+
+def test_format_spreadsheet_workbook_with_no_empty_rows_is_unchanged() -> None:
+    """Currently-correct case: a fully contiguous workbook (no padded gaps)
+    must keep its present output."""
+    out = fs._format_spreadsheet(
+        path=Path("book.xlsx"), sheets=[("Sheet1", _rows(2, label="r"))], offset=1, limit=10
+    )
+    assert out.splitlines()[-2:] == ["1\tr1", "2\tr2"]
+
+
+@pytest.mark.parametrize("bad_offset", [0, -1, -25])
+def test_format_spreadsheet_non_positive_offset_is_clamped_in_the_message(
+    bad_offset: int,
+) -> None:
+    """A non-positive offset must not leak into the continuation message --
+    the slice already floors at row 1, but the message used to echo the raw
+    offset, printing e.g. "Showing rows 0-10" (#1149 / #1402)."""
+    out = fs._format_spreadsheet(
+        path=Path("book.xlsx"),
+        sheets=[("Sheet1", _rows(20, label="r"))],
+        offset=bad_offset,
+        limit=10,
+    )
+    assert "1\tr1" in out
+    assert "Showing rows 1-10 of 20" in out
+    assert "Showing rows 0-" not in out
+    assert "Showing rows -" not in out
+
+
+def test_format_spreadsheet_multi_sheet_starvation_is_explained() -> None:
+    """One offset is shared across every sheet in a multi-sheet read; a
+    sheet smaller than that offset must say so explicitly instead of
+    silently rendering an empty table with no explanation (#1402)."""
+    out = fs._format_spreadsheet(
+        path=Path("book.xlsx"),
+        sheets=[
+            ("Big", _rows(50, label="b")),
+            ("Small", _rows(10, label="s")),
+        ],
+        offset=25,
+        limit=10,
+    )
+    # The larger sheet paginates normally at the shared offset.
+    assert "25\tb25" in out
+    # The smaller sheet gets an explicit note, not a silent empty table.
+    assert "(Offset 25 exceeds this sheet's 10 rows; no rows shown.)" in out
+    assert not any(f"s{i}" in out for i in range(1, 11))
+
+
+def test_format_spreadsheet_multi_sheet_empty_sheet_is_not_reported_as_starved() -> None:
+    """A genuinely empty sheet (0 rows) is not a starvation symptom of a
+    shared offset -- it must render like any other empty sheet, not with
+    the "offset exceeds" note meant for a sheet that has rows the offset
+    simply skipped past."""
+    out = fs._format_spreadsheet(
+        path=Path("book.xlsx"),
+        sheets=[
+            ("Big", _rows(50, label="b")),
+            ("Empty", []),
+        ],
+        offset=25,
+        limit=10,
+    )
+    assert "Empty (0 rows x 0 columns)" in out
+    assert "exceeds" not in out
