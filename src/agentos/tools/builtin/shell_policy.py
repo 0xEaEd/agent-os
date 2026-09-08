@@ -24,13 +24,10 @@ DEFAULT_DENYLIST: list[str] = [
 ]
 
 DEFAULT_DENYLIST_WIN: list[str] = [
-    r"\bdel\b",
-    r"\brmdir\b",
     r"\bFormat-Volume\b",
     r"\bStop-Computer\b",
     r"\bRestart-Computer\b",
     r"\bClear-Disk\b",
-    r"\bgit push --force\b",
 ]
 
 # Patterns that require two-step confirmation (warn, not block)
@@ -48,8 +45,7 @@ DEFAULT_WARNLIST_WIN: list[str] = [
     r"\bdel\b",
     r"\brmdir\b",
     r"\bRemove-Item\b",
-    r"\bClear-Disk\b",
-    r"\bgit push --force\b",
+    r"git\s+push\s+.*--force",
 ]
 
 _LEGACY_ENV_WARNED: bool = False

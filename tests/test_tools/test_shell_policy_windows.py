@@ -19,12 +19,31 @@ def _windows_policy_env(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.parametrize(
     "command",
     [
-        r"del C:\Windows\System32\config\SAM",
-        r"DEL C:\Windows\System32\config\SAM",
-        r"dEl C:\Windows\System32\config\SAM",
+        r"del C:\tmp\file.txt",
+        r"DEL C:\tmp\file.txt",
+        r"dEl C:\tmp\file.txt",
+        r"rmdir /s /q C:\tmp\folder",
+        r"git push origin main --force",
     ],
 )
-def test_windows_del_variants_are_denied(command: str) -> None:
+def test_windows_del_rmdir_force_push_variants_warn(command: str) -> None:
+    result = shell_policy.SafeBinPolicy.from_env().check(command)
+
+    assert result.allowed is True
+    assert result.needs_approval is True
+    assert "requires approval" in result.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        r"Format-Volume -DriveLetter D",
+        r"Clear-Disk -Number 1",
+        r"Stop-Computer -Force",
+        r"Restart-Computer -Force",
+    ],
+)
+def test_windows_destructive_system_cmds_are_denied(command: str) -> None:
     result = shell_policy.SafeBinPolicy.from_env().check(command)
 
     assert result.allowed is False
@@ -54,7 +73,7 @@ def test_windows_deny_env_overrides_platform_default(monkeypatch: pytest.MonkeyP
     policy = shell_policy.SafeBinPolicy.from_env()
 
     custom = policy.check("custom-block")
-    default_del = policy.check(r"del C:\Windows\System32\config\SAM")
+    default_del = policy.check(r"del C:\tmp\file.txt")
     assert custom.allowed is False
     assert default_del.allowed is True
     assert default_del.needs_approval is True
@@ -76,7 +95,7 @@ def test_windows_empty_warn_env_preserves_default_denylist(
 ) -> None:
     monkeypatch.setenv("AGENTOS_SAFE_BIN_WARN", "")
 
-    result = shell_policy.SafeBinPolicy.from_env().check(r"del C:\Windows\System32\config\SAM")
+    result = shell_policy.SafeBinPolicy.from_env().check(r"Format-Volume -DriveLetter D")
 
     assert result.allowed is False
     assert result.needs_approval is False
