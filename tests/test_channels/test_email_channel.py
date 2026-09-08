@@ -749,6 +749,126 @@ def test_poll_skips_a_message_larger_than_the_cap(monkeypatch: pytest.MonkeyPatc
     assert channel._fetch_unseen() == []
     # Still flagged so the same oversized mail is not re-read every poll.
     assert fake.stored == [("7", "+FLAGS", "\\Seen")]
+    # Oversized is permanent -- no retry bookkeeping should have been touched.
+    assert channel._fetch_attempts == {}
+
+
+class _FlakyBodyIMAP:
+    """A message whose BODY.PEEK[] fetch returns an empty literal until the
+    Nth attempt (or forever, if recovers_on_attempt is None) -- simulating a
+    truncated read or a message that will never parse."""
+
+    def __init__(
+        self,
+        raw: bytes,
+        *,
+        recovers_on_attempt: int | None,
+        uid: str = "9",
+    ) -> None:
+        self._raw = raw
+        self._recovers_on_attempt = recovers_on_attempt
+        self._uid = uid
+        self._fetch_attempts_made = 0
+        self.stored: list[tuple[str, str, str]] = []
+
+    def select(self, folder: str) -> tuple[str, list[bytes]]:
+        return "OK", [b"1"]
+
+    def uid(self, command: str, *args: Any) -> tuple[str, list[Any]]:
+        cmd = command.upper()
+        if cmd == "SEARCH":
+            return "OK", [self._uid.encode()]
+        if cmd == "FETCH":
+            uid, spec = args
+            if "RFC822.SIZE" in spec:
+                return "OK", [f"{uid} (RFC822.SIZE {len(self._raw)})".encode()]
+            self._fetch_attempts_made += 1
+            recovered = (
+                self._recovers_on_attempt is not None
+                and self._fetch_attempts_made >= self._recovers_on_attempt
+            )
+            if not recovered:
+                return "OK", []
+            return "OK", [(b"%b (BODY[] {%d}" % (uid.encode(), len(self._raw)), self._raw), b")"]
+        if cmd == "STORE":
+            uid, flag_command, flags = args
+            self.stored.append((uid, flag_command, flags))
+            return "OK", [b""]
+        raise ValueError(f"unsupported UID command: {command}")
+
+    def close(self) -> None:
+        return None
+
+    def logout(self) -> None:
+        return None
+
+
+def test_transient_fetch_failure_is_retried_before_quarantine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = EmailChannel(config=_config())
+    fake = _FlakyBodyIMAP(_raw().as_bytes(), recovers_on_attempt=2)
+    monkeypatch.setattr(channel, "_imap_connect", lambda: fake)
+
+    # First poll: empty body, well within the retry budget -- left \Unseen
+    # rather than acknowledged, so a working retry does not lose the mail.
+    assert channel._fetch_unseen() == []
+    assert fake.stored == []
+    assert channel._fetch_attempts == {"9": 1}
+
+    # Second poll: the same UID recovers and is delivered + acknowledged;
+    # the retry counter is cleared now that it succeeded.
+    messages = channel._fetch_unseen()
+
+    assert [m.sender_id for m in messages] == ["owner@example.com"]
+    assert fake.stored == [("9", "+FLAGS", "\\Seen")]
+    assert channel._fetch_attempts == {}
+
+
+def test_persistently_unfetchable_message_is_quarantined_after_max_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = EmailChannel(config=_config())
+    fake = _FlakyBodyIMAP(_raw().as_bytes(), recovers_on_attempt=None)
+    monkeypatch.setattr(channel, "_imap_connect", lambda: fake)
+
+    for expected_attempt in range(1, EmailChannel.MAX_FETCH_ATTEMPTS):
+        assert channel._fetch_unseen() == []
+        assert fake.stored == []
+        assert channel._fetch_attempts == {"9": expected_attempt}
+
+    # The attempt that reaches MAX_FETCH_ATTEMPTS quarantines instead of
+    # retrying again, so a message that will never parse cannot loop the
+    # poller forever.
+    assert channel._fetch_unseen() == []
+    assert fake.stored == [("9", "+FLAGS", "\\Seen")]
+    assert channel._fetch_attempts == {}
+
+
+def test_stale_retry_counters_are_evicted_when_uid_leaves_the_unseen_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A UID that stops appearing in UNSEEN (resolved by another client,
+    expunged, moved) must not leave its attempt counter behind forever --
+    that is how _fetch_attempts grew without bound (#1209 follow-up)."""
+    channel = EmailChannel(config=_config())
+    fake = _FlakyBodyIMAP(_raw().as_bytes(), recovers_on_attempt=None, uid="9")
+    monkeypatch.setattr(channel, "_imap_connect", lambda: fake)
+
+    assert channel._fetch_unseen() == []
+    assert channel._fetch_attempts == {"9": 1}
+
+    # UID 9 is gone from the next poll's UNSEEN set (e.g. another client
+    # marked it seen); a different, unrelated UID shows up instead.
+    fake._uid = "10"
+    fake._recovers_on_attempt = 1
+    fake._fetch_attempts_made = 0
+
+    messages = channel._fetch_unseen()
+
+    assert [m.sender_id for m in messages] == ["owner@example.com"]
+    # The stale "9" entry is gone, not carried forward or merged with "10".
+    assert channel._fetch_attempts == {}
 
 
 def test_one_unreadable_message_does_not_sink_the_poll(
