@@ -51,6 +51,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `urlopen`, matching the guard `robinhood-chain-stocks` already carries, and
   the watcher tests serve their fixtures over loopback HTTP instead of
   `file://` ([#1065](https://github.com/use-agent-os/agent-os/issues/1065)).
+- A DuckDuckGo outage now reads as an outage instead of a quiet zero-result
+  search. `DuckDuckGoProvider.search()` swallowed every `httpx.HTTPError` and
+  returned `[]` unless it was built with `diagnostics=True`, so a 403, a 429 or
+  a timeout was indistinguishable from "nothing matched" — and nothing set that
+  flag: `_search_provider_kwargs()` in `tools/builtin/web.py` singled
+  DuckDuckGo out to receive `diagnostics=_active_search_diagnostics`, which is
+  `False` on a default gateway, so the constructor default was overridden to
+  off at the one call site that mattered. Both layers move: the provider
+  defaults to reporting and classifies the failure the way its Brave and Tavily
+  siblings already do (401/403 `auth`, 429 `rate_limit`, other statuses `http`,
+  plus `timeout` and `network`, each carrying `status_code` and `retryable`),
+  and the tool boundary only ever turns diagnostics *on*. `diagnostics=False`
+  stays as an explicit opt-out for a caller that depends on `search()` never
+  raising; `run_web_search_payload` already routes anything raised into its
+  `ok: false` envelope, so the tool contract is unchanged
+  ([#1122](https://github.com/use-agent-os/agent-os/issues/1122)).
 - The sensitive-path denylist now expands `$VAR`/`${VAR}` before it decides,
   so the hard block cannot be side-stepped by spelling a home directory as a
   variable. Tool dispatch ends in a shell, so `cat $HOME/.ssh/config` reaches
