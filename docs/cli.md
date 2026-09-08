@@ -305,6 +305,22 @@ When the current install was built from a local directory (detected via PEP 610
 never prompts, blocks, or changes the exit code. `--json` reports the same as
 `sourceDirectory` (`null` for a release install).
 
+On **Windows** the managed gateway is stopped *before* the installer runs and
+started again afterwards. Windows refuses to replace a file a live process holds
+open, and the managed gateway runs the tool venv's own interpreter — leaving it
+up is what produced `Access is denied` on
+`…\uv\tools\use-agent-os\Scripts`, and a half-replaced directory with
+`agentos` no longer on PATH. `--no-restart` keeps its promise not to touch the
+gateway, so an upgrade with that flag can still hit the lock. POSIX is
+unchanged: files are replaced under the running gateway, which is restarted
+afterwards.
+
+If the installer is refused anyway, the failure names the recovery instead of
+only echoing the installer's error: stop the gateway and close every other
+AgentOS process, re-run the printed command from a fresh terminal, and — if
+`agentos` is then not found — put uv's tool bin directory back on PATH with
+`uv tool update-shell`.
+
 Exit codes: **0** success (upgraded + verified, or `--check`/`--dry-run`);
 **3** this install method needs a manual command (printed); **1** the upgrade
 failed, timed out, or the post-restart version could not be verified.

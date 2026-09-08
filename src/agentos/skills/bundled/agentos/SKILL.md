@@ -323,6 +323,15 @@ faking it; a failed or unverifiable upgrade is **exit 1**. Flags: `--timeout`
 (subprocess bound, default 600s; kills the process group on timeout),
 `--config`, `--json` (adds `sourceDirectory`).
 
+On Windows the managed gateway is stopped before the installer runs and started
+again afterwards — Windows cannot replace files a live process holds open, and
+the gateway runs the tool venv's own interpreter (that is the `Access is denied`
+on `…\uv\tools\use-agent-os\Scripts`). `--no-restart` opts out and can
+therefore still hit the lock. When the installer is refused anyway, the error
+names the recovery: stop the gateway, close every other AgentOS process, re-run
+the printed command from a fresh terminal, and restore uv's tool bin directory
+to PATH with `uv tool update-shell` if `agentos` has gone missing.
+
 Commands that reach the gateway compare CLI and gateway versions: a gateway
 **older** than the CLI warns (post-upgrade, before restart); a gateway
 **newer** than the CLI is *refused* (schema-corruption risk) unless

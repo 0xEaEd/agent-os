@@ -35,6 +35,12 @@ from agentos.cli.ui import console, markup_escape
 
 # Default upgrade-subprocess timeout (seconds). Overridable via --timeout.
 _DEFAULT_TIMEOUT_S = 600.0
+#: Windows will not let anything replace a file a live process holds open.
+#: Read through this rather than ``os.name`` so the Windows-only stop-first
+#: path can be exercised from either platform's test run.
+_ON_WINDOWS = os.name == "nt"
+#: What uv/pipx print when Windows refuses the replacement.
+_FILE_LOCK_MARKERS = ("access is denied", "os error 5", "winerror 5")
 # Bounded wait for the restarted gateway to report the new version.
 _VERIFY_TIMEOUT_S = 30.0
 _VERIFY_POLL_S = 0.5
@@ -163,15 +169,17 @@ def _query_gateway_version(config_path: str | None) -> str | None:
     return gateway_handshake_version(config_path=config_path)
 
 
-def _restart_and_verify(
-    *,
-    config_path: str | None,
-    expected_version: str,
-    json_output: bool,
-) -> bool:
-    """Restart the managed gateway (if running) and verify the new version.
+def _stop_gateway_before_upgrade(config_path: str | None) -> bool:
+    """Stop the managed gateway so Windows can replace the files it holds open.
 
-    Returns True on verified restart (or nothing-to-restart), False on failure.
+    The managed gateway runs the *tool venv's own* interpreter, and Windows
+    refuses to delete or overwrite a file a live process has open. Rebuilding
+    that venv underneath it is what produces "Access is denied" — and, worse, a
+    half-replaced ``Scripts`` directory afterwards with ``agentos`` no longer on
+    PATH. POSIX replaces files under a running process happily, so it keeps the
+    lower-downtime restart-afterwards path.
+
+    Returns True when a managed gateway was stopped and has to be started again.
     """
 
     from agentos.cli.gateway_cmd import _lifecycle_manager
@@ -179,17 +187,102 @@ def _restart_and_verify(
     manager = _lifecycle_manager(port=None, bind=None, listen="", config_path=config_path)
     status = manager.status()
     if not (status.state == "running" and status.managed):
-        console.print(
-            "[dim]Gateway is not running (managed) — nothing to restart. "
-            "It will pick up the new version on next start.[/dim]"
-        )
-        return True
+        return False
 
-    console.print("Restarting managed gateway…")
-    result = manager.restart()
+    console.print("Stopping managed gateway so the installed files can be replaced…")
+    result = manager.stop()
+    if result.exit_code != 0:
+        # Leave it to the normal restart-afterwards path rather than claiming a
+        # stop that did not happen; the upgrade may still fail, and then the
+        # file-lock recovery guidance is what the operator needs.
+        console.print(
+            f"[yellow]Gateway stop failed:[/yellow] {result.message or result.code or result.state}"
+        )
+        return False
+    return True
+
+
+def _start_gateway_after_failed_upgrade(config_path: str | None) -> None:
+    """Bring back the gateway we stopped when the upgrade did not go through."""
+
+    from agentos.cli.gateway_cmd import _lifecycle_manager
+
+    manager = _lifecycle_manager(port=None, bind=None, listen="", config_path=config_path)
+    result = manager.start()
     if result.exit_code != 0:
         console.print(
-            f"[red]Gateway restart failed:[/red] {result.message or result.code or result.state}"
+            "[red]The gateway stopped for the upgrade could not be started again.[/red]\n"
+            "Recovery: run 'agentos gateway start'."
+        )
+        return
+    console.print("Gateway started again on the previous version.")
+
+
+def _looks_like_file_lock(result: UpgradeRunResult) -> bool:
+    """True when the installer failed because a file was held open."""
+
+    blob = f"{result.stdout}\n{result.stderr}".casefold()
+    return any(marker in blob for marker in _FILE_LOCK_MARKERS)
+
+
+def _emit_file_lock_recovery(manual_hint: str) -> None:
+    """Say what actually holds the install open, and how to get ``agentos`` back.
+
+    A failure here can leave the tool directory half-replaced, so the operator
+    needs the PATH step as much as the retry command.
+    """
+
+    console.print(
+        "[red]The installer could not replace the installed files (access denied).[/red]\n"
+        "A running process still has them open — the gateway, an 'agentos chat' "
+        "session, or another AgentOS/Python process.\n"
+        "Recovery:\n"
+        "  1. Run 'agentos gateway stop', then close every other AgentOS process.\n"
+        f"  2. From a fresh terminal run: {markup_escape(manual_hint)}\n"
+        "  3. If 'agentos' is then not found, put uv's tool bin directory back on "
+        "PATH with 'uv tool update-shell' (or add the directory "
+        "'uv tool dir --bin' prints)."
+    )
+
+
+def _restart_and_verify(
+    *,
+    config_path: str | None,
+    expected_version: str,
+    json_output: bool,
+    start_only: bool = False,
+) -> bool:
+    """Restart the managed gateway (if running) and verify the new version.
+
+    ``start_only`` is the Windows path: the gateway was already stopped before
+    the upgrade so its files could be replaced, so there is nothing to restart —
+    it has to be started.
+
+    Returns True on verified restart (or nothing-to-restart), False on failure.
+    """
+
+    from agentos.cli.gateway_cmd import _lifecycle_manager
+
+    manager = _lifecycle_manager(port=None, bind=None, listen="", config_path=config_path)
+    if start_only:
+        console.print("Starting managed gateway…")
+        result = manager.start()
+        action = "start"
+    else:
+        status = manager.status()
+        if not (status.state == "running" and status.managed):
+            console.print(
+                "[dim]Gateway is not running (managed) — nothing to restart. "
+                "It will pick up the new version on next start.[/dim]"
+            )
+            return True
+
+        console.print("Restarting managed gateway…")
+        result = manager.restart()
+        action = "restart"
+    if result.exit_code != 0:
+        console.print(
+            f"[red]Gateway {action} failed:[/red] {result.message or result.code or result.state}"
         )
         return False
 
@@ -198,12 +291,12 @@ def _restart_and_verify(
     while time.monotonic() <= deadline:
         observed = _query_gateway_version(config_path)
         if observed == expected_version:
-            console.print(f"Gateway: restarted and verified ({expected_version}).")
+            console.print(f"Gateway: {action}ed and verified ({expected_version}).")
             return True
         time.sleep(_VERIFY_POLL_S)
 
     console.print(
-        f"[red]Gateway restart could not be verified.[/red] Expected "
+        f"[red]Gateway {action} could not be verified.[/red] Expected "
         f"{expected_version}, gateway reports {observed or 'unreachable'}.\n"
         "Recovery: run 'agentos gateway status' to inspect, then "
         "'agentos gateway restart' to retry.",
@@ -352,12 +445,20 @@ def upgrade_command(
     # Execute the delegated upgrade under a bounded timeout.
     if source_dir is not None:
         _emit_source_install_notice(source_dir)
+    # Windows cannot replace files the managed gateway holds open, so it is
+    # stopped first and started again below. --no-restart means "do not touch my
+    # gateway", which this has to honour even though the upgrade may then fail.
+    stopped_for_upgrade = (
+        _stop_gateway_before_upgrade(config_path) if _ON_WINDOWS and not no_restart else False
+    )
     console.print(f"Upgrading use-agent-os via {plan.method.value}…")
     result = _run_upgrade_subprocess(plan.command, env=env, timeout=timeout)
     if result.stdout.strip():
         console.print(markup_escape(result.stdout.strip()))
 
     if result.timed_out:
+        if stopped_for_upgrade:
+            _start_gateway_after_failed_upgrade(config_path)
         console.print(
             f"[red]Upgrade timed out after {timeout:.0f}s and was terminated.[/red]\n"
             "The upgrade tool was killed (process group), so no half-finished child "
@@ -371,6 +472,10 @@ def upgrade_command(
             f"[red]Upgrade failed (exit {result.returncode}).[/red]\n"
             f"{markup_escape(result.stderr.strip())}"
         )
+        if _looks_like_file_lock(result):
+            _emit_file_lock_recovery(plan.manual_hint)
+        if stopped_for_upgrade:
+            _start_gateway_after_failed_upgrade(config_path)
         raise typer.Exit(1)
 
     # Report old → new by reading the version from a fresh subprocess of the
@@ -400,6 +505,7 @@ def upgrade_command(
         config_path=config_path,
         expected_version=new_version,
         json_output=json_output,
+        start_only=stopped_for_upgrade,
     )
     if json_output:
         print_json(
