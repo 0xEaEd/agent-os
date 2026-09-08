@@ -32,6 +32,15 @@ def _coerce(value: Any, as_text: bool) -> Any:
     where the caller asked for ``=hello``.
     """
     if as_text:
+        if isinstance(value, str) and value.startswith("'="):
+            # ``SKILL.md`` offers ``'=hello`` and ``as_text: true`` as two
+            # spellings of one request, so the two have to land on one cell.
+            # Excel's leading apostrophe is the input escape for a
+            # formula-looking value, so it is consumed here and carried as the
+            # ``quotePrefix`` style flag by :func:`apply_ops` instead of being
+            # stored as data. Scoped to ``'=``: a value that legitimately opens
+            # with an apostrophe (``'tis``) keeps it.
+            return value[1:]
         return value
     if isinstance(value, str) and len(value) >= 19 and value[10] == "T":
         try:

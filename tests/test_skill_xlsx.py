@@ -345,3 +345,49 @@ def test_as_text_leaves_non_string_values_alone(tmp_path: Path) -> None:
     assert sheet.cell(row=2, column=1).data_type == "n"
     assert sheet.cell(row=3, column=1).value is True
     assert sheet.cell(row=3, column=1).data_type == "b"
+
+
+def test_the_apostrophe_escape_and_as_text_produce_the_same_cell(tmp_path: Path) -> None:
+    """``SKILL.md`` offers two spellings of one request; they must agree.
+
+    Excel's leading apostrophe is the input escape for a formula-looking
+    value, so ``{"value": "'=hello", "as_text": true}`` asks for exactly what
+    ``{"value": "=hello", "as_text": true}`` asks for. Storing the apostrophe
+    as data left the two spellings on different cells -- one holding ``=hello``
+    with ``quotePrefix`` set, the other holding a literal ``'=hello``.
+    """
+    sheet = _edit_and_reload(
+        tmp_path,
+        [_set_cell(2, "=hello", as_text=True), _set_cell(3, "'=hello", as_text=True)],
+    )
+    plain = sheet.cell(row=2, column=1)
+    escaped = sheet.cell(row=3, column=1)
+
+    assert (escaped.value, escaped.data_type, escaped.quotePrefix) == (
+        plain.value,
+        plain.data_type,
+        plain.quotePrefix,
+    )
+    assert escaped.value == "=hello"
+    assert escaped.quotePrefix is True
+
+
+def test_a_value_that_genuinely_starts_with_an_apostrophe_keeps_it(tmp_path: Path) -> None:
+    """The escape is only consumed when it escapes a formula.
+
+    Stripping every leading apostrophe would turn ``'tis`` into ``tis`` --
+    trading the reported bug for a quieter one.
+    """
+    sheet = _edit_and_reload(tmp_path, [_set_cell(2, "'tis", as_text=True)])
+    cell = sheet.cell(row=2, column=1)
+
+    assert cell.value == "'tis"
+    assert cell.data_type == "s"
+    assert cell.quotePrefix is False
+
+
+def test_the_apostrophe_escape_is_not_consumed_without_as_text(tmp_path: Path) -> None:
+    """Without the flag nothing is interpreted; the value is stored verbatim."""
+    sheet = _edit_and_reload(tmp_path, [_set_cell(2, "'=hello")])
+
+    assert sheet.cell(row=2, column=1).value == "'=hello"

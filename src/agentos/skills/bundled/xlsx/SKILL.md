@@ -106,9 +106,12 @@ Rules:
 - Rows and columns are 1-based (Excel convention).
 - Strings starting with `=` are written as formulas (`cell.value = "=..."`),
   matching openpyxl behavior. To write a literal `=hello`, pass
-  `as_text: true`: the value is stored unchanged as a text cell, and Excel's
-  leading-apostrophe escape is carried on the cell's `quotePrefix` style flag
-  rather than inside the value.
+  `as_text: true` — either as `{"value": "=hello", "as_text": true}` or with
+  Excel's leading-apostrophe escape, `{"value": "'=hello", "as_text": true}`.
+  Both produce the same cell: the value is stored as `=hello` in a text cell,
+  and the apostrophe is carried on the cell's `quotePrefix` style flag rather
+  than inside the value. The apostrophe is only consumed when it escapes a
+  formula, so a value that genuinely begins with one (`'tis`) keeps it.
 - Datetimes go in as ISO 8601 strings (`"2026-05-06T09:00:00"`); the helper
   parses them back to `datetime` objects so Excel renders the cell with date
   format. Pass `as_text: true` to keep such a string as text instead.
