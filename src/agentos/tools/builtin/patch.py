@@ -9,12 +9,16 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import structlog
+
 from agentos.identity.workspace import BOOTSTRAP_FILENAMES
 from agentos.sandbox.integration import sandboxed
 from agentos.tools.path_policy import reject_foreign_host_path
 from agentos.tools.registry import tool
 from agentos.tools.types import ToolError, current_tool_context
 from agentos.tools.write_tracking import record_workspace_file_write
+
+log = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -502,50 +506,160 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
     return result[:pos] + new_lines + result[pos + hunk.old_count :]
 
 
-def _apply_update(path: str, hunks: list[Hunk], root: Path | None = None) -> None:
-    resolved = _validate_path(path, root)
-    if not resolved.exists():
-        raise FileNotFoundError(f"File not found for update: {path}")
-
-    text = resolved.read_text(encoding="utf-8")
+def _updated_text(text: str, hunks: list[Hunk]) -> str:
+    """Return *text* with every hunk applied, without touching the filesystem."""
     lines = text.splitlines(keepends=True)
-
     # Apply hunks in reverse order so earlier line numbers stay valid
     for hunk in sorted(hunks, key=lambda h: h.old_start, reverse=True):
         lines = _apply_hunk(lines, hunk)
-
-    resolved.write_text("".join(lines), encoding="utf-8")
-
-
-def _apply_add(path: str, content: str, root: Path | None = None) -> None:
-    resolved = _validate_path(path, root)
-    if resolved.exists():
-        raise FileExistsError(f"File already exists: {path}")
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(content, encoding="utf-8")
+    return "".join(lines)
 
 
-def _apply_delete(path: str, root: Path | None = None) -> None:
-    resolved = _validate_path(path, root)
-    if not resolved.exists():
-        raise FileNotFoundError(f"File not found for deletion: {path}")
-    resolved.unlink()
+@dataclass
+class _StagedOp:
+    """One fully resolved operation, ready to be written verbatim."""
+
+    label: str  # "Add File: path" — names the op in any failure message
+    path: Path
+    content: str | None  # None means "delete this path"
+
+
+def _op_label(op: PatchOp) -> str:
+    if isinstance(op, AddFile):
+        return f"Add File: {op.path}"
+    if isinstance(op, UpdateFile):
+        return f"Update File: {op.path}"
+    return f"Delete File: {op.path}"
+
+
+def _plan_ops(
+    ops: list[PatchOp], root: Path | None = None
+) -> tuple[list[_StagedOp], tuple[int, int, int]]:
+    """Resolve and dry-run every operation in memory.
+
+    Nothing is written here, so a patch whose third op has a bad context is
+    rejected before its first op reaches disk. ``pending`` carries the state
+    an earlier op in the same patch would have produced, so an ``Add`` followed
+    by an ``Update`` of the same file still composes the way sequential
+    application did.
+    """
+    staged: list[_StagedOp] = []
+    pending: dict[Path, str | None] = {}
+    added = modified = deleted = 0
+
+    def _will_exist(resolved: Path) -> bool:
+        """Whether the path exists once the ops before this one have run."""
+        if resolved in pending:
+            return pending[resolved] is not None
+        return resolved.exists()
+
+    for op in ops:
+        label = _op_label(op)
+        try:
+            resolved = _validate_path(op.path, root)
+            content: str | None
+            if isinstance(op, AddFile):
+                if _will_exist(resolved):
+                    raise FileExistsError(f"File already exists: {op.path}")
+                content = op.content
+                added += 1
+            elif isinstance(op, UpdateFile):
+                if not _will_exist(resolved):
+                    raise FileNotFoundError(f"File not found for update: {op.path}")
+                # Only an update needs the text; an add/delete of a file this
+                # tool never decodes must not start failing on bad UTF-8.
+                current = pending.get(resolved) if resolved in pending else None
+                if current is None:
+                    current = resolved.read_text(encoding="utf-8")
+                content = _updated_text(current, op.hunks)
+                modified += 1
+            else:
+                if not _will_exist(resolved):
+                    raise FileNotFoundError(f"File not found for deletion: {op.path}")
+                content = None
+                deleted += 1
+        except ToolError:
+            raise
+        except (OSError, ValueError) as exc:
+            # Keep the exception type — callers and tests distinguish
+            # FileNotFoundError from ValueError — but say which op failed.
+            raise type(exc)(f"{label}: {exc}") from exc
+
+        staged.append(_StagedOp(label=label, path=resolved, content=content))
+        pending[resolved] = content
+
+    return staged, (added, modified, deleted)
+
+
+def _missing_ancestors(path: Path) -> list[Path]:
+    """Directories that would have to be created for *path* to be writable."""
+    created: list[Path] = []
+    parent = path.parent
+    while not parent.exists() and parent != parent.parent:
+        created.append(parent)
+        parent = parent.parent
+    return created
+
+
+def _commit_staged(staged: list[_StagedOp]) -> None:
+    """Write every staged op, restoring the originals if any write fails.
+
+    Planning has already ruled out the predictable failures; this rollback
+    covers what it cannot see — a permission change, a full disk, a path that
+    became a directory between plan and commit.
+    """
+    backups: dict[Path, bytes | None] = {}
+    new_dirs: list[Path] = []
+    current: _StagedOp | None = None
+    try:
+        for item in staged:
+            current = item
+            if item.path not in backups:
+                backups[item.path] = item.path.read_bytes() if item.path.is_file() else None
+            if item.content is None:
+                item.path.unlink()
+                continue
+            new_dirs.extend(reversed(_missing_ancestors(item.path)))
+            item.path.parent.mkdir(parents=True, exist_ok=True)
+            item.path.write_text(item.content, encoding="utf-8")
+    except OSError as exc:
+        _restore(backups, new_dirs)
+        label = current.label if current is not None else "patch"
+        raise type(exc)(f"{label}: {exc}") from exc
+
+
+def _restore(backups: dict[Path, bytes | None], new_dirs: list[Path]) -> None:
+    """Best-effort undo of a partially committed batch."""
+    for path, original in backups.items():
+        try:
+            if original is None:
+                if path.is_file():
+                    path.unlink()
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(original)
+        except OSError:  # pragma: no cover - rollback is best effort
+            log.warning("patch.rollback_failed", path=str(path))
+    for directory in reversed(new_dirs):
+        try:
+            directory.rmdir()
+        except OSError:  # non-empty or already gone — leave it
+            break
 
 
 def _apply_ops(ops: list[PatchOp], root: Path | None = None) -> tuple[int, int, int]:
-    """Execute all patch operations. Returns (added, modified, deleted) counts."""
-    added = modified = deleted = 0
-    for op in ops:
-        if isinstance(op, AddFile):
-            _apply_add(op.path, op.content, root)
-            added += 1
-        elif isinstance(op, UpdateFile):
-            _apply_update(op.path, op.hunks, root)
-            modified += 1
-        elif isinstance(op, DeleteFile):
-            _apply_delete(op.path, root)
-            deleted += 1
-    return added, modified, deleted
+    """Execute all patch operations atomically.
+
+    Every operation is resolved and dry-run first, so a failure anywhere in
+    the batch leaves the workspace untouched — and, because the exception is
+    raised before ``apply_patch``'s post-write hooks are skipped, the runtime's
+    view of the filesystem cannot drift from what is actually on disk.
+
+    Returns (added, modified, deleted) counts.
+    """
+    staged, counts = _plan_ops(ops, root)
+    _commit_staged(staged)
+    return counts
 
 
 # ---------------------------------------------------------------------------
