@@ -17,6 +17,8 @@ import re
 import shlex
 from pathlib import Path, PurePosixPath
 
+from agentos.redact import CREDENTIAL_FILE_NAMES
+
 # Operator escape hatch — set AGENTOS_SENSITIVE_PATHS_DISABLED=1 to no-op
 # the entire sensitive-path block layer. ONLY for trusted single-operator
 # environments / E2E testing where sandbox=false + sensitive_path checks
@@ -26,13 +28,22 @@ _DISABLED = os.environ.get(
 ).lower() in ("1", "true", "yes", "on")
 
 
+# Host credential FILES, taken from the redaction layer's list so the two
+# cannot drift: a name worth scrubbing from output is a name worth blocking at
+# the tool boundary. Bare ``credentials`` is excluded — ``~/.aws`` already
+# covers ``~/.aws/credentials``, and a loose file called ``credentials``
+# elsewhere is not necessarily a host secret.
+_HOST_CREDENTIAL_FILES: tuple[str, ...] = tuple(
+    sorted(name for name in CREDENTIAL_FILE_NAMES if name != "credentials")
+)
+
 # Path prefixes whose contents must not be read/written/deleted by the agent
 # in default mode. Strings starting with ``~`` expand to the current user's
 # home at check time. Matching is anchored at a path segment boundary (an
 # entry matches the path itself or the path plus ``/``), so ``~/.config/gh``
 # guards the GitHub CLI directory without reaching ``~/.config/gh-dash`` or
 # ``~/.config`` at large.
-_SENSITIVE_PREFIXES: tuple[str, ...] = (
+_BASE_SENSITIVE_PREFIXES: tuple[str, ...] = (
     "~/.ssh",
     "~/.aws",
     "~/.azure",
@@ -44,9 +55,6 @@ _SENSITIVE_PREFIXES: tuple[str, ...] = (
     "~/.openai",
     "~/.docker/config",
     "~/.kube",
-    "~/.npmrc",
-    "~/.pypirc",
-    "~/.netrc",
     "~/.gnupg",
     "~/.password-store",
     # A file, not a directory — the entries above all name directories, but the
@@ -56,6 +64,9 @@ _SENSITIVE_PREFIXES: tuple[str, ...] = (
     # :data:`_SENSITIVE_SUFFIXES` catches; the two together are what make the
     # file sensitive wherever it is written.
     "~/.vault-token",
+)
+
+_SYSTEM_SENSITIVE_PREFIXES: tuple[str, ...] = (
     "/etc",
     "/boot",
     "/sys",
@@ -67,9 +78,15 @@ _SENSITIVE_PREFIXES: tuple[str, ...] = (
     "/usr/lib/systemd",
 )
 
+_SENSITIVE_PREFIXES: tuple[str, ...] = (
+    *_BASE_SENSITIVE_PREFIXES,
+    *(f"~/{name}" for name in _HOST_CREDENTIAL_FILES),
+    *_SYSTEM_SENSITIVE_PREFIXES,
+)
+
 # Exact filename tails we never want mutated, regardless of parent directory.
 # Covers cases like moving an id_rsa out of ~/.ssh into /tmp.
-_SENSITIVE_SUFFIXES: tuple[str, ...] = (
+_BASE_SENSITIVE_SUFFIXES: tuple[str, ...] = (
     "/id_rsa",
     "/id_ed25519",
     "/id_ecdsa",
@@ -89,6 +106,15 @@ _SENSITIVE_SUFFIXES: tuple[str, ...] = (
     # token written outside home. The leading dot is part of the match, so a
     # file merely named ``vault-token`` is left alone.
     "/.vault-token",
+)
+
+# The same credential filenames are blocked as tails too, so moving one out of
+# its usual directory does not shake the block off. This is deliberately wider
+# than the home-directory prefixes: a project-local ``./.npmrc`` also needs
+# ``/elevated full``, matching how ``/.env`` already behaves.
+_SENSITIVE_SUFFIXES: tuple[str, ...] = (
+    *_BASE_SENSITIVE_SUFFIXES,
+    *(f"/{name}" for name in _HOST_CREDENTIAL_FILES),
 )
 
 _WORKSPACE_PARENT_EXCEPTION_MARKERS: tuple[str, ...] = ("/root",)
@@ -409,16 +435,43 @@ def sensitive_path_in_text(
     if not text:
         return None
 
-    marker = _scan_text_for_marker(text, workspace=workspace)
-    if marker is not None:
-        return marker
     # `$HOME/.ssh/config` survives token scanning as the relative-looking
     # `HOME/.ssh/config` (the leading `$` is stripped as a token edge), so the
-    # expanded spelling has to be scanned in its own right.
+    # expanded spelling has to be scanned in its own right. Scan it FIRST: the
+    # unexpanded text of `${HOME}/.npmrc` also yields the bare `/.npmrc` (the
+    # `}` is a token edge too), which matches as a filename tail and would
+    # report that instead of the `~/.npmrc` prefix the expansion resolves to.
+    # Both block, but the two spellings must report the same marker.
     expanded = _expand_env_vars(text)
-    if expanded != text:
-        return _scan_text_for_marker(expanded, workspace=workspace)
-    return None
+    # Three spellings of the same command can each reach the scanner
+    # differently, and on Windows they disagree about which marker to report.
+    # `$HOME` expands to `C:\Users\<name>`, `shlex.split` runs in POSIX mode
+    # and eats the backslashes, and what is left is drive-relative -- so it
+    # falls through to the filename-tail fallback and answers `/.npmrc` where
+    # the tilde spelling answers `~/.npmrc`. Since a credential filename is now
+    # both a home prefix and a tail, whichever spelling is scanned first would
+    # decide the marker.
+    #
+    # So every spelling is scanned and the home prefix wins outright: `~/X` and
+    # `$HOME/X` name the same file and must report the same marker, which is
+    # the parity property #985 exists to protect. A tail is only reported when
+    # no spelling could reach the prefix at all.
+    normalized = expanded.replace("\\", "/")
+    spellings: list[str] = []
+    for spelling in (expanded, normalized, text):
+        if spelling not in spellings:
+            spellings.append(spelling)
+
+    tail_marker: str | None = None
+    for spelling in spellings:
+        marker = _scan_text_for_marker(spelling, workspace=workspace)
+        if marker is None:
+            continue
+        if marker.startswith("~/"):
+            return marker
+        if tail_marker is None:
+            tail_marker = marker
+    return tail_marker
 
 
 def sensitive_target_in_command(
