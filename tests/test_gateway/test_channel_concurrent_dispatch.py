@@ -296,6 +296,79 @@ async def test_close_cancels_inflight() -> None:
     assert all(t.done() for t in tasks), "all tasks must be done after cancel_all"
 
 
+@pytest.mark.asyncio
+async def test_cancel_all_handles_reservation_tokens_alongside_tasks() -> None:
+    """A bare reservation token must not abort the shutdown loop.
+
+    ``try_acquire`` parks a plain ``object()`` in the same set as the real
+    tasks. ``cancel_all`` used to call ``.cancel()`` on every member, so the
+    token raised ``AttributeError`` and every task after it in iteration order
+    was left running.
+    """
+    ifs = _ChannelInFlightSet(cap=8)
+
+    cancelled: list[str] = []
+
+    async def _long_running(label: str) -> None:
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.append(label)
+            raise
+
+    tasks = [asyncio.create_task(_long_running(str(i))) for i in range(3)]
+    for task in tasks:
+        ifs.add(task)
+    # Interleave several tokens so no iteration order can dodge them.
+    tokens = [object() for _ in range(3)]
+    for token in tokens:
+        assert ifs.try_acquire(token)
+
+    await asyncio.sleep(0)
+
+    await ifs.cancel_all()
+
+    assert sorted(cancelled) == ["0", "1", "2"]
+    assert all(t.done() for t in tasks)
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_clears_reservation_tokens() -> None:
+    """Shutdown must not leave reservations occupying the cap."""
+    ifs = _ChannelInFlightSet(cap=2)
+    assert ifs.try_acquire(object())
+    assert ifs.try_acquire(object())
+    assert ifs.full()
+
+    await ifs.cancel_all()
+
+    assert not ifs.full()
+    assert ifs.try_acquire(object())
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_on_a_reservation_only_set_is_a_no_op() -> None:
+    ifs = _ChannelInFlightSet(cap=4)
+    assert ifs.try_acquire(object())
+
+    await ifs.cancel_all()  # must not raise
+
+    assert not ifs.full()
+
+
+def test_reservation_tokens_count_toward_the_cap() -> None:
+    """The token's whole purpose — the cap check must still see it."""
+    ifs = _ChannelInFlightSet(cap=1)
+    token = object()
+
+    assert ifs.try_acquire(token)
+    assert ifs.full()
+    assert not ifs.try_acquire(object())
+
+    ifs.release(token)
+    assert not ifs.full()
+
+
 # ── typing_keepalive lifecycle bound to reply task ──────────────────────────
 
 
