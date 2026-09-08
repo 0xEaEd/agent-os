@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Telegram polling retries failed callbacks before acknowledging their updates,
+  with at most three handling attempts per update. Exhausted updates are logged
+  at error level and skipped so later messages can proceed; repeated callback
+  IDs are deduplicated before approval handling.
+  ([#1027](https://github.com/use-agent-os/agent-os/issues/1027))
+
 - Day-of-week ranges that end at `SUN` parse again. `_parse_field` substituted
   every day name with a single number, and `sun` is always 0 there, so
   `SAT-SUN` reached the range check as `6-0` and `MON-SUN` as `1-0` — reversed
