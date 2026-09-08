@@ -181,7 +181,11 @@ async def git_diff(
         "files": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Files to stage. If omitted, stages all changes (git add -A).",
+            "description": (
+                "Files to stage. If omitted, stages all changes (git add -A). "
+                "Pass an empty array to stage nothing and commit only what is "
+                "already staged."
+            ),
         },
         "workdir": {"type": "string", "description": "Git repository directory (default: cwd)."},
     },
@@ -204,12 +208,16 @@ async def git_commit(
     workdir: str | None = None,
 ) -> str:
     cwd = _effective_workdir(workdir)
-    if files:
+    # ``files`` omitted (None) means "stage everything"; an explicitly empty
+    # list means "stage nothing" and commit what the caller already staged.
+    # Collapsing the two with ``if files:`` swept untracked files the caller
+    # never named into the commit.
+    if files is None:
+        await _run_git("add", "-A", cwd=cwd)
+    elif files:
         for file_path in files:
             _reject_foreign_git_path(file_path)
         await _run_git("add", "--", *files, cwd=cwd)
-    else:
-        await _run_git("add", "-A", cwd=cwd)
     return await _run_git("commit", "-m", message, cwd=cwd)
 
 
