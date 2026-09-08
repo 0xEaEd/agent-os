@@ -116,6 +116,9 @@ class MSTeamsChannel:
         default_factory=asyncio.Queue, init=False, repr=False
     )
     _references: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    # Tracks which cached conversation a given outbound activity id belongs
+    # to, so edit()/delete() operate on the right chat instead of guessing.
+    _message_conversation_keys: dict[str, str] = field(default_factory=dict, init=False, repr=False)
     _bot_id: str | None = field(default=None, init=False, repr=False)
     _connected: bool = field(default=False, init=False, repr=False)
     _last_message_at: datetime | None = field(default=None, init=False, repr=False)
@@ -426,32 +429,69 @@ class MSTeamsChannel:
     # ------------------------------------------------------------------
     # Outbound (proactive via continue_conversation)
     # ------------------------------------------------------------------
+    def _resolve_reference_key(self, reply_to: str | None) -> str | None:
+        """Return the cache key ``send``/``send_streaming`` resolve ``reply_to`` to.
+
+        An explicit ``reply_to`` must match a cached conversation exactly —
+        an unknown key resolves to nothing rather than silently falling back.
+        With no ``reply_to``, falls back to the most-recently-cached
+        conversation (whoever last spoke to the bot).
+        """
+        key = (reply_to or "").strip()
+        if key:
+            return key if key in self._references else None
+        if self._references:
+            return next(reversed(self._references))
+        return None
 
     def _resolve_reference(self, message: OutgoingMessage) -> Any | None:
-        key = (message.reply_to or "").strip()
-        if key and key in self._references:
-            return self._references[key]
-        # Fall back to most-recent reference for callers that just want
-        # to reply to whoever last spoke.
-        if not key and self._references:
+        key = self._resolve_reference_key(message.reply_to)
+        return self._references.get(key) if key is not None else None
+
+    def _remember_sent_message(self, message_id: str | None, cache_key: str | None) -> None:
+        """Record which conversation ``message_id`` was sent into, for edit/delete."""
+        if message_id and cache_key is not None:
+            self._message_conversation_keys[message_id] = cache_key
+
+    def _resolve_reference_for_message(self, message_id: str) -> Any | None:
+        """Resolve the conversation reference that owns ``message_id``.
+
+        Falls back to the most-recently-cached conversation (matching
+        ``send``'s own fallback) only when ``message_id`` was never tracked
+        by this adapter instance — never to whichever conversation happens
+        to be *oldest* in the cache, which would silently target an
+        unrelated chat.
+        """
+        cache_key = self._message_conversation_keys.get(message_id)
+        if cache_key is not None:
+            ref = self._references.get(cache_key)
+            if ref is not None:
+                return ref
+        if self._references:
             return next(reversed(self._references.values()))
         return None
 
     async def send(self, message: OutgoingMessage) -> None:
         if self._adapter is None:
             raise RuntimeError("MSTeamsChannel.send requires start() first")
-        ref = self._resolve_reference(message)
+        key = self._resolve_reference_key(message.reply_to)
+        ref = self._references.get(key) if key is not None else None
         if ref is None:
             raise RuntimeError("MSTeamsChannel.send has no conversation reference for reply_to")
 
+        holder: dict[str, str | None] = {"id": None}
+
         async def _callback(turn_context: Any) -> None:
-            await turn_context.send_activity(message.content)
+            response = await turn_context.send_activity(message.content)
+            if response is not None and getattr(response, "id", None):
+                holder["id"] = response.id
 
         await self._adapter.continue_conversation(
             ref,
             _callback,
             bot_id=self._bot_id,
         )
+        self._remember_sent_message(holder["id"], key)
         log.info(
             "msteams.outbound_sent",
             conversation_id=getattr(getattr(ref, "conversation", None), "id", ""),
@@ -460,14 +500,11 @@ class MSTeamsChannel:
     async def edit(self, message_id: str, content: str) -> None:
         if self._adapter is None:
             raise RuntimeError("MSTeamsChannel.edit requires start() first")
-        # Resolve a reference: prefer one whose activity_id matches — fall
-        # back to the most-recent ref since Teams edits are scoped per
-        # conversation, not per channel.
-        ref = next(iter(self._references.values()), None)
+        ref = self._resolve_reference_for_message(message_id)
         if ref is None:
             raise RuntimeError("MSTeamsChannel.edit has no conversation reference cached")
 
-        from botbuilder.schema import Activity  # noqa: PLC0415
+        from botbuilder.schema import Activity  # type: ignore[import-untyped]  # noqa: PLC0415
 
         async def _callback(turn_context: Any) -> None:
             updated = Activity(type="message", id=message_id, text=content)
@@ -478,7 +515,7 @@ class MSTeamsChannel:
     async def delete(self, message_id: str) -> None:
         if self._adapter is None:
             raise RuntimeError("MSTeamsChannel.delete requires start() first")
-        ref = next(iter(self._references.values()), None)
+        ref = self._resolve_reference_for_message(message_id)
         if ref is None:
             raise RuntimeError("MSTeamsChannel.delete has no conversation reference cached")
 
@@ -486,6 +523,7 @@ class MSTeamsChannel:
             await turn_context.delete_activity(message_id)
 
         await self._adapter.continue_conversation(ref, _callback, bot_id=self._bot_id)
+        self._message_conversation_keys.pop(message_id, None)
 
     # ------------------------------------------------------------------
     # Streaming
@@ -508,12 +546,8 @@ class MSTeamsChannel:
 
         from botbuilder.schema import Activity  # noqa: PLC0415
 
-        ref_key = (reply_to or "").strip()
-        ref = (
-            self._references.get(ref_key)
-            if ref_key
-            else next(reversed(self._references.values()), None)
-        )
+        ref_key = self._resolve_reference_key(reply_to)
+        ref = self._references.get(ref_key) if ref_key is not None else None
         if ref is None:
             raise RuntimeError("MSTeamsChannel.send_streaming has no conversation reference cached")
 
@@ -542,6 +576,7 @@ class MSTeamsChannel:
 
                 await self._adapter.continue_conversation(ref, _send, bot_id=self._bot_id)
                 message_id = holder["id"]
+                self._remember_sent_message(message_id, ref_key)
                 last_edit = time.monotonic()
                 continue
 
