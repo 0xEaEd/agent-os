@@ -157,10 +157,13 @@ class AgentOSMCPBridge:
             )
             max_events = _clamp_limit(max_events, _MAX_EVENTS_WAIT_EVENTS)
             timeout_ms = min(max(0, timeout_ms), _MAX_EVENTS_WAIT_TIMEOUT_MS)
-            deadline = time.monotonic() + timeout_ms / 1000
+            timeout_s = timeout_ms / 1000
+            deadline = time.monotonic() + timeout_s
 
             while len(events) < max_events:
-                remaining = deadline - time.monotonic()
+                # Re-clamp: on coarse clocks ``deadline - now`` can round a hair
+                # above ``timeout_s``, handing ``recv_event`` more than the cap.
+                remaining = min(deadline - time.monotonic(), timeout_s)
                 if remaining <= 0:
                     break
                 try:

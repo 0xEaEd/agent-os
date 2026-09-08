@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `events_wait` no longer hands `recv_event` a timeout above the five-minute
+  cap. On coarse clocks (Windows ticks at ~15ms) two `time.monotonic()` reads
+  inside one tick reduce the remaining wait to `(t + cap) - t`, which rounds a
+  hair above `cap` for many values of `t`; the remaining wait is now re-clamped
+  to the capped timeout on every loop iteration.
+
 ## [2026.9.7] - 2026-09-07
 
 ### Fixed
