@@ -356,6 +356,14 @@ def skills_update(
                 str(row.get("message") or ""),
             )
         console.print(table)
+        # Surface non-safe scan verdicts (closes #988)
+        for row in results:
+            safe = row.get("scan_verdict") in (None, "safe")
+            if isinstance(row, dict) and row.get("success") and not safe:
+                console.print(
+                    f"[yellow]Security: {row.get('name')} — {row['scan_verdict']} "
+                    f"({len(row.get('scan_findings') or [])} findings)[/]"
+                )
         message = payload.get("message") if isinstance(payload, dict) else None
         if message:
             console.print(str(message))
