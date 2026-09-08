@@ -53,7 +53,7 @@ def _shape_text(shape) -> list[str]:
         return []
     out: list[str] = []
     for para in shape.text_frame.paragraphs:
-        line = "".join(run.text for run in para.runs).strip()
+        line = para.text.strip()
         if line:
             out.append(line)
     return out
@@ -66,11 +66,7 @@ def _table_text(shape) -> list[str]:
     out: list[str] = []
     for row in shape.table.rows:
         cells = [
-            "".join(
-                run.text
-                for para in cell.text_frame.paragraphs
-                for run in para.runs
-            ).strip()
+            " ".join(para.text.strip() for para in cell.text_frame.paragraphs if para.text.strip())
             for cell in row.cells
         ]
         cells = [c for c in cells if c]
@@ -107,9 +103,7 @@ def _notes_text(slide) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(
-        description="Extract slide text from a .pptx file."
-    )
+    ap = argparse.ArgumentParser(description="Extract slide text from a .pptx file.")
     ap.add_argument("path", type=Path, help="Path to .pptx file")
     ap.add_argument("--json", action="store_true", help="Emit JSON")
     ap.add_argument(
@@ -142,11 +136,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "slide": i,
                 "text": _slide_text(slide),
-                **(
-                    {"notes": _notes_text(slide)}
-                    if args.include_notes
-                    else {}
-                ),
+                **({"notes": _notes_text(slide)} if args.include_notes else {}),
             }
         )
 
