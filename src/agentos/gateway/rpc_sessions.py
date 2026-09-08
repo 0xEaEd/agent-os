@@ -2370,6 +2370,35 @@ async def _handle_sessions_messages_unsubscribe(params: dict | None, ctx: RpcCon
     return None
 
 
+# A preview is 120 characters of the last message, so it reads a bounded tail
+# instead of deserializing the whole history of every listed session. The
+# second window is the fallback for a tail that is all tool traffic.
+_PREVIEW_TRANSCRIPT_WINDOWS = (10, 50)
+
+
+def _preview_snippet(transcript: list[Any]) -> str:
+    """Return the last user/assistant message text, truncated for display."""
+
+    for entry in reversed(transcript):
+        if entry.role in ("user", "assistant") and entry.content:
+            return str(entry.content)[:120]
+    return ""
+
+
+async def _preview_last_message(storage: Any, session_id: str) -> str:
+    get_recent = getattr(storage, "get_recent_transcript", None)
+    if not callable(get_recent):
+        # Storage without a tail query keeps the old full read rather than
+        # losing the preview entirely.
+        return _preview_snippet(await storage.get_transcript(session_id, limit=-1))
+    for window in _PREVIEW_TRANSCRIPT_WINDOWS:
+        transcript = await get_recent(session_id, window)
+        snippet = _preview_snippet(transcript)
+        if snippet or len(transcript) < window:
+            return snippet
+    return ""
+
+
 @_d.method("sessions.preview")
 async def _handle_sessions_preview(params: dict | None, ctx: RpcContext) -> dict:
     keys = (params or {}).get("keys")
@@ -2401,13 +2430,7 @@ async def _handle_sessions_preview(params: dict | None, ctx: RpcContext) -> dict
         )
         last_msg = ""
         try:
-            transcript = await storage.get_transcript(s.session_id, limit=-1)
-            if transcript:
-                # Find the last user or assistant message for preview
-                for entry in reversed(transcript):
-                    if entry.role in ("user", "assistant") and entry.content:
-                        last_msg = entry.content[:120]
-                        break
+            last_msg = await _preview_last_message(storage, s.session_id)
         except Exception:
             pass
         previews.append(
