@@ -28,6 +28,8 @@ from .types import (
 
 _OLLAMA_DEFAULT_BASE = "http://localhost:11434"
 _OLLAMA_ERROR_BODY_LIMIT = 2000
+# Connect budget for a daemon on the same machine. See _stream_timeout.
+_OLLAMA_CONNECT_TIMEOUT_S = 5.0
 
 
 def _build_ollama_tool(tool: ToolDefinition) -> dict[str, Any]:
@@ -129,6 +131,45 @@ def _format_error_body(body: bytes) -> str:
     return text[: _OLLAMA_ERROR_BODY_LIMIT - 1].rstrip() + "…"
 
 
+def _stream_timeout(timeout: float) -> httpx.Timeout:
+    """Bound the connect phase separately from the request timeout.
+
+    Ollama is a local daemon: a connection nobody accepts within a few seconds
+    means the server is not there (or is wedged), and spending the full
+    ``cfg.timeout`` on it only leaves the caller waiting. The read timeout stays
+    ``timeout`` — a first token can legitimately wait for the model to load.
+    """
+
+    connect = min(_OLLAMA_CONNECT_TIMEOUT_S, max(timeout, 1.0))
+    return httpx.Timeout(timeout, connect=connect, write=10.0, pool=10.0)
+
+
+def _unreachable_message(exc: Exception, base_url: str) -> str:
+    """Name the cause instead of leaking a bare transport error.
+
+    Keeps the words the ollama branch of ``classify_provider_error`` keys on
+    ("connection error"), which httpx's own ``All connection attempts failed``
+    does not carry.
+    """
+
+    return (
+        f"Connection error: Ollama is not reachable at {base_url} — start it with "
+        f"'ollama serve', or point AgentOS at the host that runs it. "
+        f"({type(exc).__name__}: {exc})"
+    )
+
+
+def _http_error_message(status_code: int, detail: str, model: str, base_url: str) -> str:
+    """Turn Ollama's "model not found" 404 into the command that fixes it."""
+
+    if status_code == 404 and "model" in detail.lower():
+        return (
+            f"Ollama model {model!r} is not available at {base_url} — pull it first: "
+            f"ollama pull {model}. (HTTP {status_code}: {detail})"
+        )
+    return f"HTTP {status_code}: {detail}"
+
+
 def _parse_tool_call(value: Any, fallback_index: int) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -224,7 +265,7 @@ class OllamaProvider:
 
         try:
             async with httpx.AsyncClient(
-                timeout=cfg.timeout,
+                timeout=_stream_timeout(cfg.timeout),
                 trust_env=_trust_env(),
                 proxy=self._proxy,
             ) as client:
@@ -236,7 +277,12 @@ class OllamaProvider:
                     if response.status_code != 200:
                         body = await response.aread()
                         yield ErrorEvent(
-                            message=f"HTTP {response.status_code}: {_format_error_body(body)}",
+                            message=_http_error_message(
+                                response.status_code,
+                                _format_error_body(body),
+                                self._model,
+                                self._base_url,
+                            ),
                             code=str(response.status_code),
                         )
                         return
@@ -324,6 +370,11 @@ class OllamaProvider:
                         model=response_model,
                     )
 
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            yield ErrorEvent(
+                message=_unreachable_message(exc, self._base_url),
+                code="connection_error",
+            )
         except httpx.TimeoutException as exc:
             yield ErrorEvent(message=f"Request timed out: {exc}", code="timeout")
         except httpx.RequestError as exc:
