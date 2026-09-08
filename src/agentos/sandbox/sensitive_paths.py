@@ -443,21 +443,35 @@ def sensitive_path_in_text(
     # report that instead of the `~/.npmrc` prefix the expansion resolves to.
     # Both block, but the two spellings must report the same marker.
     expanded = _expand_env_vars(text)
-    candidates = [expanded] if expanded != text else []
-    # On Windows the expansion lands a drive-rooted path in the middle of the
-    # text (`cat C:\Users\<name>/.npmrc`). The path pattern starts at `/`, so
-    # it can only see the trailing `/.npmrc` and reports that tail instead of the
-    # `~/.npmrc` the home prefix would give. Swapping separators lets the whole
-    # path be picked up; the drive letter is dropped, and the drive-relative
-    # remainder resolves back to the same file.
+    # Three spellings of the same command can each reach the scanner
+    # differently, and on Windows they disagree about which marker to report.
+    # `$HOME` expands to `C:\Users\<name>`, `shlex.split` runs in POSIX mode
+    # and eats the backslashes, and what is left is drive-relative -- so it
+    # falls through to the filename-tail fallback and answers `/.npmrc` where
+    # the tilde spelling answers `~/.npmrc`. Since a credential filename is now
+    # both a home prefix and a tail, whichever spelling is scanned first would
+    # decide the marker.
+    #
+    # So every spelling is scanned and the home prefix wins outright: `~/X` and
+    # `$HOME/X` name the same file and must report the same marker, which is
+    # the parity property #985 exists to protect. A tail is only reported when
+    # no spelling could reach the prefix at all.
     normalized = expanded.replace("\\", "/")
-    if normalized != expanded:
-        candidates.append(normalized)
-    for candidate in candidates:
-        marker = _scan_text_for_marker(candidate, workspace=workspace)
-        if marker is not None:
+    spellings: list[str] = []
+    for spelling in (expanded, normalized, text):
+        if spelling not in spellings:
+            spellings.append(spelling)
+
+    tail_marker: str | None = None
+    for spelling in spellings:
+        marker = _scan_text_for_marker(spelling, workspace=workspace)
+        if marker is None:
+            continue
+        if marker.startswith("~/"):
             return marker
-    return _scan_text_for_marker(text, workspace=workspace)
+        if tail_marker is None:
+            tail_marker = marker
+    return tail_marker
 
 
 def sensitive_target_in_command(

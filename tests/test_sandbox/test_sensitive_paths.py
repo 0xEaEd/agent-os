@@ -369,14 +369,17 @@ def test_new_credential_paths_are_caught_in_free_form_text() -> None:
     assert sensitive_path_in_text(f"cat {home / '.vault-token'}") == "~/.vault-token"
     assert sensitive_path_in_text("cat /var/secrets/.vault-token") == "/.vault-token"
 
-    # ``$HOME`` survives the token scan as the relative-looking
-    # ``HOME/.vault-token`` once ``$`` is stripped as a token edge, so it
-    # resolves through the leaf fallback onto the paired suffix entry rather
-    # than the home prefix. Either marker means blocked.
-    assert sensitive_path_in_text("cat $HOME/.vault-token") == "/.vault-token"
+    # ``$HOME/X`` and ``~/X`` name the same file, so they must report the same
+    # marker -- the parity property #985 exists to protect. Every spelling is
+    # scanned and the home prefix wins outright; without that the ``$`` is
+    # stripped as a token edge, the relative-looking ``HOME/.vault-token``
+    # resolves through the leaf fallback, and the two spellings disagree.
+    assert sensitive_path_in_text("cat $HOME/.vault-token") == "~/.vault-token"
 
     assert sensitive_path_in_text(f"nvim {home / '.config' / 'nvim' / 'init.lua'}") is None
     assert sensitive_path_in_text("cat /var/secrets/vault-token") is None
+
+
 # --- host credential files (#981) -------------------------------------------
 #
 # `Path.home()` and `expanduser()` both read the platform's home variable, so
@@ -384,7 +387,11 @@ def test_new_credential_paths_are_caught_in_free_form_text() -> None:
 # alike. Reading the real home would make these assertions depend on whoever
 # runs them.
 
-_FIXED_HOME = "/home/agentos-test"
+# Deliberately not under ``/home``: on macOS that prefix is an autofs mount
+# point, so ``Path.resolve()`` pays an automount lookup -- 26ms a call here
+# against 0.02ms elsewhere, which turned this file into a 35-second run once
+# the parity cases started resolving several spellings each.
+_FIXED_HOME = "/opt/agentos-test-home"
 
 
 @pytest.fixture()
@@ -461,3 +468,29 @@ def test_backslash_home_spelling_reports_the_prefix_not_the_tail(fixed_home: Pat
     backslash_home = str(fixed_home).replace("/", "\\")
     for name in ("_netrc", ".npmrc", ".pgpass", ".git-credentials"):
         assert sensitive_path_in_text(f"cat {backslash_home}/{name}") == f"~/{name}", name
+
+
+@pytest.mark.parametrize("spelling", ["$HOME", "${HOME}"])
+@pytest.mark.parametrize("name", _HOST_CREDENTIAL_FILES)
+def test_env_var_and_tilde_spellings_report_the_same_marker(
+    fixed_home: Path, spelling: str, name: str
+) -> None:
+    """The two spellings of one file must not disagree about the marker.
+
+    Deriving the credential names into both the home prefixes and the filename
+    tails gave each name two possible answers, and which one came back depended
+    on which spelling the scanner reached first. On Windows that broke the
+    parity outright: ``$HOME`` expands to ``C:\\Users\\<name>``, POSIX-mode
+    ``shlex.split`` eats the backslashes, and the drive-relative remainder falls
+    through to the tail -- so ``$HOME/.netrc`` answered ``/.netrc`` while
+    ``~/.netrc`` answered ``~/.netrc``.
+
+    Asserting the two against each other rather than against a literal keeps
+    this meaningful on every platform: the property is that they agree, not
+    what the agreed value happens to be on the runner.
+    """
+    tilde = sensitive_path_in_text(f"cat ~/{name}")
+    expanded = sensitive_path_in_text(f"cat {spelling}/{name}")
+
+    assert tilde == f"~/{name}"
+    assert expanded == tilde
