@@ -426,3 +426,232 @@ def test_upgrade_subprocess_windows_guards_stuck_communicate_after_kill(
     assert result.ok is False
     assert result.stdout == ""
     assert result.stderr == ""
+
+
+# --- Windows: stop the gateway before its files are replaced (issue #1365) ---
+
+
+class _FakeLifecycleManager:
+    """Records the lifecycle calls `agentos upgrade` makes, in order."""
+
+    def __init__(self, calls: list[str], *, state: str = "running", managed: bool = True) -> None:
+        self._calls = calls
+        self._state = state
+        self._managed = managed
+        self.stop_exit_code = 0
+        self.start_exit_code = 0
+
+    def status(self) -> Any:
+        self._calls.append("status")
+        return types.SimpleNamespace(state=self._state, managed=self._managed)
+
+    def stop(self) -> Any:
+        self._calls.append("stop")
+        return types.SimpleNamespace(
+            exit_code=self.stop_exit_code, message="", code="", state="stopped"
+        )
+
+    def start(self) -> Any:
+        self._calls.append("start")
+        return types.SimpleNamespace(
+            exit_code=self.start_exit_code, message="", code="", state="running"
+        )
+
+    def restart(self) -> Any:
+        self._calls.append("restart")
+        return types.SimpleNamespace(exit_code=0, message="", code="", state="running")
+
+
+def _install_fake_lifecycle(
+    monkeypatch: pytest.MonkeyPatch, manager: _FakeLifecycleManager
+) -> None:
+    from agentos.cli import gateway_cmd
+
+    monkeypatch.setattr(gateway_cmd, "_lifecycle_manager", lambda **_: manager)
+
+
+def _lock_failure(*_: Any, **__: Any) -> upgrade_cmd.UpgradeRunResult:
+    return upgrade_cmd.UpgradeRunResult(
+        ok=False,
+        timed_out=False,
+        returncode=2,
+        stdout="",
+        stderr=(
+            r"error: failed to remove directory "
+            r"`...\uv\tools\use-agent-os\Scripts`: "
+            "Access is denied. (os error 5)"
+        ),
+    )
+
+
+def _upgrade_with_recorded_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    on_windows: bool,
+    run: Any = _ok_run,
+    args: list[str] | None = None,
+) -> tuple[Any, list[dict[str, Any]]]:
+    restart_kwargs: list[dict[str, Any]] = []
+
+    def fake_restart(**kwargs: Any) -> bool:
+        restart_kwargs.append(kwargs)
+        return True
+
+    monkeypatch.setattr(upgrade_cmd, "_ON_WINDOWS", on_windows)
+    monkeypatch.setattr(upgrade_cmd, "build_upgrade_plan", _delegated_plan)
+    monkeypatch.setattr(upgrade_cmd, "_run_upgrade_subprocess", run)
+    monkeypatch.setattr(upgrade_cmd, "_installed_version_via", lambda *a, **k: "99999.2.0")
+    monkeypatch.setattr(upgrade_cmd, "_restart_and_verify", fake_restart)
+
+    result = runner.invoke(_app(), ["upgrade", *(args or [])])
+    return result, restart_kwargs
+
+
+def test_windows_stops_the_managed_gateway_before_replacing_its_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    _install_fake_lifecycle(monkeypatch, _FakeLifecycleManager(calls))
+
+    result, restart_kwargs = _upgrade_with_recorded_restart(monkeypatch, on_windows=True)
+
+    assert result.exit_code == 0
+    assert calls == ["status", "stop"]
+    # Already stopped, so the gateway has to be started, not restarted.
+    assert restart_kwargs[0]["start_only"] is True
+
+
+def test_posix_keeps_the_restart_afterwards_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    _install_fake_lifecycle(monkeypatch, _FakeLifecycleManager(calls))
+
+    result, restart_kwargs = _upgrade_with_recorded_restart(monkeypatch, on_windows=False)
+
+    assert result.exit_code == 0
+    assert calls == []
+    assert restart_kwargs[0]["start_only"] is False
+
+
+def test_windows_no_restart_leaves_the_gateway_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    _install_fake_lifecycle(monkeypatch, _FakeLifecycleManager(calls))
+    monkeypatch.setattr(upgrade_cmd, "_ON_WINDOWS", True)
+    monkeypatch.setattr(upgrade_cmd, "build_upgrade_plan", _delegated_plan)
+    monkeypatch.setattr(upgrade_cmd, "_run_upgrade_subprocess", _ok_run)
+    monkeypatch.setattr(upgrade_cmd, "_installed_version_via", lambda *a, **k: "99999.2.0")
+
+    result = runner.invoke(_app(), ["upgrade", "--no-restart"])
+
+    assert result.exit_code == 0
+    assert calls == []
+
+
+def test_windows_unmanaged_gateway_is_not_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    _install_fake_lifecycle(
+        monkeypatch, _FakeLifecycleManager(calls, state="unmanaged", managed=False)
+    )
+
+    result, restart_kwargs = _upgrade_with_recorded_restart(monkeypatch, on_windows=True)
+
+    assert result.exit_code == 0
+    assert calls == ["status"]
+    assert restart_kwargs[0]["start_only"] is False
+
+
+def test_failed_upgrade_starts_the_gateway_it_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    _install_fake_lifecycle(monkeypatch, _FakeLifecycleManager(calls))
+
+    result, _ = _upgrade_with_recorded_restart(monkeypatch, on_windows=True, run=_lock_failure)
+
+    assert result.exit_code == 1
+    assert calls == ["status", "stop", "start"]
+
+
+def test_access_denied_failure_names_the_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    _install_fake_lifecycle(monkeypatch, _FakeLifecycleManager(calls))
+
+    result, _ = _upgrade_with_recorded_restart(monkeypatch, on_windows=True, run=_lock_failure)
+
+    assert result.exit_code == 1
+    assert "access denied" in result.stdout
+    assert "agentos gateway stop" in result.stdout
+    # Rich wraps the panel-free console output, so assert on stable fragments.
+    assert "uv tool install --force" in result.stdout
+    assert "uv tool update-shell" in result.stdout
+
+
+def test_ordinary_failure_does_not_print_the_lock_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _plain_failure(*_: Any, **__: Any) -> upgrade_cmd.UpgradeRunResult:
+        return upgrade_cmd.UpgradeRunResult(
+            ok=False,
+            timed_out=False,
+            returncode=1,
+            stdout="",
+            stderr="error: no solution found for use-agent-os",
+        )
+
+    calls: list[str] = []
+    _install_fake_lifecycle(monkeypatch, _FakeLifecycleManager(calls))
+
+    result, _ = _upgrade_with_recorded_restart(monkeypatch, on_windows=True, run=_plain_failure)
+
+    assert result.exit_code == 1
+    assert "uv tool update-shell" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Access is denied. (os error 5)",
+        "ACCESS IS DENIED",
+        "PermissionError: [WinError 5] Access is denied",
+    ],
+)
+def test_looks_like_file_lock_matches_windows_denials(stderr: str) -> None:
+    result = upgrade_cmd.UpgradeRunResult(
+        ok=False, timed_out=False, returncode=2, stdout="", stderr=stderr
+    )
+
+    assert upgrade_cmd._looks_like_file_lock(result) is True
+
+
+def test_looks_like_file_lock_ignores_ordinary_failures() -> None:
+    result = upgrade_cmd.UpgradeRunResult(
+        ok=False, timed_out=False, returncode=1, stdout="", stderr="no solution found"
+    )
+
+    assert upgrade_cmd._looks_like_file_lock(result) is False
+
+
+def test_start_only_starts_instead_of_restarting(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    _install_fake_lifecycle(monkeypatch, _FakeLifecycleManager(calls))
+    monkeypatch.setattr(upgrade_cmd, "_query_gateway_version", lambda _: "99999.2.0")
+
+    verified = upgrade_cmd._restart_and_verify(
+        config_path=None,
+        expected_version="99999.2.0",
+        json_output=False,
+        start_only=True,
+    )
+
+    assert verified is True
+    assert calls == ["start"]
+
+
+def test_stop_failure_falls_back_to_the_restart_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    manager = _FakeLifecycleManager(calls)
+    manager.stop_exit_code = 1
+    _install_fake_lifecycle(monkeypatch, manager)
+
+    result, restart_kwargs = _upgrade_with_recorded_restart(monkeypatch, on_windows=True)
+
+    assert result.exit_code == 0
+    assert calls == ["status", "stop"]
+    assert restart_kwargs[0]["start_only"] is False
