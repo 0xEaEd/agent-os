@@ -173,9 +173,25 @@ def _parse_field(token: str, field_name: str, names: dict[str, int] | None = Non
             else:
                 start = _to_int(range_part, field_name, lo, hi)
                 end = hi
+                if field_name == "day_of_week":
+                    # Day-of-week's true cardinality is 7 distinct values
+                    # (0-6); 7 is only ever an input alias for Sunday (0),
+                    # never a real 8th slot -- matching croniter's own
+                    # RANGES[DOW] = (0, 6). A bare "N/M" (no explicit second
+                    # bound) must step across that true 7-value field:
+                    # alias a literal 7 start to 0, and use 6 (not the
+                    # alias-inclusive `hi`) as the implicit end.
+                    if start == hi:
+                        start = lo
+                    end = hi - 1
+                    if start == end:
+                        # Matches croniter: when the (aliased) start lands
+                        # exactly on the field's true max, "N/M" means "step
+                        # across the whole field", not "just N" -- e.g.
+                        # "6/2" is the entire {0, 2, 4, 6}, not just {6}.
+                        start = lo
 
             values.update(range(start, end + 1, step))
-
         elif "-" in part:
             start_str, end_str = part.split("-", 1)
             start = _to_int(start_str, field_name, lo, hi)
