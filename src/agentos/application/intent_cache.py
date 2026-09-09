@@ -198,16 +198,38 @@ def _runs_quoted_argument_as_command(prefix: str) -> bool:
     "…"`` needs no rule of its own. ``ssh`` is matched anywhere in the prefix
     rather than adjacently, so ``ssh -p 22 host "…"`` is covered too — a quoted
     argument to ``ssh`` is remote command text in every spelling.
+
+    The shell name is looked for the same way: anywhere in the prefix, scanning
+    back from ``-c`` over the shell's own options. Requiring it adjacently at
+    ``tokens[-2]`` made one option enough to turn the command back into data —
+    ``bash -e -c "rm -rf /etc"`` and ``bash -o pipefail -c "…"`` are ordinary
+    CI glue, so that is a hard block lost. The scan stops at the first token
+    that is neither an option nor an option's argument, which is what keeps
+    ``git commit -m -c "…"``-shaped prefixes from resolving to a shell.
     """
     tokens = prefix.replace(";", " ").replace("&", " ").replace("|", " ").split()
     if any(token.rsplit("/", 1)[-1] == "ssh" for token in tokens):
         return True
     if len(tokens) < 2:
         return False
-    name = tokens[-2].rsplit("/", 1)[-1]
-    flag = tokens[-1]
     # ``-c`` or a combined short flag carrying it, e.g. ``bash -lc``.
-    return name in _SHELL_NAMES and flag.startswith("-") and "c" in flag
+    flag = tokens[-1]
+    if not (flag.startswith("-") and "c" in flag):
+        return False
+    pending_word = False
+    for token in reversed(tokens[:-1]):
+        if token.rsplit("/", 1)[-1] in _SHELL_NAMES:
+            return True
+        if token.startswith("-"):
+            pending_word = False
+            continue
+        # A bare word is passed over only as the argument of the option to its
+        # left — the ``pipefail`` of ``bash -o pipefail -c``. Two in a row means
+        # the prefix is some other command, so the scan stops.
+        if pending_word:
+            return False
+        pending_word = True
+    return False
 
 
 def _command_spans(command: str) -> list[tuple[int, int]]:

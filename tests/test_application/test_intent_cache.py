@@ -396,6 +396,15 @@ class TestQuotedRmIsNotACommand:
             'sh -c "rm -rf /boot/vmlinuz"',
             '/bin/sh -c "rm -rf /etc/passwd"',
             'bash -lc "rm -rf /etc/passwd"',
+            # An option between the shell and ``-c`` moves the name off
+            # ``tokens[-2]``. Requiring it there made each of these read as
+            # data, losing the hard block; they are ordinary CI glue.
+            'bash --login -c "rm -rf /etc/passwd"',
+            'bash -e -c "rm -rf /etc/passwd"',
+            'sh -e -c "rm -rf /etc/passwd"',
+            'bash -o pipefail -c "rm -rf /etc/passwd"',
+            'sh --norc -c "rm -rf /etc/passwd"',
+            'bash --noprofile --norc -c "rm -rf /etc/passwd"',
         ],
     )
     def test_a_quoted_rm_a_shell_will_run_is_still_a_delete(self, command: str) -> None:
@@ -411,6 +420,28 @@ class TestQuotedRmIsNotACommand:
         from agentos.sandbox.sensitive_paths import sensitive_target_in_command
 
         assert sensitive_target_in_command(command) is not None, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'echo "bash -e -c rm -rf /etc"',
+            'echo "bash -o pipefail -c rm -rf /etc"',
+            'git commit -m -c "rm the old config" ',
+        ],
+    )
+    def test_scanning_back_for_the_shell_does_not_widen_to_other_commands(
+        self, command: str
+    ) -> None:
+        """The relaxation is bounded on both sides.
+
+        Looking for the shell name anywhere before ``-c`` must not make a
+        quoted mention of one executable: the introducer still has to be
+        outside the quotes, and a prefix that is some other command stops the
+        scan before any shell name could be reached.
+        """
+        from agentos.sandbox.sensitive_paths import sensitive_target_in_command
+
+        assert sensitive_target_in_command(command) is None, command
 
     def test_a_quoted_argument_of_an_ordinary_command_stays_data(self) -> None:
         """The introducer is what matters, not the quoting.
