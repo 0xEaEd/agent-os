@@ -4,8 +4,17 @@ Operations:
     {"op": "set_cell", "sheet": "Q3", "row": 1, "col": 1, "value": "..."}
     {"op": "set_cell", "sheet": "Q3", "row": 2, "col": 2, "value": "=SUM(B3:B10)"}
     {"op": "set_cell", "sheet": "Q3", "row": 3, "col": 3, "value": "=hello", "as_text": true}
+    {"op": "set_cell", "sheet": "Q3", "row": 4, "col": 1, "value": null}
     {"op": "rename_sheet", "old": "Sheet1", "new": "Summary"}
     {"op": "merge_cells", "sheet": "Q3", "range": "A1:C1"}
+
+`value` semantics for `set_cell`:
+
+* An explicit ``null`` **clears** the cell. It is the only way to express that
+  in this op schema, and the cell's style is left alone.
+* A **missing** ``value`` key is a malformed operation: it is skipped and not
+  counted in ``applied``, so a typo cannot silently wipe data.
+* ``0``, ``false`` and ``""`` are values, not absence, and are written as given.
 """
 
 from __future__ import annotations
@@ -18,6 +27,11 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+
+# Distinguishes {"value": null} from an op with no "value" key at all.
+# ``op.get("value")`` collapses both to None, which would make a malformed
+# operation indistinguishable from a deliberate clear.
+_MISSING = object()
 
 
 def _coerce(value: Any, as_text: bool) -> Any:
@@ -60,13 +74,21 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             sheet_name = op.get("sheet")
             row = op.get("row")
             col = op.get("col")
-            value = op.get("value")
+            value = op.get("value", _MISSING)
             if sheet_name not in wb.sheetnames or row is None or col is None:
+                continue
+            if value is _MISSING:
                 continue
             ws = wb[sheet_name]
             as_text = bool(op.get("as_text"))
             coerced = _coerce(value, as_text)
-            cell = ws.cell(row=int(row), column=int(col), value=coerced)
+            # Assign through the property, not Worksheet.cell(value=...): that
+            # helper ends with `if value is not None: cell.value = value`, so an
+            # explicit null only *reads* the cell and the old value survives
+            # while this loop still counts the edit as applied. Fetching the
+            # cell first also leaves its style untouched.
+            cell = ws.cell(row=int(row), column=int(col))
+            cell.value = coerced
             if as_text and isinstance(coerced, str):
                 # Assigning a string that starts with ``=`` makes openpyxl mark
                 # the cell as a formula, so the string type has to be restored

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -391,3 +393,181 @@ def test_the_apostrophe_escape_is_not_consumed_without_as_text(tmp_path: Path) -
     sheet = _edit_and_reload(tmp_path, [_set_cell(2, "'=hello")])
 
     assert sheet.cell(row=2, column=1).value == "'=hello"
+
+
+
+def _import_scripts() -> tuple[Any, Any, Any]:
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import create_xlsx  # type: ignore[import-not-found]
+        import edit_xlsx  # type: ignore[import-not-found]
+        import inspect_xlsx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+    return create_xlsx, edit_xlsx, inspect_xlsx
+
+
+def _run_cli(
+    edit_xlsx: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    src: Path,
+    out: Path,
+    ops: list[dict[str, Any]],
+    tmp_path: Path,
+) -> dict[str, Any]:
+    """Drive the script the way a caller does: ops file in, workbook out.
+
+    In-process rather than a subprocess, matching how the other bundled-skill
+    tests are run on Windows. Going through ``main`` is what matters here: the
+    reported ``applied`` count is part of the contract being fixed, and reading
+    the saved file back is the only way to see whether a write really happened
+    -- the in-memory workbook would look right either way.
+    """
+    ops_path = tmp_path / "ops.json"
+    ops_path.write_text(json.dumps(ops), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["edit_xlsx.py", str(src), str(ops_path), "--out", str(out)])
+    assert edit_xlsx.main() == 0
+    return dict(json.loads(capsys.readouterr().out.strip()))
+
+
+def _cell(path: Path, row: int, col: int, sheet: str = "S") -> Any:
+    """Read one cell from the saved file.
+
+    Addressed directly rather than through ``inspect``: clearing the only
+    populated cell leaves the sheet with no used range at all, so a row-indexed
+    read would raise IndexError instead of reporting the value as empty.
+    """
+    from openpyxl import load_workbook
+
+    return load_workbook(str(path))[sheet].cell(row=row, column=col).value
+
+
+def test_set_cell_explicit_null_clears_the_cell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    create_xlsx, edit_xlsx, inspect_xlsx = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["keep me"]]}]}).save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [{"op": "set_cell", "sheet": "S", "row": 1, "col": 1, "value": None}],
+        tmp_path,
+    )
+
+    assert report == {"applied": 1}
+    assert _cell(out, 1, 1) is None
+
+
+def test_set_cell_without_a_value_key_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A malformed op must not read as "clear this cell", and must not be
+    # counted -- otherwise a typo silently wipes data and reports success.
+    create_xlsx, edit_xlsx, inspect_xlsx = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["keep me"]]}]}).save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [{"op": "set_cell", "sheet": "S", "row": 1, "col": 1}],
+        tmp_path,
+    )
+
+    assert report == {"applied": 0}
+    assert _cell(out, 1, 1) == "keep me"
+
+
+@pytest.mark.parametrize(("value", "expected"), [(0, 0), (False, False)])
+def test_set_cell_writes_falsy_values(
+    value: Any,
+    expected: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Guards the fix: these are values, not absence. The type assertion is the
+    # point -- False must stay a boolean rather than collapse to 0.
+    create_xlsx, edit_xlsx, _ = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["old"]]}]}).save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [{"op": "set_cell", "sheet": "S", "row": 1, "col": 1, "value": value}],
+        tmp_path,
+    )
+
+    assert report == {"applied": 1}
+    written = _cell(out, 1, 1)
+    assert written == expected
+    assert isinstance(written, type(expected))
+
+
+def test_set_cell_empty_string_counts_as_an_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Excel has no empty-string cell, so openpyxl round-trips "" as None. That
+    # is unchanged by this fix and is why "" is not a substitute for an
+    # explicit null: the op still counts as applied either way, but only the
+    # null path is documented as clearing.
+    create_xlsx, edit_xlsx, _ = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["old"]]}]}).save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [{"op": "set_cell", "sheet": "S", "row": 1, "col": 1, "value": ""}],
+        tmp_path,
+    )
+
+    assert report == {"applied": 1}
+    assert _cell(out, 1, 1) is None
+
+
+def test_clearing_a_cell_keeps_its_style(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from openpyxl import load_workbook
+
+    create_xlsx, edit_xlsx, _ = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    wb = create_xlsx.build({"sheets": [{"name": "S", "rows": [["styled"]]}]})
+    wb["S"].cell(row=1, column=1).number_format = "0.00%"
+    wb.save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [{"op": "set_cell", "sheet": "S", "row": 1, "col": 1, "value": None}],
+        tmp_path,
+    )
+
+    cell = load_workbook(str(out))["S"].cell(row=1, column=1)
+    assert cell.value is None
+    assert cell.number_format == "0.00%"
