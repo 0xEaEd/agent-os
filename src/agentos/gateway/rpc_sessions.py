@@ -404,6 +404,33 @@ def _require_key(params: dict | None) -> str:
     return canonicalize_session_key(key)
 
 
+_MAX_MESSAGES_ERROR = "params.maxMessages must be a non-negative integer"
+
+
+def _require_max_messages(params: dict | None, default: int = 20) -> int:
+    """Validate ``maxMessages`` before anything destructive can run.
+
+    ``bool`` is a subclass of ``int``, so an unguarded read let ``false``
+    through as ``0`` — wiping the entire transcript and still answering
+    ``ok: true`` — and ``true`` through as "keep only the newest message".
+    A non-numeric value instead reached the session manager's own
+    ``max_messages < 0`` check and raised ``TypeError``, which the dispatcher's
+    catch-all turned into a raw INTERNAL_ERROR carrying the Python error string.
+
+    ``0`` stays valid: it is the intentional wipe, already gated by the
+    checkpoint/force safety check in the handler.
+    """
+
+    value = (params or {}).get("maxMessages", default)
+    if isinstance(value, bool):
+        raise ValueError(_MAX_MESSAGES_ERROR)
+    if not isinstance(value, int):
+        raise ValueError(_MAX_MESSAGES_ERROR)
+    if value < 0:
+        raise ValueError(_MAX_MESSAGES_ERROR)
+    return value
+
+
 def _effective_agent_id_for_session(session: Any | None, session_key: str) -> str:
     """Prefer the explicit agent encoded in modern session keys.
 
@@ -2215,7 +2242,7 @@ async def _handle_sessions_truncate(params: dict | None, ctx: RpcContext) -> dic
     if ctx.session_manager is None:
         raise RpcUnavailableError("No session manager available")
 
-    max_messages = (params or {}).get("maxMessages", 20)
+    max_messages = _require_max_messages(params)
     force = bool((params or {}).get("force", False))
 
     turn_runner = ctx.turn_runner
