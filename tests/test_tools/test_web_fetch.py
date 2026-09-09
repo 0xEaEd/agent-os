@@ -69,3 +69,45 @@ def test_resolve_effective_max_chars_allows_uncapped_run_policy() -> None:
         assert _resolve_effective_max_chars(999_999) == 999_999
     finally:
         current_tool_context.reset(token)
+
+
+def test_resolve_effective_max_chars_clamps_below_minimum_instead_of_disabling_cap() -> None:
+    """Issue #1400: a max_chars below the documented minimum (100) must be
+    clamped up to it, not treated as "no cap" — requesting 1 char should
+    never come back with more text than requesting 1,000 would."""
+    assert _resolve_effective_max_chars(1) == 100
+    assert _resolve_effective_max_chars(0) == 100
+    assert _resolve_effective_max_chars(-5) == 100
+    assert _resolve_effective_max_chars(100) == 100
+    assert _resolve_effective_max_chars(150) == 150
+
+
+def test_apply_max_chars_actually_truncates_a_below_minimum_request() -> None:
+    result = {
+        "url": "https://example.test",
+        "final_url": "https://example.test",
+        "text": _wrap_content("https://example.test", "x" * 50_000),
+    }
+
+    effective = _resolve_effective_max_chars(1)
+    truncated = _apply_max_chars(result, effective)
+
+    assert truncated["returned_length"] <= 100
+
+
+def test_resolve_effective_max_chars_run_budget_cap_still_applies_below_minimum() -> None:
+    """A sub-100 request must not escape the run-budget ceiling just because
+    it gets clamped up to the 100 floor first — the floor and the ceiling
+    are independent constraints, and the ceiling always wins when it's the
+    tighter of the two (per andreapn's review on #1400)."""
+    ctx = ToolContext(tool_run_budget_policy=ToolRunBudgetPolicy(max_single_fetch_chars=50))
+    token = current_tool_context.set(ctx)
+    try:
+        # Clamped up to 100, then back down to the tighter run-budget cap.
+        assert _resolve_effective_max_chars(1) == 50
+        assert _resolve_effective_max_chars(0) == 50
+        # A request already above the run-budget cap is unaffected by the
+        # floor logic and is still bound by the same ceiling.
+        assert _resolve_effective_max_chars(999) == 50
+    finally:
+        current_tool_context.reset(token)
