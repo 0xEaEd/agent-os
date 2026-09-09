@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ from agentos.gateway.approval_queue import get_approval_queue, reset_approval_qu
 from agentos.sandbox.config import SandboxSettings
 from agentos.sandbox.integration import configure_runtime, reset_runtime
 from agentos.sandbox.intent_cache import get_intent_cache, reset_intent_cache
+from agentos.sandbox.types import DenialReason
 from agentos.tools.builtin import code_exec, filesystem, shell
 from agentos.tools.builtin.code_exec import execute_code
 from agentos.tools.builtin.shell_policy import PolicyResult
@@ -881,3 +883,129 @@ async def test_root_wipe_is_hard_blocked_at_the_exec_approval_boundary() -> None
         assert result["status"] == "blocked"
         assert result["reason"] == "sensitive_path"
         assert result["sensitive_path"] == "/"
+
+
+@pytest.mark.asyncio
+async def test_inline_browser_approval_timeout_returns_pending_without_denial_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1563: Web UI approval wait timeout must return approval_pending and
+
+    not log DenialReason.HUMAN_REJECTED in runtime.ledger.
+    """
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.caller_kind = CallerKind.WEB
+    monkeypatch.setattr(shell, "_APPROVAL_RETRY_WAIT_SECONDS", 0.02)
+
+    monkeypatch.setattr(
+        shell,
+        "check_safe_bin",
+        lambda cmd: PolicyResult(
+            allowed=True, reason="command requires approval", needs_approval=True
+        ),
+    )
+
+    denials: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    async def _mock_record(*args: object, **kwargs: object) -> None:
+        denials.append((args, kwargs))
+
+    monkeypatch.setattr(shell, "_record_shell_denial", _mock_record)
+
+    # 1. Direct _check_exec_approval check
+    result = await shell._check_exec_approval(
+        "exec_command",
+        "rm target.txt",
+        None,
+        "command requires approval",
+        None,
+        False,
+    )
+    assert result is not None
+    assert result["status"] == "approval_pending"
+    assert result["command"] == "rm target.txt"
+    assert "still pending" in str(result["message"])
+    aid = str(result["approval_id"])
+    queue = get_approval_queue()
+    entry = queue.get(aid)
+    assert entry.resolved is False
+    assert entry.approved is False
+
+    # 2. End-to-end exec_command check
+    raw_result = await shell.exec_command("rm target.txt")
+    payload = json.loads(raw_result)
+    assert payload["status"] == "approval_pending"
+    assert payload["command"] == "rm target.txt"
+    assert len(denials) == 0
+
+
+@pytest.mark.asyncio
+async def test_inline_browser_approval_explicit_denial_returns_denied_with_human_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit operator rejection returns approval_denied and logs HUMAN_REJECTED."""
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.caller_kind = CallerKind.WEB
+    monkeypatch.setattr(shell, "_APPROVAL_RETRY_WAIT_SECONDS", 1.0)
+    monkeypatch.setattr(
+        shell,
+        "check_safe_bin",
+        lambda cmd: PolicyResult(
+            allowed=True, reason="command requires approval", needs_approval=True
+        ),
+    )
+
+    denials: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    async def _mock_record(*args: object, **kwargs: object) -> None:
+        denials.append((args, kwargs))
+
+    monkeypatch.setattr(shell, "_record_shell_denial", _mock_record)
+
+    async def resolve_denied() -> None:
+        await asyncio.sleep(0.02)
+        queue = get_approval_queue()
+        pending = queue.list_pending("exec")
+        if pending:
+            queue.resolve(pending[0]["id"], False)
+
+    task = asyncio.create_task(resolve_denied())
+    try:
+        raw_result = await shell.exec_command("rm target.txt")
+        payload = json.loads(raw_result)
+        assert payload["status"] == "approval_denied"
+        assert payload["message"] == "Approval was denied."
+        assert len(denials) == 1
+        assert denials[0][0][3] == DenialReason.HUMAN_REJECTED
+    finally:
+        await task
+
+
+@pytest.mark.asyncio
+async def test_retry_exec_approval_timeout_preserves_pending_without_auto_denial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retrying with approval_id when wait times out preserves approval_pending."""
+    queue = get_approval_queue()
+    approval_id = queue.request("exec", {"toolName": "exec_command", "command": "rm target.txt"})
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.caller_kind = CallerKind.WEB
+    monkeypatch.setattr(shell, "_APPROVAL_RETRY_WAIT_SECONDS", 0.02)
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        "rm target.txt",
+        None,
+        "command requires approval",
+        approval_id,
+        False,
+    )
+    assert result is not None
+    assert result["status"] == "approval_pending"
+    assert result["approval_id"] == approval_id
+    entry = queue.get(approval_id)
+    assert entry.resolved is False
+    assert entry.approved is False

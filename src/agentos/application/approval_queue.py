@@ -167,7 +167,13 @@ class ApprovalQueue:
         self._pending[approval_id] = entry
         return entry
 
-    async def wait(self, approval_id: str, timeout: float | None = None) -> bool:
+    async def wait(
+        self,
+        approval_id: str,
+        timeout: float | None = None,
+        *,
+        auto_deny: bool = True,
+    ) -> bool:
         entry = self.get(approval_id)
         if entry.resolved:
             return entry.approved
@@ -187,7 +193,9 @@ class ApprovalQueue:
             entry = self.get(approval_id)
             if entry.resolved:
                 return entry.approved
-        return self._deny_on_timeout_if_unresolved(approval_id)
+        if auto_deny:
+            return self._deny_on_timeout_if_unresolved(approval_id)
+        return False
 
     def _deny_on_timeout_if_unresolved(self, approval_id: str) -> bool:
         self._conn.execute("BEGIN IMMEDIATE")

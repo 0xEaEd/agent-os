@@ -107,6 +107,20 @@ async def test_approval_queue_wait_preserves_timeout_denies(tmp_path) -> None:
         queue.close()
 
 
+@pytest.mark.asyncio
+async def test_approval_queue_wait_auto_deny_false_leaves_unresolved(tmp_path) -> None:
+    db_path = tmp_path / "approval_queue.sqlite"
+    queue = ApprovalQueue(db_path=str(db_path), default_timeout=1.0, poll_interval=0.01)
+    approval_id = queue.request("exec", {"toolName": "exec_command", "command": "rm x"})
+    try:
+        assert await queue.wait(approval_id, timeout=0.02, auto_deny=False) is False
+        entry = queue.get(approval_id)
+        assert entry.resolved is False
+        assert entry.approved is False
+    finally:
+        queue.close()
+
+
 def test_approval_queue_resolve_does_not_overwrite_prior_resolution(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

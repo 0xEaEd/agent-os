@@ -1505,7 +1505,7 @@ async def _check_exec_approval(
         approval_id = queue.request(namespace="exec", params=params)
         if _wait_for_inline_browser_approval(background):
             try:
-                await queue.wait(approval_id, timeout=_APPROVAL_RETRY_WAIT_SECONDS)
+                await queue.wait(approval_id, timeout=_APPROVAL_RETRY_WAIT_SECONDS, auto_deny=False)
             except TimeoutError:
                 pass
             entry = queue.get(approval_id)
@@ -1523,12 +1523,23 @@ async def _check_exec_approval(
                 )
                 _elevate_current_call.set(True)
                 return None
+            if not entry.resolved:
+                return {
+                    "status": "approval_pending",
+                    "approval_id": approval_id,
+                    "command": command,
+                    "warning": warning,
+                    "message": (
+                        "Approval is still pending after waiting "
+                        f"{int(_APPROVAL_RETRY_WAIT_SECONDS)}s. Ask the user to approve."
+                    ),
+                }
             return {
                 "status": "approval_denied",
                 "approval_id": approval_id,
                 "command": command,
                 "warning": warning,
-                "message": "Approval was denied or timed out.",
+                "message": "Approval was denied.",
             }
         status = "approval_required"
         message = (
@@ -1563,7 +1574,7 @@ async def _check_exec_approval(
         # back approval_pending — otherwise the model sees pending and pivots
         # to a different tool before the human finishes clicking approve.
         try:
-            await queue.wait(approval_id, timeout=_APPROVAL_RETRY_WAIT_SECONDS)
+            await queue.wait(approval_id, timeout=_APPROVAL_RETRY_WAIT_SECONDS, auto_deny=False)
         except TimeoutError:
             pass
         entry = queue.get(approval_id)
