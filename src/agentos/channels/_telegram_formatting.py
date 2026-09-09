@@ -43,11 +43,30 @@ def _replace_code_spans(text: str) -> tuple[str, list[str]]:
 def _render_inline(text: str) -> str:
     protected, code_chunks = _replace_code_spans(text)
     rendered = html.escape(protected)
-    rendered = _LINK_RE.sub(r'<a href="\2">\1</a>', rendered)
+    hrefs: list[str] = []
+
+    def _park_href(match: re.Match[str]) -> str:
+        # Park the URL before the inline passes below run. They match `**`,
+        # `__`, `~~` and `*` anywhere in the string, so a URL carrying those
+        # was rewritten inside the attribute -- `foo__bar__baz` came out as
+        # `foo<b>bar</b>baz` and Telegram rejected the message with
+        # "can't find end tag of href".
+        #
+        # Only the URL is parked. The link *text* stays exposed on purpose:
+        # `[**bold**](url)` is meant to render bold, and hiding the whole
+        # anchor would silently drop that.
+        hrefs.append(match.group(2))
+        return f'<a href="\x00TG_HREF_{len(hrefs) - 1}\x00">{match.group(1)}</a>'
+
+    rendered = _LINK_RE.sub(_park_href, rendered)
     rendered = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<b>\1</b>", rendered)
     rendered = re.sub(r"__(?=\S)(.+?)(?<=\S)__", r"<b>\1</b>", rendered)
     rendered = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", r"<s>\1</s>", rendered)
     rendered = re.sub(r"(?<!\*)\*(?=\S)(.+?)(?<=\S)\*(?!\*)", r"<i>\1</i>", rendered)
+    # Restore in reverse order of protection: code spans were parked first, so
+    # they come back last and a restored code span is never rescanned.
+    for index, href in enumerate(hrefs):
+        rendered = rendered.replace(f"\x00TG_HREF_{index}\x00", href)
     for index, chunk in enumerate(code_chunks):
         rendered = rendered.replace(f"\x00TG_CODE_{index}\x00", chunk)
     return rendered
@@ -55,10 +74,22 @@ def _render_inline(text: str) -> str:
 
 def _plain_inline(text: str) -> str:
     """Remove common inline Markdown markers for table labels."""
-    text = _LINK_RE.sub(r"\1 (\2)", text)
+    # Same hazard as `_render_inline`, with a worse outcome: the marker strip
+    # below is a plain `str.replace`, so a URL containing `__`, `**` or `~~`
+    # lost those characters outright and the reader was handed a link that does
+    # not resolve. Park the URLs, strip the markers, put them back.
+    hrefs: list[str] = []
+
+    def _park_href(match: re.Match[str]) -> str:
+        hrefs.append(match.group(2))
+        return f"{match.group(1)} (\x00TG_HREF_{len(hrefs) - 1}\x00)"
+
+    text = _LINK_RE.sub(_park_href, text)
     text = text.replace("`", "")
     for marker in ("**", "__", "~~"):
         text = text.replace(marker, "")
+    for index, href in enumerate(hrefs):
+        text = text.replace(f"\x00TG_HREF_{index}\x00", href)
     return text.strip()
 
 
