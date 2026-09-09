@@ -146,6 +146,7 @@ class SlackChannel:
     _socket_stop: asyncio.Event | None = field(default=None, init=False, repr=False)
     _background_tasks: set[asyncio.Task] = field(default_factory=set, init=False, repr=False)
     supports_slash_commands: bool = True
+    webhook_path: str = ""
 
     @property
     def transport_name(self) -> str:
@@ -745,9 +746,13 @@ class SlackChannel:
     # Gateway Webhook (T012)
     # ------------------------------------------------------------------
 
-    def create_webhook_route(self, path: str = "/slack/events") -> Route:
+    def create_webhook_route(self, path: str | None = None) -> Route:
         """Return a Starlette Route for handling Slack Events API webhooks."""
-        return Route(path, endpoint=self._handle_webhook, methods=["POST"])
+        return Route(
+            path or self.webhook_path or "/slack/events",
+            endpoint=self._handle_webhook,
+            methods=["POST"],
+        )
 
     async def _handle_webhook(self, request: Request) -> Response:
         """Handle an incoming Slack Events API request."""

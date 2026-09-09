@@ -149,6 +149,19 @@ Built-in channel types are `discord`, `email`, `slack`, and `telegram`; use
 `agentos channels types` as the authoritative catalog. Config migration backs up the
 file before removing entries for retired built-in channel types.
 
+Slack webhook entries use `webhook_path`. Omitted or empty means automatic: the
+first enabled webhook account in config order keeps `/slack/events` no matter
+how many other webhook accounts are enabled, so adding a second account never
+changes an already-configured account's Request URL. Every other enabled
+webhook account with no explicit path gets `/slack/events/<account_name>`.
+Disabled and Socket Mode entries do not count, or count as "first". Non-empty
+paths supplied with `channels add slack --field webhook_path=…` take
+precedence. Automatic names (for every account but the first) must use
+letters, digits, `.`, `_`, `~`, or `-` and cannot be `.` or `..`; use an
+explicit path for other names. Configure each Slack app's Events API,
+Interactivity, and slash-command Request URLs to match, then restart the gateway.
+Duplicate webhook paths with overlapping HTTP methods cause a startup error.
+
 Telegram direct messages always require pairing. Use `agentos channels pairing
 list <name>`, `approve <name> <code>`, `deny <name> <sender-id>`, or `revoke
 <name> <sender-id>`. Pairing is binary and has no admin/owner tier. Telegram

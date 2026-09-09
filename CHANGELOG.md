@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Multiple enabled Slack webhook accounts now register distinct routes
+  instead of silently colliding on one. `ChannelManager.collect_webhook_routes()`
+  called `create_webhook_route()` without arguments, and every adapter
+  defaulted to `/slack/events`; with more than one webhook account enabled,
+  Starlette dispatched only to the first matching route, and the rest failed
+  signature verification on events meant for them. Config entries with an
+  empty `webhook_path` now auto-derive `/slack/events/<account_name>` — but
+  only for accounts after the first, so the first enabled webhook account
+  keeps `/slack/events` and adding a second account never silently re-paths
+  (and 404s) an already-configured one. Duplicate or colliding paths across
+  channel entries are now rejected at gateway startup with a descriptive
+  error naming both conflicting entries, instead of one adapter silently
+  never receiving events
+  ([#1022](https://github.com/use-agent-os/agent-os/issues/1022)).
+
 ## [2026.9.9] - 2026-09-09
 
 ### Changed
