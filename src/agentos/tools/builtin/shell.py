@@ -733,16 +733,20 @@ async def exec_command(
 
     # Denylist: hard-block, never bypassable
     if not result.allowed:
+        await _record_shell_denial("exec_command", command, cwd, DenialReason.POLICY_DENIED)
         raise ToolError(result.reason)
 
     sensitive_block = _sensitive_shell_block("exec_command", command, workdir=cwd)
     if sensitive_block is not None:
+        await _record_shell_denial("exec_command", command, cwd, DenialReason.POLICY_DENIED)
         return sensitive_block
     lockdown_block = _workspace_lockdown_shell_block("exec_command", command, cwd)
     if lockdown_block is not None:
+        await _record_shell_denial("exec_command", command, cwd, DenialReason.POLICY_DENIED)
         return json.dumps(lockdown_block, ensure_ascii=False)
     deny_block = _workspace_write_deny_shell_block("exec_command", command, cwd)
     if deny_block is not None:
+        await _record_shell_denial("exec_command", command, cwd, DenialReason.POLICY_DENIED)
         return json.dumps(deny_block, ensure_ascii=False)
 
     # Warnlist: two-step approval flow
@@ -758,9 +762,15 @@ async def exec_command(
         if approval_response is not None:
             status = approval_response.get("status")
             if status == "approval_denied":
-                await _record_shell_denial(
-                    "exec_command", command, workdir, DenialReason.HUMAN_REJECTED
+                is_policy = (
+                    bool(approval_response.get("auto_denied"))
+                    or "denied by the active approval policy"
+                    in str(approval_response.get("message") or "")
                 )
+                reason = DenialReason.POLICY_DENIED if is_policy else DenialReason.HUMAN_REJECTED
+                await _record_shell_denial("exec_command", command, cwd, reason)
+            elif status == "blocked":
+                await _record_shell_denial("exec_command", command, cwd, DenialReason.POLICY_DENIED)
             return json.dumps(approval_response)
 
     # AgentOS's own provider credentials do not cross into a child process;
@@ -895,15 +905,19 @@ async def background_process(
     result = check_safe_bin(command)
     cwd = _effective_workdir(workdir)
     if not result.allowed:
+        await _record_shell_denial("background_process", command, cwd, DenialReason.POLICY_DENIED)
         raise ToolError(result.reason)
     sensitive_block = _sensitive_shell_block("background_process", command, workdir=cwd)
     if sensitive_block is not None:
+        await _record_shell_denial("background_process", command, cwd, DenialReason.POLICY_DENIED)
         return sensitive_block
     lockdown_block = _workspace_lockdown_shell_block("background_process", command, cwd)
     if lockdown_block is not None:
+        await _record_shell_denial("background_process", command, cwd, DenialReason.POLICY_DENIED)
         return json.dumps(lockdown_block, ensure_ascii=False)
     deny_block = _workspace_write_deny_shell_block("background_process", command, cwd)
     if deny_block is not None:
+        await _record_shell_denial("background_process", command, cwd, DenialReason.POLICY_DENIED)
         return json.dumps(deny_block, ensure_ascii=False)
     if result.needs_approval:
         prior_elevation = _approval_elevation_state()
@@ -925,8 +939,16 @@ async def background_process(
         if approval_response is not None:
             status = approval_response.get("status")
             if status == "approval_denied":
+                is_policy = (
+                    bool(approval_response.get("auto_denied"))
+                    or "denied by the active approval policy"
+                    in str(approval_response.get("message") or "")
+                )
+                reason = DenialReason.POLICY_DENIED if is_policy else DenialReason.HUMAN_REJECTED
+                await _record_shell_denial("background_process", command, cwd, reason)
+            elif status == "blocked":
                 await _record_shell_denial(
-                    "background_process", command, workdir, DenialReason.HUMAN_REJECTED
+                    "background_process", command, cwd, DenialReason.POLICY_DENIED
                 )
             return json.dumps(approval_response)
 
@@ -937,7 +959,7 @@ async def background_process(
         decision, policy, request = await gate_action(
             action_kind="shell.background",
             argv=("background_process", command),
-            cwd=Path(workdir) if workdir else None,
+            cwd=Path(cwd) if cwd else None,
             env=dict(os.environ),
         )
         if isinstance(decision, DenialResult):
@@ -1293,6 +1315,12 @@ def _sandbox_request_for(
         p = Path(workdir)
         if p.is_absolute():
             workspace = p
+        elif ctx and ctx.workspace_dir:
+            workspace = (Path(ctx.workspace_dir).expanduser().resolve() / p).resolve()
+        elif runtime.workspace.is_absolute():
+            workspace = (runtime.workspace / p).resolve()
+        else:
+            workspace = (Path.cwd() / p).resolve()
     if workspace is None and ctx is not None and ctx.workspace_dir:
         wp = Path(ctx.workspace_dir)
         if wp.is_absolute():
