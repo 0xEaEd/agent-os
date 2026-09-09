@@ -881,3 +881,65 @@ async def test_root_wipe_is_hard_blocked_at_the_exec_approval_boundary() -> None
         assert result["status"] == "blocked"
         assert result["reason"] == "sensitive_path"
         assert result["sensitive_path"] == "/"
+
+
+class _FakeApprovalEntry:
+    def __init__(self, elevated_mode: str | None = None) -> None:
+        self.params: dict[str, object] = {"elevatedMode": elevated_mode} if elevated_mode else {}
+
+
+def test_apply_approval_elevated_mode_sets_elevated_for_agent_and_channel() -> None:
+    ctx = current_tool_context.get()
+    assert ctx is not None
+
+    for caller in (CallerKind.AGENT, CallerKind.CHANNEL, CallerKind.CLI, CallerKind.WEB):
+        ctx.caller_kind = caller
+        ctx.elevated = None
+        shell._apply_approval_elevated_mode(_FakeApprovalEntry("bypass"))
+        assert ctx.elevated == "bypass", f"Failed for {caller}"
+
+        ctx.elevated = None
+        shell._apply_approval_elevated_mode(_FakeApprovalEntry("full"))
+        assert ctx.elevated == "full", f"Failed for {caller}"
+
+
+def test_apply_approval_elevated_mode_ignores_subagent() -> None:
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.caller_kind = CallerKind.SUBAGENT
+    ctx.elevated = None
+
+    shell._apply_approval_elevated_mode(_FakeApprovalEntry("bypass"))
+    assert ctx.elevated is None
+
+
+@pytest.mark.asyncio
+async def test_approval_resolution_with_elevated_mode_applies_to_agent_context() -> None:
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.caller_kind = CallerKind.AGENT
+    ctx.elevated = None
+
+    queue = get_approval_queue()
+    approval_id = queue.request(
+        namespace="exec",
+        params={
+            "toolName": "exec_command",
+            "command": "rm target.txt",
+            "sessionKey": ctx.session_key,
+        },
+    )
+    queue.resolve(approval_id, approved=True, elevated_mode="bypass")
+
+    # Retry the command with approval_id as an AGENT caller
+    result = await shell._check_exec_approval(
+        "exec_command",
+        "rm target.txt",
+        None,
+        "command requires approval",
+        approval_id,
+        False,
+    )
+    assert result is None
+    assert ctx.elevated == "bypass"
+

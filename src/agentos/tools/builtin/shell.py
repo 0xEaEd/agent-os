@@ -1360,7 +1360,12 @@ def _apply_approval_elevated_mode(entry: object) -> None:
     if mode not in ("on", "bypass", "full"):
         return
     ctx = current_tool_context.get()
-    if ctx is not None and ctx.caller_kind in {CallerKind.CLI, CallerKind.WEB}:
+    if ctx is not None and ctx.caller_kind in {
+        CallerKind.CLI,
+        CallerKind.WEB,
+        CallerKind.AGENT,
+        CallerKind.CHANNEL,
+    }:
         ctx.elevated = mode
 
 
