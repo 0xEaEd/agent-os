@@ -4,9 +4,13 @@ Operations:
     {"op": "replace_run", "para": <int>, "run": <int>, "text": "..."}
     {"op": "replace_text", "find": "...", "with": "..."}
 
-`replace_text` walks every paragraph and concatenates run texts when the
-target string spans multiple runs, then writes the replacement back into the
-first run and clears the others — preserving the first run's style.
+`replace_text` walks every paragraph and matches against the joined run texts,
+so a target that spans runs is still found. The replacement is written into the
+run that owns the first character of its match, and every character the match
+did not touch stays in the run it came from — a run is where Word keeps
+character formatting, so moving text between runs would silently restyle it.
+The resulting paragraph text is still plain `str.replace` on the joined runs;
+only the run layout is preserved.
 """
 
 from __future__ import annotations
