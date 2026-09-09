@@ -460,11 +460,21 @@ class TestMaxSessionsOnReconfigure:
         assert agent_browser.active_session_count() == 1
 
     def test_the_most_recently_used_session_is_the_one_kept(self) -> None:
-        """The docs say "oldest-idle evicted"; the survivor follows that order."""
+        """The docs say "oldest-idle evicted"; the survivor follows that order.
+
+        The timestamps are assigned rather than produced by touching the
+        sessions. `time.time()` has ~15.6ms resolution on Windows, so several
+        rapid calls land inside one tick, every session ends up sharing a
+        timestamp, and `min()` then breaks the tie on insertion order instead
+        of recency -- which is a real property of the eviction on that
+        platform, but not what this test is for.
+        """
         agent_browser.configure_browser(_config(max_sessions=3))
         for key in ("s1", "s2", "s3"):
             agent_browser.get_or_create_session(key)
-        agent_browser.get_or_create_session("s1")  # s1 becomes the newest
+        agent_browser._sessions["s1"].last_used_at = 300.0  # newest
+        agent_browser._sessions["s2"].last_used_at = 100.0  # oldest
+        agent_browser._sessions["s3"].last_used_at = 200.0
 
         agent_browser.configure_browser(_config(max_sessions=1))
 
