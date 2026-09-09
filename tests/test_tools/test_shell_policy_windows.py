@@ -23,27 +23,27 @@ def _windows_policy_env(monkeypatch: pytest.MonkeyPatch):
         r"DEL C:\tmp\file.txt",
         r"dEl C:\tmp\file.txt",
         r"rmdir /s /q C:\tmp\folder",
+        r"RMDIR /S /Q C:\tmp\folder",
+        r"Remove-Item C:\tmp\stale.txt",
+        r"remove-item C:\tmp\stale.txt",
+        r"REMOVE-ITEM C:\tmp\stale.txt",
+        r"rd /s /q C:\tmp\folder",
+        r"RD /S /Q C:\tmp\folder",
+        r"erase C:\tmp\file.txt",
+        r"ERASE /F C:\tmp\file.txt",
+        r"echo 1 && rd /s /q C:\tmp\folder",
+        r"echo 1; erase C:\tmp\file.txt",
+        r"echo 1 | rd C:\tmp\folder",
         r"git push origin main --force",
-    ],
-)
-def test_windows_del_rmdir_force_push_variants_warn(command: str) -> None:
-    result = shell_policy.SafeBinPolicy.from_env().check(command)
-
-    assert result.allowed is True
-    assert result.needs_approval is True
-    assert "requires approval" in result.reason
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
+        r"git push --force",
+        r"git   push   origin   feature   --force",
         r"Format-Volume -DriveLetter D",
         r"Clear-Disk -Number 1",
         r"Stop-Computer -Force",
         r"Restart-Computer -Force",
     ],
 )
-def test_windows_destructive_system_cmds_are_denied(command: str) -> None:
+def test_windows_destructive_commands_are_denied(command: str) -> None:
     result = shell_policy.SafeBinPolicy.from_env().check(command)
 
     assert result.allowed is False
@@ -54,17 +54,25 @@ def test_windows_destructive_system_cmds_are_denied(command: str) -> None:
 @pytest.mark.parametrize(
     "command",
     [
-        r"Remove-Item C:\tmp\stale.txt",
-        r"remove-item C:\tmp\stale.txt",
-        r"REMOVE-ITEM C:\tmp\stale.txt",
+        r"mkdir rd",
+        r"cd rd",
+        r"ls rd",
+        r"dir rd",
+        r"git checkout -b rd-feature",
+        r"git branch rd",
+        r"cat erase.txt",
+        r"type erase.txt",
+        r"python erase.py",
+        r'git commit -m "erase old cache"',
+        r"npm run erase-cache",
+        r"echo 3rd party",
     ],
 )
-def test_windows_remove_item_variants_warn(command: str) -> None:
+def test_windows_anchored_rd_erase_negative_cases_allowed(command: str) -> None:
     result = shell_policy.SafeBinPolicy.from_env().check(command)
 
     assert result.allowed is True
-    assert result.needs_approval is True
-    assert "requires approval" in result.reason
+    assert result.needs_approval is False
 
 
 def test_windows_deny_env_overrides_platform_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -76,18 +84,17 @@ def test_windows_deny_env_overrides_platform_default(monkeypatch: pytest.MonkeyP
     default_del = policy.check(r"del C:\tmp\file.txt")
     assert custom.allowed is False
     assert default_del.allowed is True
-    assert default_del.needs_approval is True
+    assert default_del.needs_approval is False
 
 
-def test_windows_empty_warn_env_clears_platform_default_warnlist(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("AGENTOS_SAFE_BIN_WARN", "")
+def test_windows_custom_warn_env_sets_warnlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTOS_SAFE_BIN_WARN", r"\bcustom-warn\b")
 
-    result = shell_policy.SafeBinPolicy.from_env().check(r"Remove-Item C:\tmp\stale.txt")
+    result = shell_policy.SafeBinPolicy.from_env().check("custom-warn")
 
     assert result.allowed is True
-    assert result.needs_approval is False
+    assert result.needs_approval is True
+    assert "requires approval" in result.reason
 
 
 def test_windows_empty_warn_env_preserves_default_denylist(

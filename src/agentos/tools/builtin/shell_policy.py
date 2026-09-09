@@ -24,10 +24,16 @@ DEFAULT_DENYLIST: list[str] = [
 ]
 
 DEFAULT_DENYLIST_WIN: list[str] = [
+    r"\bdel\b",
+    r"\brmdir\b",
+    r"\bRemove-Item\b",
+    r"(?:^|[;&|])\s*rd\b",
+    r"(?:^|[;&|])\s*erase\b",
     r"\bFormat-Volume\b",
     r"\bStop-Computer\b",
     r"\bRestart-Computer\b",
     r"\bClear-Disk\b",
+    r"git\s+push\s+.*--force",
 ]
 
 # Patterns that require two-step confirmation (warn, not block)
@@ -41,12 +47,7 @@ DEFAULT_WARNLIST: list[str] = [
     r"pip\s+install\s+(?!-e)",  # non-editable pip install
 ]
 
-DEFAULT_WARNLIST_WIN: list[str] = [
-    r"\bdel\b",
-    r"\brmdir\b",
-    r"\bRemove-Item\b",
-    r"git\s+push\s+.*--force",
-]
+DEFAULT_WARNLIST_WIN: list[str] = []
 
 _LEGACY_ENV_WARNED: bool = False
 
