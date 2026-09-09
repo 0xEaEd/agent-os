@@ -467,18 +467,21 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
     pos = max(hunk.old_start - 1, 0)
     result = list(file_lines)
 
+    # Detect predominant newline from existing lines, defaulting to "\n"
+    crlf_count = sum(1 for line in file_lines if line.endswith("\r\n"))
+    lf_count = sum(1 for line in file_lines if line.endswith("\n") and not line.endswith("\r\n"))
+    newline = "\r\n" if crlf_count > lf_count else "\n"
+
     # Verify context and deleted lines match
     check_pos = pos
     for raw in hunk.lines:
-        if not raw:
-            continue
-        prefix = raw[0]
-        content = raw[1:]
+        prefix = raw[0] if raw else " "
+        content = raw[1:] if raw else ""
         if prefix in (" ", "-"):
             if check_pos >= len(result):
                 raise ValueError(f"Hunk context/delete at line {check_pos + 1} exceeds file length")
-            actual = result[check_pos].rstrip("\n")
-            expected = content.rstrip("\n")
+            actual = result[check_pos].rstrip("\r\n")
+            expected = content.rstrip("\r\n")
             if actual != expected:
                 raise ValueError(
                     f"Context mismatch at line {check_pos + 1}: "
@@ -490,21 +493,17 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
     new_lines: list[str] = []
     src_pos = pos
     for raw in hunk.lines:
-        if not raw:
-            continue
-        prefix = raw[0]
-        content = raw[1:]
+        prefix = raw[0] if raw else " "
+        content = raw[1:] if raw else ""
         if prefix == " ":
             new_lines.append(result[src_pos])
             src_pos += 1
         elif prefix == "-":
             src_pos += 1  # skip (delete)
         elif prefix == "+":
-            # Preserve newline style: add \n if original lines have it
-            if content.endswith("\n"):
-                new_lines.append(content)
-            else:
-                new_lines.append(content + "\n")
+            # Preserve newline style: use file's newline convention
+            clean = content.rstrip("\r\n")
+            new_lines.append(clean + newline)
 
     # Splice: replace [pos : pos + old_count] with new_lines
     return result[:pos] + new_lines + result[pos + hunk.old_count :]
@@ -574,7 +573,7 @@ def _plan_ops(
                 # tool never decodes must not start failing on bad UTF-8.
                 current = pending.get(resolved) if resolved in pending else None
                 if current is None:
-                    current = resolved.read_text(encoding="utf-8")
+                    current = resolved.read_bytes().decode("utf-8")
                 content = _updated_text(current, op.hunks)
                 modified += 1
             else:
@@ -625,7 +624,7 @@ def _commit_staged(staged: list[_StagedOp]) -> None:
                 continue
             new_dirs.extend(reversed(_missing_ancestors(item.path)))
             item.path.parent.mkdir(parents=True, exist_ok=True)
-            item.path.write_text(item.content, encoding="utf-8")
+            item.path.write_text(item.content, encoding="utf-8", newline="")
     except OSError as exc:
         _restore(backups, new_dirs)
         label = current.label if current is not None else "patch"
