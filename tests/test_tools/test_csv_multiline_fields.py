@@ -121,3 +121,57 @@ def test_unicode_line_separator_inside_field_not_treated_as_row_break(
     assert len(rows) == 2, f"Expected 2 rows for {label!r}, got {len(rows)}"
     assert rows[0] == ["a", "b"]
     assert rows[1] == [f"x{sep}y", "z"]
+
+
+# ── Large fields exceeding default 128KB limit (#1580) ──────────────────
+
+
+def test_csv_field_larger_than_128kb_succeeds(tmp_path: Path) -> None:
+    """Fields exceeding standard library 131,072-char limit must parse (#1580)."""
+    large_payload = "A" * 150_000
+    csv_content = f"id,payload\n1,{large_payload}\n"
+    csv_file = tmp_path / "large.csv"
+    csv_file.write_text(csv_content, encoding="utf-8")
+
+    [(_, rows)] = _read_delimited_rows(csv_file, ",")
+
+    assert len(rows) == 2
+    assert rows[0] == ["id", "payload"]
+    assert rows[1] == ["1", large_payload]
+
+
+@pytest.mark.asyncio
+async def test_read_spreadsheet_large_field_end_to_end(tmp_path: Path) -> None:
+    """read_spreadsheet must return formatted output for CSV with large fields (#1580)."""
+    from agentos.tools.builtin.filesystem import read_spreadsheet
+
+    large_payload = "X" * 140_000
+    csv_file = tmp_path / "large_e2e.csv"
+    csv_file.write_text(f"col1,col2\nval1,{large_payload}\n", encoding="utf-8")
+
+    result = await read_spreadsheet(str(csv_file))
+    assert "Sheet: large_e2e.csv (2 rows x 2 columns)" in result
+    assert "val1" in result
+    assert large_payload in result
+
+
+def test_csv_error_translated_to_tool_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """csv.Error during delimited row parsing must raise ToolError (#1580)."""
+    import csv
+
+    from agentos.tools.types import ToolError
+
+    csv_file = tmp_path / "corrupt.csv"
+    csv_file.write_text("a,b\n1,2\n", encoding="utf-8")
+
+    def _failing_reader(*args: object, **kwargs: object) -> object:
+        raise csv.Error("simulated csv parser error")
+
+    monkeypatch.setattr(csv, "reader", _failing_reader)
+
+    with pytest.raises(
+        ToolError, match="Cannot parse spreadsheet corrupt.csv: simulated csv parser error"
+    ):
+        _read_delimited_rows(csv_file, ",")

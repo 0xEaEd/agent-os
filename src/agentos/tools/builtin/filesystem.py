@@ -11,6 +11,7 @@ import json
 import os
 import posixpath
 import re
+import sys
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -588,12 +589,32 @@ async def read_spreadsheet(
     )
 
 
+def _ensure_csv_field_size_limit() -> None:
+    """Ensure csv.field_size_limit is set to the maximum supported by the runtime platform.
+
+    On 64-bit Unix platforms sys.maxsize fits in a C long, while on 64-bit Windows
+    C long is 32-bit and sys.maxsize raises OverflowError. We step down until the
+    underlying C runtime accepts the limit.
+    """
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            break
+        except OverflowError:
+            limit = int(limit / 10)
+
+
 def _read_delimited_rows(path: Path, delimiter: str) -> list[tuple[str, list[list[str]]]]:
     try:
         text = path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ToolError(f"Cannot read spreadsheet as UTF-8 text: {path}") from exc
-    rows = [list(row) for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+    _ensure_csv_field_size_limit()
+    try:
+        rows = [list(row) for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+    except csv.Error as exc:
+        raise ToolError(f"Cannot parse spreadsheet {path.name}: {exc}") from exc
     return [(path.name, rows)]
 
 
