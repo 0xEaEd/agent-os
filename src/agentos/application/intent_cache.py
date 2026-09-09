@@ -183,25 +183,61 @@ def _rm_invocation_targets(tokens: list[str]) -> list[str]:
     return targets
 
 
-def _unquoted_spans(command: str) -> list[tuple[int, int]]:
-    """Ranges of *command* that sit outside single or double quotes.
+#: Shells that hand a ``-c`` argument straight to a command interpreter.
+_SHELL_NAMES = frozenset({"sh", "bash", "zsh", "dash", "ash", "ksh"})
 
-    A quote opened and never closed leaves the rest of the string quoted, which
-    is what the shell does with it too.
+
+def _runs_quoted_argument_as_command(prefix: str) -> bool:
+    """Whether *prefix* — the text right before a quote — will execute it.
+
+    A quoted span is data *unless* something is about to run it. Skipping every
+    quoted ``rm`` also skipped ``sh -c "rm -rf /etc/passwd"``, which the shell
+    does execute, so that is a hard block lost rather than an approval lost.
+
+    Only the tail of the prefix matters, which is why ``docker exec c sh -c
+    "…"`` needs no rule of its own. ``ssh`` is matched anywhere in the prefix
+    rather than adjacently, so ``ssh -p 22 host "…"`` is covered too — a quoted
+    argument to ``ssh`` is remote command text in every spelling.
+    """
+    tokens = prefix.replace(";", " ").replace("&", " ").replace("|", " ").split()
+    if any(token.rsplit("/", 1)[-1] == "ssh" for token in tokens):
+        return True
+    if len(tokens) < 2:
+        return False
+    name = tokens[-2].rsplit("/", 1)[-1]
+    flag = tokens[-1]
+    # ``-c`` or a combined short flag carrying it, e.g. ``bash -lc``.
+    return name in _SHELL_NAMES and flag.startswith("-") and "c" in flag
+
+
+def _command_spans(command: str) -> list[tuple[int, int]]:
+    """Ranges of *command* a shell would read as command text.
+
+    Unquoted text, plus any quoted span that a shell-invoking command is about
+    to execute. A quote opened and never closed leaves the rest of the string
+    quoted, which is what the shell does with it too.
     """
     spans: list[tuple[int, int]] = []
     start = 0
     quote: str | None = None
+    quote_open = 0
     for index, char in enumerate(command):
         if quote is None:
             if char in "'\"":
                 spans.append((start, index))
                 quote = char
+                quote_open = index
         elif char == quote:
+            if _runs_quoted_argument_as_command(command[:quote_open]):
+                spans.append((quote_open + 1, index))
             quote = None
             start = index + 1
     if quote is None:
         spans.append((start, len(command)))
+    elif _runs_quoted_argument_as_command(command[:quote_open]):
+        # Unbalanced quote after an introducer: the shell would still try to run
+        # what follows, so it is command text rather than data.
+        spans.append((quote_open + 1, len(command)))
     return spans
 
 
@@ -228,11 +264,11 @@ def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
     # drops ``sudo rm -rf /etc``, ``env FOO=1 rm …``, ``time rm …`` and
     # ``xargs rm`` — a command prefix is ordinary, so that spelling trades a
     # false positive for a bypass.
-    unquoted = _unquoted_spans(command)
+    executable = _command_spans(command)
     matches = [
         match
         for match in pattern.finditer(command)
-        if any(start <= match.start() < end for start, end in unquoted)
+        if any(start <= match.start() < end for start, end in executable)
     ]
     if not matches:
         return []

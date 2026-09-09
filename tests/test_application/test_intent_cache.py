@@ -382,6 +382,48 @@ class TestQuotedRmIsNotACommand:
         targets = [target for _kind, target in _extract_intents(command)]
         assert _names_etc(targets), targets
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'sh -c "rm -rf /etc/passwd"',
+            'bash -c "rm -rf /root/.ssh/id_rsa"',
+            "bash -c 'rm -rf /etc/'",
+            'sh -c "rm -rf /etc /tmp"',
+            'ssh h "rm -rf /var/log/x"',
+            'ssh -p 22 host "rm -rf /var/log/x"',
+            'sh -c "rm -rf ~/.ssh/id_rsa"',
+            'docker exec c sh -c "rm -rf /etc/nginx"',
+            'sh -c "rm -rf /boot/vmlinuz"',
+            '/bin/sh -c "rm -rf /etc/passwd"',
+            'bash -lc "rm -rf /etc/passwd"',
+        ],
+    )
+    def test_a_quoted_rm_a_shell_will_run_is_still_a_delete(self, command: str) -> None:
+        """A quoted span is data only until something runs it.
+
+        Skipping every quoted ``rm`` also skipped these, and
+        ``_extract_intents`` is the only input to
+        ``sensitive_target_in_command`` — so that is a hard block lost, not an
+        approval-cache entry lost. The read-only cases above and these are the
+        two halves of the same rule; asserting only one of them cannot tell the
+        fix from the regression.
+        """
+        from agentos.sandbox.sensitive_paths import sensitive_target_in_command
+
+        assert sensitive_target_in_command(command) is not None, command
+
+    def test_a_quoted_argument_of_an_ordinary_command_stays_data(self) -> None:
+        """The introducer is what matters, not the quoting.
+
+        ``grep`` does not execute its pattern, so the #1349 false positive has
+        to stay fixed even though the spelling looks identical.
+        """
+        from agentos.sandbox.sensitive_paths import sensitive_target_in_command
+
+        assert sensitive_target_in_command('grep -rn "rm" /etc/passwd') is None
+        assert sensitive_target_in_command('echo "rm -rf /"') is None
+        assert sensitive_target_in_command('cat "rm notes.txt"') is None
+
     def test_quoted_and_real_rm_in_one_command(self) -> None:
         # The quoted mention is skipped; the real invocation after the
         # separator is not.
