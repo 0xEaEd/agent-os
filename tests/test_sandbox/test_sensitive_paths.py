@@ -494,3 +494,90 @@ def test_env_var_and_tilde_spellings_report_the_same_marker(
 
     assert tilde == f"~/{name}"
     assert expanded == tilde
+
+
+def test_sensitive_target_in_command_resolves_against_cwd_with_workspace(
+    fixed_home: Path,
+) -> None:
+    """Relative targets must resolve against cwd rather than workspace (#1579)."""
+    workspace = Path("/srv/project")
+
+    # Command runs in ~/.aws (outside workspace) and deletes relative "config"
+    blocked = sensitive_target_in_command(
+        "rm -rf config",
+        workspace=workspace,
+        cwd=fixed_home / ".aws",
+    )
+    assert blocked == "~/.aws"
+
+
+def test_sensitive_target_in_command_relative_cwd_inside_workspace() -> None:
+    """Relative cwd inside workspace resolves cleanly; harmless file allowed (#1579)."""
+    workspace = Path("/srv/project")
+
+    # Command runs in a subfolder of workspace and deletes a harmless file
+    allowed = sensitive_target_in_command(
+        "rm -rf temp.txt",
+        workspace=workspace,
+        cwd="subfolder",
+    )
+    assert allowed is None
+
+
+def test_sensitive_target_in_command_cwd_parent_traversal_blocked(
+    fixed_home: Path,
+) -> None:
+    """Relative path traversal escaping to a sensitive path via cwd is blocked (#1579)."""
+    workspace = Path("/srv/project")
+    aws_dir = fixed_home / ".aws"
+
+    # Command runs in ~/.aws/sub and traverses up to delete credentials
+    blocked = sensitive_target_in_command(
+        "rm -rf ../credentials",
+        workspace=workspace,
+        cwd=aws_dir / "sub",
+    )
+    assert blocked == "~/.aws"
+
+
+def test_relative_target_under_an_in_workspace_cwd_stays_allowed() -> None:
+    """The fix must not overcorrect: a relative target resolved against an
+    ordinary cwd that happens to be inside (or equal to) the workspace, and
+    that isn't itself sensitive, must still be allowed."""
+    workspace = Path("/tmp/workspace")
+
+    assert (
+        sensitive_target_in_command(
+            "rm -rf config",
+            workspace=workspace,
+            cwd=workspace / "subdir",
+        )
+        is None
+    )
+
+
+def test_workspace_exception_still_applies_with_cwd_correctly_separated() -> None:
+    """The active-workspace exception (a workspace nested under a broad
+    sensitive prefix like /root) must keep working once cwd and workspace
+    are resolved independently, for both a relative and an absolute target
+    run from inside that workspace."""
+    workspace = Path("/root/.agentos/workspace")
+
+    assert (
+        sensitive_target_in_command(
+            "rm scratch.txt",
+            workspace=workspace,
+            cwd=workspace,
+        )
+        is None
+    )
+    assert (
+        sensitive_target_in_command(
+            f"rm {workspace / 'scratch.txt'}",
+            workspace=workspace,
+            cwd=workspace,
+        )
+        is None
+    )
+
+
