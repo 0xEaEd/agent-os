@@ -123,11 +123,27 @@ _TRANSLATE_RES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 #: is the only guard — it exists because the task is different, not because the
 #: translation is judged hard. Suppression is the safe direction: it forfeits a
 #: saving and hands the turn back to ordinary model routing.
+#: ``c++`` and ``c#`` end in a non-word character, and ``.net`` starts with
+#: one, so a plain ``\b(?:...)\b`` around all three names in one alternation
+#: silently requires the *wrong* side to be a word character: it demands a
+#: word character immediately after ``c++``/``c#`` (so "C++." never matches)
+#: and immediately before ``.net`` (so "to .NET" never matches), while a
+#: version suffix or an attached framework name ("C++17", "ASP.NET") happens
+#: to satisfy the wrong-side requirement and matches by accident. These three
+#: names are pulled out of the shared group with no boundary assertion on
+#: their non-word edge — ``+``/``#``/``.`` already can't blend into a
+#: surrounding identifier, so a plain ``\b`` on the word-character edge alone
+#: is enough, and it now matches consistently whether the name sits at a
+#: sentence boundary ("C++.", "to .NET") or has a version/suffix attached
+#: ("C++17", "C#7", "ASP.NET").
 _CODE_TARGET_RE = re.compile(
     r"\b(?:python|javascript|typescript|golang|rust|java|kotlin|swift|scala"
     r"|haskell|ruby|php|perl|sql|bash|powershell|matlab|fortran|cobol"
-    r"|c\+\+|c#|\.net|react|vue|svelte|jquery|regex|assembly|solidity"
-    r"|dart|elixir|erlang|clojure|lua|zig)\b",
+    r"|react|vue|svelte|jquery|regex|assembly|solidity"
+    r"|dart|elixir|erlang|clojure|lua|zig)\b"
+    r"|\bc\+\+"
+    r"|\bc#"
+    r"|\.net\b",
     re.IGNORECASE,
 )
 

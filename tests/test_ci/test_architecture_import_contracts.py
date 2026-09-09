@@ -36,6 +36,11 @@ APPROVED_PACKAGE_IMPORTS: frozenset[tuple[str, str]] = frozenset({
     ("cli", "tools"),
     ("engine", "agents"),
     ("engine", "channels"),
+    # agentos.compat is a leaf utility package that depends on no other
+    # agentos subpackage. cli/gateway/memory/scheduler/session already point
+    # at it; the engine joins them for the shared ``accepts_keyword_arg``
+    # signature probe.
+    ("engine", "compat"),
     ("engine", "contracts"),
     ("engine", "gateway"),
     ("engine", "identity"),

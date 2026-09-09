@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import os
 import platform
-import shlex
 from pathlib import Path
 from typing import Any
 
+from agentos.cli_quoting import config_cli_arg
 from agentos.onboarding.image_generation_specs import (
     get_image_generation_provider_setup_spec,
 )
@@ -165,9 +165,7 @@ def _missing_env_warning(surface: str, env_key: str) -> str:
 
 
 def _config_cli_arg(config_path: str | Path | None) -> str:
-    if not config_path:
-        return ""
-    return f" --config {shlex.quote(str(config_path))}"
+    return config_cli_arg(config_path)
 
 
 def _image_generation_provider_id(config: Any) -> str:

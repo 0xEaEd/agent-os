@@ -25,7 +25,7 @@ class TerminalChannel:
     async def _get_reader(self) -> asyncio.StreamReader:
         async with self._reader_lock:
             if self._reader is None:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 reader = asyncio.StreamReader()
                 protocol = asyncio.StreamReaderProtocol(reader)
                 await loop.connect_read_pipe(lambda: protocol, sys.stdin)
@@ -46,21 +46,21 @@ class TerminalChannel:
 
     async def send(self, message: OutgoingMessage) -> None:
         """Write message content to stdout."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._write_stdout, message.content)
         log.debug("terminal.send", content=message.content[:80])
 
     async def edit(self, message_id: str, content: str) -> None:
         """Edit is not supported on terminal; re-print with prefix."""
         prefix = f"[edit:{message_id}] "
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._write_stdout, prefix + content)
         log.debug("terminal.edit", message_id=message_id)
 
     async def delete(self, message_id: str) -> None:
         """Delete is not supported on terminal; print a notice."""
         notice = f"[deleted:{message_id}]\n"
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._write_stdout, notice)
         log.debug("terminal.delete", message_id=message_id)
 

@@ -67,7 +67,7 @@ class AgentRunPort(Protocol):
     """Wrap ``agent.run_turn(turn_input, extra_messages=..., **kwargs)``.
 
     Returns the async iterator the agent produces; the stage consumes
-    it via ``async for``. The port handles the ``_accepts_keyword_arg``
+    it via ``async for``. The port handles the ``accepts_keyword_arg``
     introspection for ``semantic_message`` so the stage body has no
     ``inspect``-based branching. The agent is supplied per-call so a
     single stage instance can serve every turn.

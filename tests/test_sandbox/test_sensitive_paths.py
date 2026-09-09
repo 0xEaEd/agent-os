@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from agentos.redact import CREDENTIAL_FILE_NAMES
 from agentos.sandbox.sensitive_paths import (
+    _HOST_CREDENTIAL_FILES,
     _is_root_target,
     is_sensitive_path,
     sensitive_path_in_text,
@@ -239,3 +243,254 @@ def test_root_target_detection_covers_windows_drive_roots() -> None:
         "relative/path",
     ):
         assert _is_root_target(target) is False, target
+
+
+@pytest.mark.parametrize(
+    ("relative", "marker"),
+    [
+        (".config/gh/hosts.yml", "~/.config/gh"),
+        (".config/gh/config.yml", "~/.config/gh"),
+        (".anthropic/token", "~/.anthropic"),
+        (".openai/api_key", "~/.openai"),
+        (".vault-token", "~/.vault-token"),
+    ],
+)
+def test_developer_credential_paths_in_home_are_sensitive(relative: str, marker: str) -> None:
+    """The gh/Anthropic/OpenAI/Vault credential paths are guarded by default.
+
+    ``gh`` in particular is run routinely by agents, so a live GitHub token
+    lives in a path that used to sit outside the denylist.
+    """
+    target = Path.home()
+    for part in relative.split("/"):
+        target = target / part
+
+    assert is_sensitive_path(str(target)) == marker
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/var/secrets/.vault-token",
+        "/opt/vault/.vault-token",
+        r"C:\secrets\.vault-token",
+    ],
+)
+def test_vault_token_outside_home_matches_the_suffix_entry(path: str) -> None:
+    """``~/.vault-token`` only covers the documented home location.
+
+    A Vault token written anywhere else is caught by the paired
+    ``/.vault-token`` suffix entry, which is why both exist. Backslash
+    spellings normalize, so this holds on every platform.
+    """
+    assert is_sensitive_path(path) == "/.vault-token"
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        ".config/ghost/config.json",
+        ".config/gh-dash/config.yml",
+        ".config/github/settings",
+        ".anthropic-backup/token",
+        ".openairc",
+    ],
+)
+def test_new_prefixes_are_anchored_at_a_segment_boundary(relative: str) -> None:
+    """A prefix must match a whole path segment, not a string prefix.
+
+    Without segment anchoring ``~/.config/gh`` would swallow ``~/.config/ghost``
+    and ``~/.config/gh-dash``, and ``~/.openai`` would swallow ``~/.openairc``.
+    """
+    target = Path.home()
+    for part in relative.split("/"):
+        target = target / part
+
+    assert is_sensitive_path(str(target)) is None
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        ".config",
+        ".config/nvim/init.lua",
+        ".config/htop/htoprc",
+        ".config/starship.toml",
+    ],
+)
+def test_adding_config_gh_does_not_block_config_generally(relative: str) -> None:
+    """``~/.config`` holds mostly harmless state and must stay readable.
+
+    Only the ``gh`` subdirectory is sensitive; the parent and its siblings are
+    not, so editor and shell configuration keeps working.
+    """
+    target = Path.home()
+    for part in relative.split("/"):
+        target = target / part
+
+    assert is_sensitive_path(str(target)) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/var/secrets/vault-token",
+        "/etc/vault/vault-token.bak",
+    ],
+)
+def test_a_file_merely_named_vault_token_is_not_sensitive(path: str) -> None:
+    """The leading dot is part of the suffix match.
+
+    ``vault-token`` without it is an ordinary filename and must not be blocked,
+    or the entry would over-reach onto unrelated files.
+    """
+    if path.startswith("/etc"):
+        # ``/etc`` is already a sensitive prefix on its own account, so this
+        # spelling proves nothing about the suffix; assert the reason instead.
+        assert is_sensitive_path(path) == "/etc"
+        return
+
+    assert is_sensitive_path(path) is None
+
+
+def test_new_credential_paths_are_caught_in_free_form_text() -> None:
+    """The text scanner is a separate code path from :func:`is_sensitive_path`.
+
+    Shell commands reach the sandbox as free-form strings, so each new entry
+    has to be reachable through the token scan as well as a resolved path.
+    """
+    home = Path.home()
+
+    assert sensitive_path_in_text(f"cat {home / '.config' / 'gh' / 'hosts.yml'}") == (
+        "~/.config/gh"
+    )
+    assert sensitive_path_in_text(f"cat {home / '.anthropic' / 'token'}") == "~/.anthropic"
+    assert sensitive_path_in_text(f"cat {home / '.openai' / 'api_key'}") == "~/.openai"
+    assert sensitive_path_in_text(f"cat {home / '.vault-token'}") == "~/.vault-token"
+    assert sensitive_path_in_text("cat /var/secrets/.vault-token") == "/.vault-token"
+
+    # ``$HOME/X`` and ``~/X`` name the same file, so they must report the same
+    # marker -- the parity property #985 exists to protect. Every spelling is
+    # scanned and the home prefix wins outright; without that the ``$`` is
+    # stripped as a token edge, the relative-looking ``HOME/.vault-token``
+    # resolves through the leaf fallback, and the two spellings disagree.
+    assert sensitive_path_in_text("cat $HOME/.vault-token") == "~/.vault-token"
+
+    assert sensitive_path_in_text(f"nvim {home / '.config' / 'nvim' / 'init.lua'}") is None
+    assert sensitive_path_in_text("cat /var/secrets/vault-token") is None
+
+
+# --- host credential files (#981) -------------------------------------------
+#
+# `Path.home()` and `expanduser()` both read the platform's home variable, so
+# pinning HOME/USERPROFILE fixes the expected marker on POSIX and Windows
+# alike. Reading the real home would make these assertions depend on whoever
+# runs them.
+
+# Deliberately not under ``/home``: on macOS that prefix is an autofs mount
+# point, so ``Path.resolve()`` pays an automount lookup -- 26ms a call here
+# against 0.02ms elsewhere, which turned this file into a 35-second run once
+# the parity cases started resolving several spellings each.
+_FIXED_HOME = "/opt/agentos-test-home"
+
+
+@pytest.fixture()
+def fixed_home(monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("HOME", _FIXED_HOME)
+    monkeypatch.setenv("USERPROFILE", _FIXED_HOME)
+    return Path(_FIXED_HOME)
+
+
+def test_host_credential_files_are_blocked_in_home(fixed_home: Path) -> None:
+    for name in _HOST_CREDENTIAL_FILES:
+        assert is_sensitive_path(str(fixed_home / name)) == f"~/{name}", name
+
+
+def test_host_credential_files_are_blocked_as_tails_anywhere() -> None:
+    # Deliberately wider than the home prefixes: moving one of these out of the
+    # home directory must not shake the block off, and a project-local copy is
+    # covered too. Same shape as the existing `/.env` tail.
+    for name in _HOST_CREDENTIAL_FILES:
+        assert is_sensitive_path(f"/srv/project/{name}") == f"/{name}", name
+
+
+def test_host_credential_files_in_commands_are_blocked(fixed_home: Path) -> None:
+    # Two different gates: sensitive_target_in_command covers DESTRUCTIVE
+    # targets, sensitive_path_in_text covers a path merely appearing in a
+    # command (a read). Both must catch these files.
+    assert (
+        sensitive_target_in_command(f"rm {fixed_home / '.git-credentials'}") == "~/.git-credentials"
+    )
+    assert sensitive_path_in_text(f"cat {fixed_home / '.pgpass'}") == "~/.pgpass"
+
+
+def test_host_credential_tails_match_windows_separators() -> None:
+    # Backslash spelling of a tail, written as a Windows-style path rather than
+    # by replacing separators in a POSIX one -- that produces a string which is
+    # not a path on either platform.
+    assert is_sensitive_path(r"C:\srv\project\.pgpass") == "/.pgpass"
+    assert sensitive_path_in_text(r"type C:\srv\project\.npmrc") == "/.npmrc"
+
+
+def test_active_workspace_exception_keeps_credential_blocks(fixed_home: Path) -> None:
+    # The workspace carve-out must not reopen credential files that happen to
+    # sit inside it.
+    workspace = Path("/srv/project")
+
+    assert sensitive_target_in_command("rm /srv/project/scratch.txt", workspace=workspace) is None
+    assert (
+        sensitive_target_in_command("rm /srv/project/.git-credentials", workspace=workspace)
+        == "/.git-credentials"
+    )
+
+
+def test_credential_file_list_stays_in_sync_with_redact() -> None:
+    # The denylist derives from the redaction list on purpose; this fails if a
+    # name is added to one layer and not carried to the other.
+    assert set(_HOST_CREDENTIAL_FILES) == set(CREDENTIAL_FILE_NAMES) - {"credentials"}
+    assert "credentials" not in _HOST_CREDENTIAL_FILES
+
+
+def test_backslash_home_spelling_reports_the_prefix_not_the_tail(fixed_home: Path) -> None:
+    """A backslash-spelled home path must still report the home prefix.
+
+    Mixed separators are what `$HOME` expansion produces on Windows:
+    `C:\\Users\\me` + `/` + `.npmrc`. `shlex.split` in POSIX mode eats the
+    backslashes, leaving `C:Usersme/.npmrc` -- still carrying a `/`, so it
+    matches the credential *tail* and short-circuits the scan before the
+    intact token from `text.split()` is reached, reporting `/.npmrc` instead
+    of `~/.npmrc`. Both block, but #985 exists to keep every spelling on the
+    same marker.
+
+    An all-backslash spelling does NOT reproduce this: every separator is
+    eaten, the mangled token has no `/` left, and it matches nothing.
+    """
+    backslash_home = str(fixed_home).replace("/", "\\")
+    for name in ("_netrc", ".npmrc", ".pgpass", ".git-credentials"):
+        assert sensitive_path_in_text(f"cat {backslash_home}/{name}") == f"~/{name}", name
+
+
+@pytest.mark.parametrize("spelling", ["$HOME", "${HOME}"])
+@pytest.mark.parametrize("name", _HOST_CREDENTIAL_FILES)
+def test_env_var_and_tilde_spellings_report_the_same_marker(
+    fixed_home: Path, spelling: str, name: str
+) -> None:
+    """The two spellings of one file must not disagree about the marker.
+
+    Deriving the credential names into both the home prefixes and the filename
+    tails gave each name two possible answers, and which one came back depended
+    on which spelling the scanner reached first. On Windows that broke the
+    parity outright: ``$HOME`` expands to ``C:\\Users\\<name>``, POSIX-mode
+    ``shlex.split`` eats the backslashes, and the drive-relative remainder falls
+    through to the tail -- so ``$HOME/.netrc`` answered ``/.netrc`` while
+    ``~/.netrc`` answered ``~/.netrc``.
+
+    Asserting the two against each other rather than against a literal keeps
+    this meaningful on every platform: the property is that they agree, not
+    what the agreed value happens to be on the runner.
+    """
+    tilde = sensitive_path_in_text(f"cat ~/{name}")
+    expanded = sensitive_path_in_text(f"cat {spelling}/{name}")
+
+    assert tilde == f"~/{name}"
+    assert expanded == tilde

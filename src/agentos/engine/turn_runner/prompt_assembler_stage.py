@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 # ---------------------------------------------------------------------------
 # RunPipelineRequest — typed dataclass that folds the 6 inline
-# ``_accepts_keyword_arg(self._run_pipeline, ...)`` introspection calls.
+# ``accepts_keyword_arg(self._run_pipeline, ...)`` introspection calls.
 #
 # All fields are optional because the pre-turn pipeline accepts every one of
 # them as a keyword today; the stage consistently passes the value or
@@ -45,10 +45,10 @@ if TYPE_CHECKING:
 class RunPipelineRequest:
     """Typed input for ``PipelineExecutionPort.run_pipeline``.
 
-    Folds the 6 inline ``_accepts_keyword_arg(self._run_pipeline, name)``
+    Folds the 6 inline ``accepts_keyword_arg(self._run_pipeline, name)``
     introspection branches into a single typed payload. The stage builds
     this once, the port consumes it once. The introspection cleanup is
-    bounded to the prompt-assembler slice — ``_accepts_keyword_arg`` stays
+    bounded to the prompt-assembler slice — ``accepts_keyword_arg`` stays
     in ``runtime.py`` because two other call sites (``agent.run_turn`` and
     ``session_manager.append_message``) still rely on it.
     """
@@ -107,7 +107,7 @@ class PipelineExecutionPort(Protocol):
 
     The port forwards a typed ``RunPipelineRequest`` to the underlying
     helper. The adapter at the harness side unpacks the request into the
-    helper's keyword arguments. The 6 inline ``_accepts_keyword_arg``
+    helper's keyword arguments. The 6 inline ``accepts_keyword_arg``
     introspection branches are eliminated in favor of always passing every
     kwarg — the helper accepts all 6 today; the introspection is dead code.
     """

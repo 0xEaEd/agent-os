@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 import uuid
 from dataclasses import asdict, replace
@@ -11,6 +10,7 @@ from typing import Any, cast
 
 import structlog
 
+from agentos.compat.inspect_utils import accepts_keyword_arg
 from agentos.engine.cache_break_monitor import notify_compaction
 from agentos.engine.start_turn import start_turn_via_runtime
 from agentos.gateway import attachment_ingest as _attachment_ingest
@@ -21,7 +21,13 @@ from agentos.gateway.input_normalization import (
     materialize_generated_text_attachments,
     normalize_incoming_text,
 )
-from agentos.gateway.rpc import RpcContext, RpcHandlerError, RpcUnavailableError, get_dispatcher
+from agentos.gateway.rpc import (
+    RpcContext,
+    RpcHandlerError,
+    RpcUnavailableError,
+    get_dispatcher,
+    require_params_dict,
+)
 from agentos.gateway.session_events import build_sessions_changed_payload
 from agentos.gateway.session_services import (
     get_session_epoch,
@@ -34,6 +40,8 @@ from agentos.paths import media_root_from_config
 from agentos.session.compaction import (
     build_compaction_config_from_provider,
     call_compact_with_optional_config,
+    effective_compaction_model,
+    resolve_compaction_provider,
 )
 from agentos.session.compaction_lifecycle import (
     COMPACTION_CHUNK_SUMMARIZED_EVENT,
@@ -63,16 +71,6 @@ _MAX_TOTAL_ATTACHMENT_BYTES = _attachment_ingest.MAX_TOTAL_ATTACHMENT_BYTES
 _MAX_ATTACHMENTS = _attachment_ingest.MAX_ATTACHMENTS
 
 
-def _accepts_keyword_arg(func: Any, name: str) -> bool:
-    try:
-        params = inspect.signature(func).parameters
-    except (TypeError, ValueError):
-        return True
-    return name in params or any(
-        param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
-    )
-
-
 def _clean_cancel_source(value: Any, default: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -94,9 +92,9 @@ async def _cancel_task_runtime(
 ) -> int:
     cancel = getattr(task_runtime, "cancel")
     kwargs: dict[str, Any] = {"session_key": session_key}
-    if _accepts_keyword_arg(cancel, "source"):
+    if accepts_keyword_arg(cancel, "source"):
         kwargs["source"] = source
-    if _accepts_keyword_arg(cancel, "reason"):
+    if accepts_keyword_arg(cancel, "reason"):
         kwargs["reason"] = reason
     return int(await cancel(**kwargs))
 
@@ -436,43 +434,6 @@ def _context_window_tokens(params: dict | None, ctx: RpcContext) -> int:
     if value <= 0:
         raise ValueError("contextWindowTokens must be a positive integer")
     return value
-
-
-def _effective_compaction_model(session: Any | None) -> str | None:
-    if session is None:
-        return None
-    return getattr(session, "model_override", None) or getattr(session, "model", None)
-
-
-def _resolve_compaction_provider(ctx: RpcContext, session: Any | None) -> Any | None:
-    selector = getattr(ctx, "provider_selector", None)
-    if selector is None:
-        return None
-
-    resolved_selector = selector
-    clone = getattr(selector, "clone", None)
-    if callable(clone):
-        try:
-            resolved_selector = clone()
-        except Exception:  # noqa: BLE001
-            resolved_selector = selector
-
-    model = _effective_compaction_model(session)
-    if model and resolved_selector is not selector:
-        override = getattr(resolved_selector, "override_model", None)
-        if callable(override):
-            try:
-                override(model)
-            except Exception:  # noqa: BLE001
-                pass
-
-    resolver = getattr(resolved_selector, "resolve", None)
-    if not callable(resolver):
-        return None
-    try:
-        return resolver()
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _enum_value(value: Any) -> Any:
@@ -959,11 +920,11 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
         raise ValueError(f"Invalid session intent: {params.get('intent')}") from exc
 
     if ctx.session_manager is None:
-        raise KeyError("No session manager available")
+        raise RpcUnavailableError("No session manager available")
 
     storage = get_session_storage(ctx.session_manager)
     if storage is None:
-        raise KeyError("No session storage available")
+        raise RpcUnavailableError("No session storage available")
 
     session = await storage.get_session(key)
     if session is None and session_intent is SessionIntent.CONTINUE:
@@ -1511,18 +1472,18 @@ async def _handle_sessions_patch(params: dict | None, ctx: RpcContext) -> dict:
     key = _require_key(params)
 
     if ctx.session_manager is None:
-        raise KeyError("No session manager available")
+        raise RpcUnavailableError("No session manager available")
 
     storage = get_session_storage(ctx.session_manager)
     if storage is None:
-        raise KeyError("No session storage available")
+        raise RpcUnavailableError("No session storage available")
 
     session = await storage.get_session(key)
     if session is None:
         raise KeyError(f"Session not found: {key}")
 
     update_values: dict[str, Any] = {}
-    assert isinstance(params, dict)
+    params = require_params_dict(params)
     field_map = {
         "displayName": "display_name",
         "model": "model",
@@ -1602,17 +1563,17 @@ async def _handle_sessions_rename(params: dict | None, ctx: RpcContext) -> dict:
     custom name and lets ``derived_title`` fall back to the short session id.
     """
     key = _require_key(params)
-    assert isinstance(params, dict)
+    params = require_params_dict(params)
     if "name" not in params and "displayName" not in params:
         raise ValueError("sessions.rename requires a 'name'")
     name = normalize_session_name(params.get("name", params.get("displayName")))
 
     if ctx.session_manager is None:
-        raise KeyError("No session manager available")
+        raise RpcUnavailableError("No session manager available")
 
     storage = get_session_storage(ctx.session_manager)
     if storage is None:
-        raise KeyError("No session storage available")
+        raise RpcUnavailableError("No session storage available")
 
     session = await _resolve_session_node(storage, key)
     resolved_key = str(getattr(session, "session_key", "") or key)
@@ -1710,11 +1671,11 @@ async def _handle_sessions_reset(params: dict | None, ctx: RpcContext) -> dict[s
     key = _require_key(params)
 
     if ctx.session_manager is None:
-        raise KeyError("No session manager available")
+        raise RpcUnavailableError("No session manager available")
 
     storage = get_session_storage(ctx.session_manager)
     if storage is None:
-        raise KeyError("No session storage available")
+        raise RpcUnavailableError("No session storage available")
 
     task_runtime = getattr(ctx, "task_runtime", None)
     # Drain MUST run before any branch that clears session state — including the
@@ -1953,11 +1914,11 @@ def _reset_response(
 async def _handle_sessions_delete(params: dict | None, ctx: RpcContext) -> dict:
     """Delete one or more sessions. Accepts {key} for single or {keys} for bulk."""
     if ctx.session_manager is None:
-        raise KeyError("No session manager available")
+        raise RpcUnavailableError("No session manager available")
 
     storage = get_session_storage(ctx.session_manager)
     if storage is None:
-        raise KeyError("No session storage available")
+        raise RpcUnavailableError("No session storage available")
 
     # Support both single key and bulk keys
     keys: list[str] = []
@@ -2009,7 +1970,7 @@ async def _handle_sessions_delete(params: dict | None, ctx: RpcContext) -> dict:
 async def _handle_sessions_context_compact(params: dict | None, ctx: RpcContext) -> dict:
     key = _require_key(params)
     if ctx.session_manager is None:
-        raise KeyError("No session manager available")
+        raise RpcUnavailableError("No session manager available")
 
     context_window_tokens = _context_window_tokens(params, ctx)
     custom_instructions = (params or {}).get("instructions")
@@ -2100,9 +2061,12 @@ async def _handle_sessions_context_compact(params: dict | None, ctx: RpcContext)
             **compaction_lifecycle_payload(compaction_id, COMPACTION_TRIGGERED_EVENT),
         )
         try:
+            compaction_model = effective_compaction_model(session)
             compaction_config = build_compaction_config_from_provider(
-                _resolve_compaction_provider(ctx, session),
-                model_override=_effective_compaction_model(session),
+                resolve_compaction_provider(
+                    getattr(ctx, "provider_selector", None), compaction_model
+                ),
+                model_override=compaction_model,
                 compaction_config=getattr(getattr(ctx, "config", None), "compaction", None),
             )
 
@@ -2117,7 +2081,7 @@ async def _handle_sessions_context_compact(params: dict | None, ctx: RpcContext)
                 compact_kwargs: dict[str, Any] = {
                     "custom_instructions": custom_instructions,
                 }
-                if _accepts_keyword_arg(compact_with_result, "flush_receipt_status"):
+                if accepts_keyword_arg(compact_with_result, "flush_receipt_status"):
                     compact_kwargs["flush_receipt_status"] = flush_receipt_status
                 result = await compact_with_result(
                     key,
@@ -2249,7 +2213,7 @@ async def _handle_sessions_truncate(params: dict | None, ctx: RpcContext) -> dic
 
     key = _require_key(params)
     if ctx.session_manager is None:
-        raise KeyError("No session manager available")
+        raise RpcUnavailableError("No session manager available")
 
     max_messages = (params or {}).get("maxMessages", 20)
     force = bool((params or {}).get("force", False))
@@ -2370,6 +2334,35 @@ async def _handle_sessions_messages_unsubscribe(params: dict | None, ctx: RpcCon
     return None
 
 
+# A preview is 120 characters of the last message, so it reads a bounded tail
+# instead of deserializing the whole history of every listed session. The
+# second window is the fallback for a tail that is all tool traffic.
+_PREVIEW_TRANSCRIPT_WINDOWS = (10, 50)
+
+
+def _preview_snippet(transcript: list[Any]) -> str:
+    """Return the last user/assistant message text, truncated for display."""
+
+    for entry in reversed(transcript):
+        if entry.role in ("user", "assistant") and entry.content:
+            return str(entry.content)[:120]
+    return ""
+
+
+async def _preview_last_message(storage: Any, session_id: str) -> str:
+    get_recent = getattr(storage, "get_recent_transcript", None)
+    if not callable(get_recent):
+        # Storage without a tail query keeps the old full read rather than
+        # losing the preview entirely.
+        return _preview_snippet(await storage.get_transcript(session_id, limit=-1))
+    for window in _PREVIEW_TRANSCRIPT_WINDOWS:
+        transcript = await get_recent(session_id, window)
+        snippet = _preview_snippet(transcript)
+        if snippet or len(transcript) < window:
+            return snippet
+    return ""
+
+
 @_d.method("sessions.preview")
 async def _handle_sessions_preview(params: dict | None, ctx: RpcContext) -> dict:
     keys = (params or {}).get("keys")
@@ -2401,13 +2394,7 @@ async def _handle_sessions_preview(params: dict | None, ctx: RpcContext) -> dict
         )
         last_msg = ""
         try:
-            transcript = await storage.get_transcript(s.session_id, limit=-1)
-            if transcript:
-                # Find the last user or assistant message for preview
-                for entry in reversed(transcript):
-                    if entry.role in ("user", "assistant") and entry.content:
-                        last_msg = entry.content[:120]
-                        break
+            last_msg = await _preview_last_message(storage, s.session_id)
         except Exception:
             pass
         previews.append(
@@ -2427,11 +2414,11 @@ async def _handle_sessions_resolve(params: dict | None, ctx: RpcContext) -> dict
     key = _require_key(params)
 
     if ctx.session_manager is None:
-        raise KeyError("No session manager available")
+        raise RpcUnavailableError("No session manager available")
 
     storage = get_session_storage(ctx.session_manager)
     if storage is None:
-        raise KeyError("No session storage available")
+        raise RpcUnavailableError("No session storage available")
 
     session = await _resolve_session_node(storage, key)
 

@@ -27,6 +27,22 @@ Mail from ``from_address`` itself, and anything carrying
 ``Auto-Submitted``/``X-Autoreply``/``Precedence: bulk``/``List-Id``, is
 dropped. Without that an autoresponder on the far end and this adapter
 would answer each other forever.
+
+Poison-message handling
+------------------------
+A message is only acknowledged (``\\Seen``) once it has been fetched,
+parsed, *and* converted successfully — acknowledging any earlier would
+risk losing mail a later attempt could have delivered (see the incident
+this guards against on the ``_mark_seen`` call site). A message that is
+permanently unusable (declared or actual size over ``max_message_bytes``)
+is quarantined immediately, since no retry will ever shrink it. A fetch
+or parse failure might instead be transient — a truncated read, a
+momentary server hiccup — so it gets a bounded number of retries across
+poll cycles (``MAX_FETCH_ATTEMPTS``) before being quarantined the same
+way, so a message that will never parse cannot loop the poller forever
+either. The retry counter is keyed on UID and pruned to the current
+poll's UNSEEN set on every cycle, so it cannot grow without bound across
+the life of the connection.
 """
 
 from __future__ import annotations
@@ -313,6 +329,9 @@ class EmailChannel:
 
     config: EmailChannelConfig
     MAX_ATTACHMENT_BYTES: ClassVar[int] = 25 * 1024 * 1024
+    # Total attempts (including the first) before a fetch/parse failure is
+    # quarantined instead of retried on the next poll.
+    MAX_FETCH_ATTEMPTS: ClassVar[int] = 3
 
     _queue: asyncio.Queue[IncomingMessage] = field(
         default_factory=asyncio.Queue, init=False, repr=False
@@ -329,6 +348,13 @@ class EmailChannel:
     _connected: bool = field(default=False, init=False, repr=False)
     _last_message_at: datetime | None = field(default=None, init=False, repr=False)
     _last_error: str = field(default="", init=False, repr=False)
+    # UID -> attempt count for a message that failed to fetch or parse.
+    # Popped on success, on quarantine, or once a message turns out to be
+    # permanently oversized (see the poison-message note in the module
+    # docstring). Pruned each poll to the current UNSEEN set so a UID that
+    # resolves elsewhere (moved, expunged, deleted) cannot leave a stale
+    # entry behind forever.
+    _fetch_attempts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
 
     # ------------------------------------------------------------------
     # Capability declaration
@@ -493,11 +519,18 @@ class EmailChannel:
         client = self._imap_connect()
         try:
             client.select(_quote_imap_mailbox(self.config.imap_folder))
-            status, data = client.search(None, "UNSEEN")
+            status, data = client.uid("SEARCH", "UNSEEN")
             if status != "OK":
                 raise RuntimeError(f"IMAP search failed: {status}")
             raw_uids = (data[0] or b"").split()[: max(1, self.config.max_messages_per_poll)]
             uids = [uid.decode("ascii", "ignore") for uid in raw_uids]
+            # Drop retry counters for any UID no longer in this poll's UNSEEN
+            # set (resolved, expunged, or moved elsewhere) so the dict stays
+            # bounded by the mailbox's current unseen count, not by history.
+            uid_set = set(uids)
+            self._fetch_attempts = {
+                uid: n for uid, n in self._fetch_attempts.items() if uid in uid_set
+            }
             messages: list[IncomingMessage] = []
             for uid in uids:
                 try:
@@ -520,9 +553,14 @@ class EmailChannel:
                 client.logout()
 
     def _fetch_one(self, client: imaplib.IMAP4, uid: str) -> EmailMessage | None:
-        """Fetch one message, refusing oversized bodies before downloading them."""
+        """Fetch one message, refusing oversized bodies before downloading them.
 
-        status, size_data = client.fetch(uid, "(RFC822.SIZE)")
+        A permanently-too-large message is quarantined immediately. A fetch
+        or parse failure goes through ``_register_fetch_failure`` instead,
+        since it might be transient — see the module docstring.
+        """
+
+        status, size_data = client.uid("FETCH", uid, "(RFC822.SIZE)")
         if status == "OK" and size_data:
             declared = _parse_rfc822_size(size_data)
             if declared is not None and declared > self.config.max_message_bytes:
@@ -532,14 +570,17 @@ class EmailChannel:
                     size=declared,
                     limit=self.config.max_message_bytes,
                 )
+                self._fetch_attempts.pop(uid, None)
                 self._mark_seen(client, uid)
                 return None
 
-        status, body_data = client.fetch(uid, "(BODY.PEEK[])")
+        status, body_data = client.uid("FETCH", uid, "(BODY.PEEK[])")
         if status != "OK":
+            self._register_fetch_failure(client, uid, "fetch_failed")
             return None
         raw = _first_literal(body_data)
         if raw is None:
+            self._register_fetch_failure(client, uid, "empty_body")
             return None
         if len(raw) > self.config.max_message_bytes:
             log.warning(
@@ -548,17 +589,54 @@ class EmailChannel:
                 size=len(raw),
                 limit=self.config.max_message_bytes,
             )
+            self._fetch_attempts.pop(uid, None)
             self._mark_seen(client, uid)
             return None
 
         parsed = BytesParser(policy=email_policy).parsebytes(raw)
-        return parsed if isinstance(parsed, EmailMessage) else None
+        if not isinstance(parsed, EmailMessage):
+            self._register_fetch_failure(client, uid, "parse_failed")
+            return None
+        self._fetch_attempts.pop(uid, None)
+        return parsed
+
+    def _register_fetch_failure(self, client: imaplib.IMAP4, uid: str, reason: str) -> None:
+        """Retry a transient fetch/parse failure a bounded number of times,
+        then quarantine so a poison message cannot loop the poller forever.
+
+        Left unacknowledged while under the retry budget: the message stays
+        \\Unseen, so the next poll interval gets another attempt instead of
+        losing mail a working retry could have delivered (#719). Once the
+        budget is spent, the failure is assumed permanent and the message is
+        quarantined the same way an oversized message already is.
+        """
+        attempts = self._fetch_attempts.get(uid, 0) + 1
+        if attempts < self.MAX_FETCH_ATTEMPTS:
+            self._fetch_attempts[uid] = attempts
+            log.warning(
+                "email.message_fetch_retry",
+                name=self.config.name,
+                uid=uid,
+                reason=reason,
+                attempt=attempts,
+                max_attempts=self.MAX_FETCH_ATTEMPTS,
+            )
+            return
+        self._fetch_attempts.pop(uid, None)
+        log.warning(
+            "email.message_quarantined",
+            name=self.config.name,
+            uid=uid,
+            reason=reason,
+            attempts=attempts,
+        )
+        self._mark_seen(client, uid)
 
     def _mark_seen(self, client: imaplib.IMAP4, uid: str) -> None:
         if not self.config.mark_seen:
             return
         with contextlib.suppress(Exception):
-            client.store(uid, "+FLAGS", "\\Seen")
+            client.uid("STORE", uid, "+FLAGS", "\\Seen")
 
     def _reply_target(self, sender: str, reply_to_header: str) -> str:
         """Return the address replies should go to, honouring the allowlist.

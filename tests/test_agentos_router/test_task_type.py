@@ -121,6 +121,68 @@ class TestProgrammingLanguageTarget:
         verdict = detect_task_type(f"Dịch tài liệu sau sang tiếng Việt:\n\n{body}")
         assert verdict.task_type == TASK_TYPE_TRANSLATE
 
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            # Sentence-final / punctuation-adjacent: the originally reported bug.
+            "Translate this function to C++.",
+            "Translate this code to C#.",
+            "Translate this service to .NET.",
+            "Translate this module to .NET Core.",
+            "Dịch đoạn code này sang C++ giúp tôi.",
+            "Dịch code này sang C# nhé.",
+            # Version/edition suffix directly attached: a following word
+            # character must not defeat the match either.
+            "Translate this to C++17.",
+            "Translate this to C++11, keep behaviour identical.",
+            "Translate this to C#7.",
+            "Translate this to C#9 with pattern matching.",
+            # Framework name directly attached to ".NET" with no space: a
+            # preceding word character must not defeat the match.
+            "We use ASP.NET for the backend, please translate this handler.",
+            "Please translate this class to VB.NET.",
+            # Product name directly attached to "C++" with no space: a
+            # *following* letter (not just a digit) must not defeat the
+            # match either. This guards against narrowing the fix to a
+            # digit-only lookahead exception, which would still miss this.
+            "Please translate this to C++Builder syntax.",
+        ],
+    )
+    def test_programming_language_targets_with_symbols_block(self, prompt: str) -> None:
+        """``c++``/``c#``/``.net`` block regardless of what is on their non-word edge.
+
+        ``+``, ``#``, and the leading ``.`` are never word characters, so a
+        plain ``\\b`` on *that* edge alone is enough — it must not also
+        require the punctuation/version-suffix/attached-name edge to look a
+        particular way.
+        """
+        verdict = detect_task_type(prompt)
+        assert verdict.task_type is None
+        assert verdict.blocked_by == BLOCK_CODE_TARGET
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            # "c++"/"c#" embedded inside a longer identifier must still NOT
+            # match — dropping the boundary assertion on *both* edges would
+            # wrongly block these on the strength of an unrelated substring.
+            "Translate this doc, mention the abc++def helper by name.",
+            "Translate this doc, reference ticket src#123 in the notes.",
+            "Translate this ticket management#42 into French.",
+        ],
+    )
+    def test_embedded_symbol_substrings_do_not_block(self, prompt: str) -> None:
+        """A ``c++``/``c#`` substring embedded in a longer identifier is not a target.
+
+        The leading ``\\b`` on ``c++``/``c#`` must still require a real word
+        boundary before the ``c`` — otherwise any identifier that happens to
+        contain ``c++`` or ``c#`` (e.g. a variable or ticket name) would be
+        misclassified as a code-porting request.
+        """
+        verdict = detect_task_type(prompt)
+        assert verdict.task_type == TASK_TYPE_TRANSLATE
+        assert verdict.blocked_by is None
+
 
 class TestScanWindow:
     """Instructions bracket a pasted body; the middle is not scanned."""

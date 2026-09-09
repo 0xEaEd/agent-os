@@ -66,8 +66,17 @@ def _emit_metric(name: str, value: int = 1, **labels: Any) -> None:
             k: v for k, v in labels.items() if k not in {"session_key", "session_id", "turn_id"}
         }
         record_metric(name, value, **metric_labels)
-    except Exception:
-        pass
+    except Exception as exc:
+        # record_metric() swallows its own registry errors, so what lands here
+        # is the import or the label build failing — a metric that never
+        # reaches Prometheus while the log line above says it was emitted.
+        # Debug level: an observability gap must not add noise to a good turn.
+        log.debug(
+            "metric_record_failed",
+            metric=name,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
 
 
 TERMINAL_STATUSES = frozenset(

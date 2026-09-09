@@ -35,6 +35,7 @@ from agentos.attachment_refs import (
     transcript_material_path,
 )
 from agentos.bootstrap_types import BootstrapFileReport
+from agentos.compat.inspect_utils import accepts_keyword_arg
 from agentos.contracts.attachments import (
     ALLOWED_MEDIA_TYPES as _ALLOWED_ENGINE_MEDIA_TYPES,
 )
@@ -640,14 +641,6 @@ _SAFETY_MODULES: Final[tuple[Any, ...]] = (
 )
 
 log = structlog.get_logger(__name__)
-
-
-def _accepts_keyword_arg(callable_obj: Any, name: str) -> bool:
-    """Return True when callable accepts `name` explicitly or via `**kwargs`."""
-    params = inspect.signature(callable_obj).parameters
-    if name in params:
-        return True
-    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 def _strip_context_summary_marker(content: str) -> str:
@@ -1730,6 +1723,7 @@ class TurnRunner:
         self._turn_compaction_attempted_sessions: set[str] = set()
         self._turn_compacted_sessions: set[str] = set()
         self._active_pre_compaction_flush_tasks: dict[str, asyncio.Task] = {}
+        self._background_tasks: set[asyncio.Task] = set()
         self._emergency_compaction_overrides: dict[str, _EmergencyCompactionOverride] = {}
         # TurnRunner stage decomposition InputStage instance. Holds no per-turn state;
         # constructed once. Active unconditionally as of.
@@ -5348,13 +5342,13 @@ class TurnRunner:
             if callable(compact_with_result):
                 compact_method = self._session_manager.compact_with_result
                 compact_kwargs: dict[str, Any] = {}
-                if _accepts_keyword_arg(compact_method, "compaction_id"):
+                if accepts_keyword_arg(compact_method, "compaction_id"):
                     compact_kwargs["compaction_id"] = compaction_id
-                if _accepts_keyword_arg(compact_method, "trigger_reason"):
+                if accepts_keyword_arg(compact_method, "trigger_reason"):
                     compact_kwargs["trigger_reason"] = "t3_upgrade"
-                if _accepts_keyword_arg(compact_method, "flush_receipt_status"):
+                if accepts_keyword_arg(compact_method, "flush_receipt_status"):
                     compact_kwargs["flush_receipt_status"] = flush_receipt_status
-                if _accepts_keyword_arg(compact_method, "mutation_context"):
+                if accepts_keyword_arg(compact_method, "mutation_context"):
                     compact_kwargs["mutation_context"] = self._session_write_context_factory(
                         session_key
                     )
@@ -5590,13 +5584,13 @@ class TurnRunner:
             if callable(compact_with_result):
                 compact_method = self._session_manager.compact_with_result
                 compact_kwargs: dict[str, Any] = {}
-                if _accepts_keyword_arg(compact_method, "compaction_id"):
+                if accepts_keyword_arg(compact_method, "compaction_id"):
                     compact_kwargs["compaction_id"] = compaction_id
-                if _accepts_keyword_arg(compact_method, "trigger_reason"):
+                if accepts_keyword_arg(compact_method, "trigger_reason"):
                     compact_kwargs["trigger_reason"] = "preflight"
-                if _accepts_keyword_arg(compact_method, "flush_receipt_status"):
+                if accepts_keyword_arg(compact_method, "flush_receipt_status"):
                     compact_kwargs["flush_receipt_status"] = flush_receipt_status
-                if _accepts_keyword_arg(compact_method, "mutation_context"):
+                if accepts_keyword_arg(compact_method, "mutation_context"):
                     compact_kwargs["mutation_context"] = self._session_write_context_factory(
                         session_key
                     )
@@ -5825,7 +5819,7 @@ class TurnRunner:
         mark_status = getattr(self._session_manager, "mark_compaction_flush_receipt_status", None)
         if not callable(mark_status):
             return
-        asyncio.create_task(
+        task = asyncio.create_task(
             mark_compaction_flush_status_with_retry(
                 mark_status,
                 session_key=session_key,
@@ -5837,6 +5831,8 @@ class TurnRunner:
                 skipped_event=f"{event_prefix}.flush_status_update_skipped",
             )
         )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def _log_pre_compaction_flush_receipt(
         self,

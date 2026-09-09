@@ -129,7 +129,7 @@ class GatewayRPCClient:
             raise ConnectionError("Gateway connection is not open")
 
         req_id = str(uuid.uuid4())
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending[req_id] = fut
         try:

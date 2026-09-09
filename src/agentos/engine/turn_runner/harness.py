@@ -16,6 +16,7 @@ import asyncio
 import inspect
 from typing import TYPE_CHECKING, Any, cast
 
+from agentos.compat.inspect_utils import accepts_keyword_arg
 from agentos.engine.turn_runner.agent_bootstrap_stage import (
     AgentConfigBuilderPort,
     AgentFactoryPort,
@@ -680,7 +681,7 @@ class _RequestContextPrependAdapter(RequestContextPrependPort):
 class _TurnRunnerAgentRunAdapter(AgentRunPort):
     """Bind ``agent.run_turn(turn_input, extra_messages=..., **kwargs)``.
 
-    Folds the ``_accepts_keyword_arg(agent.run_turn, "semantic_message")``
+    Folds the ``accepts_keyword_arg(agent.run_turn, "semantic_message")``
     introspection inside the adapter so the stage body never imports
     ``inspect``. ``semantic_message`` is forwarded only when the agent
     accepts the keyword; otherwise the call uses the two-arg
@@ -696,10 +697,8 @@ class _TurnRunnerAgentRunAdapter(AgentRunPort):
         extra_messages: list[Any] | None,
         semantic_message: str | None,
     ) -> AsyncIterator[AgentEvent]:
-        from agentos.engine.runtime import _accepts_keyword_arg
-
         kwargs: dict[str, Any] = {}
-        if _accepts_keyword_arg(agent.run_turn, "semantic_message"):
+        if accepts_keyword_arg(agent.run_turn, "semantic_message"):
             kwargs["semantic_message"] = semantic_message
         return agent.run_turn(
             turn_input,
@@ -900,7 +899,7 @@ class _TurnRunnerTranscriptAppendAdapter(TranscriptAppendPort):
     body has no ``inspect`` dependency and no ``session_manager is None``
     conditional:
 
-    1. ``_accepts_keyword_arg(session_manager.append_message, "token_count")``
+    1. ``accepts_keyword_arg(session_manager.append_message, "token_count")``
        introspection: passes ``token_count`` only when the manager
        accepts it.
     2. The ``session_manager is None`` guard: returns ``False`` (no
@@ -925,8 +924,6 @@ class _TurnRunnerTranscriptAppendAdapter(TranscriptAppendPort):
         turn_usage: dict[str, Any] | None,
         token_count: int | None,
     ) -> bool:
-        from agentos.engine.runtime import _accepts_keyword_arg
-
         session_manager = self._runner._session_manager
         if session_manager is None:
             return False
@@ -937,11 +934,11 @@ class _TurnRunnerTranscriptAppendAdapter(TranscriptAppendPort):
         }
         if reasoning_content is not None:
             append_kwargs["reasoning_content"] = reasoning_content
-        if turn_usage is not None and _accepts_keyword_arg(
+        if turn_usage is not None and accepts_keyword_arg(
             session_manager.append_message, "turn_usage"
         ):
             append_kwargs["turn_usage"] = turn_usage
-        if _accepts_keyword_arg(session_manager.append_message, "token_count"):
+        if accepts_keyword_arg(session_manager.append_message, "token_count"):
             append_kwargs["token_count"] = token_count
         await self._runner._append_session_message(session_key, **append_kwargs)
         return True

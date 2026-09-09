@@ -48,6 +48,7 @@ from agentos.channels.artifact_delivery import (
 )
 from agentos.channels.stream_policy import resolve_channel_stream_policy
 from agentos.channels.types import IncomingMessage, OutgoingMessage
+from agentos.compat.inspect_utils import accepts_keyword_arg
 from agentos.engine.start_turn import start_turn_via_runtime
 from agentos.engine.types import (
     ArtifactEvent,
@@ -155,7 +156,10 @@ class _ChannelInFlightSet:
 
     def __init__(self, cap: int) -> None:
         self._cap = cap
-        self._tasks: set[asyncio.Task[Any]] = set()
+        # Holds real tasks *and* the bare reservation tokens ``try_acquire``
+        # parks here to make the cap check atomic. Anything that treats a
+        # member as a task has to filter first.
+        self._tasks: set[asyncio.Task[Any] | object] = set()
 
     @property
     def cap(self) -> int:
@@ -178,23 +182,79 @@ class _ChannelInFlightSet:
         runs on a single thread, this check-then-add pair is atomic — no await
         occurs between the guard and the mutation.
         """
-        if len(self._tasks) >= self._cap:  # type: ignore[arg-type]
+        if len(self._tasks) >= self._cap:
             return False
-        self._tasks.add(token)  # type: ignore[arg-type]
+        self._tasks.add(token)
         return True
 
     def release(self, token: object) -> None:
         """Release a reservation previously acquired via try_acquire."""
-        self._tasks.discard(token)  # type: ignore[arg-type]
+        self._tasks.discard(token)
 
     async def cancel_all(self) -> None:
-        """Cancel every in-flight task and await completion (for shutdown)."""
-        tasks = list(self._tasks)
+        """Cancel every in-flight task and await completion (for shutdown).
+
+        The set also holds the bare ``object()`` reservation tokens parked by
+        ``try_acquire``, which have no ``cancel``. Cancelling them raised
+        ``AttributeError`` mid-loop, so the tasks after the token were never
+        cancelled and the ``gather`` never ran — a shutdown that left real
+        work running. Filter to actual tasks, then clear the whole set so the
+        reservations do not leak either.
+        """
+        tasks = [t for t in self._tasks if isinstance(t, asyncio.Task)]
         for t in tasks:
             t.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
+
+
+def _make_reply_done_callback(
+    in_flight: _ChannelInFlightSet,
+    session_key: str,
+) -> Callable[[asyncio.Task[Any]], None]:
+    """Build the done callback that retires a finished reply delivery task.
+
+    Both terminal outcomes are worth a counter, and they are different
+    outcomes: a cancelled reply is a turn that was interrupted, an exception
+    is a delivery that broke. They carry distinct ``reason`` labels so an
+    operator reading ``turn_cancellations_total`` can tell them apart.
+    """
+
+    def _reply_done(t: asyncio.Task[Any]) -> None:
+        in_flight.discard(t)
+        if t.cancelled():
+            # ``t.exception()`` raises CancelledError on a cancelled task, so
+            # the guard that avoided that used to skip the metric as well —
+            # real cancellations were the one outcome recorded nowhere.
+            log.info(
+                "channel_dispatch.reply_task_cancelled",
+                session_key=session_key,
+            )
+            _emit_metric(
+                "turn_cancellations_total",
+                value=1,
+                reason="reply_task_cancelled",
+                session_key=session_key,
+            )
+            return
+        exc = t.exception()
+        if exc is not None:
+            log.error(
+                "channel_dispatch.reply_task_error",
+                session_key=session_key,
+                error_type=type(exc).__name__,
+                error=str(exc),
+                exc_info=exc,
+            )
+            _emit_metric(
+                "turn_cancellations_total",
+                value=1,
+                reason="reply_task_error",
+                session_key=session_key,
+            )
+
+    return _reply_done
 
 
 def _compute_channel_cap(config: Any) -> int:
@@ -292,16 +352,6 @@ class _DirectiveTagStreamSanitizer:
         pending = self._pending
         self._pending = ""
         return _strip_internal_compaction_markers(_strip_inline_directive_tags(pending))
-
-
-def _accepts_keyword_arg(callable_obj: Any, name: str) -> bool:
-    try:
-        params = inspect.signature(callable_obj).parameters
-    except (TypeError, ValueError):
-        return False
-    if name in params:
-        return True
-    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 @contextlib.asynccontextmanager
@@ -618,25 +668,7 @@ async def run_channel_dispatch(
                 )
                 _in_flight.add(reply_task)
 
-                def _reply_done(t: asyncio.Task[Any], _sk: str = session_key) -> None:
-                    _in_flight.discard(t)
-                    exc = t.exception() if not t.cancelled() else None
-                    if exc is not None:
-                        log.error(
-                            "channel_dispatch.reply_task_error",
-                            session_key=_sk,
-                            error_type=type(exc).__name__,
-                            error=str(exc),
-                            exc_info=exc,
-                        )
-                        _emit_metric(
-                            "turn_cancellations_total",
-                            value=1,
-                            reason="reply_task_error",
-                            session_key=_sk,
-                        )
-
-                reply_task.add_done_callback(_reply_done)
+                reply_task.add_done_callback(_make_reply_done_callback(_in_flight, session_key))
             continue
 
         # Gap 3: Start typing indicator (background task). On a streaming
@@ -1208,9 +1240,9 @@ def _start_typing_keepalive(
 
     typing_kwargs: dict[str, Any] = {}
     if inbound is not None:
-        if _accepts_keyword_arg(send_typing, "channel_id"):
+        if accepts_keyword_arg(send_typing, "channel_id"):
             typing_kwargs["channel_id"] = inbound.channel_id
-        if _accepts_keyword_arg(send_typing, "thread_id"):
+        if accepts_keyword_arg(send_typing, "thread_id"):
             thread_id = next(
                 (
                     inbound.metadata[key]
@@ -1526,7 +1558,7 @@ class _RuntimeChannelStreamRelay:
         if not resolve_channel_stream_policy(channel).relay_stream:
             return None
         enqueue = getattr(task_runtime, "enqueue", None)
-        if not callable(enqueue) or not _accepts_keyword_arg(enqueue, "stream_event_sink"):
+        if not callable(enqueue) or not accepts_keyword_arg(enqueue, "stream_event_sink"):
             return None
         relay = cls(channel, inbound, config)
         relay._task = asyncio.create_task(relay._run())
@@ -1561,15 +1593,16 @@ class _RuntimeChannelStreamRelay:
             return first_text, None
         buffer = [first_text]
         size = len(first_text)
+        loop = asyncio.get_running_loop()
         deadline = (
-            asyncio.get_event_loop().time() + self._coalesce_window_s
+            loop.time() + self._coalesce_window_s
             if self._coalesce_window_s > 0
             else None
         )
         while True:
             if self._coalesce_chars and size >= self._coalesce_chars:
                 return "".join(buffer), None
-            remaining = deadline - asyncio.get_event_loop().time() if deadline is not None else None
+            remaining = deadline - loop.time() if deadline is not None else None
             if remaining is not None and remaining <= 0:
                 return "".join(buffer), None
             try:
@@ -2463,11 +2496,11 @@ async def _run_turn_batch_path(
         "agent_id": tool_ctx.agent_id,
     }
     model = resolve_agent_model(tool_ctx.agent_id, config)
-    if model is not None and _accepts_keyword_arg(turn_runner.run, "model"):
+    if model is not None and accepts_keyword_arg(turn_runner.run, "model"):
         run_kwargs["model"] = model
-    if _accepts_keyword_arg(turn_runner.run, "semantic_message"):
+    if accepts_keyword_arg(turn_runner.run, "semantic_message"):
         run_kwargs["semantic_message"] = semantic_message
-    if attachments and _accepts_keyword_arg(turn_runner.run, "attachments"):
+    if attachments and accepts_keyword_arg(turn_runner.run, "attachments"):
         run_kwargs["attachments"] = attachments
     try:
         stream = turn_runner.run(
@@ -2636,11 +2669,11 @@ async def _run_turn_streaming_path(
             "agent_id": tool_ctx.agent_id,
         }
         model = resolve_agent_model(tool_ctx.agent_id, config)
-        if model is not None and _accepts_keyword_arg(turn_runner.run, "model"):
+        if model is not None and accepts_keyword_arg(turn_runner.run, "model"):
             run_kwargs["model"] = model
-        if _accepts_keyword_arg(turn_runner.run, "semantic_message"):
+        if accepts_keyword_arg(turn_runner.run, "semantic_message"):
             run_kwargs["semantic_message"] = semantic_message
-        if attachments and _accepts_keyword_arg(turn_runner.run, "attachments"):
+        if attachments and accepts_keyword_arg(turn_runner.run, "attachments"):
             run_kwargs["attachments"] = attachments
         stream = turn_runner.run(
             msg.content,
