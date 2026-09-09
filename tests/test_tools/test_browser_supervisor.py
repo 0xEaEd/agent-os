@@ -6,6 +6,7 @@ Chromium required.
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -241,6 +242,94 @@ class TestRegistry:
         # A later attempt with a working transport must succeed.
         good = registry.get_or_start("k", "ws://127.0.0.1:1/a", transport=FakeTransport())
         assert good.active is True
+
+    def test_replacing_a_dead_supervisor_does_not_hold_the_registry_lock(self) -> None:
+        """Teardown must not stall every other session.
+
+        `stop()` reaches `_WebSocketTransport.stop()`, bounded at 5s on the
+        close call plus 5s on the thread join — and this branch runs exactly
+        when the connection is dead, the case that pays both in full. `get`,
+        `stop` and `stop_all` share one process-wide lock, so holding it across
+        teardown queues the dialog and eval paths, `_drop_session`, the idle
+        reaper and gateway shutdown behind one wedged socket.
+
+        The lock is probed with a timeout rather than timed: a regression makes
+        this fail instead of hang.
+        """
+        registry = SupervisorRegistry()
+        teardown_started = threading.Event()
+        release_teardown = threading.Event()
+
+        class BlockingStopTransport(FakeTransport):
+            def stop(self) -> None:
+                teardown_started.set()
+                release_teardown.wait(timeout=5)
+                super().stop()
+
+        registry.get_or_start("k", "ws://127.0.0.1:1/a", transport=BlockingStopTransport())
+        registry.get("k")._active = False  # force the "connection dead" branch
+
+        worker = threading.Thread(
+            target=registry.get_or_start,
+            args=("k", "ws://127.0.0.1:1/a"),
+            kwargs={"transport": FakeTransport()},
+        )
+        worker.start()
+        try:
+            assert teardown_started.wait(timeout=5), "teardown never ran"
+            acquired = registry._lock.acquire(timeout=2)
+            if acquired:
+                registry._lock.release()
+            assert acquired, "registry lock is held while a supervisor is torn down"
+        finally:
+            release_teardown.set()
+            worker.join(timeout=5)
+
+    def test_the_replaced_supervisor_is_still_torn_down(self) -> None:
+        """Moving the stop out of the lock must not drop it."""
+        registry = SupervisorRegistry()
+        first = FakeTransport()
+        registry.get_or_start("k", "ws://127.0.0.1:1/a", transport=first)
+        registry.get("k")._active = False
+
+        registry.get_or_start("k", "ws://127.0.0.1:1/a", transport=FakeTransport())
+
+        assert first.stopped is True
+
+    def test_the_old_connection_is_stopped_before_the_new_one_starts(self) -> None:
+        """Two live CDP attachments to one page must not overlap."""
+        order: list[str] = []
+        registry = SupervisorRegistry()
+
+        class Recording(FakeTransport):
+            def __init__(self, label: str) -> None:
+                super().__init__()
+                self._label = label
+
+            def start(self, on_event: Any) -> None:
+                order.append(f"start:{self._label}")
+                super().start(on_event)
+
+            def stop(self) -> None:
+                order.append(f"stop:{self._label}")
+                super().stop()
+
+        registry.get_or_start("k", "ws://127.0.0.1:1/a", transport=Recording("old"))
+        registry.get("k")._active = False
+        registry.get_or_start("k", "ws://127.0.0.1:1/a", transport=Recording("new"))
+
+        assert order == ["start:old", "stop:old", "start:new"]
+
+    def test_a_live_supervisor_on_the_same_url_is_reused_untouched(self) -> None:
+        """The short-circuit still fires, so nothing is torn down needlessly."""
+        registry = SupervisorRegistry()
+        transport = FakeTransport()
+        first = registry.get_or_start("k", "ws://127.0.0.1:1/a", transport=transport)
+
+        second = registry.get_or_start("k", "ws://127.0.0.1:1/a", transport=FakeTransport())
+
+        assert second is first
+        assert transport.stopped is False
 
 
 def test_invalid_dialog_policy_rejected() -> None:

@@ -444,12 +444,18 @@ class SupervisorRegistry:
             existing = self._by_key.get(session_key)
             if existing is not None and existing.cdp_url == cdp_url and existing.active:
                 return existing
-            if existing is not None:
-                # URL changed or connection dead — tear down and restart.
-                try:
-                    existing.stop()
-                except Exception:  # noqa: BLE001
-                    pass
+            # URL changed or connection dead — the old one is replaced in the
+            # map here and torn down below, outside the lock. `stop()` reaches
+            # `_WebSocketTransport.stop()`, which is bounded at 5s on the close
+            # call plus 5s on the thread join, and this branch is entered
+            # exactly when the connection is dead — the case that pays both in
+            # full. Holding the registry lock across it stalls every other
+            # session, because `get`, `stop` and `stop_all` share this lock:
+            # the dialog and eval paths, `agent_browser._drop_session`, the
+            # idle reaper and gateway teardown all queue behind one dead
+            # socket. `stop()` and `stop_all()` already release the lock first;
+            # this was the one place that did not.
+            doomed = existing
             supervisor = CDPSupervisor(
                 session_key,
                 cdp_url,
@@ -458,6 +464,11 @@ class SupervisorRegistry:
                 transport=transport,
             )
             self._by_key[session_key] = supervisor
+        if doomed is not None:
+            # Before start(), so the replacement never attaches while the old
+            # connection is still up.
+            with contextlib.suppress(Exception):
+                doomed.stop()
         # start() does I/O; keep it outside the registry lock.
         try:
             supervisor.start()
