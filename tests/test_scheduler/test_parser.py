@@ -108,6 +108,65 @@ def test_parse_cron_dow_7_dedups_with_0_and_names() -> None:
     assert parse_cron("0 0 * * MON,7").day_of_week.values == frozenset({0, 1})
 
 
+def test_parse_cron_dow_bare_step_matches_croniter_for_every_start() -> None:
+    # Issue #1501: a bare day-of-week step "N/M" (no explicit "-" range)
+    # used `range(N, hi + 1, M)` with hi = 7, the alias-inclusive field
+    # bound. That's only correct when N == 0. croniter treats day-of-week
+    # as 7 true values (0-6), with 7 purely an input alias for 0 (its own
+    # RANGES[DOW] == (0, 6)), and internally rewrites a bare "N/M" to
+    # "N-6/M" -- so if the (alias-resolved) start lands exactly on 6, the
+    # whole field is stepped, not just that one value. This table is the
+    # full exhaustive cross-check: every valid day-of-week start value
+    # (0-7) against a representative step, verified independently against
+    # croniter directly (not just against this parser's own prior output).
+    expectations = {
+        (0, 1): {0, 1, 2, 3, 4, 5, 6},
+        (0, 2): {0, 2, 4, 6},
+        (0, 7): {0},
+        (1, 3): {1, 4},
+        (2, 3): {2, 5},
+        (5, 4): {5},
+        (6, 1): {0, 1, 2, 3, 4, 5, 6},
+        (6, 2): {0, 2, 4, 6},
+        (6, 3): {0, 3, 6},
+        (7, 1): {0, 1, 2, 3, 4, 5, 6},
+        (7, 2): {0, 2, 4, 6},
+        (7, 3): {0, 3, 6},
+        (7, 7): {0},
+    }
+    for (start, step), expected in expectations.items():
+        got = parse_cron(f"0 0 * * {start}/{step}").day_of_week.values
+        msg = f"{start}/{step}: got {sorted(got)}, want {sorted(expected)}"
+        assert got == frozenset(expected), msg
+
+
+def test_parse_cron_dow_bare_step_is_identical_across_sunday_spellings() -> None:
+    # 0, 7, and the name SUN all denote Sunday; a bare step expression must
+    # give byte-for-byte the same set regardless of which spelling is used.
+    for step in (1, 2, 3, 4, 7):
+        by_zero = parse_cron(f"0 0 * * 0/{step}").day_of_week.values
+        by_seven = parse_cron(f"0 0 * * 7/{step}").day_of_week.values
+        by_name = parse_cron(f"0 0 * * SUN/{step}").day_of_week.values
+        assert by_zero == by_seven == by_name
+
+
+def test_parse_cron_dow_bare_step_fix_does_not_affect_explicit_ranges() -> None:
+    # The fix is scoped to the bare-value ("N/M", no dash) branch only.
+    # Explicit two-sided ranges, with or without a step, must be untouched
+    # -- these already pass on main via #1344's fix for #1063.
+    assert parse_cron("0 0 * * WED-7").day_of_week.values == frozenset({0, 3, 4, 5, 6})
+    assert parse_cron("0 0 * * SAT-SUN").day_of_week.values == frozenset({0, 6})
+    assert parse_cron("0 0 * * SUN-FRI").day_of_week.values == frozenset({0, 1, 2, 3, 4, 5})
+
+
+def test_parse_cron_dow_bare_step_fix_does_not_affect_other_fields() -> None:
+    # Only day_of_week has a 0/max alias; every other field's bare "N/M"
+    # step must keep using the field's real declared max, unchanged.
+    assert parse_cron("0 0 1/6 * *").day_of_month.values == frozenset({1, 7, 13, 19, 25, 31})
+    assert parse_cron("0 0 * 12/6 *").month.values == frozenset({12})
+    assert parse_cron("0 22/1 * * *").hour.values == frozenset({22, 23})
+
+
 def test_parse_cron_dow_7_matches_sunday_not_monday() -> None:
     expr = parse_cron("0 0 * * 7")
     sunday = datetime(2026, 8, 30, 0, 0)  # a Sunday
