@@ -94,6 +94,87 @@ async def test_discord_application_command_is_deferred_before_group_dispatch() -
     )
 
 
+async def test_discord_slash_command_preserves_falsy_option_values() -> None:
+    """Issue #1229 — option values 0 and False are falsy but real: the old
+    truthiness filter dropped them from the reconstructed command string."""
+    client = _FakeDiscordClient()
+    channel = DiscordChannel(
+        DiscordChannelConfig(token="bot-token", application_id="configured-app-id")
+    )
+    channel._client = client
+    payload = _application_command()
+    payload["data"] = {
+        "type": 1,
+        "name": "temperature",
+        "options": [
+            {"name": "temp", "type": 4, "value": 0},
+            {"name": "verbose", "type": 5, "value": False},
+            {"name": "query", "type": 3, "value": "test"},
+        ],
+    }
+
+    await channel._handle_dispatch("INTERACTION_CREATE", payload)
+
+    message = await channel.receive()
+    assert message.content == "/temperature 0 False test"
+
+
+async def test_discord_slash_command_reconstructs_subcommand() -> None:
+    """Issue #1229 — a type-1 SUB_COMMAND extends the command path."""
+    client = _FakeDiscordClient()
+    channel = DiscordChannel(
+        DiscordChannelConfig(token="bot-token", application_id="configured-app-id")
+    )
+    channel._client = client
+    payload = _application_command()
+    payload["data"] = {
+        "type": 1,
+        "name": "agentos",
+        "options": [
+            {
+                "name": "configure",
+                "type": 1,
+                "options": [{"name": "provider", "type": 3, "value": "openrouter"}],
+            }
+        ],
+    }
+
+    await channel._handle_dispatch("INTERACTION_CREATE", payload)
+
+    message = await channel.receive()
+    assert message.content == "/agentos configure openrouter"
+
+
+async def test_discord_slash_command_reconstructs_subcommand_group() -> None:
+    """Issue #1229 — a type-2 SUBCOMMAND_GROUP descends into its subcommand
+    and keeps falsy leaf values (0)."""
+    client = _FakeDiscordClient()
+    channel = DiscordChannel(
+        DiscordChannelConfig(token="bot-token", application_id="configured-app-id")
+    )
+    channel._client = client
+    payload = _application_command()
+    payload["data"] = {
+        "type": 1,
+        "name": "config",
+        "options": [
+            {
+                "name": "set",
+                "type": 2,
+                "options": [
+                    {"name": "key", "type": 3, "value": "temperature"},
+                    {"name": "value", "type": 4, "value": 0},
+                ],
+            }
+        ],
+    }
+
+    await channel._handle_dispatch("INTERACTION_CREATE", payload)
+
+    message = await channel.receive()
+    assert message.content == "/config set temperature 0"
+
+
 async def test_discord_command_reply_completes_original_interaction_response() -> None:
     client = _FakeDiscordClient()
     channel = DiscordChannel(
