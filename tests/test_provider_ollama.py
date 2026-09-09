@@ -18,7 +18,8 @@ from agentos.provider import (
     ToolInputSchema,
     ToolUseEndEvent,
 )
-from agentos.provider.ollama import OllamaProvider
+from agentos.provider.failures import ProviderFailureKind, classify_provider_error
+from agentos.provider.ollama import OllamaProvider, _stream_timeout
 
 
 def _patch_transport(
@@ -260,3 +261,108 @@ def test_ollama_ignores_malformed_tool_call_chunks(monkeypatch: pytest.MonkeyPat
     assert not any(isinstance(event, ToolUseEndEvent) for event in events)
     done = next(event for event in events if isinstance(event, DoneEvent))
     assert done.stop_reason == "stop"
+
+
+def _patch_raising_transport(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise exc
+
+    transport = httpx.MockTransport(handler)
+    real_async_client = httpx.AsyncClient
+
+    def patched_async_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("agentos.provider.ollama.httpx.AsyncClient", patched_async_client)
+
+
+def _first_event(provider: OllamaProvider) -> Any:
+    async def _run() -> list[Any]:
+        return [event async for event in provider.chat([Message(role="user", content="Hi")])]
+
+    events = asyncio.run(_run())
+    assert len(events) == 1
+    return events[0]
+
+
+def test_ollama_connect_timeout_is_bounded_below_the_request_timeout() -> None:
+    timeout = _stream_timeout(120.0)
+
+    assert timeout.connect == 5.0
+    assert timeout.read == 120.0
+
+
+def test_ollama_connect_timeout_never_exceeds_a_short_request_timeout() -> None:
+    assert _stream_timeout(2.0).connect == 2.0
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ConnectError("All connection attempts failed"),
+        httpx.ConnectTimeout("timed out"),
+    ],
+)
+def test_ollama_server_down_names_the_cause(
+    monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    _patch_raising_transport(monkeypatch, exc)
+    provider = OllamaProvider(model="llama3.1:8b")
+
+    error = _first_event(provider)
+
+    assert isinstance(error, ErrorEvent)
+    assert error.code == "connection_error"
+    assert "Ollama is not reachable at http://localhost:11434" in error.message
+    assert "ollama serve" in error.message
+    # The ollama branch of classify_provider_error keys on this wording.
+    assert (
+        classify_provider_error(
+            provider_name="ollama",
+            status_code=None,
+            raw_code=error.code,
+            message=error.message,
+        )
+        is ProviderFailureKind.TRANSPORT_TRANSIENT
+    )
+
+
+def test_ollama_missing_model_404_says_how_to_pull_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    _patch_transport(
+        monkeypatch,
+        captured,
+        '{"error":"model \\"llama3.1:8b\\" not found, try pulling it first"}',
+        status_code=404,
+    )
+    provider = OllamaProvider(model="llama3.1:8b")
+
+    error = _first_event(provider)
+
+    assert isinstance(error, ErrorEvent)
+    assert error.code == "404"
+    assert "ollama pull llama3.1:8b" in error.message
+    assert "not found, try pulling it first" in error.message
+    assert (
+        classify_provider_error(
+            provider_name="ollama",
+            status_code=404,
+            raw_code=error.code,
+            message=error.message,
+        )
+        is ProviderFailureKind.MODEL_NOT_FOUND
+    )
+
+
+def test_ollama_non_model_404_keeps_the_plain_http_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    _patch_transport(monkeypatch, captured, "404 page not found", status_code=404)
+    provider = OllamaProvider(model="llama3.1:8b")
+
+    error = _first_event(provider)
+
+    assert isinstance(error, ErrorEvent)
+    assert error.message == "HTTP 404: 404 page not found"
