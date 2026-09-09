@@ -59,15 +59,37 @@ def _format_timestamp(ms: int | None) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat()
 
 
+def session_source_path(session: Any) -> str:
+    """Return the derived document path for a session.
+
+    Split out of :func:`build_session_source_document` so the freshness
+    pre-check in :meth:`SessionSourceIndexer.sync` addresses the same row the
+    document is later written to. Deriving it twice would let the two spellings
+    drift and the check would silently target nothing.
+    """
+    agent_id = _normalize_agent_id(getattr(session, "agent_id", None) or "main")
+    safe_agent = _safe_segment(agent_id, fallback="main")
+    safe_session_id = _safe_segment(session.session_id, fallback="session")
+    return f"sessions/{safe_agent}/{safe_session_id}.md"
+
+
+def session_source_mtime(session: Any) -> float:
+    """Return the document mtime for a session, in seconds.
+
+    Taken from ``updated_at`` alone, which is why it can be read before the
+    transcript is: ``SessionManager.append_message`` touches ``updated_at`` on
+    every append, so a session that gained a message always compares newer.
+    """
+    return (getattr(session, "updated_at", None) or 0) / 1000
+
+
 def build_session_source_document(
     session: Any,
     entries: list[Any],
 ) -> SessionSourceDocument:
     """Render a session transcript into a deterministic derived source document."""
     agent_id = _normalize_agent_id(getattr(session, "agent_id", None) or "main")
-    safe_agent = _safe_segment(agent_id, fallback="main")
-    safe_session_id = _safe_segment(session.session_id, fallback="session")
-    path = f"sessions/{safe_agent}/{safe_session_id}.md"
+    path = session_source_path(session)
 
     lines = [
         "---",
@@ -100,7 +122,7 @@ def build_session_source_document(
     if rendered_entries == 0:
         lines.append("(no user or assistant transcript content)")
 
-    mtime = (getattr(session, "updated_at", None) or 0) / 1000
+    mtime = session_source_mtime(session)
     return SessionSourceDocument(
         path=path,
         content="\n".join(lines).rstrip() + "\n",
@@ -130,7 +152,16 @@ class SessionSourceIndexer:
         indexed = 0
         skipped = 0
 
+        unchanged = set() if force else await self._unchanged_document_paths(sessions)
+
         for session in sessions:
+            if not force:
+                path = session_source_path(session)
+                if path in unchanged:
+                    # Still expected, or the stale-path sweep below would
+                    # delete a document that is simply up to date.
+                    expected_paths.add(path)
+                    continue
             entries = await self._storage.get_transcript(session.session_id)
             if not entries:
                 skipped += 1
@@ -155,6 +186,46 @@ class SessionSourceIndexer:
                 removed += 1
 
         return SessionSourceSyncResult(indexed=indexed, removed=removed, skipped=skipped)
+
+    async def _unchanged_document_paths(self, sessions: list[Any]) -> set[str]:
+        """Document paths already indexed at or past their session's mtime.
+
+        ``index_file`` decides "unchanged" by hashing the rendered document, so
+        reaching that decision used to cost a full transcript read, a redaction
+        pass over every entry and the whole document render -- per session, for
+        every session, on every sync. One message in one session was enough to
+        pay it for all of them, and ``sync`` runs on session start, on the
+        timer, on watch events and ahead of memory searches.
+
+        The mtime that ``index_file`` records comes from ``updated_at`` alone
+        (:func:`session_source_mtime`), so the same comparison can be made from
+        the session rows in a single batched query. ``get_file_mtimes`` is the
+        existing accessor for it -- ``memory/retrieval.py`` already reads the
+        table this way.
+
+        Conservative in both directions: a session with no ``updated_at`` is
+        never skipped, and a store without the accessor skips nothing. Opening
+        a session also touches ``updated_at``, so an untouched transcript can
+        still be re-read -- that is the old behaviour, not a regression.
+        """
+        get_file_mtimes = getattr(self._store, "get_file_mtimes", None)
+        if not callable(get_file_mtimes):
+            return set()
+
+        candidates: dict[str, float] = {}
+        for session in sessions:
+            mtime = session_source_mtime(session)
+            if mtime > 0:
+                candidates[session_source_path(session)] = mtime
+        if not candidates:
+            return set()
+
+        known = await get_file_mtimes(list(candidates))
+        return {
+            path
+            for path, mtime in candidates.items()
+            if known.get(path) is not None and mtime <= known[path]
+        }
 
     async def _list_sessions(self) -> tuple[list[Any], bool]:
         page_size = min(100, self._max_sessions)
