@@ -800,7 +800,12 @@ def create_skill_tools(loader: SkillLoader) -> None:
             from agentos.skills.resources import expand_skill_placeholders
 
             if file_path:
-                normalized_path = file_path.strip().lstrip("./")
+                # Strip the ``./`` prefix only. ``lstrip("./")`` would take the
+                # leading dot off ``.eslintrc.json`` too, and read_resource below
+                # never sees the name the caller asked for.
+                normalized_path = file_path.strip()
+                while normalized_path.startswith("./"):
+                    normalized_path = normalized_path[2:]
                 if normalized_path in {"", "SKILL.md"}:
                     if not skill.content:
                         return f"(Skill '{name}' has no body content)"

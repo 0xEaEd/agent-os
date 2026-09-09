@@ -16,6 +16,19 @@ class WorkspaceWriteDenyMatch:
     resolved_path: str
 
 
+def _strip_leading_path_prefix(value: str) -> str:
+    """Drop leading ``./`` segments and any leading ``/``.
+
+    ``str.lstrip("./")`` treats its argument as a character set, so it also eats
+    the dot that makes ``.env`` a dotfile and the ``..`` that makes a path
+    relative. Only the prefixes are meant to go.
+    """
+    text = value
+    while text.startswith("./"):
+        text = text[2:]
+    return text.lstrip("/")
+
+
 def _workspace_write_deny_globs(ctx: ToolContext | None = None) -> tuple[str, ...]:
     active = ctx if ctx is not None else current_tool_context.get()
     if active is None:
@@ -37,7 +50,7 @@ def _candidate_strings(
     workspace: Path | None,
 ) -> tuple[str, ...]:
     candidates: list[str] = [
-        original_path.replace("\\", "/").lstrip("./"),
+        _strip_leading_path_prefix(original_path.replace("\\", "/")),
         resolved.as_posix(),
     ]
     if workspace is not None:
@@ -72,9 +85,9 @@ def match_workspace_write_deny(
     candidates = _candidate_strings(resolved, original, workspace)
 
     for pattern in patterns:
-        normalized_pattern = pattern.replace("\\", "/").lstrip("./")
+        normalized_pattern = _strip_leading_path_prefix(pattern.replace("\\", "/"))
         for candidate in candidates:
-            normalized_candidate = candidate.replace("\\", "/").lstrip("./")
+            normalized_candidate = _strip_leading_path_prefix(candidate.replace("\\", "/"))
             if fnmatchcase(normalized_candidate, normalized_pattern) or fnmatchcase(
                 f"/{normalized_candidate}", normalized_pattern
             ):
@@ -122,6 +135,5 @@ def gate_workspace_write_deny(
     if match is None:
         return
     raise ToolError(
-        f"{tool_name} blocked by workspace write deny policy: "
-        f"{match.path} matches {match.pattern}."
+        f"{tool_name} blocked by workspace write deny policy: {match.path} matches {match.pattern}."
     )

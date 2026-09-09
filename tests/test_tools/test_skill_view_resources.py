@@ -44,13 +44,13 @@ def skill_loader(tmp_path: Path) -> Iterator[SkillLoader]:
     (skill_dir / "scripts").mkdir()
     (skill_dir / "assets").mkdir()
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: deck\ndescription: Deck helper\n---\n"
-        "See [guide](references/guide.md).\n",
+        "---\nname: deck\ndescription: Deck helper\n---\nSee [guide](references/guide.md).\n",
         encoding="utf-8",
     )
     (skill_dir / "references" / "guide.md").write_text("reference body\n", encoding="utf-8")
     (skill_dir / "scripts" / "inspect.py").write_text("print('script body')\n", encoding="utf-8")
     (skill_dir / "assets" / "palette.txt").write_text("blue\n", encoding="utf-8")
+    (skill_dir / "references" / ".eslintrc.json").write_text('{"root": true}\n', encoding="utf-8")
     (skill_dir / "secret.txt").write_text("do not expose\n", encoding="utf-8")
 
     loader = SkillLoader(
@@ -76,6 +76,17 @@ async def test_skill_view_reads_registered_skill_resources_by_relative_path(
     assert "reference body" in await _skill_view("deck", "references/guide.md")
     assert "script body" in await _skill_view("deck", "scripts/inspect.py")
     assert "blue" in await _skill_view("deck", "assets/palette.txt")
+
+
+@pytest.mark.asyncio
+async def test_skill_view_reads_dot_prefixed_resource_names(
+    skill_loader: SkillLoader,
+) -> None:
+    # ``lstrip("./")`` on the caller side turned ".eslintrc.json" into
+    # "eslintrc.json" before read_resource ever saw the requested name.
+    assert '"root": true' in await _skill_view("deck", "references/.eslintrc.json")
+    assert '"root": true' in await _skill_view("deck", "./references/.eslintrc.json")
+    assert '"root": true' in await _skill_view("deck", ".eslintrc.json")
 
 
 @pytest.mark.asyncio
