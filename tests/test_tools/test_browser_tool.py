@@ -465,6 +465,38 @@ def test_an_entry_that_cannot_be_a_hostname_is_refused_at_config_time(
         )
 
 
+def test_a_swallowed_refusal_still_leaves_the_allowlist_closed(tmp_path: Path) -> None:
+    """The raise must not be able to widen what it was asked to narrow.
+
+    `gateway/boot.py` calls this inside `try/except Exception` and only logs
+    `build_services.browser_failed`. Raising before the globals were assigned
+    left the module on its import-time defaults — and the default
+    `_allowed_domains` is `()`, which is the open web. So one unusable entry
+    turned a bounded browser into an unbounded one, and dropped
+    `restrict_evaluate` with it. Both are asserted here because the swallow is
+    the realistic caller, not a hypothetical one.
+    """
+    try:
+        browser_mod.configure_browser(
+            _config(
+                str(tmp_path / "engine"),
+                allowed_domains=["*.corp.example.com", "http://"],
+                restrict_evaluate=True,
+            )
+        )
+    except ValueError:
+        pass
+
+    assert browser_mod._allowed_domains != ()
+    assert browser_mod._domain_allowed("https://corp.example.com/") is True
+    assert browser_mod._domain_allowed("https://sub.corp.example.com/") is True
+    assert browser_mod._domain_allowed("https://evil.test/") is False
+    # The unusable entry is inert, not a wildcard: it is not a hostname, so it
+    # cannot match one.
+    assert browser_mod._domain_allowed("https://http/") is False
+    assert browser_mod._restrict_evaluate is True
+
+
 def test_the_refusal_names_the_accepted_format(tmp_path: Path) -> None:
     """The operator has nowhere else to look: the docs show only `[]`."""
     with pytest.raises(ValueError) as excinfo:

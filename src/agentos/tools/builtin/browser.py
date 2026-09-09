@@ -115,21 +115,10 @@ def configure_browser(config: Any | None = None) -> None:
                 normalized.append(host)
         elif str(raw).strip():
             unusable.append(str(raw).strip())
-    if unusable:
-        # Fail at the write boundary rather than at use. Dropping these would
-        # bound navigation to whatever is left with no way to tell that from a
-        # working allowlist -- and an allowlist is the wrong place to guess.
-        # Same shape as `normalize_tool_profile`: canonicalise, or raise naming
-        # the accepted format.
-        raise ValueError(
-            "browser.allowed_domains entries must be hostnames; "
-            + ", ".join(repr(entry) for entry in unusable)
-            + " cannot be reduced to one. Write a bare hostname such as "
-            "'example.com' (it already covers subdomains). A leading '.' or "
-            "'*.', a scheme, a port, userinfo and a path are accepted and "
-            "reduced to the hostname."
-        )
-    _allowed_domains = tuple(normalized)
+    # Unusable entries are kept on the list verbatim. They are not hostnames,
+    # so `_domain_allowed` can never match one -- but their presence keeps the
+    # allowlist non-empty, and an empty `_allowed_domains` means the open web.
+    _allowed_domains = tuple(normalized + unusable)
     _restrict_evaluate = bool(_get("restrict_evaluate", False))
     _allow_unsafe_evaluate = bool(_get("allow_unsafe_evaluate", False))
     _snapshot_max_chars = max(1000, int(_get("snapshot_max_chars", _DEFAULT_SNAPSHOT_MAX_CHARS)))
@@ -138,6 +127,29 @@ def configure_browser(config: Any | None = None) -> None:
     )
     _attach_confirmed = bool(_get("attach_confirmed", False))
     _attach_acked.clear()
+
+    if unusable:
+        # Fail at the write boundary rather than at use. Dropping these would
+        # bound navigation to whatever is left with no way to tell that from a
+        # working allowlist -- and an allowlist is the wrong place to guess.
+        # Same shape as `normalize_tool_profile`: canonicalise, or raise naming
+        # the accepted format.
+        #
+        # Raised only after every global is assigned. The one caller that runs
+        # this at boot (`gateway/boot.py`, `build_services.browser_failed`)
+        # logs the exception and carries on, and raising before the assignment
+        # left the module on its import-time defaults -- `_allowed_domains =
+        # ()`, the open web, from a config that only asked to narrow it. The
+        # state above is what a swallowed raise now leaves behind: the usable
+        # entries normalised, the unusable ones inert, the allowlist closed.
+        raise ValueError(
+            "browser.allowed_domains entries must be hostnames; "
+            + ", ".join(repr(entry) for entry in unusable)
+            + " cannot be reduced to one. Write a bare hostname such as "
+            "'example.com' (it already covers subdomains). A leading '.' or "
+            "'*.', a scheme, a port, userinfo and a path are accepted and "
+            "reduced to the hostname."
+        )
 
 
 def reset_browser_runtime() -> None:
