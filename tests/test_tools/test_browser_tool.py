@@ -448,12 +448,41 @@ def test_spellings_of_one_domain_are_not_stored_twice(tmp_path: Path) -> None:
     assert browser_mod._allowed_domains == ("example.com",)
 
 
-def test_an_entry_that_cannot_be_a_hostname_is_dropped_with_a_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("entry", ["/", "://", "..", "?", "http://", "-bad"])
+def test_an_entry_that_cannot_be_a_hostname_is_refused_at_config_time(
+    tmp_path: Path, entry: str
 ) -> None:
-    """Silence is the defect being fixed, so a dropped entry has to say so."""
+    """Fail at the write boundary, not at use.
+
+    Dropping the entry would bound navigation to whatever is left with no way
+    to tell that from a working allowlist — and an allowlist is the wrong place
+    to guess. Same shape as `normalize_tool_profile`: canonicalise, or raise
+    naming the accepted format.
+    """
+    with pytest.raises(ValueError, match="must be hostnames"):
+        browser_mod.configure_browser(
+            _config(str(tmp_path / "engine"), allowed_domains=[entry, "example.com"])
+        )
+
+
+def test_the_refusal_names_the_accepted_format(tmp_path: Path) -> None:
+    """The operator has nowhere else to look: the docs show only `[]`."""
+    with pytest.raises(ValueError) as excinfo:
+        browser_mod.configure_browser(_config(str(tmp_path / "engine"), allowed_domains=["/"]))
+
+    message = str(excinfo.value)
+    assert "'/'" in message
+    assert "example.com" in message
+
+
+def test_a_blank_entry_is_skipped_rather_than_refused(tmp_path: Path) -> None:
+    """Whitespace is not a malformed hostname, it is an empty slot.
+
+    The pre-existing filter already dropped blanks, and failing a gateway boot
+    over a stray comma in a TOML list would be worse than ignoring it.
+    """
     browser_mod.configure_browser(
-        _config(str(tmp_path / "engine"), allowed_domains=["/", "example.com"])
+        _config(str(tmp_path / "engine"), allowed_domains=["  ", "example.com", ""])
     )
 
     assert browser_mod._allowed_domains == ("example.com",)

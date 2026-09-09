@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -106,16 +107,28 @@ def configure_browser(config: Any | None = None) -> None:
 
     domains = _get("allowed_domains", ()) or ()
     normalized: list[str] = []
+    unusable: list[str] = []
     for raw in domains:
         host = _normalize_allowed_domain(raw)
         if host:
             if host not in normalized:
                 normalized.append(host)
         elif str(raw).strip():
-            # Never drop one in silence: an entry that cannot be a hostname
-            # would otherwise bound navigation to nothing with no way to tell
-            # that from a working allowlist.
-            log.warning("browser.allowed_domain_ignored", entry=str(raw).strip())
+            unusable.append(str(raw).strip())
+    if unusable:
+        # Fail at the write boundary rather than at use. Dropping these would
+        # bound navigation to whatever is left with no way to tell that from a
+        # working allowlist -- and an allowlist is the wrong place to guess.
+        # Same shape as `normalize_tool_profile`: canonicalise, or raise naming
+        # the accepted format.
+        raise ValueError(
+            "browser.allowed_domains entries must be hostnames; "
+            + ", ".join(repr(entry) for entry in unusable)
+            + " cannot be reduced to one. Write a bare hostname such as "
+            "'example.com' (it already covers subdomains). A leading '.' or "
+            "'*.', a scheme, a port, userinfo and a path are accepted and "
+            "reduced to the hostname."
+        )
     _allowed_domains = tuple(normalized)
     _restrict_evaluate = bool(_get("restrict_evaluate", False))
     _allow_unsafe_evaluate = bool(_get("allow_unsafe_evaluate", False))
@@ -171,6 +184,13 @@ def _fail(message: str) -> str:
     return json.dumps({"success": False, "error": message}, ensure_ascii=False)
 
 
+#: A hostname label is alphanumerics and inner hyphens; labels join on dots.
+#: Deliberately not a public-suffix check — this only rejects input that cannot
+#: be a hostname at all, it does not judge whether the host exists.
+_HOSTNAME_LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+_HOSTNAME_RE = re.compile(rf"^{_HOSTNAME_LABEL}(?:\.{_HOSTNAME_LABEL})*$")
+
+
 def _normalize_allowed_domain(value: str) -> str:
     """Reduce one ``allowed_domains`` entry to the bare hostname it means.
 
@@ -200,7 +220,13 @@ def _normalize_allowed_domain(value: str) -> str:
         host = ""
     if not host:
         host = text.split("/", 1)[0]
-    return host.removeprefix("*.").strip(".")
+    host = host.removeprefix("*.").strip(".")
+    # The fallback above happily yields a non-empty non-host for input that is
+    # only punctuation -- `://` leaves `:`, `http://` leaves `http:`. Returning
+    # those would put an entry on the allowlist that can never match a host,
+    # which is the silent failure this whole function exists to remove, so the
+    # shape is checked rather than assumed.
+    return host if _HOSTNAME_RE.match(host) else ""
 
 
 def _host_of(url: str) -> str:
