@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import contextvars
 import json
@@ -567,8 +568,12 @@ async def _read_bg_output(session: _BgSession) -> None:
     stdout = session.process.stdout
     if stdout is None:
         return
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     while chunk := await stdout.read(4096):
-        _append_bg_output(session, chunk.decode("utf-8", errors="replace"))
+        if decoded := decoder.decode(chunk):
+            _append_bg_output(session, decoded)
+    if final_decoded := decoder.decode(b"", final=True):
+        _append_bg_output(session, final_decoded)
 
 
 def _append_bg_output(session: _BgSession, output: str) -> None:
