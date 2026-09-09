@@ -1080,7 +1080,20 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
         nonlocal message_text, persisted_entry, fresh_user_session
         get_transcript = getattr(ctx.session_manager, "get_transcript", None)
         if callable(get_transcript):
-            fresh_user_session = not bool(await get_transcript(key))
+            # Only emptiness is being asked, so one row answers it. Unbounded,
+            # this reads and deserialises the session's whole history on every
+            # user message -- `SessionStorage.get_transcript` turns `limit=None`
+            # into `LIMIT -1` and builds a `TranscriptEntry` per row. A 5k-entry
+            # session cost ~135ms against ~4ms for a single row, on the send
+            # path rather than a background job.
+            #
+            # The call is duck-typed, and session managers that predate the
+            # `limit` parameter (fakes included) accept the key alone, so the
+            # bound is only passed when the callable declares it.
+            if accepts_keyword_arg(get_transcript, "limit"):
+                fresh_user_session = not bool(await get_transcript(key, limit=1))
+            else:
+                fresh_user_session = not bool(await get_transcript(key))
         if raw_attachments:
             from agentos.gateway.transcripts import (
                 build_transcript_attachment_envelope,

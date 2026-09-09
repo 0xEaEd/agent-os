@@ -776,6 +776,24 @@ class TestSessionsList:
         assert manager._storage.list_agent_tasks_calls == []
 
 
+class _LimitAwareSessionManager(FakeSessionManager):
+    """A session manager whose ``get_transcript`` declares the ``limit`` bound.
+
+    The plain :class:`FakeSessionManager` accepts the key alone, which is the
+    older duck-typed shape; this one records how the send path asked so the
+    bound itself can be asserted.
+    """
+
+    def __init__(self, sessions: list[FakeSession] | None = None) -> None:
+        super().__init__(sessions)
+        self.transcript_limits: list[int | None] = []
+
+    async def get_transcript(self, key: str, limit: int | None = None) -> list:
+        self.transcript_limits.append(limit)
+        entries = list(self.transcript)
+        return entries if limit is None else entries[:limit]
+
+
 class TestSessionsSend:
     @pytest.mark.asyncio
     async def test_send_valid(self, dispatcher, ctx_with_sessions, session):
@@ -852,6 +870,84 @@ class TestSessionsSend:
         assert (
             runtime.enqueue_calls[0]["envelope"].metadata.get("persisted_user_message_id") is None
         )
+
+    @pytest.mark.asyncio
+    async def test_send_probes_freshness_with_a_bounded_transcript_read(self, dispatcher):
+        """The freshness probe reads one row, not the whole history.
+
+        Only emptiness is being decided, but the unbounded read deserialised
+        every entry of the session on every user message -- on the send path,
+        so the cost grew with the conversation the user was still having.
+        """
+        session = FakeSession(session_key="agent:main:webchat:bounded-probe")
+        manager = _LimitAwareSessionManager([session])
+        manager.transcript = [SimpleNamespace(role="user", content=f"turn {i}") for i in range(500)]
+        runner = _RecordingTurnRunner()
+        ctx = make_ctx(session_manager=manager, task_runtime=None, turn_runner=runner)
+
+        res = await dispatcher.dispatch(
+            "r1",
+            "sessions.send",
+            {"key": session.session_key, "message": "hello"},
+            ctx,
+        )
+        task = get_agent_task_registry().get(session.session_key)
+        if task is not None:
+            await task
+
+        assert res.ok is True
+        assert manager.transcript_limits == [1]
+        assert runner.run_calls[0]["fresh_user_session"] is False
+
+    @pytest.mark.asyncio
+    async def test_send_bounded_probe_still_reports_a_fresh_session(self, dispatcher):
+        """Bounding the read must not change the answer for an empty session."""
+        session = FakeSession(session_key="agent:main:webchat:bounded-fresh")
+        manager = _LimitAwareSessionManager([session])
+        manager.transcript = []
+        runner = _RecordingTurnRunner()
+        ctx = make_ctx(session_manager=manager, task_runtime=None, turn_runner=runner)
+
+        res = await dispatcher.dispatch(
+            "r1",
+            "sessions.send",
+            {"key": session.session_key, "message": "hello"},
+            ctx,
+        )
+        task = get_agent_task_registry().get(session.session_key)
+        if task is not None:
+            await task
+
+        assert res.ok is True
+        assert manager.transcript_limits == [1]
+        assert runner.run_calls[0]["fresh_user_session"] is True
+
+    @pytest.mark.asyncio
+    async def test_send_omits_the_bound_for_a_manager_without_a_limit_parameter(self, dispatcher):
+        """A manager that predates ``limit`` is still called with the key alone.
+
+        The call is duck-typed, so passing the bound unconditionally would
+        raise ``TypeError`` against every such implementation rather than
+        merely reading more rows than needed.
+        """
+        session = FakeSession(session_key="agent:main:webchat:no-limit-param")
+        manager = FakeSessionManager([session])
+        manager.transcript = [SimpleNamespace(role="user", content="previous")]
+        runner = _RecordingTurnRunner()
+        ctx = make_ctx(session_manager=manager, task_runtime=None, turn_runner=runner)
+
+        res = await dispatcher.dispatch(
+            "r1",
+            "sessions.send",
+            {"key": session.session_key, "message": "hello"},
+            ctx,
+        )
+        task = get_agent_task_registry().get(session.session_key)
+        if task is not None:
+            await task
+
+        assert res.ok is True
+        assert runner.run_calls[0]["fresh_user_session"] is False
 
     @pytest.mark.asyncio
     async def test_send_marks_empty_transcript_as_fresh_user_session(self, dispatcher, session):
