@@ -11,6 +11,8 @@ Spec:
         }
       ]
     }
+Entries in "merged" may also be range strings, e.g. "A1:B1", as returned by
+inspect_xlsx. Strings and {"range": ...} objects can be mixed in the same list.
 """
 
 from __future__ import annotations
@@ -54,7 +56,9 @@ def build(spec: dict[str, Any]) -> Workbook:
             ws.append([_coerce(v) for v in row])
 
         for merged in sheet_spec.get("merged") or []:
-            if isinstance(merged, dict) and "range" in merged:
+            if isinstance(merged, str):
+                ws.merge_cells(merged)
+            elif isinstance(merged, dict) and "range" in merged:
                 ws.merge_cells(str(merged["range"]))
 
         freeze = sheet_spec.get("freeze")

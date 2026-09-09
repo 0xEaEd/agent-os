@@ -141,6 +141,13 @@ Spec:
 }
 ```
 
+`merged` accepts range strings (`["A1:C1"]`), objects with a `range` key
+(`[{"range": "A1:C1"}]`), or a mixture of both. The string format matches
+the `merged` list returned by `inspect_xlsx.py`. This compatibility applies
+to merge metadata only; inspected `rows` contain cell objects rather than
+the plain values required by the creation spec. Invalid range coordinates
+raise an error from openpyxl.
+
 For programmatic use:
 
 ```python
