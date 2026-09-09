@@ -20,11 +20,22 @@ _PLACEHOLDERS = frozenset(
 _KNOWN_IDENTITY_FIELDS = frozenset(["name", "emoji", "creature", "vibe", "theme", "avatar"])
 
 
+# CommonMark disallows intra-word emphasis with ``_``: a ``_`` flanked by
+# alphanumerics on both sides is literal text, not a delimiter. Matching it
+# anyway ate the underscores out of ordinary values -- ``snake_case_bot``
+# parsed as ``snakecasebot`` -- so the boundary assertions below are what keep
+# a name a name. ``*`` has no such rule (``a*b*c`` really is emphasis in
+# CommonMark), so the asterisk pattern is deliberately left as it was.
+_INLINE_EMPHASIS_ASTERISK_RE = re.compile(r"\*{1,3}(.*?)\*{1,3}")
+_INLINE_EMPHASIS_UNDERSCORE_RE = re.compile(r"(?<![0-9A-Za-z])_{1,3}(.*?)_{1,3}(?![0-9A-Za-z])")
+_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+
+
 def _strip_markdown_inline(text: str) -> str:
     """Strip inline markdown formatting: bold, italic, code."""
-    text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", text)
-    text = re.sub(r"_{1,3}(.*?)_{1,3}", r"\1", text)
-    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = _INLINE_EMPHASIS_ASTERISK_RE.sub(r"\1", text)
+    text = _INLINE_EMPHASIS_UNDERSCORE_RE.sub(r"\1", text)
+    text = _INLINE_CODE_RE.sub(r"\1", text)
     return text
 
 
