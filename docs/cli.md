@@ -8,7 +8,11 @@ Run:
 ```sh
 agentos --help
 agentos <command> --help
+agentos --version
 ```
+
+`--version` prints the installed version and exits, so the version is
+available without `uv tool list` or `pip show`.
 
 ## Main Commands
 

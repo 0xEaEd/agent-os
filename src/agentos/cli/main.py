@@ -113,6 +113,34 @@ app.add_typer(search_app, name="search")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(skills_app, name="skills")
 
+
+def _version_callback(value: bool) -> None:
+    """Print the installed version and exit, before any command runs.
+
+    Eager so ``agentos --version`` answers without Typer demanding a
+    subcommand, which is what ``no_args_is_help`` would otherwise do.
+    """
+    if not value:
+        return
+    from agentos import __version__
+
+    typer.echo(__version__)
+    raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        help="Show the installed AgentOS version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    """AgentOS - Python agent runtime with multi-channel support."""
+
+
 app.command("init")(init_command)
 app.command("doctor")(doctor_command)
 app.command("upgrade")(upgrade_command)
