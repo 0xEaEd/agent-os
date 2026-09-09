@@ -23,9 +23,9 @@ def test_csv_multiline_quoted_field_stays_single_row(tmp_path: Path) -> None:
 
     [(_, rows, _)] = _read_delimited_rows(csv_file, ",")
 
-    assert rows[0] == ["name", "description"]
-    assert rows[1] == ["Alice", "Line one\nLine two\nLine three"]
-    assert rows[2] == ["Bob", "Simple"]
+    assert rows[1] == ["name", "description"]
+    assert rows[2] == ["Alice", "Line one\nLine two\nLine three"]
+    assert rows[3] == ["Bob", "Simple"]
     assert len(rows) == 3
 
 
@@ -44,9 +44,9 @@ def test_csv_delimiter_inside_quoted_field(tmp_path: Path) -> None:
 
     [(_, rows, _)] = _read_delimited_rows(csv_file, ",")
 
-    assert rows[0] == ["key", "value"]
-    assert rows[1] == ["item", "one, two, three"]
-    assert rows[2] == ["other", "plain"]
+    assert rows[1] == ["key", "value"]
+    assert rows[2] == ["item", "one, two, three"]
+    assert rows[3] == ["other", "plain"]
     assert len(rows) == 3
 
 
@@ -65,9 +65,9 @@ def test_csv_multiline_and_delimiter_in_same_field(tmp_path: Path) -> None:
 
     [(_, rows, _)] = _read_delimited_rows(csv_file, ",")
 
-    assert rows[0] == ["id", "data"]
-    assert rows[1] == ["1", "first, value\nsecond, value"]
-    assert rows[2] == ["2", "ok"]
+    assert rows[1] == ["id", "data"]
+    assert rows[2] == ["1", "first, value\nsecond, value"]
+    assert rows[3] == ["2", "ok"]
     assert len(rows) == 3
 
 
@@ -86,9 +86,9 @@ def test_tsv_multiline_quoted_field(tmp_path: Path) -> None:
 
     [(_, rows, _)] = _read_delimited_rows(tsv_file, "\t")
 
-    assert rows[0] == ["name", "notes"]
-    assert rows[1] == ["Alice", "Line1\nLine2"]
-    assert rows[2] == ["Bob", "ok"]
+    assert rows[1] == ["name", "notes"]
+    assert rows[2] == ["Alice", "Line1\nLine2"]
+    assert rows[3] == ["Bob", "ok"]
     assert len(rows) == 3
 
 
@@ -119,5 +119,5 @@ def test_unicode_line_separator_inside_field_not_treated_as_row_break(
     [(_, rows, _)] = _read_delimited_rows(csv_file, ",")
 
     assert len(rows) == 2, f"Expected 2 rows for {label!r}, got {len(rows)}"
-    assert rows[0] == ["a", "b"]
-    assert rows[1] == [f"x{sep}y", "z"]
+    assert rows[1] == ["a", "b"]
+    assert rows[2] == [f"x{sep}y", "z"]

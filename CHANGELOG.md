@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `read_spreadsheet` no longer mislabels row numbers or dead-ends its own
+  pagination on a sparse `.xlsx` sheet. OpenXML omits empty rows from
+  `<sheetData>`, storing each present row's real 1-indexed number on its
+  `r` attribute; `_read_xlsx_worksheet` now keys rows by that number
+  directly (a sparse map) instead of padding a list up to it, so a sheet
+  with data at, say, row 1 and row 5000 reports and paginates against the
+  real row numbers throughout, and the tool's own continuation offsets
+  reach row 5000 instead of stalling in the gap. Keying by real row number
+  also means reading no longer costs anything proportional to how large a
+  declared (or crafted/corrupt) row index is, nor does it multiply by how
+  many sheets a workbook has before one is selected.
+  ([#1149](https://github.com/use-agent-os/agent-os/issues/1149))
+
 ## [2026.9.10] - 2026-09-09
 
 ### Added
@@ -277,6 +292,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   omitting an optional one leaves the target on its own default. Compaction
   provider resolution is unified the same way
   ([#1201](https://github.com/use-agent-os/agent-os/issues/1201)).
+
+## [2026.9.7] - 2026-09-07
 
 ### Fixed
 
