@@ -84,6 +84,7 @@ def configure_browser(config: Any | None = None) -> None:
 
     previous_enabled = _active_enabled
     previous_cdp_port = _active_cdp_port
+    previous_max_sessions = _active_max_sessions
 
     _active_enabled = bool(_get("enabled", True))
     _active_headless = bool(_get("headless", True))
@@ -113,6 +114,32 @@ def configure_browser(config: Any | None = None) -> None:
             cdp_port=_active_cdp_port,
         )
         close_all_sessions()
+    elif _sessions and _active_max_sessions < previous_max_sessions:
+        # Lowering the cap has to act on the sessions already running. Nothing
+        # else will: `_evict_if_over_cap` is only reached when a *new* session
+        # is created, and reusing an existing one refreshes `last_used_at`, so
+        # the idle reaper never takes it either. An operator who lowers this is
+        # almost always relieving memory pressure -- each managed session is a
+        # Chromium process -- and would otherwise see the number change in
+        # config and nothing change on the box.
+        _trim_to_cap()
+
+
+def _trim_to_cap() -> None:
+    """Evict oldest-idle until the live set fits ``max_sessions``.
+
+    Separate from :func:`_evict_if_over_cap`, which compares with ``>=``
+    because it is making room for one more session. Enforcing the cap after a
+    config change wants ``>``, or it would evict one session too many.
+    """
+    while len(_sessions) > _active_max_sessions:
+        oldest_key = min(_sessions, key=lambda k: _sessions[k].last_used_at)
+        log.info(
+            "browser.session_evicted_on_reconfigure",
+            session_key=oldest_key,
+            max_sessions=_active_max_sessions,
+        )
+        _drop_session(oldest_key)
 
 
 def reset_browser_runtime() -> None:
