@@ -141,6 +141,34 @@ class TestProjectsListGetUpdateDelete:
         assert winner.payload["project"]["knowledge"] == "v3"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_expected", [True, False])
+    async def test_update_rejects_bool_expected_updated_at(self, dispatcher, ctx, bad_expected):
+        # bool is a subclass of int in Python, so a naive `isinstance(x, int)`
+        # check accepts True/False as if they were real ms timestamps. That
+        # previously reached the storage compare-and-swap as 1/0, which never
+        # matches a real updated_at and surfaces the misleading
+        # "project.conflict" / reload-and-retry error instead of a clear
+        # INVALID_REQUEST for the caller's bad param.
+        project = await _create_project(dispatcher, ctx)
+        res = await dispatcher.dispatch(
+            "r1",
+            "projects.update",
+            {
+                "projectId": project["project_id"],
+                "knowledge": "v2",
+                "expectedUpdatedAt": bad_expected,
+            },
+            ctx,
+        )
+        assert res.ok is False
+        assert res.error.code == "INVALID_REQUEST"
+        # The rejected write must not have landed.
+        fresh = await dispatcher.dispatch(
+            "r2", "projects.get", {"projectId": project["project_id"]}, ctx
+        )
+        assert fresh.payload["project"]["knowledge"] == "Shared facts."
+
+    @pytest.mark.asyncio
     async def test_delete_reports_detached_sessions(self, dispatcher, ctx, manager):
         project = await _create_project(dispatcher, ctx)
         await manager.create(
