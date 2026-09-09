@@ -881,3 +881,51 @@ async def test_root_wipe_is_hard_blocked_at_the_exec_approval_boundary() -> None
         assert result["status"] == "blocked"
         assert result["reason"] == "sensitive_path"
         assert result["sensitive_path"] == "/"
+
+
+def test_sandbox_request_for_resolves_relative_workdir(tmp_path: Path) -> None:
+    """Relative workdir in _sandbox_request_for must resolve against workspace (#1562)."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sub = ws / "subfolder"
+    sub.mkdir()
+
+    configure_runtime(SandboxSettings(sandbox=False), workspace=ws)
+    token = current_tool_context.set(
+        ToolContext(workspace_dir=str(ws), session_key="agent:main:test")
+    )
+    try:
+        built = shell._sandbox_request_for("exec_command", "echo test", "subfolder")
+        assert built is not None
+        req, _, session_id = built
+        assert req.cwd == sub.resolve()
+        assert session_id == "agent:main:test"
+    finally:
+        current_tool_context.reset(token)
+
+
+def test_sandbox_request_for_populates_env_and_matches_fingerprint(tmp_path: Path) -> None:
+    """_sandbox_request_for must include execution environment for fingerprinting (#1562)."""
+    from agentos.sandbox.governance import action_fingerprint
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    configure_runtime(SandboxSettings(sandbox=False), workspace=ws)
+    token = current_tool_context.set(
+        ToolContext(workspace_dir=str(ws), session_key="agent:main:test")
+    )
+    try:
+        custom_env = {"FOO": "bar"}
+        built = shell._sandbox_request_for("exec_command", "echo test", None, env=custom_env)
+        assert built is not None
+        req, _, _ = built
+        assert "PATH" in req.env
+        assert req.env.get("FOO") == "bar"
+
+        # Fingerprint must be consistent and include PATH
+        fp = action_fingerprint(req)
+        assert len(fp) == 32
+    finally:
+        current_tool_context.reset(token)
+
