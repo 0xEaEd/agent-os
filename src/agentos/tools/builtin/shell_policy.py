@@ -23,12 +23,17 @@ DEFAULT_DENYLIST: list[str] = [
     r"(?i)\bRestart-Computer\b",  # PowerShell system reboot
 ]
 
+_WIN_CMD_PREFIX: str = (
+    r"(?:^|[;&|\n])\s*"
+    r"(?:(?:cmd(?:\.exe)?\s+/[ck]|(?:powershell|pwsh)(?:\.exe)?(?:\s+-[a-zA-Z]+)*)\s+)?"
+)
+
 DEFAULT_DENYLIST_WIN: list[str] = [
     r"\bdel\b",
     r"\brmdir\b",
     r"\bRemove-Item\b",
-    r"(?:^|[;&|])\s*rd\b",
-    r"(?:^|[;&|])\s*erase\b",
+    _WIN_CMD_PREFIX + r"rd\b",
+    _WIN_CMD_PREFIX + r"erase\b",
     r"\bFormat-Volume\b",
     r"\bStop-Computer\b",
     r"\bRestart-Computer\b",
@@ -67,10 +72,7 @@ def _legacy_denylist_if_set() -> list[str]:
 
         structlog.get_logger(__name__).warning(
             "shell_policy.legacy_deny_env_detected",
-            message=(
-                "AGENTOS_SHELL_DENYLIST is deprecated; use "
-                "AGENTOS_SAFE_BIN_DENY"
-            ),
+            message=("AGENTOS_SHELL_DENYLIST is deprecated; use AGENTOS_SAFE_BIN_DENY"),
         )
         _LEGACY_ENV_WARNED = True
     return _resolve_env_list(legacy)

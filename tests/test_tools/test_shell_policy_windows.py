@@ -41,6 +41,17 @@ def _windows_policy_env(monkeypatch: pytest.MonkeyPatch):
         r"Clear-Disk -Number 1",
         r"Stop-Computer -Force",
         r"Restart-Computer -Force",
+        # Shell wrappers (cmd /c, powershell -c) and multiline commands for del/rd/rmdir/erase
+        r"cmd /c del C:\tmp\x",
+        r"cmd /c rd /s /q C:\tmp",
+        r"cmd.exe /c del C:\tmp\x",
+        r"cmd.exe /c erase C:\tmp\x",
+        r"powershell -c del C:\tmp\x",
+        r"powershell -c rd C:\tmp",
+        "echo 1\ndel C:\\tmp\\x",
+        "echo 1\nrd /s /q C:\\tmp",
+        "echo 1\nrmdir /s /q C:\\d",
+        "echo 1\nerase C:\\tmp\\x",
     ],
 )
 def test_windows_destructive_commands_are_denied(command: str) -> None:
@@ -66,6 +77,15 @@ def test_windows_destructive_commands_are_denied(command: str) -> None:
         r'git commit -m "erase old cache"',
         r"npm run erase-cache",
         r"echo 3rd party",
+        r"curl -o out.bin https://cdn.example.com/rd",
+        r"kubectl get pods -n rd",
+        r"helm install rd ./chart",
+        r"psql -c 'SELECT * FROM rd'",
+        r"python train.py --dataset erase-bench",
+        r"git log --grep rd",
+        r"cd C:\data\rd",
+        r"echo rd",
+        r"npm run build && npm test",
     ],
 )
 def test_windows_anchored_rd_erase_negative_cases_allowed(command: str) -> None:
@@ -116,9 +136,7 @@ def test_legacy_shell_denylist_warns_once(monkeypatch: pytest.MonkeyPatch) -> No
         second = shell_policy.SafeBinPolicy.from_env()
 
     warnings = [
-        event
-        for event in captured
-        if event["event"] == "shell_policy.legacy_deny_env_detected"
+        event for event in captured if event["event"] == "shell_policy.legacy_deny_env_detected"
     ]
     assert len(warnings) == 1
     assert first.check("legacy-block").allowed is False
