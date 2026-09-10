@@ -19,11 +19,17 @@ import '@/i18n/en/chat'
  *
  *   - tier pinned  → `c1 · gpt-5.6-luna`
  *   - model pinned → the model id alone; no tier was chosen
- *   - auto         → `Auto · c2`, the tier the router last picked, so "let it
- *                    decide" is still legible
- *   - image turn   → an override note, because an image turn is routed to a
- *                    vision tier before pins are consulted; the pin did not run
- *                    that turn and saying otherwise would misreport the bill
+ *   - auto         → `Auto · c2 · glm-5.2`, the tier the router last picked and
+ *                    the model it resolved to, so "let it decide" is still
+ *                    legible. The model comes from the routing decision, not
+ *                    from the tier rows: an image turn names `image_model`,
+ *                    which is not a pinnable tier and therefore has no row to
+ *                    look up.
+ *   - image turn   → an override note WHEN A PIN IS SET, because an image turn
+ *                    is routed to a vision tier before pins are consulted; the
+ *                    pin did not run that turn and saying otherwise would
+ *                    misreport the bill. On auto there is no pin to override,
+ *                    so the label alone tells the story.
  *
  * Disabled (not hidden) when no Pilot Router is configured, so the composer
  * does not reflow when the router is toggled.
@@ -152,23 +158,39 @@ export function RoutePicker({ route }: RoutePickerProps) {
   const pinnedModelLabel = route.pinned
     ? route.tiers.find((row) => row.tier === route.pinned)?.model || ''
     : ''
+  const autoLabel = !route.lastRoutedTier
+    ? t('chat.routeAuto')
+    : route.lastRoutedModel
+      ? t('chat.routeAutoWithTierModel', {
+          tier: route.lastRoutedTier,
+          model: route.lastRoutedModel,
+        })
+      : t('chat.routeAutoWithTier', { tier: route.lastRoutedTier })
   const label = route.pinnedModel
     ? route.pinnedModel
     : route.pinned
       ? pinnedModelLabel
         ? `${route.pinned} · ${pinnedModelLabel}`
         : route.pinned
-      : route.lastRoutedTier
-        ? t('chat.routeAutoWithTier', { tier: route.lastRoutedTier })
-        : t('chat.routeAuto')
+      : autoLabel
 
+  // The trigger is width-capped and ellipsises, so a long model id is readable
+  // only here — the auto title repeats the route in full rather than restating
+  // the generic "the router picks a tier" once a turn has actually routed.
+  const autoTitle =
+    route.lastRoutedTier && route.lastRoutedModel
+      ? t('chat.routeAutoRoutedTitle', {
+          tier: route.lastRoutedTier,
+          model: route.lastRoutedModel,
+        })
+      : t('chat.routeAutoTitle')
   const title = !route.enabled
     ? t('chat.routeDisabledTitle')
     : route.pinnedModel
       ? t('chat.routeModelPinnedTitle', { model: route.pinnedModel })
       : route.pinned
         ? t('chat.routePinnedTitle', { tier: route.pinned })
-        : t('chat.routeAutoTitle')
+        : autoTitle
 
   return (
     <div className="chat-route-wrap" ref={wrapRef}>

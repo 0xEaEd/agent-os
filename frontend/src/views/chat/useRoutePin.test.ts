@@ -137,20 +137,104 @@ describe('useRoutePin', () => {
     expect(result.current.imageOverride).toBe(false)
   })
 
-  it('flags an image route as an override of the pin', async () => {
+  it('keeps the model the decision names, not just the tier', async () => {
     const { rpc, emit } = fakeRpc()
     const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
     await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    act(() =>
+      emit('session.event.router_decision', { tier: 'c2', model: 'glm-5.2', source: 'pilot' }),
+    )
+
+    expect(result.current.lastRoutedModel).toBe('glm-5.2')
+  })
+
+  it('reads the model from an image route, whose tier has no pinnable row', async () => {
+    const { rpc, emit } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    // `router.hold.get` reports text tiers only, so `image_model` can never be
+    // resolved to a model through `tiers` — the decision is the only source.
+    act(() =>
+      emit('session.event.router_decision', {
+        tier: 'image_model',
+        model: 'gpt-4o',
+        source: 'image_route',
+      }),
+    )
+
+    expect(result.current.tiers.some((row) => row.tier === 'image_model')).toBe(false)
+    expect(result.current.lastRoutedModel).toBe('gpt-4o')
+  })
+
+  it('accepts the persisted routed_model spelling of the decision', async () => {
+    const { rpc, emit } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    act(() => emit('session.event.router_decision', { tier: 'c1', routed_model: 'gpt-5.6-luna' }))
+
+    expect(result.current.lastRoutedModel).toBe('gpt-5.6-luna')
+  })
+
+  it('leaves the routed model null when the decision carries none', async () => {
+    const { rpc, emit } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    act(() => emit('session.event.router_decision', { tier: 'c1', model: '  ', source: 'pilot' }))
+
+    expect(result.current.lastRoutedTier).toBe('c1')
+    expect(result.current.lastRoutedModel).toBeNull()
+  })
+
+  it('flags an image route as an override of the pin', async () => {
+    const { rpc, emit } = fakeRpc({
+      'router.hold.get': { ...HOLD_GET_OK, hold: { tier: 'c0' } },
+    })
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.pinned).toBe('c0'))
 
     act(() => emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }))
 
     expect(result.current.imageOverride).toBe(true)
   })
 
-  it('clears the override flag once a text turn routes normally again', async () => {
+  it('does not call an image route an override while routing is automatic', async () => {
     const { rpc, emit } = fakeRpc()
     const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
     await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    act(() => emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }))
+
+    // Nothing was pinned, so the image tier overrode nothing.
+    expect(result.current.isPinned).toBe(false)
+    expect(result.current.lastRoutedTier).toBe('image_model')
+    expect(result.current.imageOverride).toBe(false)
+  })
+
+  it('drops the override flag when the pin it bypassed is cleared', async () => {
+    const { rpc, emit } = fakeRpc({
+      'router.hold.get': { ...HOLD_GET_OK, hold: { tier: 'c0' } },
+    })
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.pinned).toBe('c0'))
+
+    act(() => emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }))
+    expect(result.current.imageOverride).toBe(true)
+
+    await act(async () => result.current.clear())
+
+    expect(result.current.imageOverride).toBe(false)
+  })
+
+  it('clears the override flag once a text turn routes normally again', async () => {
+    const { rpc, emit } = fakeRpc({
+      'router.hold.get': { ...HOLD_GET_OK, hold: { tier: 'c0' } },
+    })
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.pinned).toBe('c0'))
 
     act(() => emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }))
     act(() => emit('session.event.router_decision', { tier: 'c1', source: 'pilot' }))

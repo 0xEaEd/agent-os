@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- The chat composer's route picker now names the model a turn actually ran on
+  while routing is automatic, and stops claiming an override when nothing is
+  pinned. Pasting an image labelled the button `Auto · image_model` — a bare
+  tier key with no model beside it, and one that appears nowhere in the picker's
+  menu, because `router.hold.get` reports pinnable text tiers only. The
+  `router_decision` event already carries the model that ran; `useRoutePin` was
+  discarding it. It is kept now and the Auto label reads `Auto · c2 · glm-5.2`
+  (the full route is repeated in the button's title, which the width-capped
+  label elides). Reading the model off the decision is also the only correct
+  source: the image branch picks at random among every `supports_image` tier, so
+  the model genuinely varies per turn when more than one is configured.
+  The `image route` badge, whose tooltip says image turns are routed before the
+  pin is applied, is now shown only when a pin actually exists to be bypassed.
+  ([#1631](https://github.com/use-agent-os/agent-os/issues/1631))
+
 - `read_spreadsheet` no longer mislabels row numbers or dead-ends its own
   pagination on a sparse `.xlsx` sheet. OpenXML omits empty rows from
   `<sheetData>`, storing each present row's real 1-indexed number on its
