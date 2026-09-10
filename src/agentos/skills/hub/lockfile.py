@@ -2,12 +2,85 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
+import threading
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
 from agentos.paths import default_agentos_home
+
+_T = TypeVar("_T")
+
+#: Serializes threads *within* this process before they reach the OS file
+#: lock below. See _locked() for why the file lock alone is not enough.
+_THREAD_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    """Serialize this process's threads, then take the cross-process file lock.
+
+    The OS lock in :func:`_file_locked` is per-handle and only guards other
+    processes. Within one process it is not merely redundant but actively
+    unsafe on Windows: ``msvcrt.locking`` refuses to block on a region the
+    calling process already holds, raising ``OSError(EDEADLOCK)`` instead of
+    waiting, so a second thread's update fails outright and its entry is lost.
+    POSIX ``flock`` blocks instead, which is why this only ever surfaced on
+    Windows. Taking a process-wide mutex first means exactly one thread is
+    ever inside the file lock, so the deadlock guard cannot trigger.
+    """
+    with _THREAD_LOCK, _file_locked(path):
+        yield
+
+
+@contextlib.contextmanager
+def _file_locked(path: Path) -> Iterator[None]:
+    """Hold an exclusive, cross-process OS lock for a lockfile read-modify-write.
+
+    Two concurrent installs each doing `load()` -> mutate -> `save()` on the
+    same lockfile race on that cycle: whichever writes last wins, silently
+    discarding the other's entry. The lock lives on a sibling `*.lock` file
+    (never `path` itself) so acquiring it never depends on `path` existing or
+    being valid JSON, and releasing it never touches the data file. Mirrors
+    the fcntl/msvcrt pattern already used for `_rate_limits.json` in
+    `agentos.channel_pairing`.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
+    with lock_path.open("a+b") as lock_file:
+
+        def unlock() -> None:
+            return None
+
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
+
+            def unlock() -> None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
+
+        elif os.name == "nt":  # pragma: no cover - exercised on Windows CI.
+            import msvcrt
+
+            if lock_file.seek(0, os.SEEK_END) == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+
+            def unlock() -> None:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+
+        try:
+            yield
+        finally:
+            unlock()
 
 
 def default_lockfile_path() -> Path:
@@ -105,6 +178,23 @@ class Lockfile:
 
     def get(self, name: str) -> LockEntry | None:
         return self.installed.get(name)
+
+    @classmethod
+    def update(cls, path: Path, mutate: Callable[[Lockfile], _T]) -> _T:
+        """Atomically read-modify-write the lockfile at `path`.
+
+        Holds an exclusive lock across the whole `load()` -> `mutate()` ->
+        `save()` cycle, so a second concurrent install/uninstall/update
+        merges with the first's write instead of clobbering it. Every
+        installer call site that used to do its own load/mutate/save should
+        go through this instead. Returns whatever `mutate` returns, so
+        call sites needing a result (e.g. `remove()`'s bool) still get it.
+        """
+        with _locked(path):
+            lockfile = cls.load(path)
+            result = mutate(lockfile)
+            lockfile.save(path)
+            return result
 
 
 def compute_sha256(directory: Path) -> str:
