@@ -170,17 +170,11 @@ def _validate_path(path: str, root: Path | None = None) -> Path:
 
 
 def _memory_source_rel_path(path: str, root: Path) -> str | None:
-    resolved = _validate_path(path, root)
-    try:
-        rel = resolved.relative_to(root)
-    except ValueError:
-        return None
+    from agentos.tools.builtin import filesystem
 
-    if rel.parts == ("MEMORY.md",):
-        return "MEMORY.md"
-    if len(rel.parts) >= 2 and rel.parts[0] == "memory" and rel.suffix == ".md":
-        return rel.as_posix()
-    return None
+    resolved = _validate_path(path, root)
+    return filesystem._memory_source_rel_path(resolved, root=root)
+
 
 
 def _bootstrap_source_rel_path(path: str, root: Path) -> str | None:
