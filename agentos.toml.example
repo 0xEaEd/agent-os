@@ -98,6 +98,13 @@
 #                                 #   --remote-debugging-port=<port>. Localhost only.
 # attach_confirmed = false        # must be true to let the agent drive your Chrome
 # allowed_domains = []            # [] = open web (SSRF still blocks private IPs)
+#                                 # entries are hostnames and cover subdomains:
+#                                 # ["example.com"] allows example.com and
+#                                 # www.example.com. A leading "." or "*.", a
+#                                 # scheme, a port and a path are all accepted
+#                                 # and reduced to the hostname. Anything that
+#                                 # cannot be reduced to one is refused at
+#                                 # config time, naming the format.
 # persist_profile = false         # true = keep cookies/login between sessions (on disk)
 # session_ttl_minutes = 15
 # max_sessions = 3

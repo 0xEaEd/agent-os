@@ -369,3 +369,152 @@ class TestDialogWithoutSupervisor:
         # Either the supervisor failed to attach (no supervisor message) or the
         # transport raised — both surface as a clean failure, never a crash.
         assert result["success"] is False
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "example.com",
+        ".example.com",
+        "*.example.com",
+        "https://example.com",
+        "example.com/",
+        "https://example.com:8443/path?q=1",
+        "https://user@example.com",
+        "EXAMPLE.COM.",
+    ],
+)
+def test_allowed_domain_spellings_all_reduce_to_the_hostname(tmp_path: Path, entry: str) -> None:
+    """Every conventional spelling of one domain has to allowlist that domain.
+
+    The match compares against ``urlparse(url).hostname``, so an entry that
+    carries a leading dot, a `*.`, a scheme, a port, userinfo or a path could
+    never equal a host — it matched nothing and navigation was refused with a
+    message naming the very domain the operator had allowlisted.
+    """
+    browser_mod.configure_browser(_config(str(tmp_path / "engine"), allowed_domains=[entry]))
+
+    assert browser_mod._allowed_domains == ("example.com",)
+    assert browser_mod._domain_allowed("https://example.com/p") is True
+    assert browser_mod._domain_allowed("https://www.example.com/p") is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil-example.com/p",
+        "https://example.com.evil.test/p",
+        "https://notexample.com/p",
+        "https://example.org/p",
+    ],
+)
+def test_normalizing_the_entries_does_not_widen_the_allowlist(tmp_path: Path, url: str) -> None:
+    """Accepting more spellings must not accept more hosts.
+
+    The suffix match stays anchored at a label boundary, so a lookalike host is
+    still refused no matter which spelling put the domain on the list.
+    """
+    browser_mod.configure_browser(
+        _config(str(tmp_path / "engine"), allowed_domains=[".example.com"])
+    )
+
+    assert browser_mod._domain_allowed(url) is False
+
+
+def test_a_more_specific_entry_stays_more_specific(tmp_path: Path) -> None:
+    """``sub.example.com`` must not be widened into ``example.com``."""
+    browser_mod.configure_browser(
+        _config(str(tmp_path / "engine"), allowed_domains=["sub.example.com"])
+    )
+
+    assert browser_mod._allowed_domains == ("sub.example.com",)
+    assert browser_mod._domain_allowed("https://sub.example.com/p") is True
+    assert browser_mod._domain_allowed("https://example.com/p") is False
+
+
+def test_spellings_of_one_domain_are_not_stored_twice(tmp_path: Path) -> None:
+    """Two spellings of one host collapse to a single entry.
+
+    The list is echoed back in the refusal message, so a duplicated host would
+    read as a broken allowlist.
+    """
+    browser_mod.configure_browser(
+        _config(
+            str(tmp_path / "engine"),
+            allowed_domains=["example.com", ".example.com", "https://example.com/"],
+        )
+    )
+
+    assert browser_mod._allowed_domains == ("example.com",)
+
+
+@pytest.mark.parametrize("entry", ["/", "://", "..", "?", "http://", "-bad"])
+def test_an_entry_that_cannot_be_a_hostname_is_refused_at_config_time(
+    tmp_path: Path, entry: str
+) -> None:
+    """Fail at the write boundary, not at use.
+
+    Dropping the entry would bound navigation to whatever is left with no way
+    to tell that from a working allowlist — and an allowlist is the wrong place
+    to guess. Same shape as `normalize_tool_profile`: canonicalise, or raise
+    naming the accepted format.
+    """
+    with pytest.raises(ValueError, match="must be hostnames"):
+        browser_mod.configure_browser(
+            _config(str(tmp_path / "engine"), allowed_domains=[entry, "example.com"])
+        )
+
+
+def test_a_swallowed_refusal_still_leaves_the_allowlist_closed(tmp_path: Path) -> None:
+    """The raise must not be able to widen what it was asked to narrow.
+
+    `gateway/boot.py` calls this inside `try/except Exception` and only logs
+    `build_services.browser_failed`. Raising before the globals were assigned
+    left the module on its import-time defaults — and the default
+    `_allowed_domains` is `()`, which is the open web. So one unusable entry
+    turned a bounded browser into an unbounded one, and dropped
+    `restrict_evaluate` with it. Both are asserted here because the swallow is
+    the realistic caller, not a hypothetical one.
+    """
+    try:
+        browser_mod.configure_browser(
+            _config(
+                str(tmp_path / "engine"),
+                allowed_domains=["*.corp.example.com", "http://"],
+                restrict_evaluate=True,
+            )
+        )
+    except ValueError:
+        pass
+
+    assert browser_mod._allowed_domains != ()
+    assert browser_mod._domain_allowed("https://corp.example.com/") is True
+    assert browser_mod._domain_allowed("https://sub.corp.example.com/") is True
+    assert browser_mod._domain_allowed("https://evil.test/") is False
+    # The unusable entry is inert, not a wildcard: it is not a hostname, so it
+    # cannot match one.
+    assert browser_mod._domain_allowed("https://http/") is False
+    assert browser_mod._restrict_evaluate is True
+
+
+def test_the_refusal_names_the_accepted_format(tmp_path: Path) -> None:
+    """The operator has nowhere else to look: the docs show only `[]`."""
+    with pytest.raises(ValueError) as excinfo:
+        browser_mod.configure_browser(_config(str(tmp_path / "engine"), allowed_domains=["/"]))
+
+    message = str(excinfo.value)
+    assert "'/'" in message
+    assert "example.com" in message
+
+
+def test_a_blank_entry_is_skipped_rather_than_refused(tmp_path: Path) -> None:
+    """Whitespace is not a malformed hostname, it is an empty slot.
+
+    The pre-existing filter already dropped blanks, and failing a gateway boot
+    over a stray comma in a TOML list would be worse than ignoring it.
+    """
+    browser_mod.configure_browser(
+        _config(str(tmp_path / "engine"), allowed_domains=["  ", "example.com", ""])
+    )
+
+    assert browser_mod._allowed_domains == ("example.com",)

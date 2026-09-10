@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 
@@ -104,7 +106,19 @@ def configure_browser(config: Any | None = None) -> None:
         return default if value is None else value
 
     domains = _get("allowed_domains", ()) or ()
-    _allowed_domains = tuple(str(d).strip().lower() for d in domains if str(d).strip())
+    normalized: list[str] = []
+    unusable: list[str] = []
+    for raw in domains:
+        host = _normalize_allowed_domain(raw)
+        if host:
+            if host not in normalized:
+                normalized.append(host)
+        elif str(raw).strip():
+            unusable.append(str(raw).strip())
+    # Unusable entries are kept on the list verbatim. They are not hostnames,
+    # so `_domain_allowed` can never match one -- but their presence keeps the
+    # allowlist non-empty, and an empty `_allowed_domains` means the open web.
+    _allowed_domains = tuple(normalized + unusable)
     _restrict_evaluate = bool(_get("restrict_evaluate", False))
     _allow_unsafe_evaluate = bool(_get("allow_unsafe_evaluate", False))
     _snapshot_max_chars = max(1000, int(_get("snapshot_max_chars", _DEFAULT_SNAPSHOT_MAX_CHARS)))
@@ -113,6 +127,29 @@ def configure_browser(config: Any | None = None) -> None:
     )
     _attach_confirmed = bool(_get("attach_confirmed", False))
     _attach_acked.clear()
+
+    if unusable:
+        # Fail at the write boundary rather than at use. Dropping these would
+        # bound navigation to whatever is left with no way to tell that from a
+        # working allowlist -- and an allowlist is the wrong place to guess.
+        # Same shape as `normalize_tool_profile`: canonicalise, or raise naming
+        # the accepted format.
+        #
+        # Raised only after every global is assigned. The one caller that runs
+        # this at boot (`gateway/boot.py`, `build_services.browser_failed`)
+        # logs the exception and carries on, and raising before the assignment
+        # left the module on its import-time defaults -- `_allowed_domains =
+        # ()`, the open web, from a config that only asked to narrow it. The
+        # state above is what a swallowed raise now leaves behind: the usable
+        # entries normalised, the unusable ones inert, the allowlist closed.
+        raise ValueError(
+            "browser.allowed_domains entries must be hostnames; "
+            + ", ".join(repr(entry) for entry in unusable)
+            + " cannot be reduced to one. Write a bare hostname such as "
+            "'example.com' (it already covers subdomains). A leading '.' or "
+            "'*.', a scheme, a port, userinfo and a path are accepted and "
+            "reduced to the hostname."
+        )
 
 
 def reset_browser_runtime() -> None:
@@ -157,6 +194,51 @@ def _session_key() -> str:
 
 def _fail(message: str) -> str:
     return json.dumps({"success": False, "error": message}, ensure_ascii=False)
+
+
+#: A hostname label is alphanumerics and inner hyphens; labels join on dots.
+#: Deliberately not a public-suffix check — this only rejects input that cannot
+#: be a hostname at all, it does not judge whether the host exists.
+_HOSTNAME_LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+_HOSTNAME_RE = re.compile(rf"^{_HOSTNAME_LABEL}(?:\.{_HOSTNAME_LABEL})*$")
+
+
+def _normalize_allowed_domain(value: str) -> str:
+    """Reduce one ``allowed_domains`` entry to the bare hostname it means.
+
+    The match in :func:`_domain_allowed` compares against
+    ``urlparse(url).hostname``, so an entry has to be a hostname and nothing
+    else. Only lowercasing it left every other conventional spelling matching
+    nothing at all -- and failing closed, so the operator saw a refusal naming
+    the very domain they had allowlisted:
+
+        Refused to navigate to 'example.com': not in browser.allowed_domains
+        (.example.com).
+
+    A leading ``.`` and a leading ``*.`` are the usual ways to write "this
+    domain and its subdomains", which is already what the match does, so both
+    are accepted and reduce to the same host. A scheme, port, userinfo, path or
+    query is what an operator gets by copying from the address bar; ``urlparse``
+    is reused to strip them so the entry lands on exactly the value the
+    navigation side derives.
+    """
+    text = str(value).strip().lower()
+    if not text:
+        return ""
+    candidate = text if "//" in text else f"//{text}"
+    try:
+        host = urlparse(candidate).hostname or ""
+    except ValueError:
+        host = ""
+    if not host:
+        host = text.split("/", 1)[0]
+    host = host.removeprefix("*.").strip(".")
+    # The fallback above happily yields a non-empty non-host for input that is
+    # only punctuation -- `://` leaves `:`, `http://` leaves `http:`. Returning
+    # those would put an entry on the allowlist that can never match a host,
+    # which is the silent failure this whole function exists to remove, so the
+    # shape is checked rather than assumed.
+    return host if _HOSTNAME_RE.match(host) else ""
 
 
 def _host_of(url: str) -> str:
