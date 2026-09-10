@@ -492,7 +492,7 @@ class SessionManager:
 
     async def _rotate_session_id(self, node: SessionNode) -> SessionNode:
         old_session_id = node.session_id
-        await self._archive_session_identity(node)
+        await self._archive_session_identity(node, require_success=True)
         await self._storage.delete_transcript(old_session_id)
         await self._storage.delete_summaries(old_session_id)
         await self._storage.invalidate_context_states(
@@ -518,14 +518,23 @@ class SessionManager:
         await self._storage.upsert_session(node)
         return node
 
-    async def _archive_session_identity(self, node: SessionNode) -> bool:
+    async def _archive_session_identity(
+        self, node: SessionNode, *, require_success: bool = False
+    ) -> bool:
         """Best-effort raw archive before a same-key transcript reset.
 
         Returns ``True`` when a non-empty archive file was written to disk,
-        ``False`` when there was nothing to archive or the write failed. The
-        reset path uses the return value to decide whether a destructive
-        rotation is safe to fall back to when the memory-flush service is
-        unavailable.
+        ``False`` when there was nothing to archive — an empty session is
+        safe to rotate either way. A write *failure* on a non-empty session
+        is a different outcome from "nothing to archive" and must not be
+        folded into the same ``False``: with ``require_success=True`` (the
+        destructive :meth:`_rotate_session_id` path, which deletes the
+        transcript this archive is the only backup of) a failure raises
+        instead, aborting the reset with a clear error rather than silently
+        proceeding to delete an unarchived transcript.
+        :meth:`rotate_session_id_archive_only` keeps ``require_success``
+        false: it never deletes anything, so a failed backup there costs
+        nothing but the backup itself.
         """
 
         try:
@@ -550,7 +559,22 @@ class SessionManager:
             }
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             return True
-        except Exception:
+        except Exception as exc:
+            import structlog as _structlog
+
+            _structlog.get_logger(__name__).warning(
+                "session.archive_failed",
+                session_key=node.session_key,
+                session_id=node.session_id,
+                error=str(exc),
+                aborting_reset=require_success,
+            )
+            if require_success:
+                raise RuntimeError(
+                    f"Failed to archive session {node.session_key!r} before a "
+                    "destructive reset; aborting rather than deleting an "
+                    "unarchived transcript"
+                ) from exc
             return False
 
     async def rotate_session_id_archive_only(self, session_key: str) -> SessionNode:
