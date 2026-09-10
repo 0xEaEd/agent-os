@@ -168,6 +168,33 @@ class DenialLedger:
             state.last_reason = reason
         await self._cache.purge(session_id, fingerprint)
 
+    async def record_audit_denial(
+        self,
+        session_id: str,
+        fingerprint: str,
+        reason: DenialReason,
+    ) -> None:
+        """Record a denial that was refused *before* :func:`gate_execution` ran.
+
+        A shell-layer hard block never reaches the gate, so it must not move
+        the two pieces of state the gate reads back on the next call.
+        ``total`` drives the §8.5 pause, which is permanent and applies to
+        every ``@sandboxed`` tool: at the default threshold of three, and with
+        the sensitive-path check being a text scan that matches things like
+        ``grep -rn id_rsa .``, counting these would let three ordinary
+        refusals brick a session. ``last_fingerprint`` drives the §8.4 repeat
+        guard, and overwriting it with a fingerprint no gate call can produce
+        would let a blindly retried, already-denied command through.
+
+        What does carry the audit trail runs unchanged: the per-fingerprint
+        count, and the §8.3 stale-output purge.
+        """
+        del reason  # recorded by the caller's own log line; not gate state
+        async with self._lock:
+            state = self._state(session_id)
+            state.counts[fingerprint] = state.counts.get(fingerprint, 0) + 1
+        await self._cache.purge(session_id, fingerprint)
+
     async def count(self, session_id: str, fingerprint: str) -> int:
         async with self._lock:
             return self._sessions.get(session_id, _SessionState()).counts.get(fingerprint, 0)
