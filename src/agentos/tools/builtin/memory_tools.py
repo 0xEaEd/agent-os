@@ -1173,8 +1173,8 @@ def create_memory_tools(
         content = file_path.read_text(encoding="utf-8", errors="replace")
         if from_line is not None or lines is not None:
             all_lines = content.splitlines()
-            start = max(0, (from_line - 1)) if from_line else 0
-            end = (start + lines) if lines else len(all_lines)
+            start = max(0, (from_line - 1)) if from_line is not None else 0
+            end = (start + max(0, lines)) if lines is not None else len(all_lines)
             content = "\n".join(all_lines[start:end])
         full_len = len(content)
         if full_len > 8000:

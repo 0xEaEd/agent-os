@@ -200,3 +200,32 @@ async def test_memory_tool_picks_up_budget_change_without_restart(tmp_path):
 
     now_fits = json.loads(await tools["memory"](action="add", content="y" * 50))
     assert now_fits["success"] is True
+
+
+async def test_memory_get_line_slicing(memory_tools_fixture, tmp_path):
+    tools = memory_tools_fixture
+    (tmp_path / "MEMORY.md").write_text("line1\nline2\nline3\nline4\nline5", encoding="utf-8")
+
+    # lines=0 returns empty string
+    res_zero = await tools["memory_get"](path="MEMORY.md", lines=0)
+    assert res_zero == ""
+
+    # from_line=2, lines=0 returns empty string
+    res_from_zero = await tools["memory_get"](path="MEMORY.md", from_line=2, lines=0)
+    assert res_from_zero == ""
+
+    # from_line=2, lines=2 returns 2 lines starting at line 2
+    res_slice = await tools["memory_get"](path="MEMORY.md", from_line=2, lines=2)
+    assert res_slice == "line2\nline3"
+
+    # from_line=3, lines=None returns line 3 to EOF
+    res_from = await tools["memory_get"](path="MEMORY.md", from_line=3)
+    assert res_from == "line3\nline4\nline5"
+
+    # lines=2 without from_line returns first 2 lines
+    res_head = await tools["memory_get"](path="MEMORY.md", lines=2)
+    assert res_head == "line1\nline2"
+
+    # negative lines clamps to 0 (empty string)
+    res_neg = await tools["memory_get"](path="MEMORY.md", lines=-1)
+    assert res_neg == ""
