@@ -22,6 +22,7 @@ function route(overrides: Partial<RoutePinApi> = {}): RoutePinApi {
     pinnedModel: null,
     isPinned: false,
     lastRoutedTier: null,
+    lastRoutedModel: null,
     imageOverride: false,
     busy: false,
     pin: vi.fn(),
@@ -46,6 +47,31 @@ describe('RoutePicker', () => {
   it('names the tier the router actually chose while on Auto', () => {
     render(<RoutePicker route={route({ lastRoutedTier: 'c2' })} />)
     expect(trigger()).toHaveTextContent('Auto · c2')
+  })
+
+  it('names the model the router actually used while on Auto', () => {
+    render(<RoutePicker route={route({ lastRoutedTier: 'c2', lastRoutedModel: 'glm-5.2' })} />)
+    expect(trigger()).toHaveTextContent('Auto · c2 · glm-5.2')
+  })
+
+  it('names the image model on an image turn, whose tier has no row to look up', () => {
+    render(
+      <RoutePicker route={route({ lastRoutedTier: 'image_model', lastRoutedModel: 'gpt-4o' })} />,
+    )
+    expect(trigger()).toHaveTextContent('Auto · image_model · gpt-4o')
+  })
+
+  it('spells the routed model out in the title, which the capped label elides', () => {
+    render(<RoutePicker route={route({ lastRoutedTier: 'c2', lastRoutedModel: 'glm-5.2' })} />)
+    expect(trigger()).toHaveAttribute(
+      'title',
+      'The Pilot Router routed the last turn to c2 · glm-5.2',
+    )
+  })
+
+  it('keeps the generic Auto title until a turn has actually routed', () => {
+    render(<RoutePicker route={route()} />)
+    expect(trigger()).toHaveAttribute('title', 'The Pilot Router picks a tier for each turn')
   })
 
   it('falls back to a bare Auto before any turn has been routed', () => {
@@ -181,6 +207,16 @@ describe('RoutePicker', () => {
   it('shows no override badge on ordinary text turns', () => {
     render(<RoutePicker route={route({ pinned: 'c0' })} />)
     expect(screen.queryByText('image route')).not.toBeInTheDocument()
+  })
+
+  it('shows no override badge on an image turn that overrode nothing', () => {
+    // Auto routing: the hook reports no override, so the label carries the
+    // image route on its own rather than a badge claiming a bypassed pin.
+    render(
+      <RoutePicker route={route({ lastRoutedTier: 'image_model', lastRoutedModel: 'gpt-4o' })} />,
+    )
+    expect(screen.queryByText('image route')).not.toBeInTheDocument()
+    expect(trigger()).toHaveTextContent('image_model · gpt-4o')
   })
 
   it('closes on Escape without reaching the composer abort chain', () => {
