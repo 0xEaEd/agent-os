@@ -23,9 +23,12 @@ from agentos.redact import CREDENTIAL_FILE_NAMES
 # the entire sensitive-path block layer. ONLY for trusted single-operator
 # environments / E2E testing where sandbox=false + sensitive_path checks
 # block valid agent commands like ``ls /etc/...``. Default off.
-_DISABLED = os.environ.get(
-    "AGENTOS_SENSITIVE_PATHS_DISABLED", ""
-).lower() in ("1", "true", "yes", "on")
+_DISABLED = os.environ.get("AGENTOS_SENSITIVE_PATHS_DISABLED", "").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 
 # Host credential FILES, taken from the redaction layer's list so the two
@@ -207,9 +210,7 @@ def _path_contains(path: str, root: str) -> bool:
         return False
     normalized_path = path.rstrip("/")
     normalized_root = root.rstrip("/")
-    return normalized_path == normalized_root or normalized_path.startswith(
-        normalized_root + "/"
-    )
+    return normalized_path == normalized_root or normalized_path.startswith(normalized_root + "/")
 
 
 def _segment_sweeps_its_parent(segment: str) -> bool:
@@ -296,9 +297,7 @@ def _workspace_contains(path: str, workspace: str | Path | None) -> bool:
     candidate_paths = _comparison_path_candidates(str(path))
     workspace_paths = _comparison_path_candidates(str(workspace))
     return any(
-        _path_contains(candidate, root)
-        for candidate in candidate_paths
-        for root in workspace_paths
+        _path_contains(candidate, root) for candidate in candidate_paths for root in workspace_paths
     )
 
 
@@ -316,9 +315,7 @@ def _workspace_nested_under_marker(workspace: str | Path | None, marker: str) ->
         pass
     for workspace_text in _comparison_path_candidates(str(workspace)):
         for marker_text in _comparison_path_candidates(marker):
-            if workspace_text != marker_text and _path_contains(
-                workspace_text, marker_text
-            ):
+            if workspace_text != marker_text and _path_contains(workspace_text, marker_text):
                 return True
     return False
 
@@ -366,9 +363,7 @@ def sensitive_path_marker(
     marker = is_sensitive_path(text)
     if marker is None:
         return None
-    if _workspace_contains(text, workspace) and _workspace_nested_under_marker(
-        workspace, marker
-    ):
+    if _workspace_contains(text, workspace) and _workspace_nested_under_marker(workspace, marker):
         leaf_marker = _sensitive_leaf_marker(text)
         return leaf_marker
     return marker
@@ -390,8 +385,7 @@ def _scan_text_for_marker(
         (match.group(0), match.start()) for match in _ABSOLUTE_OR_TILDE_PATH_RE.finditer(text)
     )
     with_context.extend(
-        (match.group("path"), match.start("path"))
-        for match in _DOTENV_LITERAL_RE.finditer(text)
+        (match.group("path"), match.start("path")) for match in _DOTENV_LITERAL_RE.finditer(text)
     )
 
     for raw in candidates:
@@ -493,11 +487,12 @@ def sensitive_target_in_command(
         return None
     from agentos.sandbox.intent_cache import _extract_intents
 
-    effective_workspace = workspace
-    if effective_workspace is None:
-        effective_workspace = cwd if cwd is not None else Path.cwd()
+    base_dir = cwd if cwd is not None else (workspace if workspace is not None else Path.cwd())
+    effective_workspace = (
+        workspace if workspace is not None else (cwd if cwd is not None else Path.cwd())
+    )
 
-    for _kind, target in _extract_intents(command, base_dir=effective_workspace):
+    for _kind, target in _extract_intents(command, base_dir=base_dir):
         if _is_root_target(target):
             return _ROOT_TARGET_MARKER
         marker = sensitive_path_marker(target, workspace=effective_workspace)
