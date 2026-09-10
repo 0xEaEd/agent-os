@@ -183,6 +183,86 @@ def _rm_invocation_targets(tokens: list[str]) -> list[str]:
     return targets
 
 
+#: Shells that hand a ``-c`` argument straight to a command interpreter.
+_SHELL_NAMES = frozenset({"sh", "bash", "zsh", "dash", "ash", "ksh"})
+
+
+def _runs_quoted_argument_as_command(prefix: str) -> bool:
+    """Whether *prefix* — the text right before a quote — will execute it.
+
+    A quoted span is data *unless* something is about to run it. Skipping every
+    quoted ``rm`` also skipped ``sh -c "rm -rf /etc/passwd"``, which the shell
+    does execute, so that is a hard block lost rather than an approval lost.
+
+    Only the tail of the prefix matters, which is why ``docker exec c sh -c
+    "…"`` needs no rule of its own. ``ssh`` is matched anywhere in the prefix
+    rather than adjacently, so ``ssh -p 22 host "…"`` is covered too — a quoted
+    argument to ``ssh`` is remote command text in every spelling.
+
+    The shell name is looked for the same way: anywhere in the prefix, scanning
+    back from ``-c`` over the shell's own options. Requiring it adjacently at
+    ``tokens[-2]`` made one option enough to turn the command back into data —
+    ``bash -e -c "rm -rf /etc"`` and ``bash -o pipefail -c "…"`` are ordinary
+    CI glue, so that is a hard block lost. The scan stops at the first token
+    that is neither an option nor an option's argument, which is what keeps
+    ``git commit -m -c "…"``-shaped prefixes from resolving to a shell.
+    """
+    tokens = prefix.replace(";", " ").replace("&", " ").replace("|", " ").split()
+    if any(token.rsplit("/", 1)[-1] == "ssh" for token in tokens):
+        return True
+    if len(tokens) < 2:
+        return False
+    # ``-c`` or a combined short flag carrying it, e.g. ``bash -lc``.
+    flag = tokens[-1]
+    if not (flag.startswith("-") and "c" in flag):
+        return False
+    pending_word = False
+    for token in reversed(tokens[:-1]):
+        if token.rsplit("/", 1)[-1] in _SHELL_NAMES:
+            return True
+        if token.startswith("-"):
+            pending_word = False
+            continue
+        # A bare word is passed over only as the argument of the option to its
+        # left — the ``pipefail`` of ``bash -o pipefail -c``. Two in a row means
+        # the prefix is some other command, so the scan stops.
+        if pending_word:
+            return False
+        pending_word = True
+    return False
+
+
+def _command_spans(command: str) -> list[tuple[int, int]]:
+    """Ranges of *command* a shell would read as command text.
+
+    Unquoted text, plus any quoted span that a shell-invoking command is about
+    to execute. A quote opened and never closed leaves the rest of the string
+    quoted, which is what the shell does with it too.
+    """
+    spans: list[tuple[int, int]] = []
+    start = 0
+    quote: str | None = None
+    quote_open = 0
+    for index, char in enumerate(command):
+        if quote is None:
+            if char in "'\"":
+                spans.append((start, index))
+                quote = char
+                quote_open = index
+        elif char == quote:
+            if _runs_quoted_argument_as_command(command[:quote_open]):
+                spans.append((quote_open + 1, index))
+            quote = None
+            start = index + 1
+    if quote is None:
+        spans.append((start, len(command)))
+    elif _runs_quoted_argument_as_command(command[:quote_open]):
+        # Unbalanced quote after an introducer: the shell would still try to run
+        # what follows, so it is command text rather than data.
+        spans.append((quote_open + 1, len(command)))
+    return spans
+
+
 def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
     """Pull every ``rm`` argument out, tagged with that invocation's flags.
 
@@ -192,12 +272,26 @@ def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
     set, so the ``-rf`` on the second does not leak onto the first. Does not
     try to be a full shell parser — falls back to whitespace split on shlex
     errors (unbalanced quotes).
+
+    A ``rm`` inside a quoted argument is text, not a command: without that
+    check ``grep -rn "rm" /etc/passwd`` extracted ``/etc/passwd`` and was
+    hard-blocked as a delete, and the operator could not approve past it.
     """
     # Match each ``rm`` invocation, stopping at shell separators.
     # ``[^;\n&|]*`` captures everything from ``rm`` up to the next separator
     # or end-of-expression, so each ``rm`` is tokenized independently.
     pattern = re.compile(r"\brm\b([^;\n&|]*)")
-    matches = list(pattern.finditer(command))
+    # Position, not quoting, is what tells a command from a word here. Requiring
+    # ``rm`` to start the string or follow a separator would look tighter but
+    # drops ``sudo rm -rf /etc``, ``env FOO=1 rm …``, ``time rm …`` and
+    # ``xargs rm`` — a command prefix is ordinary, so that spelling trades a
+    # false positive for a bypass.
+    executable = _command_spans(command)
+    matches = [
+        match
+        for match in pattern.finditer(command)
+        if any(start <= match.start() < end for start, end in executable)
+    ]
     if not matches:
         return []
 

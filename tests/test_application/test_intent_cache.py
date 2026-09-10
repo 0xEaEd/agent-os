@@ -15,6 +15,17 @@ import pytest
 from agentos.application.intent_cache import IntentApprovalCache, _extract_intents
 
 
+def _names_etc(targets: list[str]) -> bool:
+    """Whether any extracted target names ``/etc``, on either path separator.
+
+    Windows resolves a drive-relative ``/etc`` against the working drive, so
+    the extracted target arrives as ``D:\\etc`` on the CI runner. Normalising
+    the separator keeps one assertion honest on every platform, rather than
+    gating the case behind ``skipif`` and losing it on half of CI.
+    """
+    return any(target.replace("\\", "/").endswith("/etc") for target in targets)
+
+
 class TestCompoundCommandSeparatorBypass:
     """Every shell separator must be caught by the permission cache.
 
@@ -330,3 +341,129 @@ class TestDocumentedAsymmetries:
         cache.record("rm /tmp/d")
         assert cache.check("rm -d /tmp/d") is True
         assert cache.check('os.rmdir("/tmp/d")') is True
+
+
+class TestQuotedRmIsNotACommand:
+    """A ``rm`` inside a quoted argument is text, not a delete (#1349).
+
+    The hard block these intents feed survives user approval, so a false
+    positive here cannot be approved past — only ``/elevated full`` clears it.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'grep -rn "rm" /etc/passwd',
+            'git commit -m "rm the old config" /etc/hosts',
+            'echo "use rm carefully" >> /root/notes.md',
+            "echo 'rm -rf /' > note.txt",
+            'rg --fixed-strings "rm -rf" /var/log/syslog',
+        ],
+    )
+    def test_read_only_command_mentioning_rm_extracts_nothing(self, command: str) -> None:
+        assert _extract_intents(command) == []
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rm -rf /etc",
+            "sudo rm -rf /etc",
+            "env FOO=1 rm -rf /etc",
+            "time rm -rf /etc",
+            "nohup rm -rf /etc",
+            "find . -name '*.log' | xargs rm -rf /etc",
+            "cd /tmp && rm -rf /etc",
+        ],
+    )
+    def test_real_deletes_are_still_extracted(self, command: str) -> None:
+        # Guards against the tempting fix: requiring `rm` to start the string
+        # or follow a separator reads as tighter but drops every one of these
+        # command prefixes, trading a false positive for a bypass.
+        targets = [target for _kind, target in _extract_intents(command)]
+        assert _names_etc(targets), targets
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'sh -c "rm -rf /etc/passwd"',
+            'bash -c "rm -rf /root/.ssh/id_rsa"',
+            "bash -c 'rm -rf /etc/'",
+            'sh -c "rm -rf /etc /tmp"',
+            'ssh h "rm -rf /var/log/x"',
+            'ssh -p 22 host "rm -rf /var/log/x"',
+            'sh -c "rm -rf ~/.ssh/id_rsa"',
+            'docker exec c sh -c "rm -rf /etc/nginx"',
+            'sh -c "rm -rf /boot/vmlinuz"',
+            '/bin/sh -c "rm -rf /etc/passwd"',
+            'bash -lc "rm -rf /etc/passwd"',
+            # An option between the shell and ``-c`` moves the name off
+            # ``tokens[-2]``. Requiring it there made each of these read as
+            # data, losing the hard block; they are ordinary CI glue.
+            'bash --login -c "rm -rf /etc/passwd"',
+            'bash -e -c "rm -rf /etc/passwd"',
+            'sh -e -c "rm -rf /etc/passwd"',
+            'bash -o pipefail -c "rm -rf /etc/passwd"',
+            'sh --norc -c "rm -rf /etc/passwd"',
+            'bash --noprofile --norc -c "rm -rf /etc/passwd"',
+        ],
+    )
+    def test_a_quoted_rm_a_shell_will_run_is_still_a_delete(self, command: str) -> None:
+        """A quoted span is data only until something runs it.
+
+        Skipping every quoted ``rm`` also skipped these, and
+        ``_extract_intents`` is the only input to
+        ``sensitive_target_in_command`` — so that is a hard block lost, not an
+        approval-cache entry lost. The read-only cases above and these are the
+        two halves of the same rule; asserting only one of them cannot tell the
+        fix from the regression.
+        """
+        from agentos.sandbox.sensitive_paths import sensitive_target_in_command
+
+        assert sensitive_target_in_command(command) is not None, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'echo "bash -e -c rm -rf /etc"',
+            'echo "bash -o pipefail -c rm -rf /etc"',
+            'git commit -m -c "rm the old config" ',
+        ],
+    )
+    def test_scanning_back_for_the_shell_does_not_widen_to_other_commands(
+        self, command: str
+    ) -> None:
+        """The relaxation is bounded on both sides.
+
+        Looking for the shell name anywhere before ``-c`` must not make a
+        quoted mention of one executable: the introducer still has to be
+        outside the quotes, and a prefix that is some other command stops the
+        scan before any shell name could be reached.
+        """
+        from agentos.sandbox.sensitive_paths import sensitive_target_in_command
+
+        assert sensitive_target_in_command(command) is None, command
+
+    def test_a_quoted_argument_of_an_ordinary_command_stays_data(self) -> None:
+        """The introducer is what matters, not the quoting.
+
+        ``grep`` does not execute its pattern, so the #1349 false positive has
+        to stay fixed even though the spelling looks identical.
+        """
+        from agentos.sandbox.sensitive_paths import sensitive_target_in_command
+
+        assert sensitive_target_in_command('grep -rn "rm" /etc/passwd') is None
+        assert sensitive_target_in_command('echo "rm -rf /"') is None
+        assert sensitive_target_in_command('cat "rm notes.txt"') is None
+
+    def test_quoted_and_real_rm_in_one_command(self) -> None:
+        # The quoted mention is skipped; the real invocation after the
+        # separator is not.
+        intents = _extract_intents('echo "rm this later"; rm -rf /etc')
+        targets = [target for _kind, target in intents]
+        assert _names_etc(targets), targets
+        assert not any(target.endswith("later") for target in targets), targets
+
+    def test_unbalanced_quote_leaves_the_rest_quoted(self) -> None:
+        # An unclosed quote quotes the remainder, which is what the shell does
+        # with it too, so nothing after it is read as a command.
+        assert _extract_intents('echo "rm -rf /etc') == []
