@@ -11,6 +11,7 @@ import json
 import os
 import posixpath
 import re
+import threading
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -589,12 +590,36 @@ async def read_spreadsheet(
     )
 
 
+#: csv.field_size_limit() is process-global state shared by every thread in
+#: the executor pool _read_delimited_rows runs on. Guarding the read/raise/
+#: restore excursion below with a lock stops one thread's temporarily-raised
+#: limit from leaking into another thread's concurrent parse.
+_CSV_FIELD_LIMIT_LOCK = threading.Lock()
+
+
 def _read_delimited_rows(path: Path, delimiter: str) -> list[tuple[str, dict[int, list[str]], int]]:
     try:
         text = path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ToolError(f"Cannot read spreadsheet as UTF-8 text: {path}") from exc
-    parsed = [list(row) for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+
+    # A single field's raw length can never exceed the file's own length, so
+    # raising the limit to len(text) is enough to parse any legitimate large
+    # cell (an embedded JSON blob, log line, base64 column -- ordinary data,
+    # not a crafted edge case) while staying bounded by memory already spent
+    # reading the file. Never raise it to sys.maxsize: a malformed quote
+    # would then let the parser treat the rest of an arbitrarily large file
+    # as one field with no ceiling at all.
+    with _CSV_FIELD_LIMIT_LOCK:
+        previous_limit = csv.field_size_limit()
+        csv.field_size_limit(max(previous_limit, len(text)))
+        try:
+            parsed = [list(row) for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+        except csv.Error as exc:
+            raise ToolError(f"Cannot parse {path.name} as delimited text: {exc}") from exc
+        finally:
+            csv.field_size_limit(previous_limit)
+
     rows = dict(enumerate(parsed, start=1))
     return [(path.name, rows, len(parsed))]
 
