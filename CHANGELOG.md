@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The chat composer's route picker now shows the tiers an image turn is routed
+  to. They sit below the pinnable list as plain text, not as options: the router
+  picks the vision route before holds are consulted, so pinning one would
+  install a hold that never takes effect. Until now they were filtered out
+  everywhere — `router.hold.get` reports pinnable text tiers only — so the only
+  way to learn which model an image would be handed to was to send one and read
+  the route label afterwards. `router.hold.get` gained a separate `imageTiers`
+  list for this, built by the new `build_router_image_routes()`; it reports
+  every `supports_image` tier rather than only the `image_only` one, because the
+  router's image branch picks at random among all of them.
+  ([#1632](https://github.com/use-agent-os/agent-os/issues/1632))
+
 ### Fixed
 
 - The chat composer's route picker now names the model a turn actually ran on

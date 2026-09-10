@@ -40,6 +40,14 @@ export interface RoutePinState {
   /** Pinnable text tiers, config order. Empty while loading or when disabled. */
   tiers: RoutePinTier[]
   /**
+   * The tiers an image turn can land on — shown, never pinned. The router picks
+   * the vision route before holds are consulted, so a pin here could not take
+   * effect; they are kept apart from `tiers` so no caller can offer them as a
+   * choice. Several can be listed: the image branch picks at random among every
+   * vision-capable tier.
+   */
+  imageTiers: RoutePinTier[]
+  /**
    * Every model of the ACTIVE provider. Routing runs through one provider, so a
    * model from any other provider in the catalog would be sent to this one
    * under a name it does not know — those are filtered out server-side rather
@@ -92,6 +100,7 @@ interface HoldGetResult {
   provider?: string
   hold?: { tier?: string; model?: string; targetType?: string } | null
   tiers?: { tier?: string; model?: string }[]
+  imageTiers?: { tier?: string; model?: string }[]
 }
 
 const EMPTY_TIERS: RoutePinTier[] = []
@@ -102,6 +111,7 @@ interface HoldSlice {
   enabled: boolean
   provider: string
   tiers: RoutePinTier[]
+  imageTiers: RoutePinTier[]
   pinned: string | null
   pinnedModel: string | null
 }
@@ -123,6 +133,7 @@ const EMPTY_HOLD = {
   enabled: false,
   provider: '',
   tiers: EMPTY_TIERS,
+  imageTiers: EMPTY_TIERS,
   pinned: null,
   pinnedModel: null,
 } as const
@@ -160,18 +171,21 @@ export function useRoutePin(
         // which of the two the user actually chose, so the picker must not read
         // the tier as a tier selection.
         const byModel = result.hold?.targetType === 'model'
+        const readTiers = (rows: { tier?: string; model?: string }[] | undefined) =>
+          (Array.isArray(rows) ? rows : [])
+            .map((row) => ({
+              tier: routerFxNormalizeTier(row?.tier || ''),
+              model: typeof row?.model === 'string' ? row.model : '',
+            }))
+            .filter((row) => row.tier)
         setHold({
           session: forSession,
           enabled: result.enabled === true,
           provider: typeof result.provider === 'string' ? result.provider : '',
           pinned: byModel ? null : routerFxNormalizeTier(result.hold?.tier || '') || null,
           pinnedModel: byModel ? String(result.hold?.model || '') || null : null,
-          tiers: (Array.isArray(result.tiers) ? result.tiers : [])
-            .map((row) => ({
-              tier: routerFxNormalizeTier(row?.tier || ''),
-              model: typeof row?.model === 'string' ? row.model : '',
-            }))
-            .filter((row) => row.tier),
+          tiers: readTiers(result.tiers),
+          imageTiers: readTiers(result.imageTiers),
         })
       })
       .catch(() => {
@@ -324,11 +338,24 @@ export function useRoutePin(
       .map(([tier, cfg]) => ({ tier, model: cfg.model || '' }))
   }, [live.tiers, tierConfigs])
 
+  // Same fallback for the image rows, split on the flag the ROUTER splits on:
+  // `supports_image`, not `image_only`. A text tier that also takes images is a
+  // candidate for an image turn, and pinnability is a separate question the
+  // list above already answers.
+  const effectiveImageTiers = useMemo(() => {
+    if (live.imageTiers.length > 0) return live.imageTiers
+    if (!tierConfigs) return EMPTY_TIERS
+    return Object.entries(tierConfigs)
+      .filter(([, cfg]) => cfg.supportsImage || cfg.imageOnly)
+      .map(([tier, cfg]) => ({ tier, model: cfg.model || '' }))
+  }, [live.imageTiers, tierConfigs])
+
   const isPinned = live.pinned !== null || live.pinnedModel !== null
 
   return {
     enabled: live.enabled,
     tiers: effectiveTiers,
+    imageTiers: effectiveImageTiers,
     models,
     pinned: live.pinned,
     pinnedModel: live.pinnedModel,

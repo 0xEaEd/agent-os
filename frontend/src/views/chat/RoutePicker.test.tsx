@@ -12,6 +12,7 @@ function route(overrides: Partial<RoutePinApi> = {}): RoutePinApi {
       { tier: 'c2', model: 'glm-5.2' },
       { tier: 'c3', model: 'claude-opus-5' },
     ],
+    imageTiers: [{ tier: 'image_model', model: 'gpt-4o' }],
     models: [
       // gpt-5.6-luna is also tier c1's model — the overlap the dedup handles.
       { id: 'gpt-5.6-luna', name: 'gpt-5.6-luna' },
@@ -197,6 +198,72 @@ describe('RoutePicker', () => {
     fireEvent.click(screen.getAllByRole('option')[0]!)
     expect(clear).toHaveBeenCalledTimes(1)
     expect(pin).not.toHaveBeenCalled()
+  })
+
+  it('reports the image tier so the vision model is knowable before sending one', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    expect(screen.getByText('Images route here automatically')).toBeInTheDocument()
+    expect(screen.getByText('image_model')).toBeInTheDocument()
+    expect(screen.getByText('gpt-4o')).toBeInTheDocument()
+  })
+
+  it('keeps the image tier out of the options, since a pin on it never applies', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    // Auto + 4 tiers + terra + grok, exactly as before: the image row is not
+    // one of them.
+    expect(screen.getAllByRole('option')).toHaveLength(7)
+    expect(screen.queryByRole('option', { name: /image_model/ })).not.toBeInTheDocument()
+  })
+
+  it('does not repeat a vision tier that is already pinnable in the list', () => {
+    // c3 takes images AND text, so it is a real, pinnable option; listing it
+    // again below would read as a second, different route.
+    render(
+      <RoutePicker
+        route={route({
+          imageTiers: [
+            { tier: 'c3', model: 'claude-opus-5' },
+            { tier: 'image_model', model: 'gpt-4o' },
+          ],
+        })}
+      />,
+    )
+    fireEvent.click(trigger())
+    expect(screen.getAllByText('c3')).toHaveLength(1)
+    expect(screen.getByText('image_model')).toBeInTheDocument()
+  })
+
+  it('filters the image rows with the same search as the options', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'grok' } })
+    expect(screen.queryByText('image_model')).not.toBeInTheDocument()
+    expect(screen.queryByText('Images route here automatically')).not.toBeInTheDocument()
+  })
+
+  it('finds the image tier by its model id, which no option row carries', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'gpt-4o' } })
+    expect(screen.queryByRole('option')).not.toBeInTheDocument()
+    expect(screen.getByText('image_model')).toBeInTheDocument()
+    // The image row IS the match, so the empty-list note would contradict it.
+    expect(screen.queryByText('No route matches')).not.toBeInTheDocument()
+  })
+
+  it('still reports no match when neither an option nor an image row survives', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'nothing-here' } })
+    expect(screen.getByText('No route matches')).toBeInTheDocument()
+  })
+
+  it('omits the section entirely when no tier takes images', () => {
+    render(<RoutePicker route={route({ imageTiers: [] })} />)
+    fireEvent.click(trigger())
+    expect(screen.queryByText('Images route here automatically')).not.toBeInTheDocument()
   })
 
   it('flags the turns an image route took instead of the pin', () => {

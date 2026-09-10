@@ -26,6 +26,7 @@ from agentos.router_control import (
     RouterControlTarget,
     RouterControlValidationError,
     build_router_control_targets,
+    build_router_image_routes,
     resolve_router_control_model_target,
     resolve_router_control_target,
 )
@@ -178,6 +179,13 @@ async def _handle_router_hold_get(params: dict | None, ctx: RpcContext) -> dict[
     ``provider`` is the active provider id, so a client can list the models it
     is actually allowed to pin without having to know that routing runs through
     a single provider.
+
+    ``imageTiers`` is a separate, DISPLAY-only list: the tiers an image turn can
+    be routed to. It is not merged into ``tiers`` because these cannot be
+    pinned — the router picks the vision route before holds are consulted — and
+    a client that pinned one would install a hold that never takes effect. It
+    exists so the picker can show what an image will be handed to before one is
+    sent, instead of naming a tier the menu has no row for.
     """
 
     from agentos.gateway.rpc_models import active_provider_id
@@ -186,7 +194,7 @@ async def _handle_router_hold_get(params: dict | None, ctx: RpcContext) -> dict[
     try:
         cfg, store = _router_state(ctx)
     except RpcHandlerError:
-        return {"enabled": False, "hold": None, "tiers": [], "provider": ""}
+        return {"enabled": False, "hold": None, "tiers": [], "imageTiers": [], "provider": ""}
 
     hold = store.get_user_hold(key)
     return {
@@ -202,6 +210,15 @@ async def _handle_router_hold_get(params: dict | None, ctx: RpcContext) -> dict[
             }
             for target in build_router_control_targets(cfg)
             if target.target_type == "tier"
+        ],
+        "imageTiers": [
+            {
+                "tier": route.tier,
+                "model": route.model,
+                "provider": route.provider,
+                "description": route.description,
+            }
+            for route in build_router_image_routes(cfg)
         ],
     }
 
