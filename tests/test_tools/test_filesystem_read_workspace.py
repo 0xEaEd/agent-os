@@ -435,3 +435,45 @@ async def test_write_file_records_workspace_write_on_both_create_and_overwrite(
         current_tool_context.reset(token)
 
 
+def test_select_spreadsheet_sheets_exact_numeric_name_precedence() -> None:
+    sheets: list[tuple[str, dict[int, list[str]], int]] = [
+        ("Overview", {1: ["A", "B"]}, 1),
+        ("1", {1: ["X", "Y"]}, 1),
+        ("Summary", {1: ["1", "2"]}, 1),
+    ]
+    # "1" should match the sheet named "1", not index 0 ("Overview")
+    result = fs._select_spreadsheet_sheets(sheets, "1")
+    assert len(result) == 1
+    assert result[0][0] == "1"
+
+
+def test_select_spreadsheet_sheets_numeric_index_fallback() -> None:
+    sheets: list[tuple[str, dict[int, list[str]], int]] = [
+        ("Overview", {1: ["A", "B"]}, 1),
+        ("Details", {1: ["X", "Y"]}, 1),
+    ]
+    # No sheet named "1", so "1" falls back to 1-based index 1 -> sheets[0]
+    result_str = fs._select_spreadsheet_sheets(sheets, "1")
+    assert result_str[0][0] == "Overview"
+
+    # Integer 2 selects 1-based index 2 -> sheets[1]
+    result_int = fs._select_spreadsheet_sheets(sheets, 2)
+    assert result_int[0][0] == "Details"
+
+
+def test_select_spreadsheet_sheets_case_insensitive_and_missing() -> None:
+    sheets: list[tuple[str, dict[int, list[str]], int]] = [
+        ("Overview", {1: ["A", "B"]}, 1),
+        ("Data Sheet", {1: ["X", "Y"]}, 1),
+    ]
+    # Case-insensitive match
+    result = fs._select_spreadsheet_sheets(sheets, "overview")
+    assert result[0][0] == "Overview"
+
+    # None or empty string returns all sheets
+    assert fs._select_spreadsheet_sheets(sheets, None) == sheets
+    assert fs._select_spreadsheet_sheets(sheets, "") == sheets
+
+    # Unknown sheet raises ToolError
+    with pytest.raises(ToolError, match="Sheet not found: Missing"):
+        fs._select_spreadsheet_sheets(sheets, "Missing")
