@@ -19,12 +19,31 @@ def _windows_policy_env(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.parametrize(
     "command",
     [
-        r"del C:\Windows\System32\config\SAM",
-        r"DEL C:\Windows\System32\config\SAM",
-        r"dEl C:\Windows\System32\config\SAM",
+        r"del C:\tmp\file.txt",
+        r"DEL C:\tmp\file.txt",
+        r"dEl C:\tmp\file.txt",
+        r"rmdir C:\tmp\stale",
+        r"git push --force origin main",
     ],
 )
-def test_windows_del_variants_are_denied(command: str) -> None:
+def test_windows_warnlist_variants_require_approval(command: str) -> None:
+    result = shell_policy.SafeBinPolicy.from_env().check(command)
+
+    assert result.allowed is True
+    assert result.needs_approval is True
+    assert "requires approval" in result.reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "Format-Volume -DriveLetter D",
+        "Clear-Disk -Number 1",
+        "Stop-Computer",
+        "Restart-Computer",
+    ],
+)
+def test_windows_denylist_commands_are_blocked(command: str) -> None:
     result = shell_policy.SafeBinPolicy.from_env().check(command)
 
     assert result.allowed is False
@@ -54,7 +73,7 @@ def test_windows_deny_env_overrides_platform_default(monkeypatch: pytest.MonkeyP
     policy = shell_policy.SafeBinPolicy.from_env()
 
     custom = policy.check("custom-block")
-    default_del = policy.check(r"del C:\Windows\System32\config\SAM")
+    default_del = policy.check(r"del C:\tmp\file.txt")
     assert custom.allowed is False
     assert default_del.allowed is True
     assert default_del.needs_approval is True
@@ -76,7 +95,7 @@ def test_windows_empty_warn_env_preserves_default_denylist(
 ) -> None:
     monkeypatch.setenv("AGENTOS_SAFE_BIN_WARN", "")
 
-    result = shell_policy.SafeBinPolicy.from_env().check(r"del C:\Windows\System32\config\SAM")
+    result = shell_policy.SafeBinPolicy.from_env().check("Format-Volume -DriveLetter D")
 
     assert result.allowed is False
     assert result.needs_approval is False
@@ -90,9 +109,7 @@ def test_legacy_shell_denylist_warns_once(monkeypatch: pytest.MonkeyPatch) -> No
         second = shell_policy.SafeBinPolicy.from_env()
 
     warnings = [
-        event
-        for event in captured
-        if event["event"] == "shell_policy.legacy_deny_env_detected"
+        event for event in captured if event["event"] == "shell_policy.legacy_deny_env_detected"
     ]
     assert len(warnings) == 1
     assert first.check("legacy-block").allowed is False
