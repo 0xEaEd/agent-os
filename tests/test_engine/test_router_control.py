@@ -17,6 +17,7 @@ from agentos.router_control import (
     RouterControlHoldStore,
     RouterControlValidationError,
     build_router_control_targets,
+    build_router_image_routes,
     render_router_control_prompt_block,
     resolve_router_control_model_target,
     resolve_router_control_target,
@@ -44,6 +45,69 @@ def test_router_control_targets_generalize_to_every_profile() -> None:
                 assert f"tier:{tier_name}" not in target_ids
                 continue
             assert f"tier:{tier_name}" in target_ids
+
+
+def test_image_routes_list_every_vision_tier_not_just_the_image_only_one() -> None:
+    """The router picks at random among all ``supports_image`` tiers.
+
+    Reporting only ``image_model`` would imply a determinism the image branch
+    does not have.
+    """
+
+    cfg = _router_cfg(
+        {
+            "c0": {"provider": "openrouter", "model": "flash", "supports_image": False},
+            "c3": {"provider": "openrouter", "model": "opus", "supports_image": True},
+            "image_model": {
+                "provider": "openrouter",
+                "model": "gpt-4o",
+                "supports_image": True,
+                "image_only": True,
+            },
+        }
+    )
+
+    routes = build_router_image_routes(cfg)
+
+    assert [route.tier for route in routes] == ["c3", "image_model"]
+    assert [route.model for route in routes] == ["opus", "gpt-4o"]
+
+
+def test_image_routes_are_not_pin_targets() -> None:
+    """They exist to be shown, not chosen: a hold on one could never apply."""
+
+    tiers = {
+        "c1": {"provider": "openrouter", "model": "sonnet", "supports_image": False},
+        "image_model": {
+            "provider": "openrouter",
+            "model": "gpt-4o",
+            "supports_image": True,
+            "image_only": True,
+        },
+    }
+    cfg = _router_cfg(tiers)
+
+    assert [route.tier for route in build_router_image_routes(cfg)] == ["image_model"]
+    assert "tier:image_model" not in {
+        target.target_id for target in build_router_control_targets(cfg)
+    }
+    with pytest.raises(RouterControlValidationError):
+        resolve_router_control_target(cfg, "tier:image_model")
+
+
+def test_image_routes_skip_a_vision_tier_with_no_model() -> None:
+    cfg = _router_cfg(
+        {
+            "c1": {"provider": "openrouter", "model": "sonnet", "supports_image": False},
+            "image_model": {"provider": "openrouter", "model": "", "supports_image": True},
+        }
+    )
+
+    assert build_router_image_routes(cfg) == []
+
+
+def test_image_routes_are_empty_without_a_router() -> None:
+    assert build_router_image_routes(None) == []
 
 
 def test_model_targets_are_rejected_by_local_validation() -> None:

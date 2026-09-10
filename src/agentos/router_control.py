@@ -47,6 +47,22 @@ class RouterControlTarget:
     thinking_level: str | None = None
 
 
+@dataclass(frozen=True)
+class RouterImageRoute:
+    """One tier an image turn can be routed to. NOT a pin target.
+
+    Deliberately not a ``RouterControlTarget``: these rows exist to be shown,
+    not chosen. The router picks the vision route before holds are consulted, so
+    a hold on one of these could never take effect, and giving them a
+    ``target_id`` would invite exactly that mistake.
+    """
+
+    tier: str
+    model: str
+    provider: str | None = None
+    description: str | None = None
+
+
 @dataclass
 class RouterControlHold:
     tier: str
@@ -120,6 +136,38 @@ def build_router_control_targets(router_cfg: object | None) -> list[RouterContro
         )
 
     return targets
+
+
+def build_router_image_routes(router_cfg: object | None) -> list[RouterImageRoute]:
+    """Return the tiers an image turn can land on, in config order.
+
+    The router's image branch selects among every ``supports_image`` tier — not
+    only the ``image_only`` ones — and picks at random when several qualify
+    (``engine/steps/agentos_router.py``). So the honest answer to "where does an
+    image go?" is this whole list, and a caller that showed only ``image_model``
+    would imply a determinism the router does not have.
+
+    Kept out of :func:`build_router_control_targets` on purpose. That list feeds
+    hold resolution and the ``router_control`` tool menu, where every entry must
+    be a route a turn can actually be pinned to; an image tier is not one.
+    """
+
+    routes: list[RouterImageRoute] = []
+    for tier, cfg in normalize_tier_mapping(_router_tiers(router_cfg)).items():
+        if not bool(cfg.get("supports_image", False)):
+            continue
+        model = str(cfg.get("model") or "").strip()
+        if not model:
+            continue
+        routes.append(
+            RouterImageRoute(
+                tier=tier,
+                model=model,
+                provider=str(cfg.get("provider") or "").strip() or None,
+                description=str(cfg.get("description") or "").strip() or None,
+            )
+        )
+    return routes
 
 
 def resolve_router_control_target(

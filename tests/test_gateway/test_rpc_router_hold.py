@@ -25,6 +25,12 @@ def _router_cfg(enabled: bool = True) -> SimpleNamespace:
         tiers={
             "c0": {"model": "gemini-flash-lite", "provider": "openrouter"},
             "c3": {"model": "claude-opus-4-8", "provider": "openrouter"},
+            "image_model": {
+                "model": "gpt-4o",
+                "provider": "openrouter",
+                "supports_image": True,
+                "image_only": True,
+            },
         },
     )
 
@@ -388,6 +394,54 @@ def test_router_hold_get_reports_the_active_pin_and_pinnable_tiers() -> None:
     assert result.payload["enabled"] is True
     assert result.payload["hold"]["tier"] == "c3"
     assert {tier["tier"] for tier in result.payload["tiers"]} == {"c0", "c3"}
+
+
+def test_router_hold_get_reports_image_tiers_apart_from_the_pinnable_ones() -> None:
+    """The picker needs to show where an image goes before one is sent.
+
+    Separate from ``tiers`` because an image tier cannot be pinned: the router
+    picks the vision route before holds are consulted.
+    """
+
+    result = asyncio.run(_dispatch("router.hold.get", {"key": "agent:main:main"}, _ctx()))
+
+    assert result.error is None, result.error
+    assert result.payload is not None
+    assert {tier["tier"] for tier in result.payload["tiers"]} == {"c0", "c3"}
+    assert result.payload["imageTiers"] == [
+        {
+            "tier": "image_model",
+            "model": "gpt-4o",
+            "provider": "openrouter",
+            "description": None,
+        }
+    ]
+
+
+def test_router_hold_get_refuses_to_pin_a_reported_image_tier() -> None:
+    """Reporting the row must not make it pinnable through the same RPC."""
+
+    ctx = _ctx()
+
+    result = asyncio.run(
+        _dispatch("router.hold.set", {"key": "agent:main:main", "tier": "image_model"}, ctx)
+    )
+
+    assert result.error is not None
+    assert result.error.code == "router.unknown_tier"
+
+
+def test_router_hold_get_reports_empty_image_tiers_when_none_support_images() -> None:
+    cfg = SimpleNamespace(
+        enabled=True,
+        tiers={"c0": {"model": "gemini-flash-lite", "provider": "openrouter"}},
+    )
+
+    result = asyncio.run(_dispatch("router.hold.get", {"key": "agent:main:main"}, _ctx(cfg=cfg)))
+
+    assert result.error is None, result.error
+    assert result.payload is not None
+    assert result.payload["imageTiers"] == []
 
 
 def test_router_hold_get_reports_no_pin_when_unpinned() -> None:

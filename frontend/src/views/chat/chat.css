@@ -2960,6 +2960,46 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Vision tiers, below the listbox and outside it: an image turn is routed
+   before holds are consulted, so these are reported, never offered. Rows are
+   indented past the check column so their tier names still line up with the
+   options above. */
+.chat-route-image {
+  flex: none;
+  margin-top: 4px;
+  padding-top: 5px;
+  padding-bottom: 3px;
+  border-top: 1px solid var(--hairline);
+}
+.chat-route-image__hint {
+  margin: 0;
+  padding: 3px 9px 5px;
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.3;
+}
+.chat-route-image__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 3px 9px 3px 31px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+.chat-route-image__tier {
+  flex: none;
+}
+.chat-route-image__model {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Gear trigger + popover holding the toolbar in the composer input bar
    (chat.js:1248-1281 chat-toolbar-wrap). */

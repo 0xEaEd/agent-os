@@ -183,6 +183,9 @@ export const chat = defineNamespace('chat', {
   routeSearchPlaceholder: 'Search tiers and models',
   routeNoMatch: 'No route matches',
   routeDisabledTitle: 'Turn on the Pilot Router to pick a tier',
+  routeImageHint: 'Images route here automatically',
+  routeImageHintTitle:
+    'Image turns are routed to a vision tier before any pin is applied, so these cannot be pinned',
   routeImageOverride: 'image route',
   routeImageOverrideTitle:
     'This turn used the image tier: image turns are routed before the pin is applied',

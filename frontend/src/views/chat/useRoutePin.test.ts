@@ -17,6 +17,7 @@ const HOLD_GET_OK = {
     { tier: 'c0', model: 'deepseek-v4-flash' },
     { tier: 'c3', model: 'claude-opus-5' },
   ],
+  imageTiers: [{ tier: 'image_model', model: 'gpt-4o' }],
 }
 
 const MODELS_OK = [
@@ -390,5 +391,60 @@ describe('useRoutePin', () => {
 
     // image_only tiers are not pinnable text routes and must not be offered.
     expect(result.current.tiers).toEqual([{ tier: 'c1', model: 'gpt-5.6-luna' }])
+  })
+
+  it('reads the image tiers the gateway reports', async () => {
+    const { rpc } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    expect(result.current.imageTiers).toEqual([{ tier: 'image_model', model: 'gpt-4o' }])
+    // Kept apart from the pinnable list: a hold on a vision tier never applies.
+    expect(result.current.tiers.some((row) => row.tier === 'image_model')).toBe(false)
+  })
+
+  it('reports no image tiers when an older gateway omits the field', async () => {
+    const { rpc } = fakeRpc({
+      'router.hold.get': {
+        enabled: true,
+        provider: 'opencap',
+        hold: null,
+        tiers: [{ tier: 'c0', model: 'deepseek-v4-flash' }],
+      },
+    })
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    expect(result.current.imageTiers).toEqual([])
+  })
+
+  it('falls back to every vision-capable config tier, not only the image-only one', () => {
+    const { rpc } = fakeRpc()
+    const { result } = renderHook(() =>
+      useRoutePin(rpc, 'agent:main:main', {
+        c1: { model: 'gpt-5.6-luna', supportsImage: false, imageOnly: false },
+        c3: { model: 'claude-opus-5', supportsImage: true, imageOnly: false },
+        image_model: { model: 'minimax-m3', supportsImage: true, imageOnly: true },
+      }),
+    )
+
+    // The router's image branch picks among every supports_image tier, so the
+    // fallback splits on that flag rather than on image_only.
+    expect(result.current.imageTiers).toEqual([
+      { tier: 'c3', model: 'claude-opus-5' },
+      { tier: 'image_model', model: 'minimax-m3' },
+    ])
+  })
+
+  it('does not carry one session’s image tiers over to the next', async () => {
+    const { rpc } = fakeRpc()
+    const { result, rerender } = renderHook(({ key }) => useRoutePin(rpc, key), {
+      initialProps: { key: 'agent:main:one' },
+    })
+    await waitFor(() => expect(result.current.imageTiers).toHaveLength(1))
+
+    rerender({ key: 'agent:main:two' })
+
+    expect(result.current.imageTiers).toEqual([])
   })
 })
