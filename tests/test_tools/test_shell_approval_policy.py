@@ -277,6 +277,31 @@ async def test_approved_destructive_code_exec_uses_host_grant_when_sandbox_enabl
 
 
 @pytest.mark.asyncio
+async def test_destructive_code_exec_approval_is_not_truncated(
+    tmp_path: Path,
+) -> None:
+    """Issue #1567: the approval record stored (and shown to the human) must
+    contain the full script, not just its first 200 characters. A script
+    whose destructive statement lands past that boundary used to present as
+    harmless imports/docstring in the approval prompt -- the human approved
+    an operation they were never actually shown."""
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.workspace_dir = str(tmp_path)
+    preamble = "# harmless-looking preamble\n" * 10
+    assert len(preamble) > 200
+    code = preamble + "import os\nos.remove('target.txt')"
+
+    pending = json.loads(await execute_code(code))
+
+    assert pending["status"] == "approval_required"
+    approval_id = str(pending["approval_id"])
+    entry = get_approval_queue().get(approval_id)
+    assert entry.params["command"] == code
+    assert "os.remove" in entry.params["command"]
+
+
+@pytest.mark.asyncio
 async def test_approved_background_process_uses_host_grant_when_sandbox_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
