@@ -104,7 +104,7 @@ def _resolve_path(path: str) -> Path:
         return alias
     if root is not None and not raw.is_absolute():
         return (root / raw).resolve(strict=False)
-    return raw.resolve(strict=False) if raw.is_absolute() else raw
+    return raw.resolve(strict=False)
 
 
 def _resolve_base(path: str | None) -> Path:
@@ -316,8 +316,7 @@ def _workspace_strict_read_block(
             "workspace": str(roots[0]),
             "allowed_roots": [str(root) for root in roots],
             "message": (
-                f"{tool_name} blocked: {candidate} is outside active read roots "
-                f"({root_labels})."
+                f"{tool_name} blocked: {candidate} is outside active read roots ({root_labels})."
             ),
             "retryable": False,
         }
@@ -795,8 +794,7 @@ def _format_spreadsheet(
             parts.append(f"{idx}\t" + "\t".join(rows.get(idx, [])))
         if end < total_rows:
             parts.append(
-                f"(Showing rows {offset}-{end} of {total_rows}. "
-                f"Use offset={end + 1} to continue.)"
+                f"(Showing rows {offset}-{end} of {total_rows}. Use offset={end + 1} to continue.)"
             )
     return "\n".join(parts)
 
@@ -886,9 +884,7 @@ def _locate_edit(original: str, old_text: str, new_text: str, *, path: str) -> F
     argv_factory=lambda a: ("fs.edit", str(a.get("path", ""))),
     record_payload=False,
 )
-async def edit_file(
-    path: str, old_text: str, new_text: str, approval_id: str | None = None
-) -> str:
+async def edit_file(path: str, old_text: str, new_text: str, approval_id: str | None = None) -> str:
     p = _resolve_path(path)
     approval = await _gate_out_of_workspace_write("edit_file", p, path, approval_id)
     if approval is not None:

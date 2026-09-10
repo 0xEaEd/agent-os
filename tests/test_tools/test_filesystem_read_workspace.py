@@ -435,3 +435,33 @@ async def test_write_file_records_workspace_write_on_both_create_and_overwrite(
         current_tool_context.reset(token)
 
 
+def test_resolve_path_without_workspace_resolves_against_cwd() -> None:
+    token = current_tool_context.set(None)
+    try:
+        assert fs._workspace_root() is None
+        p = fs._resolve_path("some_relative_file.txt")
+        assert p.is_absolute()
+        assert p == (Path.cwd() / "some_relative_file.txt").resolve()
+    finally:
+        current_tool_context.reset(token)
+
+
+def test_resolve_path_traversal_blocks_sensitive_paths_when_workspace_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home_sub = Path.home() / ".agentos" / "test_workspace_none"
+    home_sub.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(home_sub)
+
+    token = current_tool_context.set(None)
+    try:
+        assert fs._workspace_root() is None
+        p = fs._resolve_path("../../.ssh/config")
+        assert p.is_absolute()
+        block = fs._sensitive_access_block("read_file", p, "../../.ssh/config")
+        assert block is not None
+        assert block["status"] == "blocked"
+        assert block["reason"] == "sensitive_path"
+        assert block["sensitive_path"] == "~/.ssh"
+    finally:
+        current_tool_context.reset(token)
