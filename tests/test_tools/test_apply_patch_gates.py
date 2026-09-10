@@ -479,6 +479,181 @@ async def test_apply_patch_unattended_bypass_skips_outside_workspace_approval(
 
 
 @pytest.mark.asyncio
+async def test_apply_patch_workspace_lockdown_blocks_outside_workspace_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(patch_tool, "_default_patch_root", lambda: tmp_path.resolve())
+    token = current_tool_context.set(
+        ToolContext(
+            workspace_dir=str(workspace),
+            workspace_lockdown=True,
+        )
+    )
+    apply_patch = _original_async(patch_tool.apply_patch)
+    try:
+        with pytest.raises(ToolError, match="workspace lockdown"):
+            await apply_patch(
+                """*** Begin Patch
+*** Update File: outside.txt
+@@@ -1,1 +1,1 @@@
+-old
++new
+*** End Patch"""
+            )
+    finally:
+        current_tool_context.reset(token)
+
+    assert outside.read_text(encoding="utf-8") == "old\n"
+    assert get_approval_queue().list_pending("exec") == []
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_workspace_lockdown_blocks_outside_workspace_even_with_bypass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(patch_tool, "_default_patch_root", lambda: tmp_path.resolve())
+    token = current_tool_context.set(
+        ToolContext(
+            workspace_dir=str(workspace),
+            workspace_lockdown=True,
+            elevated="bypass",
+            interaction_mode=InteractionMode.UNATTENDED,
+        )
+    )
+    apply_patch = _original_async(patch_tool.apply_patch)
+    try:
+        with pytest.raises(ToolError, match="workspace lockdown"):
+            await apply_patch(
+                """*** Begin Patch
+*** Update File: outside.txt
+@@@ -1,1 +1,1 @@@
+-old
++new
+*** End Patch"""
+            )
+    finally:
+        current_tool_context.reset(token)
+
+    assert outside.read_text(encoding="utf-8") == "old\n"
+    assert get_approval_queue().list_pending("exec") == []
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_workspace_lockdown_blocks_outside_workspace_even_with_full_elevation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(patch_tool, "_default_patch_root", lambda: tmp_path.resolve())
+    token = current_tool_context.set(
+        ToolContext(
+            workspace_dir=str(workspace),
+            workspace_lockdown=True,
+            elevated="full",
+        )
+    )
+    apply_patch = _original_async(patch_tool.apply_patch)
+    try:
+        with pytest.raises(ToolError, match="workspace lockdown"):
+            await apply_patch(
+                """*** Begin Patch
+*** Update File: outside.txt
+@@@ -1,1 +1,1 @@@
+-old
++new
+*** End Patch"""
+            )
+    finally:
+        current_tool_context.reset(token)
+
+    assert outside.read_text(encoding="utf-8") == "old\n"
+    assert get_approval_queue().list_pending("exec") == []
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_workspace_lockdown_allows_configured_scratch_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "scratch"
+    workspace.mkdir()
+    scratch.mkdir()
+    target = scratch / "scratch_target.txt"
+    target.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(patch_tool, "_default_patch_root", lambda: tmp_path.resolve())
+    token = current_tool_context.set(
+        ToolContext(
+            workspace_dir=str(workspace),
+            scratch_dir=str(scratch),
+            workspace_lockdown=True,
+            elevated="bypass",
+            interaction_mode=InteractionMode.UNATTENDED,
+        )
+    )
+    apply_patch = _original_async(patch_tool.apply_patch)
+    try:
+        result = await apply_patch(
+            """*** Begin Patch
+*** Update File: scratch/scratch_target.txt
+@@@ -1,1 +1,1 @@@
+-old
++new
+*** End Patch"""
+        )
+    finally:
+        current_tool_context.reset(token)
+
+    assert result == "Applied patch: 1 file(s) modified"
+    assert target.read_text(encoding="utf-8") == "new\n"
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_workspace_lockdown_blocks_delete_outside_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(patch_tool, "_default_patch_root", lambda: tmp_path.resolve())
+    token = current_tool_context.set(
+        ToolContext(
+            workspace_dir=str(workspace),
+            workspace_lockdown=True,
+            elevated="full",
+        )
+    )
+    apply_patch = _original_async(patch_tool.apply_patch)
+    try:
+        with pytest.raises(ToolError, match="workspace lockdown"):
+            await apply_patch(
+                """*** Begin Patch
+*** Delete File: outside.txt
+*** End Patch"""
+            )
+    finally:
+        current_tool_context.reset(token)
+
+    assert outside.exists()
+    assert outside.read_text(encoding="utf-8") == "old\n"
+
+
+@pytest.mark.asyncio
 async def test_apply_patch_add_file_refuses_existing_file(tmp_path: Path) -> None:
     target = tmp_path / "existing.txt"
     target.write_text("old\n", encoding="utf-8")

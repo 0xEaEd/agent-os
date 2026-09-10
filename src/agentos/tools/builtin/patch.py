@@ -293,6 +293,8 @@ def _patch_approval_plan(
                     None,
                 )
 
+        filesystem._gate_workspace_lockdown_write("apply_patch", resolved, op.path)
+
         deny_match = match_workspace_write_deny(
             resolved,
             original_path=op.path,
