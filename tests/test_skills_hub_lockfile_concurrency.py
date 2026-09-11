@@ -9,6 +9,7 @@ across the whole cycle so concurrent writers serialize instead of racing.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from pathlib import Path
@@ -68,6 +69,36 @@ def test_update_returns_mutate_result_and_persists(tmp_path: Path) -> None:
     # Removing again reports False but must not raise or corrupt the file.
     removed_again = Lockfile.update(path, lambda lockfile: lockfile.remove("demo"))
     assert removed_again is False
+
+
+def test_save_failure_leaves_original_file_untouched(tmp_path: Path, monkeypatch) -> None:
+    """A crash or full-disk mid-write must not corrupt the on-disk lockfile.
+
+    `save()` writes to a sibling temp file and only swaps it in via
+    `os.replace` once the write has fully landed. If something fails before
+    that swap (simulated here via a failing `os.fsync`), the previous valid
+    file must be left exactly as it was -- never truncated -- and no stray
+    `.tmp` file should be left behind either.
+    """
+    path = tmp_path / "skills-lock.json"
+    Lockfile.update(path, lambda lockfile: lockfile.add("demo", _entry("demo")))
+    original_bytes = path.read_bytes()
+
+    def failing_fsync(fd: int) -> None:
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(os, "fsync", failing_fsync)
+
+    lockfile = Lockfile.load(path)
+    lockfile.add("other-skill", _entry("other-skill"))
+    try:
+        lockfile.save(path)
+        raise AssertionError("save() should have propagated the simulated fsync failure")
+    except OSError:
+        pass
+
+    assert path.read_bytes() == original_bytes
+    assert list(tmp_path.glob(".*.tmp")) == []
 
 
 class _StaticRouter:

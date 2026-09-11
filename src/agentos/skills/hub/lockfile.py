@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import json
 import os
+import tempfile
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
@@ -160,12 +161,37 @@ class Lockfile:
             return Lockfile()
 
     def save(self, path: Path) -> None:
+        """Write the lockfile atomically via a same-directory temp file + `os.replace`.
+
+        A direct `path.write_text()` can leave a truncated file behind if the
+        process is killed or the disk fills mid-write — and `load()`'s broad
+        `except (..., OSError): return Lockfile()` then silently reports that
+        truncated file as an *empty* lockfile, masking the corruption instead
+        of surfacing it. Writing to a `.tmp` sibling and swapping it in with
+        `os.replace` (atomic on both POSIX and Windows) means a failure
+        leaves the previous valid file in place, never a half-written one.
+        The temp file lives next to `path` so the replace stays on one
+        filesystem.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "version": self.version,
             "installed": {name: asdict(entry) for name, entry in self.installed.items()},
         }
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        payload = json.dumps(data, indent=2)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     def add(self, name: str, entry: LockEntry) -> None:
         self.installed[name] = entry
