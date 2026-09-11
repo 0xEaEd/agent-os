@@ -6,7 +6,6 @@ import contextlib
 import hashlib
 import json
 import os
-import tempfile
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
@@ -161,37 +160,30 @@ class Lockfile:
             return Lockfile()
 
     def save(self, path: Path) -> None:
-        """Write the lockfile atomically via a same-directory temp file + `os.replace`.
+        """Write the lockfile atomically via `agentos.memory.atomic_write.atomic_write_text`.
 
         A direct `path.write_text()` can leave a truncated file behind if the
         process is killed or the disk fills mid-write — and `load()`'s broad
         `except (..., OSError): return Lockfile()` then silently reports that
         truncated file as an *empty* lockfile, masking the corruption instead
-        of surfacing it. Writing to a `.tmp` sibling and swapping it in with
-        `os.replace` (atomic on both POSIX and Windows) means a failure
+        of surfacing it. `atomic_write_text` writes to a same-directory temp
+        file, fsyncs it, and swaps it in with `os.replace`, so a failure
         leaves the previous valid file in place, never a half-written one.
-        The temp file lives next to `path` so the replace stays on one
-        filesystem.
+
+        Imported locally, not at module top: `agentos.memory`'s `__init__`
+        pulls in the embedding/provider stack (httpx, pydantic and friends),
+        and `lockfile.py` is on the hot path for every `agentos skill`
+        invocation. Mirrors the same lazy-import precedent already used for
+        `agentos.memory.model_download` in `cli/main.py`.
         """
+        from agentos.memory.atomic_write import atomic_write_text
+
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "version": self.version,
             "installed": {name: asdict(entry) for name, entry in self.installed.items()},
         }
-        payload = json.dumps(data, indent=2)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
-        )
-        tmp_path = Path(tmp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(tmp_path, path)
-        except BaseException:
-            tmp_path.unlink(missing_ok=True)
-            raise
+        atomic_write_text(path, json.dumps(data, indent=2))
 
     def add(self, name: str, entry: LockEntry) -> None:
         self.installed[name] = entry
@@ -215,11 +207,18 @@ class Lockfile:
         installer call site that used to do its own load/mutate/save should
         go through this instead. Returns whatever `mutate` returns, so
         call sites needing a result (e.g. `remove()`'s bool) still get it.
+
+        `save()` is skipped when `mutate` leaves `installed` unchanged (e.g.
+        removing a name that was never there) -- otherwise a no-op call like
+        uninstalling an unknown skill would still create an empty lockfile
+        file where none existed before.
         """
         with _locked(path):
             lockfile = cls.load(path)
+            before = dict(lockfile.installed)
             result = mutate(lockfile)
-            lockfile.save(path)
+            if lockfile.installed != before:
+                lockfile.save(path)
             return result
 
 
