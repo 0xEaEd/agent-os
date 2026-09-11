@@ -196,6 +196,9 @@ class MemorySyncManager:
         an unindexed file would keep its recorded mtime and never be
         rediscovered, and a failed delete would orphan SQLite chunks.
         """
+        if reason == "session-delta" and not self._delta.should_sync() and not force:
+            return
+
         is_search_reason = reason == "search" or reason.startswith("search:")
         delta_snapshot = self._delta.snapshot()
         session_delta_pending = self._delta.has_pending()
