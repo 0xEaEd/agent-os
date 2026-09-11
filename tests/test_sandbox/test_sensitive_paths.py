@@ -26,6 +26,22 @@ def test_sensitive_path_in_text_matches_native_separator_paths() -> None:
     assert sensitive_path_in_text(f"type {key_path}") == "~/.ssh"
 
 
+def test_sensitive_path_in_text_matches_home_path_with_spaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spaced_home = "C:/Users/John Doe with Spaces"
+    monkeypatch.setattr(Path, "home", lambda: Path(spaced_home))
+    monkeypatch.setenv("USERPROFILE", spaced_home)
+    monkeypatch.setenv("HOME", spaced_home)
+
+    assert sensitive_path_in_text(f"type {spaced_home}/.ssh/id_rsa") == "~/.ssh"
+    assert (
+        sensitive_path_in_text(f"cat {spaced_home}\\.config\\gh\\hosts.yml")
+        == "~/.config/gh"
+    )
+    assert sensitive_path_in_text(f'cat "{spaced_home}/.config/gh/hosts.yml"') == "~/.config/gh"
+
+
 def test_active_workspace_under_root_is_not_blocked_by_root_prefix() -> None:
     workspace = Path("/root/.agentos/workspace")
 

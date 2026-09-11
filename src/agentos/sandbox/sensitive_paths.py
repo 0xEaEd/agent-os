@@ -187,7 +187,14 @@ def _expand_env_vars(text: str) -> str:
     if "$" not in text and "%" not in text:
         return text
     try:
-        return os.path.expandvars(text)
+        expanded = os.path.expandvars(text)
+        if ("$HOME" in expanded or "${HOME}" in expanded) and "HOME" not in os.environ:
+            try:
+                home_val = os.environ.get("USERPROFILE") or str(Path.home())
+                expanded = expanded.replace("${HOME}", home_val).replace("$HOME", home_val)
+            except (OSError, RuntimeError):
+                pass
+        return expanded
     except (KeyError, TypeError, ValueError):
         return text
 
@@ -381,6 +388,29 @@ def _scan_text_for_marker(
 ) -> str | None:
     candidates: list[str] = []
     with_context: list[tuple[str, int]] = []
+    try:
+        home = Path.home()
+        home_variants = [str(home), str(home).replace("\\", "/")]
+        for var in home_variants:
+            if not var:
+                continue
+            flags = re.IGNORECASE if os.name == "nt" else 0
+            for match in re.finditer(re.escape(var), text, flags):
+                start = match.start()
+                end = match.end()
+                if start > 0 and text[start - 1] in ('"', "'", "`"):
+                    quote = text[start - 1]
+                    quote_end = text.find(quote, end)
+                    if quote_end != -1:
+                        candidates.append(text[start:quote_end])
+                        continue
+                rem = end
+                while rem < len(text) and text[rem] not in _TOKEN_EDGE_CHARS:
+                    rem += 1
+                candidates.append(text[start:rem])
+    except (OSError, RuntimeError):
+        pass
+
     try:
         candidates.extend(shlex.split(text))
     except ValueError:
