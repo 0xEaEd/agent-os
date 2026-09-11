@@ -766,7 +766,7 @@ async def exec_command(
             status = approval_response.get("status")
             if status == "approval_denied":
                 await _record_shell_denial(
-                    "exec_command", command, workdir, DenialReason.HUMAN_REJECTED
+                    "exec_command", command, workdir, DenialReason.HUMAN_REJECTED, env=env
                 )
             return json.dumps(approval_response)
 
@@ -786,7 +786,7 @@ async def exec_command(
         decision, policy, request = await gate_action(
             action_kind="shell.exec",
             argv=("exec_command", command),
-            cwd=Path(workdir) if workdir else None,
+            cwd=Path(cwd) if cwd else None,
             env=merged_env,
         )
         if isinstance(decision, DenialResult):
@@ -944,7 +944,7 @@ async def background_process(
         decision, policy, request = await gate_action(
             action_kind="shell.background",
             argv=("background_process", command),
-            cwd=Path(workdir) if workdir else None,
+            cwd=Path(cwd) if cwd else None,
             env=dict(os.environ),
         )
         if isinstance(decision, DenialResult):
@@ -1283,7 +1283,10 @@ async def process(
 
 
 def _sandbox_request_for(
-    tool_name: str, command: str, workdir: str | None
+    tool_name: str,
+    command: str,
+    workdir: str | None,
+    env: dict[str, str] | None = None,
 ) -> tuple[SandboxRequest, SandboxPolicy, str] | None:
     """Build a SandboxRequest for the current shell command.
 
@@ -1295,17 +1298,12 @@ def _sandbox_request_for(
         return None
     action_kind = "shell.background" if tool_name == "background_process" else "shell.exec"
     ctx = current_tool_context.get()
-    workspace = None
-    if workdir:
-        p = Path(workdir)
-        if p.is_absolute():
-            workspace = p
-    if workspace is None and ctx is not None and ctx.workspace_dir:
-        wp = Path(ctx.workspace_dir)
-        if wp.is_absolute():
-            workspace = wp
-    if workspace is None:
-        workspace = runtime.workspace if runtime.workspace.is_absolute() else Path.cwd()
+    effective_cwd = _effective_workdir(workdir)
+    workspace = (
+        Path(effective_cwd)
+        if effective_cwd
+        else (runtime.workspace if runtime.workspace.is_absolute() else Path.cwd())
+    )
 
     level = (
         select_level(action_kind)
@@ -1313,18 +1311,24 @@ def _sandbox_request_for(
         else runtime.effective.default_level
     )
     policy = build_policy(level, action_kind, workspace, runtime.settings, trusted=True)
+    subprocess_env = build_subprocess_env(extra=env)
     request = build_request(
         action_kind=action_kind,
         argv=(tool_name, command),
         cwd=workspace,
         policy=policy,
+        env=subprocess_env,
     )
     session_id = str(ctx.session_key) if ctx and ctx.session_key else "default"
     return request, policy, session_id
 
 
 async def _record_shell_denial(
-    tool_name: str, command: str, workdir: str | None, reason: DenialReason
+    tool_name: str,
+    command: str,
+    workdir: str | None,
+    reason: DenialReason,
+    env: dict[str, str] | None = None,
 ) -> None:
     """Record a shell-layer denial into the sandbox ledger for §8.3/§8.5.
 
@@ -1335,7 +1339,7 @@ async def _record_shell_denial(
     runtime = get_runtime()
     if runtime is None:
         return
-    built = _sandbox_request_for(tool_name, command, workdir)
+    built = _sandbox_request_for(tool_name, command, workdir, env=env)
     if built is None:
         return
     request, _, session_id = built
