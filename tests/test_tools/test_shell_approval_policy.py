@@ -524,6 +524,111 @@ def test_shell_write_targets_ignores_words_ending_in_tee(command: str) -> None:
     assert shell._shell_write_targets(command) == []
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install requests > /dev/null",
+        "pip install requests 2>/dev/null",
+        "pip install requests &>/dev/null",
+        "pip install requests > /dev/null 2>&1",
+        "pip install requests >/dev/null 2>&1",
+        "echo hi | tee /dev/null",
+        "echo hi | tee -a /dev/null",
+        "make build >/dev/null; make test >/dev/null",
+    ],
+)
+def test_shell_write_targets_ignores_the_null_sink(command: str) -> None:
+    """Discarding output is not a write. ``/dev/null`` is not under any lockdown
+    root, so counting it as a write target refused a large share of ordinary
+    commands under workspace lockdown."""
+    assert shell._shell_write_targets(command) == []
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("cmd > out.txt 2>/dev/null", ["out.txt"]),
+        ("cmd 2>/dev/null > /etc/passwd", ["/etc/passwd"]),
+        ("cmd 2>/dev/null | tee /etc/passwd", ["/etc/passwd"]),
+        ("cmd >/dev/null | tee -a out.log", ["out.log"]),
+    ],
+)
+def test_shell_write_targets_keeps_real_targets_beside_a_null_sink(
+    command: str,
+    expected: list[str],
+) -> None:
+    """The null sink is dropped without over-stripping: a real target in the
+    same command still has to be reported."""
+    assert shell._shell_write_targets(command) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install requests > /dev/null",
+        "pip install requests 2>/dev/null",
+        "pip install requests &>/dev/null",
+        "pip install requests > /dev/null 2>&1",
+        "echo hi | tee /dev/null",
+    ],
+)
+async def test_workspace_lockdown_allows_null_sink_redirections(
+    tmp_path: Path,
+    command: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.interaction_mode = InteractionMode.UNATTENDED
+    ctx.elevated = "bypass"
+    ctx.workspace_dir = str(workspace)
+    ctx.workspace_lockdown = True  # type: ignore[attr-defined]
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        command,
+        str(workspace),
+        "command requires approval",
+        None,
+        False,
+    )
+
+    assert result is None or result.get("reason") != "workspace_lockdown"
+
+
+@pytest.mark.asyncio
+async def test_workspace_lockdown_still_blocks_a_real_target_beside_a_null_sink(
+    tmp_path: Path,
+) -> None:
+    """Guards the other direction: dropping the null sink must not smuggle a
+    genuine out-of-workspace write past the lockdown."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.interaction_mode = InteractionMode.UNATTENDED
+    ctx.elevated = "bypass"
+    ctx.workspace_dir = str(workspace)
+    ctx.workspace_lockdown = True  # type: ignore[attr-defined]
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        f"echo ok > {outside} 2>/dev/null",
+        str(workspace),
+        "command requires approval",
+        None,
+        False,
+    )
+
+    assert result is not None
+    assert result["status"] == "blocked"
+    assert result["reason"] == "workspace_lockdown"
+    assert result["target"] == str(outside)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "template",

@@ -82,6 +82,7 @@ _SANDBOX_NETWORK_FAILURE_MARKERS: tuple[str, ...] = (
     "failed to resolve",
     "curl: (6)",
 )
+_NULL_SINK_PATH = "/dev/null"
 _SHELL_NULL_REDIRECT_RE = re.compile(
     r"(?:(?<=^)|(?<=[\s;|&]))\d*[<>]{1,2}\s*/dev/null(?=$|[\s;|&])"
 )
@@ -354,10 +355,16 @@ _TEE_PATTERN = re.compile(
 
 
 def _shell_write_targets(command: str) -> list[str]:
-    scanned = _FD_DUP_PATTERN.sub(" ", command)
+    # Discarding output is not a write, so the null sink must not read as a
+    # write target -- otherwise ``> /dev/null`` alone blocks the command under
+    # workspace lockdown. Stripping the redirections first mirrors what
+    # ``_sensitive_shell_block`` already does; the trailing filter is what
+    # covers ``tee /dev/null``, where the sink arrives as an argument rather
+    # than as a redirection and so survives the stripper.
+    scanned = _FD_DUP_PATTERN.sub(" ", _without_shell_null_redirections(command))
     targets: list[str] = [match.group(2) for match in _REDIRECTION_PATTERN.finditer(scanned)]
     targets.extend(match.group(2) for match in _TEE_PATTERN.finditer(scanned))
-    return targets
+    return [target for target in targets if target != _NULL_SINK_PATH]
 
 
 def _workspace_lockdown_shell_block(
