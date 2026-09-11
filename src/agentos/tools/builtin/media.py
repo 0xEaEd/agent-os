@@ -754,7 +754,7 @@ def _parse_page_range(pages: str, total: int) -> list[int]:
         if not seg:
             continue
         if "-" in seg:
-            parts = seg.split("-", 1)
+            parts = [p.strip() for p in seg.split("-", 1)]
             if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
                 raise SafeToolError(f"Invalid page range: {pages}")
             start, end = int(parts[0]), int(parts[1])
