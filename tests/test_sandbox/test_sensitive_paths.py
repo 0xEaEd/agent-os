@@ -494,3 +494,155 @@ def test_env_var_and_tilde_spellings_report_the_same_marker(
 
     assert tilde == f"~/{name}"
     assert expanded == tilde
+
+
+# --- Issue #1579: relative destructive targets resolve against cwd ------------
+#
+# ``workspace`` is the boundary "inside the workspace" is measured against;
+# ``cwd`` is the directory the command actually executes in. A relative
+# ``rm`` target must resolve against the latter, otherwise a command running
+# in ``~/.aws`` looks like it is deleting ``<workspace>/config``.
+
+
+def test_relative_target_resolves_against_cwd_not_workspace(fixed_home: Path) -> None:
+    workspace = Path("/tmp/workspace")
+
+    assert (
+        sensitive_target_in_command(
+            "rm -rf config",
+            workspace=workspace,
+            cwd=fixed_home / ".aws",
+        )
+        == "~/.aws"
+    )
+    assert (
+        sensitive_target_in_command(
+            "rm -rf .aws/config",
+            workspace=workspace,
+            cwd=fixed_home,
+        )
+        == "~/.aws"
+    )
+    assert (
+        sensitive_target_in_command(
+            "shutil.rmtree('config')",
+            workspace=workspace,
+            cwd=fixed_home / ".aws",
+        )
+        == "~/.aws"
+    )
+
+
+def test_parent_traversal_from_cwd_reaches_sensitive_paths(fixed_home: Path) -> None:
+    workspace = Path("/tmp/workspace")
+
+    assert (
+        sensitive_target_in_command(
+            "rm -rf ../.ssh",
+            workspace=workspace,
+            cwd=fixed_home / "project",
+        )
+        == "~/.ssh"
+    )
+    assert (
+        sensitive_target_in_command(
+            "rm -rf ../../../etc/ssl",
+            workspace=workspace,
+            cwd=workspace / "nested",
+        )
+        == "/etc"
+    )
+
+
+def test_tilde_cwd_is_expanded_before_resolving_targets(fixed_home: Path) -> None:
+    assert (
+        sensitive_target_in_command(
+            "rm -rf credentials",
+            workspace="/tmp/workspace",
+            cwd="~/.aws",
+        )
+        == "~/.aws"
+    )
+
+
+def test_relative_cwd_resolves_against_workspace(fixed_home: Path) -> None:
+    """A relative ``cwd`` is itself relative to the workspace, mirroring
+    ``shell._effective_workdir``; it must not be joined onto the process cwd."""
+    workspace = Path("/tmp/workspace")
+
+    assert (
+        sensitive_target_in_command("rm -rf build", workspace=workspace, cwd="packages/app") is None
+    )
+    assert sensitive_target_in_command("rm -rf .env", workspace=workspace, cwd="packages/app") in {
+        "/.env",
+        "/.env*",
+    }
+
+
+def test_in_workspace_cwd_keeps_ordinary_work_allowed(fixed_home: Path) -> None:
+    """Regression guard: the fix must not start blocking benign in-workspace
+    deletes just because the command runs in a subdirectory."""
+    workspace = Path("/tmp/workspace")
+
+    for command in (
+        "rm -rf build",
+        "rm -rf ./dist node_modules",
+        "rm -f ../scratch.txt",
+        "shutil.rmtree('build')",
+    ):
+        assert (
+            sensitive_target_in_command(
+                command,
+                workspace=workspace,
+                cwd=workspace / "packages" / "app",
+            )
+            is None
+        ), command
+
+
+def test_workspace_exception_is_measured_against_workspace_not_cwd() -> None:
+    """The ``/root`` exception for a container workspace still applies when the
+    command runs in a subdirectory of that workspace, and still does *not*
+    apply when cwd escapes it."""
+    workspace = Path("/root/.agentos/workspace")
+
+    assert (
+        sensitive_target_in_command(
+            "rm scratch.txt",
+            workspace=workspace,
+            cwd=workspace / "sub",
+        )
+        is None
+    )
+    assert (
+        sensitive_target_in_command(
+            "rm -rf ../../.bashrc",
+            workspace=workspace,
+            cwd=workspace / "sub",
+        )
+        == "/root"
+    )
+    assert (
+        sensitive_target_in_command(
+            "rm -rf .agentos",
+            workspace=workspace,
+            cwd=Path("/root"),
+        )
+        == "/root"
+    )
+
+
+def test_relative_targets_resolve_against_workspace_when_cwd_is_absent() -> None:
+    workspace = Path("/root/.agentos/workspace")
+
+    assert sensitive_target_in_command("rm scratch.txt", workspace=workspace) is None
+    assert sensitive_target_in_command("rm -rf ../../.bashrc", workspace=workspace) == "/root"
+
+
+def test_cwd_alone_still_anchors_relative_targets(fixed_home: Path) -> None:
+    """With no workspace configured the execution directory is the only
+    anchor we have, for both the target and the boundary."""
+    assert sensitive_target_in_command("rm -rf config", cwd=fixed_home / ".aws") == "~/.aws"
+    assert (
+        sensitive_target_in_command("rm scratch.txt", cwd=Path("/root/.agentos/workspace")) is None
+    )
