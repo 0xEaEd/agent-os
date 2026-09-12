@@ -13,6 +13,7 @@ import posixpath
 import re
 import threading
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -115,9 +116,16 @@ def _resolve_base(path: str | None) -> Path:
     return root if root is not None else Path.cwd()
 
 
-def _memory_source_rel_path(path: Path) -> str | None:
+def _memory_source_rel_path(path: Path, roots: Iterable[Path] | None = None) -> str | None:
+    """Return *path* relative to the memory root it is a source file of, or ``None``.
+
+    This is the single definition of "which Markdown files feed the memory
+    snapshot"; ``apply_patch`` delegates here rather than keeping its own
+    copy, so the two tools cannot disagree about what counts as a source.
+    *roots* defaults to :func:`_memory_roots`.
+    """
     resolved = path.resolve(strict=False)
-    for root in _memory_roots():
+    for root in _memory_roots() if roots is None else roots:
         try:
             rel = resolved.relative_to(root)
         except ValueError:
@@ -915,9 +923,7 @@ def _locate_edit(original: str, old_text: str, new_text: str, *, path: str) -> F
     argv_factory=lambda a: ("fs.edit", str(a.get("path", ""))),
     record_payload=False,
 )
-async def edit_file(
-    path: str, old_text: str, new_text: str, approval_id: str | None = None
-) -> str:
+async def edit_file(path: str, old_text: str, new_text: str, approval_id: str | None = None) -> str:
     p = _resolve_path(path)
     approval = await _gate_out_of_workspace_write("edit_file", p, path, approval_id)
     if approval is not None:

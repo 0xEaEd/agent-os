@@ -77,4 +77,6 @@ async def test_patch_notifies_bootstrap_and_memory_sources(tmp_path) -> None:
         current_tool_context.reset(token)
 
     assert bootstrap_calls == [("main", "USER.md")]
-    assert memory_calls == [("main", "memory/2026-05-01.md")]
+    # USER.md is a curated memory store as well as a bootstrap file, so the
+    # patch tool must refresh the memory snapshot for it exactly like write_file.
+    assert memory_calls == [("main", "USER.md"), ("main", "memory/2026-05-01.md")]
