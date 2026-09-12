@@ -27,7 +27,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _url import require_http_url  # noqa: E402
-from _watermark import select_new  # noqa: E402
+from _watermark import positive_int, select_new  # noqa: E402
 
 USER_AGENT = "AgentOS-cron-watcher/1.0"
 
@@ -71,7 +71,9 @@ def main() -> int:
         default=[],
         help="Extra request header as 'Key: value'. Repeatable.",
     )
-    parser.add_argument("--limit", type=int, default=10, help="Max items to report")
+    parser.add_argument(
+        "--limit", type=positive_int, default=10, help="Max items to report per run"
+    )
     parser.add_argument(
         "--first-run-reports",
         action="store_true",
@@ -117,11 +119,13 @@ def main() -> int:
             continue
         by_id[str(identifier)] = item
 
-    fresh = select_new(args.name, list(by_id), first_run_reports=args.first_run_reports)
+    fresh = select_new(
+        args.name, list(by_id), first_run_reports=args.first_run_reports, limit=args.limit
+    )
     if not fresh:
         return 0
 
-    for identifier in fresh[: args.limit]:
+    for identifier in fresh:
         print(f"- {_summarize(by_id[identifier], args.field)}")
     return 0
 

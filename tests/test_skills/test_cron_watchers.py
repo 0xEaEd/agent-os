@@ -302,3 +302,110 @@ def test_github_rejects_an_unknown_scope(state_dir):
     result = _run("watch_github.py", "--repo", "o/n", "--scope", "stars", env_home=state_dir)
 
     assert result.returncode == 2  # argparse rejects the choice
+
+
+# ── --limit must not consume the backlog (Issue #1674) ──────────────────────
+
+
+def _watermark_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_watermark", SCRIPTS / "_watermark.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_select_new_commits_only_the_ids_it_reports(state_dir):
+    """`select_new` used to mark every fresh id seen while the watcher printed
+    only the first ``--limit`` of them, so a busy feed lost the surplus for
+    good. The limit caps one run's report; the rest comes back next run.
+
+    Feeds list newest first, so ``ids`` here is newest first too and a capped
+    run drains from the old end: the deferred ids are the newest, which stay on
+    the page longest."""
+    watermark = _watermark_module()
+    ids = [f"item-{i:02d}" for i in range(25, 0, -1)]  # item-25 (newest) .. item-01
+    oldest_five = ids[-5:]
+
+    assert watermark.select_new("demo", oldest_five, limit=10) == []  # first run adopts silently
+    second = watermark.select_new("demo", ids, limit=10)
+    third = watermark.select_new("demo", ids, limit=10)
+    fourth = watermark.select_new("demo", ids, limit=10)
+
+    assert second == ids[10:20]  # item-15 .. item-06: the oldest unseen ten
+    assert third == ids[0:10]  # item-25 .. item-16
+    assert fourth == []
+    assert watermark.load_seen("demo") == [*oldest_five, *ids[10:20], *ids[0:10]]
+
+
+def test_select_new_without_a_limit_reports_everything(state_dir):
+    watermark = _watermark_module()
+    watermark.select_new("all", ["a"])
+
+    assert watermark.select_new("all", ["a", "b", "c"]) == ["b", "c"]
+    assert watermark.select_new("all", ["a", "b", "c"]) == []
+
+
+def test_select_new_first_run_still_adopts_the_whole_feed_silently(state_dir):
+    """The silent first run is deliberate: it must not leave a backlog behind."""
+    watermark = _watermark_module()
+    ids = [f"item-{i:02d}" for i in range(30)]
+
+    assert watermark.select_new("quiet", ids, limit=10) == []
+    assert watermark.load_seen("quiet") == ids
+    assert watermark.select_new("quiet", ids, limit=10) == []
+
+
+def test_select_new_first_run_reports_respects_the_limit_too(state_dir):
+    watermark = _watermark_module()
+    ids = [f"item-{i:02d}" for i in range(12)]
+
+    first = watermark.select_new("loud", ids, limit=10, first_run_reports=True)
+    second = watermark.select_new("loud", ids, limit=10, first_run_reports=True)
+
+    assert first == ids[2:]
+    assert second == ids[:2]
+
+
+@pytest.mark.parametrize("limit", ["0", "-1", "ten"])
+def test_limit_must_be_a_positive_integer(limit, state_dir):
+    """A cap of 0 or less would report nothing and commit nothing, forever."""
+    result = _run(
+        "watch_rss.py",
+        "--url",
+        "http://127.0.0.1:1/x",
+        "--name",
+        "t",
+        "--limit",
+        limit,
+        env_home=state_dir,
+    )
+
+    assert result.returncode == 2  # argparse rejects the value
+    assert "--limit" in result.stderr
+
+
+def test_rss_surplus_past_the_limit_is_reported_on_the_next_run(state_dir, base_url):
+    url = _feed(state_dir, base_url, "feed.xml", RSS)
+    _run("watch_rss.py", "--url", url, "--name", "t", env_home=state_dir)
+    _feed(
+        state_dir,
+        base_url,
+        "feed.xml",
+        RSS.replace(
+            "</channel>",
+            "<item><title>Third post</title><guid>3</guid></item>"
+            "<item><title>Fourth post</title><guid>4</guid></item></channel>",
+        ),
+    )
+
+    first = _run("watch_rss.py", "--url", url, "--name", "t", "--limit", "1", env_home=state_dir)
+    second = _run("watch_rss.py", "--url", url, "--name", "t", "--limit", "1", env_home=state_dir)
+    third = _run("watch_rss.py", "--url", url, "--name", "t", "--limit", "1", env_home=state_dir)
+
+    # The feed lists newest last here, so the tail -- Fourth -- is drained first.
+    assert first.returncode == 0 and first.stdout.strip() == "- Fourth post"
+    assert second.returncode == 0 and second.stdout.strip() == "- Third post"
+    assert third.returncode == 0 and third.stdout == ""

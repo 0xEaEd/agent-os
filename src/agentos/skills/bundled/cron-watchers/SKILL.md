@@ -34,8 +34,10 @@ which is exactly the contract a cron `script` job wants.
 | `watch_github.py` | A repo's issues, pulls, or releases | `--repo`, `--scope`, `--name` |
 
 All three also take `--limit` (max lines per run, default 10) and
-`--first-run-reports` (report everything on the first run instead of starting
-quiet).
+`--first-run-reports` (report on the first run instead of starting quiet).
+When more than `--limit` items are new, the run reports the oldest of them and
+leaves the rest for the following runs; only what was reported is marked seen.
+An item is lost only if it drops off the feed's page before its turn comes.
 
 `--url` must be `http://` or `https://`. Any other scheme is refused with exit
 code 1 — `urlopen` speaks `file:`, `ftp:` and `data:` too, and a watcher
