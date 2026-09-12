@@ -45,8 +45,31 @@ _SCHEMA_VALUED_KEYS = ("items", "additionalProperties", "contains", "not")
 _SCHEMA_LIST_KEYS = ("allOf", "anyOf", "oneOf", "prefixItems")
 
 
+# The spellings a JSON ``type`` uses for "null": the keyword itself, and the
+# JSON literal some non-Python servers emit in its place.
+_NULL_TYPE_ENTRIES = ("null", None)
+
+
 def _is_null_schema(node: Any) -> bool:
-    return isinstance(node, Mapping) and node.get("type") == "null"
+    """Return True when *node* is a schema that admits ``null`` and nothing else.
+
+    Pydantic spells it ``{"type": "null"}``, but the same branch also arrives
+    as ``{"type": ["null"]}``, ``{"type": null}``, ``{"const": null}`` and
+    ``{"enum": [null]}`` from other generators. Every spelling has to collapse, because the whole
+    point of removing the union is a provider that rejects ``anyOf`` outright.
+    """
+
+    if not isinstance(node, Mapping):
+        return False
+    if "type" in node:
+        declared = node["type"]
+        if isinstance(declared, list):
+            return bool(declared) and all(entry in _NULL_TYPE_ENTRIES for entry in declared)
+        return declared in _NULL_TYPE_ENTRIES
+    if "const" in node:
+        return node["const"] is None
+    enum = node.get("enum")
+    return isinstance(enum, list) and bool(enum) and all(entry is None for entry in enum)
 
 
 def _collect_defs(schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -132,7 +155,7 @@ def _sanitize_node(
             continue
 
         if key == "type" and isinstance(value, list):
-            concrete = [entry for entry in value if entry != "null"]
+            concrete = [entry for entry in value if entry not in _NULL_TYPE_ENTRIES]
             out["type"] = concrete[0] if concrete else "string"
             fixes.append("collapsed_type_array")
             continue

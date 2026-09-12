@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
+
 from agentos.tools.schema_sanitize import sanitize_input_schema
 
 
@@ -51,6 +55,70 @@ def test_union_with_two_real_branches_is_left_alone() -> None:
 
     assert cleaned["properties"]["value"]["anyOf"] == [{"type": "integer"}, {"type": "string"}]
     assert "collapsed_nullable_union" not in fixes
+
+
+# Every spelling of "this branch only admits null" that JSON Schema allows.
+# Pydantic emits ``{"type": "null"}``; hand-written and non-Python servers
+# emit the rest, and each one used to survive as an uncollapsed ``anyOf``.
+_NULL_SPELLINGS: list[dict[str, Any]] = [
+    {"type": "null"},
+    {"type": ["null"]},
+    {"type": None},
+    {"type": [None]},
+    {"const": None},
+    {"enum": [None]},
+    {"type": "null", "description": "Nothing."},
+]
+
+
+@pytest.mark.parametrize("null_branch", _NULL_SPELLINGS)
+@pytest.mark.parametrize("union_key", ["anyOf", "oneOf"])
+def test_every_null_spelling_collapses_the_nullable_union(
+    union_key: str, null_branch: dict[str, Any]
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "filter": {union_key: [{"type": "string"}, null_branch], "description": "Which."}
+        },
+    }
+
+    cleaned, fixes = sanitize_input_schema(schema)
+
+    assert cleaned["properties"]["filter"] == {"type": "string", "description": "Which."}
+    assert "collapsed_nullable_union" in fixes
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        {"enum": [None, "a"]},
+        {"enum": []},
+        {"enum": ["null"]},
+        {"const": "null"},
+        {"const": 0},
+        {"type": []},
+        {"type": ["null", "integer"]},
+        {"type": "string"},
+        {"description": "no type at all"},
+    ],
+)
+def test_branches_that_admit_a_real_value_are_not_treated_as_null(branch: dict[str, Any]) -> None:
+    schema = {"type": "object", "properties": {"value": {"anyOf": [{"type": "string"}, branch]}}}
+
+    cleaned, fixes = sanitize_input_schema(schema)
+
+    assert "collapsed_nullable_union" not in fixes
+    assert "anyOf" in cleaned["properties"]["value"]
+
+
+def test_type_array_with_a_none_entry_collapses_to_the_concrete_entry() -> None:
+    schema = {"type": "object", "properties": {"name": {"type": [None, "string"]}}}
+
+    cleaned, fixes = sanitize_input_schema(schema)
+
+    assert cleaned["properties"]["name"]["type"] == "string"
+    assert "collapsed_type_array" in fixes
 
 
 def test_type_array_collapses_to_the_non_null_entry() -> None:
