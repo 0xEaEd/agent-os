@@ -4,8 +4,9 @@ Operations:
     {"op": "replace_run", "para": <int>, "run": <int>, "text": "..."}
     {"op": "replace_text", "find": "...", "with": "..."}
 
-`replace_text` walks every paragraph and matches against the joined run texts,
-so a target that spans runs is still found. The replacement is written into the
+`replace_text` walks every paragraph -- body paragraphs and the cells of every
+table, nested tables included -- and matches against the joined run texts, so a
+target that spans runs is still found. The replacement is written into the
 run that owns the first character of its match, and every character the match
 did not touch stays in the run it came from — a run is where Word keeps
 character formatting, so moving text between runs would silently restyle it.
@@ -18,10 +19,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
 from docx import Document
+from docx.table import Table, _Cell
 from docx.text.paragraph import Paragraph
 
 
@@ -75,9 +78,38 @@ def _replace_text_in_paragraph(para: Paragraph, find: str, replacement: str) -> 
     return True
 
 
+def _iter_table_paragraphs(tables: Iterable[Table]) -> Iterator[Paragraph]:
+    """Yield the paragraphs of every cell in *tables*, recursing into nested tables.
+
+    Cells are taken straight from the ``<w:tc>`` elements rather than through
+    ``row.cells``: that API repeats a merged cell once per grid column it spans
+    (so a replacement would hit the same text several times) and resolves
+    vertically merged cells against the row above, which raises ``ValueError``
+    on the irregular grids other generators produce. Each ``<w:tc>`` is visited
+    exactly once either way.
+    """
+    for table in tables:
+        for tc in table._tbl.iter_tcs():
+            cell = _Cell(tc, table)
+            yield from cell.paragraphs
+            yield from _iter_table_paragraphs(cell.tables)
+
+
+def _iter_all_paragraphs(doc: Document) -> Iterator[Paragraph]:
+    """Body paragraphs followed by every table-cell paragraph in the document.
+
+    ``doc.paragraphs`` is body-only in python-docx, yet contracts, reports and
+    invoices keep most of their placeholders inside tables.
+    """
+    yield from doc.paragraphs
+    yield from _iter_table_paragraphs(doc.tables)
+
+
 def apply_ops(doc: Document, ops: list[dict[str, Any]]) -> int:
     applied = 0
     for op in ops:
+        if not isinstance(op, dict):
+            continue
         kind = op.get("op")
         if kind == "replace_run":
             try:
@@ -91,7 +123,7 @@ def apply_ops(doc: Document, ops: list[dict[str, Any]]) -> int:
             replacement = str(op.get("with", ""))
             if not find:
                 continue
-            for para in doc.paragraphs:
+            for para in _iter_all_paragraphs(doc):
                 if _replace_text_in_paragraph(para, find, replacement):
                     applied += 1
     return applied

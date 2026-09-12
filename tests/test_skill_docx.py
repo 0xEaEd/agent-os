@@ -257,3 +257,124 @@ def test_replace_run_still_touches_only_its_own_run() -> None:
     edit_docx._replace_run(paragraph, 1, "there")
 
     assert [(run.text, run.bold) for run in paragraph.runs] == [("Hello ", None), ("there", True)]
+
+
+def test_replace_text_reaches_table_cells(tmp_path: Path) -> None:
+    """Placeholders in contracts and invoices usually live inside tables.
+
+    `apply_ops` only walked `doc.paragraphs`, which python-docx limits to the
+    body, so a `{{CLIENT}}` in a table cell was never replaced and the op
+    reported zero applications.
+    """
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    doc.add_paragraph("Agreement Header")
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Client:"
+    table.cell(0, 1).text = "{{CLIENT}}"
+
+    applied = edit_docx.apply_ops(
+        doc, [{"op": "replace_text", "find": "{{CLIENT}}", "with": "Acme Corp"}]
+    )
+
+    assert applied == 1
+    assert table.cell(0, 1).text == "Acme Corp"
+    assert table.cell(0, 0).text == "Client:"
+
+
+def test_replace_text_counts_body_and_table_paragraphs_together() -> None:
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    doc.add_paragraph("Dear {{NAME}},")
+    doc.add_table(rows=1, cols=1).cell(0, 0).text = "Signed: {{NAME}}"
+
+    applied = edit_docx.apply_ops(doc, [{"op": "replace_text", "find": "{{NAME}}", "with": "Wei"}])
+
+    assert applied == 2
+    assert doc.paragraphs[0].text == "Dear Wei,"
+    assert doc.tables[0].cell(0, 0).text == "Signed: Wei"
+
+
+def test_replace_text_reaches_nested_tables() -> None:
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    outer = doc.add_table(rows=1, cols=1)
+    inner = outer.cell(0, 0).add_table(rows=1, cols=1)
+    inner.cell(0, 0).text = "Total: {{TOTAL}}"
+
+    applied = edit_docx.apply_ops(
+        doc, [{"op": "replace_text", "find": "{{TOTAL}}", "with": "42.00"}]
+    )
+
+    assert applied == 1
+    assert inner.cell(0, 0).text == "Total: 42.00"
+
+
+def test_replace_text_visits_a_merged_cell_once() -> None:
+    """`row.cells` repeats a merged cell for every grid column it spans.
+
+    Walking it once per column would apply the replacement again to text the
+    first pass already rewrote; a replacement containing its own needle makes
+    that visible.
+    """
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    table = doc.add_table(rows=1, cols=3)
+    merged = table.cell(0, 0).merge(table.cell(0, 2))
+    merged.text = "{{X}}"
+
+    applied = edit_docx.apply_ops(doc, [{"op": "replace_text", "find": "{{X}}", "with": "{{X}}!"}])
+
+    assert applied == 1
+    assert merged.text == "{{X}}!"
+
+
+def test_replace_text_survives_an_irregular_vertical_merge() -> None:
+    """`row.cells` resolves a `vMerge=continue` cell against the row above and
+    raises `ValueError` when no cell starts at that grid offset there -- a
+    layout non-Word generators produce. Walking the `<w:tc>` elements directly
+    never enters that path, so the whole edit (body included) still lands."""
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    doc.add_paragraph("Header {{X}}")
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(0, 1))
+    table.cell(1, 0).text = "Cell {{X}}"
+    continue_marker = OxmlElement("w:vMerge")
+    continue_marker.set(qn("w:val"), "continue")
+    table.cell(1, 1)._tc.get_or_add_tcPr().append(continue_marker)
+
+    applied = edit_docx.apply_ops(doc, [{"op": "replace_text", "find": "{{X}}", "with": "Y"}])
+
+    assert applied == 2
+    assert doc.paragraphs[0].text == "Header Y"
+    assert table.cell(1, 0).text == "Cell Y"
+
+
+def test_apply_ops_skips_non_dict_ops() -> None:
+    """Malformed op lists are ignored, as `edit_xlsx.apply_ops` already does."""
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    doc.add_paragraph("Hello {{NAME}}")
+
+    applied = edit_docx.apply_ops(
+        doc,
+        [None, "replace_text", 3, {"op": "replace_text", "find": "{{NAME}}", "with": "Wei"}],
+    )
+
+    assert applied == 1
+    assert doc.paragraphs[0].text == "Hello Wei"

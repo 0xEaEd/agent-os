@@ -96,6 +96,9 @@ python {baseDir}/scripts/edit_docx.py input.docx ops.json --out output.docx
 ]
 ```
 
+`replace_text` walks body paragraphs and every table cell (nested tables
+included), so placeholders inside contract or invoice tables are found too.
+
 Edit at the **run** level, not the paragraph level — replacing whole paragraph
 text drops formatting. If a placeholder spans multiple runs (often happens
 when the original template applied bold/italic mid-word), the helper script
