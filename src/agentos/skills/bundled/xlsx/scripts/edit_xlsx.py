@@ -102,15 +102,27 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
         elif kind == "rename_sheet":
             old = op.get("old")
             new = op.get("new")
-            if old in wb.sheetnames and isinstance(new, str):
-                wb[old].title = new
-                applied += 1
+            if (
+                old in wb.sheetnames
+                and isinstance(new, str)
+                and new.strip()
+                and not any(ch in new for ch in (":", "\\", "/", "?", "*", "[", "]"))
+                and new.strip() not in (s for s in wb.sheetnames if s != old)
+            ):
+                try:
+                    wb[old].title = new.strip()
+                    applied += 1
+                except (ValueError, KeyError):
+                    pass
         elif kind == "merge_cells":
             sheet_name = op.get("sheet")
             rng = op.get("range")
             if sheet_name in wb.sheetnames and isinstance(rng, str):
-                wb[sheet_name].merge_cells(rng)
-                applied += 1
+                try:
+                    wb[sheet_name].merge_cells(rng)
+                    applied += 1
+                except ValueError:
+                    pass
     return applied
 
 

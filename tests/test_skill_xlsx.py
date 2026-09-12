@@ -571,3 +571,109 @@ def test_clearing_a_cell_keeps_its_style(
     cell = load_workbook(str(out))["S"].cell(row=1, column=1)
     assert cell.value is None
     assert cell.number_format == "0.00%"
+
+
+@pytest.mark.parametrize(
+    "invalid_name",
+    [
+        "",
+        "   ",
+        "Invalid*Name",
+        "Invalid:Name",
+        "Invalid?Name",
+        "Invalid/Name",
+        "Invalid\\Name",
+        "Invalid[Name",
+        "Invalid]Name",
+    ],
+)
+def test_rename_sheet_skips_invalid_titles(
+    invalid_name: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    create_xlsx, edit_xlsx, _ = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "Sales", "rows": [["ok"]]}]}).save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [
+            {"op": "rename_sheet", "old": "Sales", "new": invalid_name},
+            {"op": "set_cell", "sheet": "Sales", "row": 1, "col": 2, "value": "added"},
+        ],
+        tmp_path,
+    )
+
+    assert report == {"applied": 1}
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(out))
+    assert "Sales" in wb.sheetnames
+    assert wb["Sales"].cell(row=1, column=2).value == "added"
+
+
+def test_rename_sheet_skips_existing_name_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    create_xlsx, edit_xlsx, _ = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build(
+        {"sheets": [{"name": "Sheet1", "rows": [["1"]]}, {"name": "Sheet2", "rows": [["2"]]}]}
+    ).save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [
+            {"op": "rename_sheet", "old": "Sheet1", "new": "Sheet2"},
+            {"op": "set_cell", "sheet": "Sheet1", "row": 1, "col": 1, "value": "updated"},
+        ],
+        tmp_path,
+    )
+
+    assert report == {"applied": 1}
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(out))
+    assert wb.sheetnames == ["Sheet1", "Sheet2"]
+    assert wb["Sheet1"].cell(row=1, column=1).value == "updated"
+
+
+def test_merge_cells_skips_invalid_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    create_xlsx, edit_xlsx, _ = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["a", "b"]]}]}).save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [
+            {"op": "merge_cells", "sheet": "S", "range": "not-a-range"},
+            {"op": "set_cell", "sheet": "S", "row": 1, "col": 1, "value": "survives"},
+        ],
+        tmp_path,
+    )
+
+    assert report == {"applied": 1}
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(out))
+    assert wb["S"].cell(row=1, column=1).value == "survives"
+
