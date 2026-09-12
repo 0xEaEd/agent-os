@@ -229,4 +229,10 @@ def _build_generic_channel(
         return cast("ManagedChannel", channel_class(config=config_class(**config_kwargs)))
 
     kwargs = {key: value for key, value in data.items() if key in accepted}
+    # ``name`` is excluded from ``data`` with the other common entry fields,
+    # so hand it over explicitly when the adapter can take it -- the same
+    # courtesy the config path extends above. Without it a flat adapter
+    # can never learn which entry it serves (#1606).
+    if "name" in accepted and hasattr(entry, "name"):
+        kwargs["name"] = entry.name
     return cast("ManagedChannel", channel_class(**kwargs))
