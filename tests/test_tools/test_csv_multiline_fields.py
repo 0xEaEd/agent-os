@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+import threading
 from pathlib import Path
 
 import pytest
 
 from agentos.tools.builtin.filesystem import _read_delimited_rows
+from agentos.tools.types import ToolError
 
 # ── Multiline quoted field ──────────────────────────────────────────────
 
@@ -121,3 +124,86 @@ def test_unicode_line_separator_inside_field_not_treated_as_row_break(
     assert len(rows) == 2, f"Expected 2 rows for {label!r}, got {len(rows)}"
     assert rows[1] == ["a", "b"]
     assert rows[2] == [f"x{sep}y", "z"]
+
+
+# ── Issue #1580: fields exceeding Python's default 128KB field limit ────
+
+
+def test_field_exceeding_default_limit_is_parsed_not_crashed(tmp_path: Path) -> None:
+    """The issue's exact reproduction: a single cell over 131,072 characters
+    used to raise an unhandled _csv.Error instead of being parsed."""
+    csv_file = tmp_path / "large_field.csv"
+    csv_file.write_text("id,payload\n1," + "A" * 131_073, encoding="utf-8")
+
+    [(_, rows, count)] = _read_delimited_rows(csv_file, ",")
+
+    assert count == 2
+    assert rows[1] == ["id", "payload"]
+    assert rows[2] == ["1", "A" * 131_073]
+
+
+def test_field_size_limit_is_restored_after_reading(tmp_path: Path) -> None:
+    """csv.field_size_limit() is process-global; the excursion to
+    accommodate a large field must not leak into later, unrelated csv use
+    elsewhere in the process."""
+    original_limit = csv.field_size_limit()
+    csv_file = tmp_path / "large_field.csv"
+    csv_file.write_text("id,payload\n1," + "A" * (original_limit * 2), encoding="utf-8")
+
+    _read_delimited_rows(csv_file, ",")
+
+    assert csv.field_size_limit() == original_limit
+
+
+def test_field_size_limit_restored_even_when_parsing_raises(tmp_path: Path, monkeypatch) -> None:
+    """The limit must be restored on the error path too, not only on success."""
+    original_limit = csv.field_size_limit()
+    csv_file = tmp_path / "large_field.csv"
+    csv_file.write_text("id,payload\n1," + "A" * (original_limit * 2), encoding="utf-8")
+
+    class _BoomReader:
+        def __iter__(self):
+            raise csv.Error("boom")
+
+    monkeypatch.setattr(csv, "reader", lambda *a, **k: _BoomReader())
+
+    with pytest.raises(ToolError, match="Cannot parse"):
+        _read_delimited_rows(csv_file, ",")
+
+    assert csv.field_size_limit() == original_limit
+
+
+def test_concurrent_reads_do_not_race_on_the_global_field_size_limit(
+    tmp_path: Path,
+) -> None:
+    """Two large-field reads running on separate threads must not observe
+    each other's temporarily-raised limit or its restoration mid-parse."""
+    original_limit = csv.field_size_limit()
+    files = []
+    for index in range(4):
+        size = original_limit + 1000 * (index + 1)
+        path = tmp_path / f"large_{index}.csv"
+        path.write_text(f"id,payload\n{index}," + "A" * size, encoding="utf-8")
+        files.append((path, size))
+
+    results: list[BaseException | int] = [0] * len(files)
+
+    def _worker(slot: int, path: Path, size: int) -> None:
+        try:
+            [(_, rows, _)] = _read_delimited_rows(path, ",")
+            results[slot] = len(rows[2][1])
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread below
+            results[slot] = exc  # type: ignore[assignment]
+
+    threads = [
+        threading.Thread(target=_worker, args=(i, path, size))
+        for i, (path, size) in enumerate(files)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    for (path, size), result in zip(files, results, strict=True):
+        assert result == size, f"{path.name}: expected field length {size}, got {result!r}"
+    assert csv.field_size_limit() == original_limit
