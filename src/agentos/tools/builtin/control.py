@@ -1781,13 +1781,10 @@ async def gateway(
         parts = key.split(".")
         val = cfg_dict
         for p in parts:
-            if isinstance(val, dict):
-                val = val.get(p)
+            if isinstance(val, dict) and p in val:
+                val = val[p]
             else:
-                val = None
-                break
-        if val is None:
-            raise ToolError(f"Config key not found: {key}")
+                raise ToolError(f"Config key not found: {key}")
         return json.dumps({"action": "config_get", "key": key, "value": val})
 
     # config_set
