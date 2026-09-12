@@ -187,6 +187,7 @@ from agentos.session.keys import (
     is_subagent_key,
     normalize_agent_id,
 )
+from agentos.session.manager import TranscriptSnapshot
 from agentos.session.terminal_reply import build_terminal_reply, sanitize_agent_error
 from agentos.tools.types import CallerKind, ToolContext
 from agentos.util.bounded_registry import BoundedRegistry
@@ -1734,6 +1735,10 @@ class TurnRunner:
         self._active_pre_compaction_flush_tasks: dict[str, asyncio.Task] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._emergency_compaction_overrides: dict[str, _EmergencyCompactionOverride] = {}
+        # Last persisted row each session's loaded history covers, keyed by
+        # session key; anchors inline compaction persistence so rows appended
+        # mid-turn (queued follow-ups) are never overwritten or archived.
+        self._compaction_snapshots: dict[str, TranscriptSnapshot] = {}
         # TurnRunner stage decomposition InputStage instance. Holds no per-turn state;
         # constructed once. Active unconditionally as of.
         self._input_stage = InputStage(extra_ctx=_TurnRunnerExtraContextAdapter())
@@ -1839,6 +1844,9 @@ class TurnRunner:
     def clear_compaction_turn_state(self, session_key: str) -> None:
         self._turn_compaction_attempted_sessions.discard(session_key)
         self._turn_compacted_sessions.discard(session_key)
+        # The anchor only means something for the turn that loaded the history;
+        # the next turn's _load_history records a fresh one.
+        self._compaction_snapshots.pop(session_key, None)
 
     def refresh_memory_snapshot(self, agent_id: str) -> None:
         """Refresh frozen snapshots for all sessions of the given agent.
@@ -6052,6 +6060,7 @@ class TurnRunner:
             return None
 
         transcript = await self._session_manager.get_transcript(session_key)
+        await self._remember_compaction_snapshot(session_key, transcript)
 
         from agentos.engine.history import reconstruct_messages_from_entry
         from agentos.provider import Message
@@ -6116,6 +6125,47 @@ class TurnRunner:
             context_states=context_states,
             skip_covered_through_ids=provider_context.covered_through_ids,
         )
+
+    async def _remember_compaction_snapshot(
+        self, session_key: str, transcript: list[Any] | None
+    ) -> None:
+        """Record which persisted rows the agent's history is built from.
+
+        ``persist_compaction_result`` anchors an inline compaction on it so a
+        follow-up ``sessions.send`` appends after this point is re-appended
+        verbatim instead of being overwritten by the agent's stale kept tail.
+        An empty transcript still records the session so a later compaction
+        of purely in-memory messages treats every persisted row as newer.
+        """
+        snapshots = getattr(self, "_compaction_snapshots", None)
+        if snapshots is None:
+            return
+        snapshots.pop(session_key, None)
+        last = transcript[-1] if transcript else None
+        session_id = getattr(last, "session_id", None)
+        message_id = getattr(last, "message_id", None)
+        if session_id and message_id:
+            snapshots[session_key] = TranscriptSnapshot(
+                session_id=str(session_id), through_message_id=str(message_id)
+            )
+            return
+        if last is not None:
+            return
+        get_session = getattr(self._session_manager, "get_session", None)
+        if not callable(get_session):
+            return
+        try:
+            node = get_session(session_key)
+            if inspect.isawaitable(node):
+                node = await node
+        except Exception:  # noqa: BLE001 - the anchor is best-effort
+            log.debug("compaction_snapshot.session_lookup_failed", session_key=session_key)
+            return
+        session_id = getattr(node, "session_id", None)
+        if session_id:
+            snapshots[session_key] = TranscriptSnapshot(
+                session_id=str(session_id), through_message_id=None
+            )
 
     async def _load_context_states(self, session_key: str) -> list[Any]:
         context_states: list[Any] = []

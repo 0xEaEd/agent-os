@@ -707,13 +707,25 @@ class _TurnRunnerAgentRunAdapter(AgentRunPort):
         )
 
 
+class CompactionPersistRejectedError(RuntimeError):
+    """``persist_compaction_result`` wrote nothing for an inline compaction.
+
+    Raised by the persist adapter so the stream consumer stage takes its
+    failed-persist path -- a ``failed`` lifecycle notification and no
+    post-persist refresh -- instead of announcing a durable compaction that
+    never reached the transcript. The usual cause is a stale snapshot: the
+    session was reset, truncated or compacted from under the running turn.
+    """
+
+
 class _TurnRunnerCompactionPersistAdapter(CompactionPersistPort):
     """Bind ``SessionManager.persist_compaction_result`` + ``notify_compaction``.
 
-    Compaction refresh: the adapter forwards the persist call verbatim and
-    follows it with a completed lifecycle notification. Failed persistence
-    is handled by the stream consumer stage so completed is never emitted
-    before durable storage succeeds. The re-entrancy contract on
+    Compaction refresh: the adapter forwards the persist call verbatim,
+    anchored on the ``TranscriptSnapshot`` ``_load_history`` recorded for the
+    session, and follows it with a completed lifecycle notification. Failed
+    persistence is handled by the stream consumer stage so completed is never
+    emitted before durable storage succeeds. The re-entrancy contract on
     ``persist_compaction_result`` is untouched.
     """
 
@@ -735,6 +747,7 @@ class _TurnRunnerCompactionPersistAdapter(CompactionPersistPort):
             compaction_lifecycle_payload,
             new_compaction_id,
         )
+        from agentos.session.manager import TranscriptSnapshot
 
         session_manager = self._runner._session_manager
         if session_manager is None:
@@ -750,12 +763,30 @@ class _TurnRunnerCompactionPersistAdapter(CompactionPersistPort):
             p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
         ):
             persist_kwargs["trigger_reason"] = "agent_inline_overflow"
+        # Anchor the rewrite on the rows the agent's history was loaded from
+        # so a follow-up queued mid-turn is never overwritten or archived.
+        snapshots = getattr(self._runner, "_compaction_snapshots", None)
+        snapshot = snapshots.get(session_key) if snapshots is not None else None
+        if snapshot is not None and "snapshot" in params:
+            persist_kwargs["snapshot"] = snapshot
         async with self._runner._session_write_context(session_key):
-            await persist_method(
+            persisted = await persist_method(
                 session_key,
                 summary,
                 kept_entries,
                 **persist_kwargs,
+            )
+        if isinstance(persisted, TranscriptSnapshot):
+            # The next compaction of this same in-memory history must anchor
+            # on the kept tail that was just written, not on the old rows.
+            if snapshots is not None:
+                snapshots[session_key] = persisted
+        elif "snapshot" in params:
+            # A snapshot-aware manager returns None only when it wrote nothing
+            # (stale snapshot, missing session); do not report it as persisted.
+            raise CompactionPersistRejectedError(
+                f"inline compaction for {session_key} was not persisted: the transcript "
+                "changed since the agent loaded its history"
             )
         compaction_id = compaction_id or new_compaction_id()
         notify_compaction(
