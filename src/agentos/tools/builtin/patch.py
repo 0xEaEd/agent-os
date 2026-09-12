@@ -169,18 +169,25 @@ def _validate_path(path: str, root: Path | None = None) -> Path:
     return resolved
 
 
-def _memory_source_rel_path(path: str, root: Path) -> str | None:
-    resolved = _validate_path(path, root)
-    try:
-        rel = resolved.relative_to(root)
-    except ValueError:
-        return None
+def _memory_roots(root: Path) -> tuple[Path, ...]:
+    """The patch root plus every memory root the filesystem tools know about."""
+    from agentos.tools.builtin import filesystem
 
-    if rel.parts == ("MEMORY.md",):
-        return "MEMORY.md"
-    if len(rel.parts) >= 2 and rel.parts[0] == "memory" and rel.suffix == ".md":
-        return rel.as_posix()
-    return None
+    roots = [root]
+    for candidate in filesystem._memory_roots():
+        if candidate not in roots:
+            roots.append(candidate)
+    return tuple(roots)
+
+
+def _memory_source_rel_path(path: str, root: Path) -> str | None:
+    # Delegate to the filesystem tool's classifier so USER.md, memory.md and a
+    # memory_source_dir nested under the workspace refresh the snapshot the
+    # same way they do through write_file / edit_file.
+    from agentos.tools.builtin import filesystem
+
+    resolved = _validate_path(path, root)
+    return filesystem._memory_source_rel_path(resolved, roots=_memory_roots(root))
 
 
 def _bootstrap_source_rel_path(path: str, root: Path) -> str | None:
