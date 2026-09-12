@@ -365,8 +365,15 @@ class BoundedRegistry[KT, VT]:
         if ttl is None or not self._entries:
             return
         cutoff = self._now() - ttl
-        # Insertion order is write order, so the stale entries are a prefix.
-        doomed = [key for key, (_, written) in self._entries.items() if written <= cutoff]
+        # Scan everything: ``get()`` moves a hit to the end without refreshing
+        # its timestamp, so the stale entries are not a prefix of the order.
+        # The veto applies here too — ``evictable`` means "never remove this"
+        # on every path, so a still-running background shell survives its TTL.
+        doomed = [
+            key
+            for key, (value, written) in self._entries.items()
+            if written <= cutoff and self._is_evictable(value)
+        ]
         for key in doomed:
             del self._entries[key]
         self.expirations += len(doomed)

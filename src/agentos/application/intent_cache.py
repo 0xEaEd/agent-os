@@ -398,7 +398,10 @@ class IntentApprovalCache:
         self._default_ttl = default_ttl
         # intent -> (expires_monotonic, scope)
         # Keys are (kind, target), not sessions; the TTL already lives in
-        # the value, so this only adds the missing size ceiling.
+        # the value, so this only adds the missing size ceiling. An ``always``
+        # grant carries a year-long TTL, so a long-lived gateway can push one
+        # out under the LRU ceiling — that fails *closed* (the user is
+        # re-prompted), which is the right direction for an approval cache.
         self._entries: BoundedRegistry[tuple[str, str], tuple[float, str]] = BoundedRegistry(
             name="IntentApprovalCache._entries",
         )

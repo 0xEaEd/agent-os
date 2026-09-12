@@ -56,7 +56,10 @@ class ApprovalQueue:
         # Node ids are an operational set rather than a per-session one, so
         # the ceiling is a backstop nothing reaches; eviction falls back to
         # the global settings, which is the same answer an unconfigured
-        # node already gets.
+        # node already gets. Note the direction: a node pinned to a stricter
+        # policy than the global one (say ``auto-deny``) would fail *open* to
+        # the global setting if it were ever evicted, which is why the ceiling
+        # is sized so it cannot be.
         self._node_settings: BoundedRegistry[str, ApprovalSettings] = BoundedRegistry(
             name="ApprovalQueue._node_settings",
         )

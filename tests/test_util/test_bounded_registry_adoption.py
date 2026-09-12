@@ -63,6 +63,41 @@ def test_module_level_shell_session_store_is_bounded() -> None:
     assert isinstance(shell._bg_sessions, BoundedRegistry)
 
 
+def test_a_running_background_shell_session_outlives_the_cache_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``background_process`` exists for dev servers and long builds, so a
+    session that is still running must stay reachable past the TTL — the
+    subprocess would otherwise keep running with nothing able to poll, log or
+    kill it, and its cleanup callbacks would never fire."""
+    registry = shell._bg_sessions
+    ttl = registry.ttl_seconds
+    assert ttl is not None
+    now = [1000.0]
+    monkeypatch.setattr(registry, "_now", lambda: now[0])
+
+    running = shell._BgSession(session_id="bg-run", command="sleep", process=object())  # type: ignore[arg-type]
+    finished = shell._BgSession(
+        session_id="bg-done",
+        command="true",
+        process=object(),
+        done=True,  # type: ignore[arg-type]
+    )
+    registry["bg-run"] = running
+    registry["bg-done"] = finished
+    try:
+        now[0] += ttl + 1
+
+        assert registry.get("bg-run") is running
+        assert registry.get("bg-done") is None
+
+        running.done = True
+        assert registry.get("bg-run") is None
+    finally:
+        registry.pop("bg-run", None)
+        registry.pop("bg-done", None)
+
+
 def test_turn_runner_snapshot_fields_are_bounded() -> None:
     from agentos.engine import runtime
 

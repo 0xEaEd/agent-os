@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 
 import pytest
@@ -134,6 +135,37 @@ def test_ttl_is_measured_from_the_write_not_the_read() -> None:
     clock.advance(31)
 
     assert registry.get("a") is None
+
+
+def test_a_non_evictable_entry_survives_a_ttl_sweep() -> None:
+    """``evictable`` means "never remove this" on the TTL path too.
+
+    The other three eviction paths already honoured the veto; a TTL sweep
+    that ignored it would drop a still-running background shell session
+    (``shell._bg_sessions``) after ``ttl_seconds`` regardless of its state.
+    """
+    clock = _Clock()
+    registry: BoundedRegistry[str, asyncio.Lock] = BoundedRegistry(
+        max_entries=100,
+        ttl_seconds=60,
+        time_source=clock,
+        evictable=lambda lock: not lock.locked(),
+        register=False,
+    )
+    held, free = asyncio.Lock(), asyncio.Lock()
+    registry["held"] = held
+    registry["free"] = free
+    asyncio.run(held.acquire())
+    clock.advance(61)
+
+    assert registry.get("held") is held
+    assert registry.get("free") is None
+    assert registry.expirations == 1
+
+    # Once the veto lifts the next sweep takes it, so nothing is pinned forever.
+    held.release()
+    assert registry.get("held") is None
+    assert registry.expirations == 2
 
 
 def test_a_session_shaped_registry_has_no_ttl() -> None:
