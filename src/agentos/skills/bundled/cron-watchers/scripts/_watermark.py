@@ -9,11 +9,23 @@ script, so the scripts directory stays read-only in practice.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
 
 MAX_REMEMBERED_IDS = 500
+
+
+def positive_int(raw: str) -> int:
+    """argparse type for ``--limit``: a cap of 0 or less would stall the watermark."""
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {raw!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
 
 
 def _state_root() -> Path:
@@ -53,17 +65,37 @@ def save_seen(name: str, ids: list[str]) -> None:
     tmp.replace(path)
 
 
-def select_new(name: str, ids: list[str], *, first_run_reports: bool = False) -> list[str]:
-    """Return the ids not seen before and record them.
+def select_new(
+    name: str,
+    ids: list[str],
+    *,
+    first_run_reports: bool = False,
+    limit: int | None = None,
+) -> list[str]:
+    """Return the ids to report this run and record only those as seen.
+
+    ``limit`` caps how much one run reports, not how much the feed may
+    publish: the surplus is left out of the watermark so the next run picks it
+    up. Committing every fresh id while printing only the first ``limit`` lost
+    the rest for good, silently, on exactly the busy feeds a watcher is for.
+    Feeds list newest first, so the capped run takes the *tail* of the fresh
+    ids: the backlog drains oldest first, in feed order, and what is deferred
+    is the newest, which stays on the page longest. An id that leaves the page
+    before its turn comes is still never reported -- the page is the only
+    memory the watcher has of it.
 
     The first run reports nothing by default: a watcher that has never run has
     no idea which of the 50 items on the page are actually new, and dumping all
-    of them into a chat is the wrong first impression.
+    of them into a chat is the wrong first impression. That silent run adopts
+    the whole feed, so no backlog is left behind.
     """
-    seen = set(load_seen(name))
+    seen = load_seen(name)
+    known = set(seen)
     is_first_run = not seen
-    fresh = [item for item in ids if item not in seen]
-    save_seen(name, [*load_seen(name), *fresh])
+    fresh = [item for item in ids if item not in known]
     if is_first_run and not first_run_reports:
+        save_seen(name, [*seen, *fresh])
         return []
-    return fresh
+    reported = fresh if limit is None else fresh[-limit:]
+    save_seen(name, [*seen, *reported])
+    return reported

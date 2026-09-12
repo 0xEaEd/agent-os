@@ -26,7 +26,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from _watermark import select_new  # noqa: E402
+from _watermark import positive_int, select_new  # noqa: E402
 
 API_ROOT = "https://api.github.com"
 USER_AGENT = "AgentOS-cron-watcher/1.0"
@@ -66,7 +66,9 @@ def main() -> int:
     parser.add_argument("--repo", required=True, help="owner/name")
     parser.add_argument("--scope", default="issues", choices=SCOPES, help="What to watch")
     parser.add_argument("--name", default="", help="Watermark name (default: repo+scope)")
-    parser.add_argument("--limit", type=int, default=10, help="Max items to report")
+    parser.add_argument(
+        "--limit", type=positive_int, default=10, help="Max items to report per run"
+    )
     parser.add_argument(
         "--first-run-reports",
         action="store_true",
@@ -110,11 +112,13 @@ def main() -> int:
         if identifier:
             lines[identifier] = line
 
-    fresh = select_new(watermark, list(lines), first_run_reports=args.first_run_reports)
+    fresh = select_new(
+        watermark, list(lines), first_run_reports=args.first_run_reports, limit=args.limit
+    )
     if not fresh:
         return 0
 
-    for identifier in fresh[: args.limit]:
+    for identifier in fresh:
         print(lines[identifier])
     return 0
 

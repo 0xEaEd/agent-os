@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _url import require_http_url  # noqa: E402
-from _watermark import select_new  # noqa: E402
+from _watermark import positive_int, select_new  # noqa: E402
 
 USER_AGENT = "AgentOS-cron-watcher/1.0"
 
@@ -62,7 +62,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True, help="Feed URL")
     parser.add_argument("--name", required=True, help="Watermark name, unique per feed")
-    parser.add_argument("--limit", type=int, default=10, help="Max entries to report")
+    parser.add_argument(
+        "--limit", type=positive_int, default=10, help="Max entries to report per run"
+    )
     parser.add_argument(
         "--first-run-reports",
         action="store_true",
@@ -94,11 +96,13 @@ def main() -> int:
 
     entries = _entries(root)
     by_id = {entry[0]: entry for entry in entries}
-    fresh = select_new(args.name, list(by_id), first_run_reports=args.first_run_reports)
+    fresh = select_new(
+        args.name, list(by_id), first_run_reports=args.first_run_reports, limit=args.limit
+    )
     if not fresh:
         return 0
 
-    for guid in fresh[: args.limit]:
+    for guid in fresh:
         _, title, link = by_id[guid]
         print(f"- {title or guid}" + (f"\n  {link}" if link else ""))
     return 0
