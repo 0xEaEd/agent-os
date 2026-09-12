@@ -257,10 +257,26 @@ def _resolve_session_id(runtime: SandboxRuntime, session_id: str | None) -> str:
 
 
 def _resolve_workspace(runtime: SandboxRuntime, cwd: str | None) -> Path:
+    """Directory the gated action runs in, always absolute.
+
+    A relative ``cwd`` is joined onto the workspace root, mirroring
+    ``shell._effective_workdir``. It used to be discarded outright, so every
+    relative ``workdir`` collapsed onto the root and -- because
+    :func:`action_fingerprint` hashes ``cwd`` -- two unrelated
+    subdirectories shared one fingerprint. For tools with a fixed
+    ``argv_factory`` that made a denial in one directory auto-deny the next
+    directory as ``REPEATED_SAME_INTENT`` (#1595).
+    """
+    root = _workspace_root(runtime)
     if cwd:
-        p = Path(cwd)
+        p = Path(cwd).expanduser()
         if p.is_absolute():
             return p
+        return root / p
+    return root
+
+
+def _workspace_root(runtime: SandboxRuntime) -> Path:
     try:
         from agentos.tools.types import current_tool_context
 
