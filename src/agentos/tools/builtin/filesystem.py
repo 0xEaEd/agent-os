@@ -1031,13 +1031,43 @@ async def glob_search(pattern: str, path: str | None = None) -> str:
     return "\n".join(matches)
 
 
+def _include_matches(fp: Path, base: Path, include: str) -> bool:
+    """Return True when ``include`` names ``fp`` by filename or by relative path.
+
+    A bare glob (``*.py``, ``test_*.py``) describes the filename, so it is
+    matched against ``fp.name`` at any depth exactly as before. A glob that
+    carries a directory (``tests/*.py``) can only be matched against the path
+    relative to the search base -- matched against the filename alone it never
+    fires, and the tool answers "no matches" for code that exists.
+
+    Matching is ``fnmatch``, so ``*`` also spans ``/``; ``**/`` additionally
+    matches zero directories (``src/**/*.py`` includes ``src/a.py``), which
+    ``fnmatch`` alone would not give it.
+    """
+    if fnmatch.fnmatch(fp.name, include):
+        return True
+    try:
+        relative = fp.relative_to(base).as_posix()
+    except ValueError:  # rglob yields base-prefixed paths; defensive only
+        return False
+    if fnmatch.fnmatch(relative, include):
+        return True
+    return "**/" in include and fnmatch.fnmatch(relative, include.replace("**/", ""))
+
+
 @tool(
     name="grep_search",
     description="Search file contents for a regex pattern.",
     params={
         "pattern": {"type": "string", "description": "Regex pattern to search for."},
         "path": {"type": "string", "description": "File or directory to search (default: cwd)."},
-        "include": {"type": "string", "description": "Glob pattern to filter files (e.g. '*.py')."},
+        "include": {
+            "type": "string",
+            "description": (
+                "Glob pattern to filter files, matched against the filename or the "
+                "path relative to the search directory (e.g. '*.py', 'tests/*.py')."
+            ),
+        },
         "max_results": {
             "type": "integer",
             "description": "Maximum number of matches to return (default 100).",
@@ -1099,7 +1129,7 @@ async def grep_search(
                     continue
                 if not fp.is_file():
                     continue
-                if include and not fnmatch.fnmatch(fp.name, include):
+                if include and not _include_matches(fp, base, include):
                     continue
                 search_file(fp)
 
