@@ -11,6 +11,27 @@ from typing import Any
 import pdfplumber
 from pypdf import PdfReader
 
+# pdfplumber's third mode, ``explicit``, needs ``explicit_vertical_lines`` /
+# ``explicit_horizontal_lines`` that this script has no way to supply, so it
+# crashed inside pdfplumber on every call. It is deliberately not offered.
+TABLE_STRATEGIES = ("lines", "text")
+
+
+def _table_settings(tables_strategy: str | None) -> dict[str, str]:
+    """pdfplumber table settings for *tables_strategy* (default ``lines``).
+
+    The strategy applies to both axes: setting only ``vertical_strategy`` left
+    the horizontal axis on ``lines``, so ``text`` never found a row in the
+    borderless tables it exists for.
+    """
+    strategy = tables_strategy or "lines"
+    if strategy not in TABLE_STRATEGIES:
+        raise ValueError(
+            f"unsupported --tables-strategy {strategy!r}; "
+            f"choose one of: {', '.join(TABLE_STRATEGIES)}"
+        )
+    return {"vertical_strategy": strategy, "horizontal_strategy": strategy}
+
 
 def extract(path: Path, tables_strategy: str | None) -> dict[str, Any]:
     reader = PdfReader(str(path))
@@ -21,7 +42,7 @@ def extract(path: Path, tables_strategy: str | None) -> dict[str, Any]:
 
     pages_text: list[dict[str, Any]] = []
     tables: list[dict[str, Any]] = []
-    table_settings = {"vertical_strategy": tables_strategy or "lines"}
+    table_settings = _table_settings(tables_strategy)
     with pdfplumber.open(str(path)) as pdf:
         for idx, page in enumerate(pdf.pages, start=1):
             content = page.extract_text() or ""
@@ -42,9 +63,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("path", type=Path)
     parser.add_argument(
         "--tables-strategy",
-        choices=("lines", "text", "explicit"),
+        choices=TABLE_STRATEGIES,
         default=None,
-        help="pdfplumber table-detection strategy",
+        help="pdfplumber table-detection strategy for both axes (default: lines)",
     )
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--json", action="store_true", help="Force JSON output (default)")

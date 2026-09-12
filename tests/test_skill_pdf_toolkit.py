@@ -127,3 +127,75 @@ def test_extract_creates_parent_directory(tmp_path: Path, monkeypatch: pytest.Mo
     )
     assert extract.main() == 0
     assert out_file.is_file()
+
+
+def _extract_module():
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import extract  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+    return extract
+
+
+def _make_borderless_table_pdf(path: Path) -> None:
+    """A platypus table with no ruling lines -- the layout `text` mode exists for."""
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.platypus import SimpleDocTemplate, Table
+
+    doc = SimpleDocTemplate(str(path), pagesize=LETTER)
+    # Four rows: pdfplumber's `text` mode needs ``min_words_vertical`` (default
+    # 3) aligned words to accept a column edge, so stay clear of that threshold.
+    doc.build([Table([["Name", "Qty"], ["Widget", "3"], ["Gadget", "7"], ["Gizmo", "9"]])])
+
+
+def test_tables_strategy_text_detects_a_borderless_table(tmp_path: Path) -> None:
+    """`--tables-strategy text` must switch both axes.
+
+    Only `vertical_strategy` used to be set, so the horizontal axis kept
+    looking for ruling lines a borderless table does not have and the flag's
+    one documented use case returned no tables at all.
+    """
+    extract = _extract_module()
+    pdf_file = tmp_path / "borderless.pdf"
+    _make_borderless_table_pdf(pdf_file)
+
+    payload = extract.extract(pdf_file, tables_strategy="text")
+
+    cells = {cell for table in payload["tables"] for row in table["rows"] for cell in row if cell}
+    assert {"Name", "Qty", "Widget", "3", "Gadget", "7", "Gizmo", "9"} <= cells
+
+
+def test_tables_strategy_lines_still_the_default(tmp_path: Path) -> None:
+    extract = _extract_module()
+    pdf_file = tmp_path / "borderless.pdf"
+    _make_borderless_table_pdf(pdf_file)
+
+    assert extract._table_settings(None) == {
+        "vertical_strategy": "lines",
+        "horizontal_strategy": "lines",
+    }
+    # A borderless table has no ruling lines, so the default finds nothing.
+    assert extract.extract(pdf_file, tables_strategy=None)["tables"] == []
+
+
+def test_tables_strategy_explicit_is_rejected_with_a_clear_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """pdfplumber's `explicit` mode needs line lists this script cannot supply.
+
+    It used to be advertised in `choices` and then crash inside pdfplumber
+    with `TypeError: object of type 'NoneType' has no len()` on every call.
+    """
+    extract = _extract_module()
+    pdf_file = tmp_path / "doc.pdf"
+    _make_one_page_pdf(pdf_file, "TEST")
+
+    with pytest.raises(ValueError, match="explicit"):
+        extract.extract(pdf_file, tables_strategy="explicit")
+
+    monkeypatch.setattr(sys, "argv", ["extract.py", str(pdf_file), "--tables-strategy", "explicit"])
+    with pytest.raises(SystemExit) as exc_info:
+        extract.main()
+    assert exc_info.value.code == 2
+    assert "invalid choice: 'explicit'" in capsys.readouterr().err

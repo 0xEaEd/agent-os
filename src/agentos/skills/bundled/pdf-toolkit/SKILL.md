@@ -75,8 +75,10 @@ Output:
 
 Text uses `pdfplumber` (already in default dependencies) which preserves
 column layout better than naive PDF text extraction. Tables use
-`pdfplumber.extract_tables()` with default settings; for tricky layouts
-pass `--tables-strategy lines|text|explicit` to switch detection mode.
+`pdfplumber.extract_tables()` with the `lines` strategy (ruling lines on both
+axes); for borderless tables pass `--tables-strategy text` to detect rows and
+columns from word positions instead. pdfplumber's `explicit` mode is not
+offered because it needs line coordinates this script cannot supply.
 
 For OCR (scanned PDFs), this skill does not include Tesseract — use the
 sibling skill that wraps an OCR engine (out of scope here).
