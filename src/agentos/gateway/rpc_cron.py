@@ -1061,7 +1061,9 @@ async def _handle_cron_remove(params: dict | None, ctx: RpcContext) -> None:
     if not isinstance(params, dict) or "id" not in params:
         raise ValueError("params.id is required")
     scheduler = _require_scheduler(ctx)
-    await scheduler.remove_job(params["id"])
+    removed = await scheduler.remove_job(params["id"])
+    if not removed:
+        raise KeyError(f"Cron job not found: {params['id']}")
     return None
 
 
