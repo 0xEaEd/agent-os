@@ -280,8 +280,34 @@ class ModelSelector:
                 provider_routing=self._chain[0].provider_routing,
             )
         if fallbacks is not None:
+            previous = self._chain
             self._config.fallbacks = list(fallbacks)
             self._chain = [self._chain[0], *fallbacks]
+            self._rebase_onto_chain(previous)
+
+    def _rebase_onto_chain(self, previous: list[ProviderConfig]) -> None:
+        """Re-point the held position at the rebuilt chain, or drop it.
+
+        ``_index`` and ``_admitted_index`` were computed against ``previous``.
+        The breaker admission held there (possibly this turn's half-open
+        probe) is per *provider*, so it follows the active link's provider to
+        wherever the new chain lists it first: re-asking the breaker would
+        see that probe as already in flight and skip past it, which is what
+        ``_admitted_index`` exists to prevent. The primary always qualifies --
+        only its model can change. When the provider is gone from the chain
+        the selector resets to the primary the way ``sync_primary`` does;
+        keeping the old numbers would point past the end of a shorter chain
+        (``IndexError`` on the next ``resolve()``) or vouch for a provider
+        the breaker was never asked about (#1616).
+        """
+        provider = previous[self._index].provider
+        for index, cfg in enumerate(self._chain):
+            if cfg.provider == provider:
+                self._index = index
+                if self._admitted_index is not None:
+                    self._admitted_index = index
+                return
+        self.reset()
 
     def sync_primary(self, cfg: ProviderConfig) -> None:
         """Replace the primary provider config for future resolves and clones."""
