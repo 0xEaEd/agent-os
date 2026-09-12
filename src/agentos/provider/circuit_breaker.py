@@ -163,6 +163,7 @@ class ProviderCircuitBreaker:
         open --(cooldown elapsed, one caller admitted)--> half_open
         half_open --(success)--> closed
         half_open --(failure)--> open   # with a longer cooldown
+        half_open --(request-shaped failure)--> half_open   # probe slot released
 
     All methods are safe to call from multiple threads and from concurrent
     turns; a single lock guards the whole table.
@@ -250,7 +251,16 @@ class ProviderCircuitBreaker:
         if kind is not None and not trips_breaker(kind):
             with self._lock:
                 entry = self._entries.get(provider)
-                return entry.state if entry else BreakerState.CLOSED
+                if entry is None:
+                    return BreakerState.CLOSED
+                if entry.state is BreakerState.HALF_OPEN:
+                    # The failed request was the half-open probe, and it says
+                    # nothing about provider health either way. Give the slot
+                    # back so the next caller becomes the probe; leaving
+                    # ``probe_started_at`` set would report "probe in flight"
+                    # and park every caller for a full window (#1602).
+                    entry.probe_started_at = None
+                return entry.state
         with self._lock:
             entry = self._entries.setdefault(provider, _Entry())
             now = self._clock()
