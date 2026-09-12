@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The `c0` router tier on the `bankr`, `opencap` and `surplus` tier profiles
+  now defaults to DeepSeek V4.1 Flash (`deepseek-v4.1-flash`) instead of V4
+  Flash. All three gateways publish the id with a 1M context and 384K max
+  output, so the bare id needs no gateway window override, and it is declared
+  in `model_registry` with `supports_image` left off: it is a text tier, and a
+  vision-flagged text tier would become a random pick for image turns
+  alongside `image_model`. The `openrouter` profile deliberately stays on
+  `deepseek/deepseek-v4-flash`: OpenRouter routes V4 Flash cheaper than
+  `openai/gpt-5.6-luna` but prices V4.1 Flash above it, so the router's
+  cost-aware override would hand every OpenRouter c0 turn to c1. Existing
+  configs are not migrated -- `deepseek-v4-flash` still resolves on every
+  gateway -- and the direct `deepseek` profile is unchanged.
+
 ## [2026.9.11] - 2026-09-11
 
 ### Added
