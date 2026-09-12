@@ -172,7 +172,15 @@ class ApprovalQueue:
         if entry.resolved:
             return entry.approved
         t = timeout if timeout is not None else self._timeout
-        deadline = time.monotonic() + t
+        now = time.monotonic()
+        deadline = now + t
+        # The approval's overall lifespan (created_at + default_timeout) is a
+        # wall-clock fact, but it is compared against a monotonic deadline, so
+        # convert it once here rather than re-reading time.time() after the
+        # loop. Windows' wall clock ticks at ~15.6ms; read afresh after a 20ms
+        # monotonic wait it can still show the approval as younger than its
+        # lifespan and leave a timed-out approval pending forever.
+        lifespan_deadline = now + max(0.0, entry.created_at + self._timeout - time.time())
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -188,7 +196,7 @@ class ApprovalQueue:
             if entry.resolved:
                 return entry.approved
 
-        if time.time() - entry.created_at < self._timeout:
+        if time.monotonic() < lifespan_deadline:
             # The caller's own timeout elapsed, but the approval's overall
             # lifespan (created_at + default_timeout) hasn't -- leave it
             # pending instead of denying it, so a human operator can still

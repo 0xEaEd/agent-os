@@ -21,6 +21,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   configs are not migrated -- `deepseek-v4-flash` still resolves on every
   gateway -- and the direct `deepseek` profile is unchanged.
 
+### Fixed
+
+- `ApprovalQueue.wait()` could leave an approval pending forever after its full
+  default timeout had elapsed. The wait deadline was measured on the monotonic
+  clock but the "has the approval's lifespan expired?" check re-read
+  `time.time()`; on Windows the wall clock ticks at ~15.6ms, so after a short
+  wait it could still report the approval as younger than its lifespan and skip
+  the deny. The lifespan is now converted to the monotonic clock once at entry.
+  This was the intermittent
+  `test_approval_queue_wait_denies_once_the_full_default_timeout_elapses`
+  failure in the Windows CI job on `main`.
+
 ## [2026.9.11] - 2026-09-11
 
 ### Added
