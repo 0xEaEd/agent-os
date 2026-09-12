@@ -32,6 +32,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   This was the intermittent
   `test_approval_queue_wait_denies_once_the_full_default_timeout_elapses`
   failure in the Windows CI job on `main`.
+- `apply_patch` no longer rewrites every line of a CRLF file to LF. The
+  reported symptom — `Context mismatch ... got '...\r'` — is not reachable
+  through the tool: the update path read with `Path.read_text()`, whose
+  universal-newline translation folds `\r\n` to `\n` before `_apply_hunk`
+  ever sees it. The quieter defect is at the same site: the translation is
+  one-way in memory only, so writing back with `write_text()` re-emitted
+  `os.linesep` and a one-line patch to a CRLF file came out as a whole-file
+  diff, with the untouched lines converted too (and the mirror-image damage
+  on Windows, where an LF file came back as CRLF). Both ends of the round
+  trip — the read in `_plan_ops` and the write in `_commit_staged` — now open
+  with `newline=""`, so endings survive verbatim; `_apply_hunk` compares
+  context with `rstrip("\r\n")` so a `\r` cannot fail a match, and an added
+  line takes the file's own ending — majority convention, first-seen breaking
+  a tie — instead of a hardcoded `\n`. An `*** Add File` goes through the
+  same `newline=""` write, so the patch text stays the only authority on what
+  a created file contains
+  ([#1124](https://github.com/use-agent-os/agent-os/issues/1124)).
 
 ## [2026.9.11] - 2026-09-11
 
