@@ -852,8 +852,10 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
         patch["schedule_kind"] = sched_kind
         patch["schedule_value"] = sched_value
         schedule_raw = params.get("schedule")
-        schedule_tz_was_supplied = (
-            isinstance(schedule_raw, dict) and "tz" in schedule_raw
+        # ``timezone`` is an alias of ``tz`` inside ``schedule`` too, so an
+        # explicit ``"timezone": ""`` is a clear, not an omission.
+        schedule_tz_was_supplied = isinstance(schedule_raw, dict) and (
+            "tz" in schedule_raw or "timezone" in schedule_raw
         )
         if sched_kind == ScheduleKind.CRON and (
             sched_tz or tz_was_supplied or schedule_tz_was_supplied
