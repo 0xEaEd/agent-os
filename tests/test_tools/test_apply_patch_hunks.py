@@ -178,3 +178,195 @@ def test_apply_hunk_zero_start_with_explicit_old_count_replaces_the_first_line()
     hunk.lines = ["-line1", "+LINE1"]
 
     assert patch_tool._apply_hunk(["line1\n", "line2\n"], hunk) == ["LINE1\n", "line2\n"]
+
+
+# ---------------------------------------------------------------------------
+# Blank context lines (#1577)
+#
+# In unified diff format an empty context line is legitimately written as a
+# bare ``""`` rather than ``" "`` -- editors, terminals, CI log pipelines and
+# most model output strip the trailing space. ``_apply_hunk`` used to skip
+# such lines outright, so every later line was checked against the wrong file
+# line (a spurious "Context mismatch") and, had verification passed, the
+# blank would have been dropped from the output.
+# ---------------------------------------------------------------------------
+
+
+def _hunk(old_start: int, old_count: int, new_count: int, lines: list[str]) -> patch_tool.Hunk:
+    hunk = patch_tool.Hunk(
+        old_start=old_start, old_count=old_count, new_start=old_start, new_count=new_count
+    )
+    hunk.lines = lines
+    return hunk
+
+
+def test_bare_empty_hunk_line_is_a_blank_context_line() -> None:
+    hunk = _hunk(1, 3, 3, [" foo", "", "-bar", "+baz"])
+
+    assert patch_tool._apply_hunk(["foo\n", "\n", "bar\n"], hunk) == ["foo\n", "\n", "baz\n"]
+
+
+def test_space_prefixed_blank_context_line_still_works() -> None:
+    hunk = _hunk(1, 3, 3, [" foo", " ", "-bar", "+baz"])
+
+    assert patch_tool._apply_hunk(["foo\n", "\n", "bar\n"], hunk) == ["foo\n", "\n", "baz\n"]
+
+
+def test_consecutive_blank_context_lines_are_all_kept() -> None:
+    hunk = _hunk(1, 4, 4, [" foo", "", "", "-bar", "+baz"])
+
+    assert patch_tool._apply_hunk(["foo\n", "\n", "\n", "bar\n"], hunk) == [
+        "foo\n",
+        "\n",
+        "\n",
+        "baz\n",
+    ]
+
+
+def test_blank_context_line_as_the_first_hunk_line() -> None:
+    hunk = _hunk(1, 2, 2, ["", "-bar", "+baz"])
+
+    assert patch_tool._apply_hunk(["\n", "bar\n"], hunk) == ["\n", "baz\n"]
+
+
+def test_blank_context_line_as_the_last_hunk_line() -> None:
+    hunk = _hunk(1, 2, 2, ["-bar", "+baz", ""])
+
+    assert patch_tool._apply_hunk(["bar\n", "\n", "tail\n"], hunk) == ["baz\n", "\n", "tail\n"]
+
+
+def test_blank_context_line_must_match_a_blank_file_line() -> None:
+    hunk = _hunk(1, 3, 3, [" foo", "", "-bar", "+baz"])
+
+    with pytest.raises(ValueError, match=r"line 2: expected '', got 'not blank'"):
+        patch_tool._apply_hunk(["foo\n", "not blank\n", "bar\n"], hunk)
+
+
+def test_added_and_deleted_blank_lines_keep_their_prefix_semantics() -> None:
+    hunk = _hunk(1, 3, 3, [" foo", "-", "+", "+added", "-bar"])
+
+    assert patch_tool._apply_hunk(["foo\n", "\n", "bar\n"], hunk) == ["foo\n", "\n", "added\n"]
+
+
+def test_blank_context_line_reuses_the_original_file_line() -> None:
+    """A blank context line is copied through, not re-synthesised."""
+    hunk = _hunk(1, 2, 3, [" foo", "", "+"])
+    original_blank = "\n"
+
+    out = patch_tool._apply_hunk(["foo\n", original_blank], hunk)
+
+    assert out == ["foo\n", "\n", "\n"]
+    assert out[1] is original_blank
+
+
+@pytest.mark.asyncio
+async def test_issue_repro_blank_context_line_without_leading_space(tmp_path: Path) -> None:
+    target = tmp_path / "test.txt"
+    target.write_text("foo\n\nbar\n", encoding="utf-8")
+
+    result = await _apply(
+        tmp_path,
+        "*** Begin Patch\n"
+        "*** Update File: test.txt\n"
+        "@@@ -1,3 +1,3 @@@\n"
+        " foo\n"
+        "\n"
+        "-bar\n"
+        "+baz\n"
+        "*** End Patch",
+    )
+
+    assert "1 file(s) modified" in result
+    assert target.read_text(encoding="utf-8") == "foo\n\nbaz\n"
+
+
+@pytest.mark.asyncio
+async def test_blank_line_before_end_marker_is_not_hunk_context(tmp_path: Path) -> None:
+    """A blank separator after the hunk body must not be read as context."""
+    target = tmp_path / "test.txt"
+    target.write_text("foo\nbar\n", encoding="utf-8")
+
+    await _apply(
+        tmp_path,
+        "*** Begin Patch\n"
+        "*** Update File: test.txt\n"
+        "@@@ -1,2 +1,2 @@@\n"
+        " foo\n"
+        "-bar\n"
+        "+baz\n"
+        "\n"
+        "*** End Patch",
+    )
+
+    assert target.read_text(encoding="utf-8") == "foo\nbaz\n"
+
+
+@pytest.mark.asyncio
+async def test_blank_line_between_hunks_and_files_is_not_hunk_context(tmp_path: Path) -> None:
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    second.write_text("x\n", encoding="utf-8")
+
+    await _apply(
+        tmp_path,
+        "*** Begin Patch\n"
+        "*** Update File: a.txt\n"
+        "@@@ -1,1 +1,1 @@@\n"
+        "-one\n"
+        "+ONE\n"
+        "\n"
+        "@@@ -4,1 +4,1 @@@\n"
+        "-four\n"
+        "+FOUR\n"
+        "\n"
+        "*** Update File: b.txt\n"
+        "@@@ -1,1 +1,1 @@@\n"
+        "-x\n"
+        "+y\n"
+        "*** End Patch",
+    )
+
+    assert first.read_text(encoding="utf-8") == "ONE\ntwo\nthree\nFOUR\n"
+    assert second.read_text(encoding="utf-8") == "y\n"
+
+
+@pytest.mark.asyncio
+async def test_trailing_blank_context_counted_by_the_header_is_kept(tmp_path: Path) -> None:
+    """A trailing ``""`` the header accounts for is real context, not a separator."""
+    target = tmp_path / "test.txt"
+    target.write_text("bar\n\ntail\n", encoding="utf-8")
+
+    await _apply(
+        tmp_path,
+        "*** Begin Patch\n"
+        "*** Update File: test.txt\n"
+        "@@@ -1,2 +1,2 @@@\n"
+        "-bar\n"
+        "+baz\n"
+        "\n"
+        "*** End Patch",
+    )
+
+    assert target.read_text(encoding="utf-8") == "baz\n\ntail\n"
+
+
+def _parsed_hunk_lines(body: str) -> list[str]:
+    ops = patch_tool._parse_patch(f"*** Begin Patch\n*** Update File: t.txt\n{body}\n*** End Patch")
+    (op,) = ops
+    assert isinstance(op, patch_tool.UpdateFile)
+    (hunk,) = op.hunks
+    return hunk.lines
+
+
+def test_separator_after_an_omitted_count_header_is_trimmed() -> None:
+    """``-3 +3`` means one old line; the trailing blank is not a second one."""
+    assert _parsed_hunk_lines("@@@ -3 +3 @@@\n-old\n+new\n") == ["-old", "+new"]
+
+
+def test_separator_after_a_prepend_hunk_is_trimmed() -> None:
+    assert _parsed_hunk_lines("@@@ -0,0 +1,2 @@@\n+one\n+two\n") == ["+one", "+two"]
+
+
+def test_counted_trailing_blank_is_kept_and_only_the_separator_is_trimmed() -> None:
+    assert _parsed_hunk_lines("@@@ -1,2 +1,2 @@@\n-bar\n+baz\n\n\n") == ["-bar", "+baz", ""]

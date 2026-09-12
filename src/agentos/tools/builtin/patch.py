@@ -110,6 +110,7 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
                     ):
                         hunk.lines.append(body[i])
                         i += 1
+                    _trim_trailing_separators(hunk)
                     hunks.append(hunk)
                 else:
                     i += 1
@@ -124,6 +125,37 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
             i += 1
 
     return ops
+
+
+def _split_hunk_line(raw: str) -> tuple[str, str]:
+    """Return ``(prefix, content)`` for one hunk line.
+
+    Unified diffs write an empty context line as a bare ``""`` at least as
+    often as ``" "`` -- editors, terminals, CI log pipelines and most model
+    output strip the trailing space -- so an empty line is a context line
+    whose content is empty, not a line to skip.
+    """
+    if not raw:
+        return " ", ""
+    return raw[0], raw[1:]
+
+
+def _old_side_line_count(lines: list[str]) -> int:
+    """Number of hunk lines that consume a line of the original file."""
+    return sum(1 for raw in lines if _split_hunk_line(raw)[0] in (" ", "-"))
+
+
+def _trim_trailing_separators(hunk: Hunk) -> None:
+    """Drop blank lines that trail the hunk body but are not part of it.
+
+    A bare ``""`` inside a hunk is a blank context line (see
+    ``_split_hunk_line``), but a blank line that merely separates the hunk
+    from the next ``@@@`` / ``***`` marker is formatting, not context. The
+    header's old-side count tells the two apart: a trailing blank the count
+    does not account for is a separator.
+    """
+    while hunk.lines and hunk.lines[-1] == "" and _old_side_line_count(hunk.lines) > hunk.old_count:
+        hunk.lines.pop()
 
 
 def _parse_hunk_header(header: str) -> Hunk:
@@ -470,10 +502,7 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
     # Verify context and deleted lines match
     check_pos = pos
     for raw in hunk.lines:
-        if not raw:
-            continue
-        prefix = raw[0]
-        content = raw[1:]
+        prefix, content = _split_hunk_line(raw)
         if prefix in (" ", "-"):
             if check_pos >= len(result):
                 raise ValueError(f"Hunk context/delete at line {check_pos + 1} exceeds file length")
@@ -490,10 +519,7 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
     new_lines: list[str] = []
     src_pos = pos
     for raw in hunk.lines:
-        if not raw:
-            continue
-        prefix = raw[0]
-        content = raw[1:]
+        prefix, content = _split_hunk_line(raw)
         if prefix == " ":
             new_lines.append(result[src_pos])
             src_pos += 1
