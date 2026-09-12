@@ -187,19 +187,6 @@ def normalize_address(value: str) -> str:
     return address.strip().lower()
 
 
-def is_email_address(value: str) -> bool:
-    """Return True when ``value`` carries a usable mailbox address.
-
-    Outbound callers hand us ``reply_to`` values that are sometimes an address
-    and sometimes an opaque routing token (``cron``, a thread key), so the
-    address fallback has to be able to tell the two apart.
-    """
-
-    address = normalize_address(value)
-    local, at, domain = address.partition("@")
-    return bool(local and at and domain)
-
-
 def sender_allowed(sender: str, allowlist: list[str] | tuple[str, ...]) -> bool:
     """Return True when ``sender`` matches the fail-closed allowlist.
 
@@ -775,21 +762,39 @@ class EmailChannel:
         return OutgoingMessage(content=content, reply_to=inbound.channel_id, metadata=metadata)
 
     def _resolve_target(self, message: OutgoingMessage) -> tuple[str, str, str, str]:
-        """Return ``(to, subject, in_reply_to, references)`` for an outbound send."""
+        """Return ``(to, subject, in_reply_to, references)`` for an outbound send.
+
+        The mailbox comes from ``metadata["to"]`` (channel replies, scheduler
+        and heartbeat delivery), ``metadata["recipient"]`` (the message tool)
+        or the thread the ``reply_to`` key names. It is never read off
+        ``reply_to`` itself: that key is the inbound Message-ID, which has a
+        mailbox's ``local@domain`` shape but a domain chosen by whoever sent
+        the original mail. Once the thread has aged out of the cache -- any
+        restart empties it -- guessing would hand the reply to that domain.
+        Refusing is a loud failure instead of a silent misdelivery.
+        """
 
         reply_to = (message.reply_to or "").strip()
         thread = self._threads.get(reply_to)
         metadata = message.metadata or {}
-        # The message tool writes "recipient", channel replies write "to", and
-        # scheduler/heartbeat delivery sends the bare address as reply_to, so
-        # every producer has to be able to name the mailbox.
         to_address = str(
             metadata.get("to") or metadata.get("recipient") or (thread.to_address if thread else "")
         ).strip()
-        if not to_address and is_email_address(reply_to):
-            to_address = normalize_address(reply_to)
         if not to_address:
-            raise ValueError("email.send has no recipient for reply_to")
+            if not reply_to:
+                raise ValueError(
+                    "email.send has no recipient: the message names no metadata['to'] and no thread"
+                )
+            log.warning(
+                "email.send_unknown_thread",
+                name=self.config.name,
+                thread_id=reply_to,
+            )
+            raise ValueError(
+                f"email.send has no recipient for unknown thread {reply_to!r}: the thread "
+                "is not in the routing cache (evicted, or lost on restart) and the message "
+                "names no metadata['to']"
+            )
         subject = str(metadata.get("subject") or "").strip()
         if not subject:
             subject = reply_subject(thread.subject) if thread else _DEFAULT_OUTBOUND_SUBJECT

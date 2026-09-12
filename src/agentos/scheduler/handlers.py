@@ -205,6 +205,10 @@ def _delivery_override_from_fields(job: CronJob) -> dict[str, str] | None:
         "channel_id": delivery.channel_id,
         "account_id": delivery.account_id,
         "thread_id": delivery.thread_id,
+        # ``channel`` means the recipient was configured; ``origin`` means it
+        # is the key of the conversation the job came from. The email adapter
+        # only mails a configured address (see HeartbeatService).
+        "mode": str(delivery.mode),
     }
 
 

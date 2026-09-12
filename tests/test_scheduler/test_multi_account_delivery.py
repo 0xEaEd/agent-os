@@ -14,6 +14,7 @@ from agentos.scheduler.types import (
     DeliveryConfig,
     DeliveryMode,
     FailureDestination,
+    ReplyTargetSnapshot,
     SessionTarget,
 )
 
@@ -317,6 +318,131 @@ async def test_slack_resolved_thread_metadata() -> None:
     assert msg.content == "hello thread"
     assert msg.reply_to == "thread-456"
     assert msg.metadata == {"channel": "C0123ABCDEF"}
+
+
+def _email_chain() -> tuple[_FakeAdapter, DeliveryChain]:
+    adapter = _FakeAdapter("mail")
+    manager = ChannelManager(
+        _channels={"mail": adapter},  # type: ignore
+        _turn_runner=None,
+        _session_manager=None,
+        _channel_types={"mail": "email"},
+    )
+    return adapter, DeliveryChain(channel_manager_ref=lambda: manager)
+
+
+def _email_job(delivery: DeliveryConfig) -> CronJob:
+    return CronJob(
+        id="job-1",
+        name="mail-test",
+        handler_key="script_run",
+        payload=make_script_payload("test.sh"),
+        session_target=SessionTarget.ISOLATED,
+        delivery=delivery,
+    )
+
+
+# The email adapter never reads a mailbox off ``reply_to``: an inbound thread
+# key is a Message-ID with the same ``local@domain`` shape. So a delivery to an
+# operator-chosen address has to carry it in ``metadata["to"]``, while a
+# delivery back into the originating conversation must not -- there
+# ``channel_id`` *is* the thread key, and naming it as the recipient would
+# mail the Message-ID.
+
+
+@pytest.mark.asyncio
+async def test_channel_mode_email_delivery_names_the_configured_mailbox() -> None:
+    adapter, chain = _email_chain()
+    job = _email_job(
+        DeliveryConfig(
+            mode=DeliveryMode.CHANNEL, channel_name="email", channel_id="alerts@example.com"
+        )
+    )
+
+    report = await chain.deliver(job, "report", True, "report", "cron:job-1:run:deadbeef")
+
+    assert report.channel_status == "delivered"
+    (msg,) = adapter.messages
+    assert msg.reply_to == "alerts@example.com"
+    assert msg.metadata == {"to": "alerts@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_origin_mode_email_delivery_keeps_the_thread_key_as_reply_to_only() -> None:
+    adapter, chain = _email_chain()
+    job = _email_job(
+        DeliveryConfig(
+            mode=DeliveryMode.ORIGIN, channel_name="email", channel_id="CAGr5Gg=xyz@mail.gmail.com"
+        )
+    )
+
+    await chain.deliver(job, "report", True, "report", "cron:job-1:run:deadbeef")
+
+    (msg,) = adapter.messages
+    assert msg.reply_to == "CAGr5Gg=xyz@mail.gmail.com"
+    assert msg.metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_rendezvous_email_delivery_keeps_the_thread_key_as_reply_to_only() -> None:
+    adapter, chain = _email_chain()
+    job = _email_job(
+        DeliveryConfig(
+            mode=DeliveryMode.CHANNEL,
+            channel_name="email",
+            channel_id="alerts@example.com",
+            originating_reply_target=ReplyTargetSnapshot(
+                channel_name="email", channel_type="email", to="CAGr5Gg=xyz@mail.gmail.com"
+            ),
+        )
+    )
+
+    await chain.deliver(job, "report", True, "report", "cron:job-1:run:deadbeef")
+
+    (msg,) = adapter.messages
+    assert msg.reply_to == "CAGr5Gg=xyz@mail.gmail.com"
+    assert msg.metadata == {}
+
+
+@pytest.mark.asyncio
+async def test_failure_destination_email_delivery_names_the_configured_mailbox() -> None:
+    adapter, chain = _email_chain()
+    job = _email_job(
+        DeliveryConfig(
+            mode=DeliveryMode.NONE,
+            failure_destination=FailureDestination(
+                mode=DeliveryMode.CHANNEL, channel_name="email", channel_id="oncall@example.com"
+            ),
+        )
+    )
+
+    status = await chain.dispatch_failure_alert(job, "boom")
+
+    assert status == "delivered"
+    (msg,) = adapter.messages
+    assert msg.reply_to == "oncall@example.com"
+    assert msg.metadata == {"to": "oncall@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_channel_mode_delivery_to_other_adapters_carries_no_metadata() -> None:
+    adapter = _FakeAdapter("tg")
+    manager = ChannelManager(
+        _channels={"tg": adapter},  # type: ignore
+        _turn_runner=None,
+        _session_manager=None,
+        _channel_types={"tg": "telegram"},
+    )
+    chain = DeliveryChain(channel_manager_ref=lambda: manager)
+    job = _email_job(
+        DeliveryConfig(mode=DeliveryMode.CHANNEL, channel_name="telegram", channel_id="12345")
+    )
+
+    await chain.deliver(job, "report", True, "report", "cron:job-1:run:deadbeef")
+
+    (msg,) = adapter.messages
+    assert msg.reply_to == "12345"
+    assert msg.metadata == {}
 
 
 @pytest.mark.asyncio
