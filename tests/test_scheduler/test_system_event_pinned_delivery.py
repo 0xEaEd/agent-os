@@ -51,6 +51,9 @@ def test_resolver_uses_explicit_channel_fields_when_channel_mode() -> None:
         "channel_id": "C123",
         "account_id": "T1",
         "thread_id": "th-1",
+        # The recipient was configured, not inferred from a conversation --
+        # the email adapter needs to know which (see HeartbeatService).
+        "mode": "channel",
     }
 
 
@@ -116,6 +119,7 @@ def test_resolver_uses_origin_fields_when_origin_without_snapshot() -> None:
         "channel_id": "dis-1",
         "account_id": "",
         "thread_id": "",
+        "mode": "origin",
     }
 
 

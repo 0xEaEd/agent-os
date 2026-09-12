@@ -339,6 +339,13 @@ class DeliveryChain:
             channel_id=channel_id,
             account_id=account_id,
             thread_id=thread_id,
+            # A rendezvous snapshot and ``origin`` mode both name the
+            # conversation the job came from; only a plain ``channel`` job
+            # carries a recipient someone typed in.
+            configured_recipient=(
+                job.delivery.originating_reply_target is None
+                and job.delivery.mode == DeliveryMode.CHANNEL
+            ),
         )
 
     async def _deliver_origin_webchat_to_session(
@@ -419,8 +426,16 @@ class DeliveryChain:
         channel_id: str,
         account_id: str = "",
         thread_id: str = "",
+        configured_recipient: bool = False,
     ) -> str:
-        """Send ``text`` via the registered channel adapter for ``channel_name``."""
+        """Send ``text`` via the registered channel adapter for ``channel_name``.
+
+        ``configured_recipient`` says ``channel_id`` is an address someone
+        configured rather than the key of the conversation the job came from.
+        The email adapter needs to know: a thread key is a Message-ID with a
+        mailbox's shape, so it refuses to read a recipient off ``reply_to``
+        and only mails an address it is handed as ``metadata["to"]``.
+        """
         text = strip_reply_directives(text) or ""
         if not self._channel_manager_ref:
             return "skipped"
@@ -472,6 +487,10 @@ class DeliveryChain:
                         reply_to="cron",
                         metadata={"channel": channel_id, "thread_ts": None},
                     )
+            elif channel_name == "email" and configured_recipient and channel_id:
+                msg = OutgoingMessage(
+                    content=text, reply_to=channel_id, metadata={"to": channel_id}
+                )
             else:
                 msg = OutgoingMessage(content=text, reply_to=channel_id or None)
             await asyncio.wait_for(adapter.send(msg), timeout=30.0)
@@ -588,6 +607,7 @@ class DeliveryChain:
                 channel_id=fd.channel_id,
                 account_id=fd.account_id or "",
                 thread_id=fd.thread_id,
+                configured_recipient=True,
             )
         return "skipped"
 

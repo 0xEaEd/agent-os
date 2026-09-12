@@ -143,7 +143,14 @@ from the same person starts a fresh session.
 
 The thread routing table (which address and subject a reply goes back to) is
 rebuilt from each inbound message and kept in memory only, so a gateway
-restart does not affect replying to live conversations.
+restart does not affect replying to live conversations. A reply into a thread
+the table no longer knows -- a scheduled job or artifact delivery that fires
+after a restart, before the correspondent has written again -- is refused with
+`email.send has no recipient for unknown thread` rather than guessed: the thread
+key is the inbound `Message-ID`, which looks like a mailbox but whose domain the
+original sender chose. Cron and heartbeat deliveries that are configured with an
+address (cron `channel_id: "alerts@example.com"`, heartbeat `to:`) do not depend
+on the table.
 
 Quoted history below a reply is stripped before the text reaches the model, and
 HTML-only mail is flattened to text. Replies are sent as plain text: mail

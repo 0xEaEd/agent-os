@@ -209,6 +209,10 @@ class HeartbeatLoop:
                 "account_id": snap["account_id"],
                 "thread_id": snap["thread_id"],
             }
+            if snap["to"]:
+                # A configured ``to`` is a recipient, not the session's last
+                # conversation -- the email adapter treats the two differently.
+                delivery_override["mode"] = "channel"
 
         kwargs = {
             "reason": "heartbeat:loop",

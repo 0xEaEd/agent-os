@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agentos.scheduler.delivery import infer_delivery
+from agentos.scheduler.types import DeliveryMode
 
 
 @dataclass
@@ -109,6 +110,12 @@ class HeartbeatService:
                 delivery.thread_id = override["thread_id"]
             elif not turn_source_thread_id:
                 delivery.thread_id = ""
+            if override.get("mode") == DeliveryMode.CHANNEL and override.get("channel_id"):
+                # The override carries a recipient someone configured, not
+                # the conversation the session last spoke to. Without an id
+                # the target is still the inferred conversation, whatever
+                # the override's mode says.
+                delivery.mode = DeliveryMode.CHANNEL
         elif isinstance(target, str) and target.strip():
             delivery = await infer_delivery(
                 self._session_storage,
@@ -273,6 +280,17 @@ class HeartbeatService:
                     reply_to=("cron" if channel_id else None),
                     metadata=metadata,
                 )
+        elif (
+            channel_name == "email"
+            and getattr(delivery, "mode", None) == DeliveryMode.CHANNEL
+            and channel_id
+        ):
+            # ``channel_id`` is a configured address. The email adapter only
+            # mails an address it is handed as ``metadata["to"]``: a thread
+            # key is a Message-ID with a mailbox's shape, so it refuses to
+            # read a recipient off ``reply_to``. In ``origin`` mode the id
+            # *is* the thread key and must stay ``reply_to`` alone.
+            msg = OutgoingMessage(content=text, reply_to=channel_id, metadata={"to": channel_id})
         else:
             msg = OutgoingMessage(content=text, reply_to=channel_id or None)
         try:

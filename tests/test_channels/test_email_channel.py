@@ -21,7 +21,6 @@ from agentos.channels.email import (
     _quote_imap_mailbox,
     html_to_text,
     is_automated,
-    is_email_address,
     normalize_address,
     reply_subject,
     sender_allowed,
@@ -534,23 +533,99 @@ async def test_send_resolves_the_recipient_from_metadata_recipient(
     assert sent[0].get("In-Reply-To") is None
 
 
-async def test_send_resolves_the_recipient_from_reply_to_address(
+async def test_send_resolves_the_recipient_from_metadata_to(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Scheduler and heartbeat delivery pass the address as ``reply_to`` alone."""
+    """Scheduler and heartbeat delivery name the mailbox in ``metadata["to"]``."""
 
     channel = EmailChannel(config=_config())
     sent: list[EmailMessage] = []
     monkeypatch.setattr(channel, "_smtp_send", sent.append)
 
-    await channel.send(OutgoingMessage(content="alert", reply_to="alerts@example.com"))
+    await channel.send(
+        OutgoingMessage(
+            content="alert",
+            reply_to="alerts@example.com",
+            metadata={"to": "alerts@example.com"},
+        )
+    )
 
     assert sent[0]["To"] == "alerts@example.com"
     assert sent[0].get_content().strip() == "alert"
 
 
+@pytest.mark.parametrize(
+    "reply_to",
+    [
+        # The thread key an inbound Message-ID produces -- the value every
+        # channel reply, message-tool send and artifact delivery carries.
+        "CAGr5Gg=xyz@mail.gmail.com",
+        # ...and one whose domain the original sender chose for themselves.
+        "anything@attacker.example",
+        # A bare mailbox is no different: after a restart the channel cannot
+        # tell it from a Message-ID, so neither may be guessed at.
+        "alerts@example.com",
+    ],
+)
+async def test_send_never_treats_an_unknown_thread_key_as_the_recipient(
+    monkeypatch: pytest.MonkeyPatch, reply_to: str
+) -> None:
+    """A Message-ID has a mailbox's shape; an evicted thread must fail loudly."""
+
+    channel = EmailChannel(config=_config())
+    sent: list[EmailMessage] = []
+    monkeypatch.setattr(channel, "_smtp_send", sent.append)
+
+    with pytest.raises(ValueError, match="unknown thread"):
+        await channel.send(OutgoingMessage(content="secret reply", reply_to=reply_to))
+
+    assert sent == []
+
+
+async def test_send_with_no_target_at_all_says_so() -> None:
+    channel = EmailChannel(config=_config())
+
+    with pytest.raises(ValueError, match="no metadata\\['to'\\] and no thread"):
+        await channel.send(OutgoingMessage(content="ping", reply_to=None))
+
+
+async def test_send_after_thread_eviction_is_refused_not_misdelivered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = EmailChannel(config=_config())
+    sent: list[EmailMessage] = []
+    monkeypatch.setattr(channel, "_smtp_send", sent.append)
+    inbound = channel._to_incoming(_raw())
+    assert inbound is not None
+    await channel.send(OutgoingMessage(content="first", reply_to=inbound.channel_id))
+    assert sent[0]["To"] == "owner@example.com"
+
+    channel._threads.clear()  # what a restart or LRU eviction does
+
+    with pytest.raises(ValueError, match="unknown thread"):
+        await channel.send(OutgoingMessage(content="second", reply_to=inbound.channel_id))
+    assert len(sent) == 1
+
+
+async def test_send_file_into_an_evicted_thread_fails_instead_of_misdelivering(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    channel = EmailChannel(config=_config())
+    sent: list[EmailMessage] = []
+    monkeypatch.setattr(channel, "_smtp_send", sent.append)
+    artifact = tmp_path / "report.csv"
+    artifact.write_bytes(b"a,b\n")
+
+    result = await channel.send_file("CAGr5Gg=xyz@mail.gmail.com", str(artifact))
+
+    assert result.status == ChannelSendStatus.FAILED
+    assert result.retryable is False
+    assert "unknown thread" in (result.reason or "")
+    assert sent == []
+
+
 async def test_send_recipient_resolution_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``to`` beats ``recipient`` beats the thread cache beats ``reply_to``."""
+    """``to`` beats ``recipient`` beats the thread cache; ``reply_to`` is never a mailbox."""
 
     channel = EmailChannel(config=_config())
     assert channel._to_incoming(_raw()) is not None
@@ -572,29 +647,12 @@ async def test_send_recipient_resolution_precedence(monkeypatch: pytest.MonkeyPa
         )
     )
     await channel.send(OutgoingMessage(content="x", reply_to="m1@example.com"))
-    await channel.send(OutgoingMessage(content="x", reply_to="fourth@example.com"))
 
     assert [m["To"] for m in sent] == [
         "first@example.com",
         "second@example.com",
         "owner@example.com",
-        "fourth@example.com",
     ]
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("owner@example.com", True),
-        ("Owner Name <owner@example.com>", True),
-        ("unknown", False),
-        ("cron", False),
-        ("", False),
-        ("m1@example.com", True),
-    ],
-)
-def test_is_email_address_accepts_only_addressable_values(value: str, expected: bool) -> None:
-    assert is_email_address(value) is expected
 
 
 async def test_send_without_a_known_thread_is_refused() -> None:
