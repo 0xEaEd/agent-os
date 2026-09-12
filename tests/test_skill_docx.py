@@ -378,3 +378,47 @@ def test_apply_ops_skips_non_dict_ops() -> None:
 
     assert applied == 1
     assert doc.paragraphs[0].text == "Hello Wei"
+
+
+def test_replace_run_returns_bool() -> None:
+    edit_docx = _edit_docx_module()
+    paragraph = _paragraph([("Run 0", False)])
+
+    assert edit_docx._replace_run(paragraph, 0, "Updated") is True
+    assert paragraph.runs[0].text == "Updated"
+    assert edit_docx._replace_run(paragraph, 5, "OutOfBounds") is False
+    assert edit_docx._replace_run(paragraph, -1, "Negative") is False
+    assert paragraph.runs[0].text == "Updated"
+
+
+def test_apply_ops_replace_run_counts_only_valid_modifications() -> None:
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    p0 = doc.add_paragraph()
+    p0.add_run("Original 0")
+    p1 = doc.add_paragraph()
+    p1.add_run("Original 1")
+
+    ops = [
+        # Out-of-bounds run index: should be ignored and not increment applied
+        {"op": "replace_run", "para": 0, "run": 99, "text": "Out of bounds"},
+        # Negative run index: should be ignored
+        {"op": "replace_run", "para": 0, "run": -1, "text": "Negative run"},
+        # Out-of-bounds para index: should be ignored
+        {"op": "replace_run", "para": 10, "run": 0, "text": "Out of bounds para"},
+        # Negative para index: should be ignored
+        {"op": "replace_run", "para": -1, "run": 0, "text": "Negative para"},
+        # Invalid para type: should be ignored without raising
+        {"op": "replace_run", "para": "invalid", "run": 0, "text": "Invalid para"},
+        {"op": "replace_run", "para": None, "run": 0, "text": "None para"},
+        # Valid replace_run: should succeed and increment applied
+        {"op": "replace_run", "para": 1, "run": 0, "text": "Replaced 1"},
+    ]
+
+    applied = edit_docx.apply_ops(doc, ops)
+    assert applied == 1
+    assert doc.paragraphs[0].runs[0].text == "Original 0"
+    assert doc.paragraphs[1].runs[0].text == "Replaced 1"
+

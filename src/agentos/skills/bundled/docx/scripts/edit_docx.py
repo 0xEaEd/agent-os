@@ -28,9 +28,11 @@ from docx.table import Table, _Cell
 from docx.text.paragraph import Paragraph
 
 
-def _replace_run(para: Paragraph, run_idx: int, text: str) -> None:
+def _replace_run(para: Paragraph, run_idx: int, text: str) -> bool:
     if 0 <= run_idx < len(para.runs):
         para.runs[run_idx].text = text
+        return True
+    return False
 
 
 def _replace_text_in_paragraph(para: Paragraph, find: str, replacement: str) -> bool:
@@ -113,11 +115,16 @@ def apply_ops(doc: Document, ops: list[dict[str, Any]]) -> int:
         kind = op.get("op")
         if kind == "replace_run":
             try:
-                para = doc.paragraphs[int(op["para"])]
-            except (KeyError, IndexError, ValueError):
+                para_idx = int(op["para"])
+                if para_idx < 0 or para_idx >= len(doc.paragraphs):
+                    continue
+                para = doc.paragraphs[para_idx]
+                run_idx = int(op.get("run", 0))
+                text = str(op.get("text", ""))
+                if _replace_run(para, run_idx, text):
+                    applied += 1
+            except (KeyError, IndexError, ValueError, TypeError):
                 continue
-            _replace_run(para, int(op.get("run", 0)), str(op.get("text", "")))
-            applied += 1
         elif kind == "replace_text":
             find = str(op.get("find", ""))
             replacement = str(op.get("with", ""))
