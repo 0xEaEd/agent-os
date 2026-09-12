@@ -75,20 +75,25 @@ def _table_text(shape) -> list[str]:
     return out
 
 
+def _collect_shape_text(shape) -> list[str]:
+    """Recursively collect non-empty text strings from a shape or group shape."""
+    out: list[str] = []
+    out.extend(_shape_text(shape))
+    out.extend(_table_text(shape))
+    if getattr(shape, "shapes", None):
+        try:
+            for inner in shape.shapes:
+                out.extend(_collect_shape_text(inner))
+        except (AttributeError, TypeError):
+            pass
+    return out
+
+
 def _slide_text(slide) -> list[str]:
-    """Walk shapes (and one level of grouped shapes) collecting text."""
+    """Walk shapes (and recursively grouped shapes) collecting text."""
     out: list[str] = []
     for shape in slide.shapes:
-        out.extend(_shape_text(shape))
-        out.extend(_table_text(shape))
-        # one level of group expansion (sufficient for most decks)
-        if getattr(shape, "shape_type", None) and getattr(shape, "shapes", None):
-            try:
-                for inner in shape.shapes:
-                    out.extend(_shape_text(inner))
-                    out.extend(_table_text(inner))
-            except (AttributeError, TypeError):
-                pass
+        out.extend(_collect_shape_text(shape))
     return out
 
 
