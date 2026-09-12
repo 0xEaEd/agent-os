@@ -49,6 +49,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   same `newline=""` write, so the patch text stays the only authority on what
   a created file contains
   ([#1124](https://github.com/use-agent-os/agent-os/issues/1124)).
+- Twenty per-session registries are bounded behind one shared primitive
+  instead of growing for the life of the gateway process. Each was a bare
+  `dict` keyed by a session id (or a tuple containing one) with no `pop()` on
+  session end and no ceiling, so a gateway serving many short sessions retained
+  one entry per session per registry — task-runtime locks, stream replay
+  buffers and sequence counters, background shell sessions, stale-output and
+  intent-approval caches, archived subagent handles, memory and bootstrap
+  snapshots, approval elevations, usage scopes and metadata, plan-mode flags,
+  the denial ledger, repeat-call watchdog state, and cache-break baselines.
+  Fifteen separate reports had produced twenty competing patches, each with its
+  own eviction policy; `agentos.util.BoundedRegistry` replaces them with one
+  rule in two configurations — session-scoped state dropped on the session's
+  terminal event with an LRU ceiling as the backstop, and time-scoped caches
+  with TTL plus a ceiling. `evict_session_runtime_state()`, the choke point
+  every deletion and terminal path already runs, now sweeps every registry that
+  can identify a session, so the bound really is the backstop rather than the
+  mechanism. A value the site declares busy — a held `asyncio.Lock` — is never
+  evicted. Both ceilings and the cache TTL are config keys
+  (`registry_session_max_entries`, `registry_cache_max_entries`,
+  `registry_cache_ttl_seconds`)
+  ([#1131](https://github.com/use-agent-os/agent-os/issues/1131)).
 
 ## [2026.9.11] - 2026-09-11
 
