@@ -95,14 +95,38 @@ def _iter_table_paragraphs(tables: Iterable[Table]) -> Iterator[Paragraph]:
             yield from _iter_table_paragraphs(cell.tables)
 
 
+def _iter_header_footer_paragraphs(doc: Document) -> Iterator[Paragraph]:
+    """Yield paragraphs and table-cell paragraphs from all headers and footers."""
+    seen: set[Any] = set()
+    for section in getattr(doc, "sections", []):
+        containers = [section.header, section.footer]
+        if getattr(section, "different_first_page_header_footer", False):
+            containers.extend([section.first_page_header, section.first_page_footer])
+        settings = getattr(doc, "settings", None)
+        if getattr(settings, "odd_and_even_pages_header_footer", False):
+            containers.extend([section.even_page_header, section.even_page_footer])
+
+        for hf in containers:
+            if hf is None:
+                continue
+            part = getattr(hf, "part", None)
+            key = part if part is not None else id(hf)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield from hf.paragraphs
+            yield from _iter_table_paragraphs(hf.tables)
+
+
 def _iter_all_paragraphs(doc: Document) -> Iterator[Paragraph]:
-    """Body paragraphs followed by every table-cell paragraph in the document.
+    """Body paragraphs, table-cell paragraphs, and header/footer paragraphs.
 
     ``doc.paragraphs`` is body-only in python-docx, yet contracts, reports and
-    invoices keep most of their placeholders inside tables.
+    invoices keep placeholders inside tables and section headers/footers.
     """
     yield from doc.paragraphs
     yield from _iter_table_paragraphs(doc.tables)
+    yield from _iter_header_footer_paragraphs(doc)
 
 
 def apply_ops(doc: Document, ops: list[dict[str, Any]]) -> int:

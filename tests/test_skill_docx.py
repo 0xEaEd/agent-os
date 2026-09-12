@@ -378,3 +378,85 @@ def test_apply_ops_skips_non_dict_ops() -> None:
 
     assert applied == 1
     assert doc.paragraphs[0].text == "Hello Wei"
+
+
+def test_replace_text_reaches_headers_and_footers() -> None:
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    doc.add_paragraph("Body paragraph")
+    sec = doc.sections[0]
+    sec.header.paragraphs[0].text = "Header {{ORG}}"
+    sec.footer.paragraphs[0].text = "Confidential {{DOC_ID}}"
+
+    applied = edit_docx.apply_ops(
+        doc,
+        [
+            {"op": "replace_text", "find": "{{ORG}}", "with": "Acme Corp"},
+            {"op": "replace_text", "find": "{{DOC_ID}}", "with": "DOC-999"},
+        ],
+    )
+
+    assert applied == 2
+    assert sec.header.paragraphs[0].text == "Header Acme Corp"
+    assert sec.footer.paragraphs[0].text == "Confidential DOC-999"
+
+
+def test_replace_text_reaches_header_tables() -> None:
+    from docx import Document
+    from docx.shared import Inches
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    sec = doc.sections[0]
+    tbl = sec.header.add_table(1, 1, Inches(1))
+    tbl.cell(0, 0).text = "TableInHeader: {{DATE}}"
+
+    applied = edit_docx.apply_ops(
+        doc,
+        [{"op": "replace_text", "find": "{{DATE}}", "with": "2026-09-12"}],
+    )
+
+    assert applied == 1
+    assert tbl.cell(0, 0).text == "TableInHeader: 2026-09-12"
+
+
+def test_replace_text_visits_shared_section_headers_once() -> None:
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    sec0 = doc.sections[0]
+    sec0.header.paragraphs[0].text = "{{TAG}}"
+    # Adding a second section links its header to sec0 by default
+    doc.add_section()
+
+    applied = edit_docx.apply_ops(
+        doc,
+        [{"op": "replace_text", "find": "{{TAG}}", "with": "{{TAG}}!"}],
+    )
+
+    assert applied == 1
+    assert sec0.header.paragraphs[0].text == "{{TAG}}!"
+
+
+def test_replace_text_different_first_page_header() -> None:
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    sec = doc.sections[0]
+    sec.different_first_page_header_footer = True
+    sec.first_page_header.paragraphs[0].text = "First: {{TITLE}}"
+    sec.header.paragraphs[0].text = "Other: {{TITLE}}"
+
+    applied = edit_docx.apply_ops(
+        doc,
+        [{"op": "replace_text", "find": "{{TITLE}}", "with": "Quarterly Report"}],
+    )
+
+    assert applied == 2
+    assert sec.first_page_header.paragraphs[0].text == "First: Quarterly Report"
+    assert sec.header.paragraphs[0].text == "Other: Quarterly Report"
+
