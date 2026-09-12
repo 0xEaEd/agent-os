@@ -743,18 +743,38 @@ async def exec_command(
     result = check_safe_bin(command)
     cwd = _effective_workdir(workdir)
 
+    # Every unconditional block below is recorded in the ledger before it
+    # returns or raises. These are the *most* severe refusals, and recording
+    # only the interactive approval denials left them out of the audit trail
+    # entirely. They are audit_only: they refuse before the sandbox gate runs,
+    # so they must not move the §8.5 pause total or the §8.4 last-denial
+    # fingerprint — see DenialLedger.record_audit_denial for what each would
+    # break.
+
     # Denylist: hard-block, never bypassable
     if not result.allowed:
+        await _record_shell_denial(
+            "exec_command", command, cwd, DenialReason.POLICY_DENIED, audit_only=True
+        )
         raise ToolError(result.reason)
 
     sensitive_block = _sensitive_shell_block("exec_command", command, workdir=cwd)
     if sensitive_block is not None:
+        await _record_shell_denial(
+            "exec_command", command, cwd, DenialReason.POLICY_DENIED, audit_only=True
+        )
         return sensitive_block
     lockdown_block = _workspace_lockdown_shell_block("exec_command", command, cwd)
     if lockdown_block is not None:
+        await _record_shell_denial(
+            "exec_command", command, cwd, DenialReason.POLICY_DENIED, audit_only=True
+        )
         return json.dumps(lockdown_block, ensure_ascii=False)
     deny_block = _workspace_write_deny_shell_block("exec_command", command, cwd)
     if deny_block is not None:
+        await _record_shell_denial(
+            "exec_command", command, cwd, DenialReason.POLICY_DENIED, audit_only=True
+        )
         return json.dumps(deny_block, ensure_ascii=False)
 
     # Warnlist: two-step approval flow
@@ -906,16 +926,29 @@ async def background_process(
 ) -> str:
     result = check_safe_bin(command)
     cwd = _effective_workdir(workdir)
+    # As in exec_command: hard blocks get an audit-only ledger record.
     if not result.allowed:
+        await _record_shell_denial(
+            "background_process", command, cwd, DenialReason.POLICY_DENIED, audit_only=True
+        )
         raise ToolError(result.reason)
     sensitive_block = _sensitive_shell_block("background_process", command, workdir=cwd)
     if sensitive_block is not None:
+        await _record_shell_denial(
+            "background_process", command, cwd, DenialReason.POLICY_DENIED, audit_only=True
+        )
         return sensitive_block
     lockdown_block = _workspace_lockdown_shell_block("background_process", command, cwd)
     if lockdown_block is not None:
+        await _record_shell_denial(
+            "background_process", command, cwd, DenialReason.POLICY_DENIED, audit_only=True
+        )
         return json.dumps(lockdown_block, ensure_ascii=False)
     deny_block = _workspace_write_deny_shell_block("background_process", command, cwd)
     if deny_block is not None:
+        await _record_shell_denial(
+            "background_process", command, cwd, DenialReason.POLICY_DENIED, audit_only=True
+        )
         return json.dumps(deny_block, ensure_ascii=False)
     if result.needs_approval:
         prior_elevation = _approval_elevation_state()
@@ -1334,22 +1367,37 @@ async def _record_shell_denial(
     workdir: str | None,
     reason: DenialReason,
     env: dict[str, str] | None = None,
+    *,
+    audit_only: bool = False,
 ) -> None:
     """Record a shell-layer denial into the sandbox ledger for §8.3/§8.5.
 
+    ``audit_only`` is for the unconditional blocks, which refuse before the
+    sandbox gate ever runs: they leave the §8.5 pause total and the §8.4
+    last-denial fingerprint alone, because neither would mean what the gate
+    reads it to mean. See :meth:`DenialLedger.record_audit_denial`.
+
     Silently no-ops when the runtime is not configured. Failure to record
     is logged but never propagated — we prefer a missed bookkeeping entry
-    over a new failure mode in the shell tool.
+    over a new failure mode in the shell tool. That guarantee is why the
+    request is built inside the ``try`` as well: _sandbox_request_for reaches
+    Path.cwd(), which raises when the process cwd has been removed, and this
+    now sits on the security-block path where a raise would replace a clean
+    block envelope with an unhandled exception.
     """
     runtime = get_runtime()
     if runtime is None:
         return
-    built = _sandbox_request_for(tool_name, command, workdir, env=env)
-    if built is None:
-        return
-    request, _, session_id = built
     try:
-        await runtime.ledger.record_denial(session_id, action_fingerprint(request), reason)
+        built = _sandbox_request_for(tool_name, command, workdir, env=env)
+        if built is None:
+            return
+        request, _, session_id = built
+        fingerprint = action_fingerprint(request)
+        if audit_only:
+            await runtime.ledger.record_audit_denial(session_id, fingerprint, reason)
+        else:
+            await runtime.ledger.record_denial(session_id, fingerprint, reason)
     except Exception:  # pragma: no cover - bookkeeping only
         log.exception("shell.denial_record_failed", command=_audit_command(command))
 
