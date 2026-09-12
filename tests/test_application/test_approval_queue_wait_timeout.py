@@ -68,3 +68,27 @@ async def test_wait_returns_immediately_once_resolved_during_the_call(tmp_path) 
 
     assert result is True
     queue.close()
+
+
+@pytest.mark.asyncio
+async def test_wait_default_timeout_denies_even_when_the_wall_clock_does_not_tick(
+    tmp_path, monkeypatch
+) -> None:
+    """Windows' time.time() advances in ~15.6ms steps, so after a short wait it
+    can still read the approval as younger than its lifespan. A frozen wall
+    clock is the extreme form of that: the wait deadline (monotonic) elapses
+    while time.time() - created_at stays 0, and the approval must still be
+    denied rather than left pending forever."""
+    db_path = tmp_path / "approval_queue.sqlite"
+    queue = ApprovalQueue(default_timeout=0.02, db_path=str(db_path), poll_interval=0.01)
+    approval_id = queue.request("exec", {"toolName": "exec_command"})
+    frozen = time.time()
+    monkeypatch.setattr(time, "time", lambda: frozen)
+
+    result = await queue.wait(approval_id)
+
+    assert result is False
+    entry = queue.get(approval_id)
+    assert entry.resolved is True
+    assert entry.approved is False
+    queue.close()

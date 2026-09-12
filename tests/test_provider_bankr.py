@@ -75,7 +75,7 @@ def test_bankr_is_a_tier_profile() -> None:
     tiers = _router_tier_profile_defaults("bankr")
     assert tiers == _bankr_tiers()
     assert tiers["c0"]["provider"] == "bankr"
-    assert tiers["c0"]["model"] == "deepseek-v4-flash"
+    assert tiers["c0"]["model"] == "deepseek-v4.1-flash"
     assert tiers["c1"]["model"] == "gpt-5.6-luna"
     assert tiers["c2"]["model"] == "glm-5.2"
     assert tiers["c3"]["model"] == "claude-opus-5"

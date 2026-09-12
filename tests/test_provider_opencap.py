@@ -95,7 +95,7 @@ def test_opencap_router_profile_contract() -> None:
     tiers = _router_tier_profile_defaults("opencap")
 
     assert {tier["provider"] for tier in tiers.values()} == {"opencap"}
-    assert tiers["c0"]["model"] == "deepseek-v4-flash"
+    assert tiers["c0"]["model"] == "deepseek-v4.1-flash"
     assert tiers["c1"]["model"] == "gpt-5.6-luna"
     assert tiers["c2"]["model"] == "glm-5.3"
     assert tiers["c3"]["model"] == "claude-opus-5"
@@ -127,6 +127,7 @@ def test_opencap_tier_models_are_all_served_by_the_live_catalog() -> None:
     """
     published = {
         "deepseek-v4-flash",
+        "deepseek-v4.1-flash",
         "gpt-5.6-luna",
         "glm-5.3",
         "glm-5.3-flash",
@@ -340,6 +341,13 @@ def test_opencap_gateway_uses_conservative_shared_id_limits() -> None:
     assert catalog.resolve_max_tokens("deepseek-v4-flash", provider_name="opencap") == 128_000
     assert catalog.resolve_context_window("deepseek-v4-flash", provider_name="opencap") == 1_000_000
 
+    # The V4.1 default is published at the same 384K output / 1M context on the
+    # gateway as everywhere else, so it carries no gateway override.
+    assert catalog.resolve_max_tokens("deepseek-v4.1-flash", provider_name="opencap") == 384_000
+    assert (
+        catalog.resolve_context_window("deepseek-v4.1-flash", provider_name="opencap") == 1_048_576
+    )
+
 
 def test_opencap_deepseek_v4_models_resolve_deepseek_reasoning() -> None:
     # DeepSeek V4 via the OpenCAP/Bankr gateways honors the DeepSeek-native
@@ -347,10 +355,13 @@ def test_opencap_deepseek_v4_models_resolve_deepseek_reasoning() -> None:
     # capability gate must say so or tier thinking_level silently no-ops.
     catalog = ModelCatalog()
 
+    # deepseek-v4.1-flash is the shipped c0 on both gateways, so the offline
+    # prefix heuristic has to cover the dotted id too, not just deepseek-v4-*.
     for provider in ("opencap", "bankr"):
-        caps = catalog.get_capabilities("deepseek-v4-flash", provider_name=provider)
-        assert caps.supports_reasoning is True
-        assert caps.reasoning_format == "deepseek"
+        for model in ("deepseek-v4-flash", "deepseek-v4.1-flash"):
+            caps = catalog.get_capabilities(model, provider_name=provider)
+            assert caps.supports_reasoning is True, (provider, model)
+            assert caps.reasoning_format == "deepseek", (provider, model)
 
     pro = catalog.get_capabilities("deepseek-v4-pro", provider_name="opencap")
     assert pro.supports_reasoning is True

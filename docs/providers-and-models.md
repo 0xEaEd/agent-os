@@ -96,7 +96,7 @@ router profile selects bare OpenCAP model IDs across
 
 | Tier | Model | Role |
 | --- | --- | --- |
-| `c0` | `deepseek-v4-flash` | trivial chat, short rewrites, extraction |
+| `c0` | `deepseek-v4.1-flash` | trivial chat, short rewrites, extraction |
 | `c1` | `gpt-5.6-luna` | default balanced route for normal agent work |
 | `c2` | `glm-5.3` | multi-step coding, structured reasoning, larger synthesis |
 | `c3` | `claude-opus-5` | difficult planning, deep review, high-stakes synthesis |
@@ -138,7 +138,7 @@ Surplus model IDs across
 
 | Tier | Model | Role |
 | --- | --- | --- |
-| `c0` | `deepseek-v4-flash` | trivial chat, short rewrites, extraction |
+| `c0` | `deepseek-v4.1-flash` | trivial chat, short rewrites, extraction |
 | `c1` | `gpt-5.6-luna` | default balanced route for normal agent work |
 | `c2` | `glm-5.3` | multi-step coding, structured reasoning, larger context |
 | `c3` | `claude-opus-5` | difficult planning, deep review, high-stakes synthesis |

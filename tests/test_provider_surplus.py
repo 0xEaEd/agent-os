@@ -80,7 +80,7 @@ def test_surplus_router_profile_contract() -> None:
     tiers = _router_tier_profile_defaults("surplus")
 
     assert {tier["provider"] for tier in tiers.values()} == {"surplus"}
-    assert tiers["c0"]["model"] == "deepseek-v4-flash"
+    assert tiers["c0"]["model"] == "deepseek-v4.1-flash"
     assert tiers["c1"]["model"] == "gpt-5.6-luna"
     assert tiers["c2"]["model"] == "glm-5.3"
     assert tiers["c3"]["model"] == "claude-opus-5"
@@ -108,6 +108,7 @@ def test_surplus_tier_models_are_all_served_by_the_live_catalog() -> None:
     """
     published = {
         "deepseek-v4-flash",
+        "deepseek-v4.1-flash",
         "deepseek-v4-pro",
         "gpt-5.6-luna",
         "gpt-5.6-terra",
@@ -273,7 +274,13 @@ def test_surplus_tier_defaults_resolve_reasoning_without_a_live_catalog() -> Non
     without a reasoning format their thinking_level silently no-ops."""
     catalog = ModelCatalog()
 
-    for model in ("deepseek-v4-flash", "gpt-5.6-luna", "glm-5.3", "claude-opus-5"):
+    for model in (
+        "deepseek-v4.1-flash",
+        "deepseek-v4-flash",
+        "gpt-5.6-luna",
+        "glm-5.3",
+        "claude-opus-5",
+    ):
         caps = catalog.get_capabilities(model, provider_name="surplus")
         assert caps.supports_reasoning is True, model
         assert caps.reasoning_format == "openrouter", model

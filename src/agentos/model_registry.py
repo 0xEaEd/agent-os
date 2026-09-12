@@ -213,6 +213,23 @@ MODEL_FACTS: tuple[ModelFacts, ...] = (
         price=PriceFacts(1.74, 3.48),
     ),
     ModelFacts(
+        "deepseek-v4.1-flash",
+        max_output_tokens=384_000,
+        context_window=1_048_576,
+        price=PriceFacts(0.15, 0.60, cached_input_per_m=0.003),
+        note=(
+            "Bankr, OpenCAP and Surplus all publish 384K output / 1M context for "
+            "this bare id, so unlike deepseek-v4-flash no gateway window override "
+            "is needed. Vision-capable upstream, but supports_image stays False on "
+            "purpose: it is the gateways' c0 text default, and a supports_image "
+            "text tier becomes a random pick for image turns alongside "
+            "image_model -- the same treatment gpt-5.6-luna and claude-opus-5 get. "
+            "Not the OpenRouter c0: there deepseek/deepseek-v4-flash is routed "
+            "cheaper than gpt-5.6-luna while V4.1 Flash is not, so the cost-aware "
+            "override would hand every c0 turn to c1."
+        ),
+    ),
+    ModelFacts(
         "deepseek/deepseek-v3.2",
         max_output_tokens=16_384,
         context_window=163_840,
