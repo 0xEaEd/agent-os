@@ -14,14 +14,13 @@ def coerce_schedule_from_params(params: dict[str, Any]) -> tuple[ScheduleKind, s
         schedule = dict(schedule_raw)
         top_level_tz = _top_level_tz(params)
         if top_level_tz and schedule.get("kind") == ScheduleKind.CRON.value:
-            schedule_tz = schedule.get("tz")
-            if isinstance(schedule_tz, str):
-                schedule_tz = schedule_tz.strip()
-            else:
-                schedule_tz = ""
+            # ``_schedule_tz`` reads both ``tz`` and its ``timezone`` alias, so
+            # a top-level tz is checked against whichever one the caller used.
+            schedule_tz = _schedule_tz(schedule)
             if schedule_tz and schedule_tz != top_level_tz:
                 raise ValueError("schedule.tz conflicts with tz")
             schedule["tz"] = top_level_tz
+            schedule.pop("timezone", None)
         return coerce_schedule(schedule)
     expression = params.get("expression")
     if isinstance(expression, str) and expression.strip():
@@ -48,6 +47,30 @@ def _top_level_tz(params: dict[str, Any]) -> str:
     if tz and timezone and tz != timezone:
         raise ValueError("tz conflicts with timezone")
     return tz or timezone
+
+
+def _schedule_tz(raw: dict[str, Any]) -> str:
+    """Resolve ``schedule.tz`` and its ``schedule.timezone`` alias.
+
+    Mirrors :func:`_top_level_tz` for the structured cron path: either
+    spelling is accepted, both must agree when present, and a non-string
+    value is rejected instead of being silently dropped -- a dropped tz
+    schedules the job in UTC with no error anywhere (#1603).
+    """
+    tz = _tz_string(raw, "tz")
+    timezone = _tz_string(raw, "timezone")
+    if tz and timezone and tz != timezone:
+        raise ValueError("schedule.tz conflicts with schedule.timezone")
+    return tz or timezone
+
+
+def _tz_string(raw: dict[str, Any], key: str) -> str:
+    value = raw.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"schedule.{key} must be a string IANA timezone name")
+    return value.strip()
 
 
 def coerce_schedule(raw: dict[str, Any]) -> tuple[ScheduleKind, str, str]:
@@ -81,10 +104,7 @@ def _coerce_cron(raw: dict[str, Any]) -> tuple[ScheduleKind, str, str]:
         raise ValueError(
             f"schedule.expr invalid: {exc}; expected 5-field POSIX cron"
         ) from exc
-    tz_raw = raw.get("tz") or ""
-    if not isinstance(tz_raw, str):
-        raise ValueError("schedule.tz must be a string IANA timezone name")
-    tz_value = tz_raw.strip()
+    tz_value = _schedule_tz(raw)
     try:
         validate_tz(tz_value)
     except ValueError as exc:
