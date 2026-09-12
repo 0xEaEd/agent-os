@@ -134,3 +134,52 @@ async def test_default_is_used_when_max_messages_is_absent(dispatcher, ctx, mana
 
     assert res.ok is True
     assert manager.truncate_calls == [(SESSION_KEY, 20)]
+
+
+@pytest.mark.parametrize("value", [0, 1, 5, 50])
+def test_snake_case_max_messages_accepted(value: int) -> None:
+    assert _require_max_messages({"max_messages": value}) == value
+
+
+@pytest.mark.parametrize("value", [False, True, "20", 20.0, None, -1, [], {"a": 1}])
+def test_snake_case_max_messages_rejected(value: Any) -> None:
+    with pytest.raises(ValueError, match="params.maxMessages must be a non-negative integer"):
+        _require_max_messages({"max_messages": value})
+
+
+def test_camel_case_precedence_over_snake_case() -> None:
+    assert _require_max_messages({"maxMessages": 5, "max_messages": 10}) == 5
+
+
+@pytest.mark.asyncio
+async def test_snake_case_max_messages_truncates_correctly(dispatcher, ctx, manager) -> None:
+    res = await dispatcher.dispatch(
+        "r1",
+        "sessions.truncate",
+        {"key": SESSION_KEY, "max_messages": 5},
+        ctx,
+    )
+
+    assert res.ok is True
+    assert manager.truncate_calls == [(SESSION_KEY, 5)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [False, True, "5", -1])
+async def test_snake_case_bad_max_messages_rejects_and_truncates_nothing(
+    dispatcher, ctx, manager, value: Any
+) -> None:
+    manager.transcript = [object(), object(), object()]
+
+    res = await dispatcher.dispatch(
+        "r1",
+        "sessions.truncate",
+        {"key": SESSION_KEY, "max_messages": value},
+        ctx,
+    )
+
+    assert res.ok is False
+    assert res.error.code == "INVALID_REQUEST"
+    assert res.error.message == "params.maxMessages must be a non-negative integer"
+    assert manager.truncate_calls == []
+

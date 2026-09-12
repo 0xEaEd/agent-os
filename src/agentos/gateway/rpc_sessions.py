@@ -430,7 +430,8 @@ def _require_max_messages(params: dict | None, default: int = 20) -> int:
     checkpoint/force safety check in the handler.
     """
 
-    value = (params or {}).get("maxMessages", default)
+    params_dict = params or {}
+    value = params_dict.get("maxMessages", params_dict.get("max_messages", default))
     if isinstance(value, bool):
         raise ValueError(_MAX_MESSAGES_ERROR)
     if not isinstance(value, int):
