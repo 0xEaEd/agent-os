@@ -320,7 +320,7 @@ async def _replace_with_new_session(
         )
     )
     sync_session_chrome_from_state(state)
-    label = f" ({title})" if title else ""
+    label = f" ({markup_escape(title)})" if title else ""
     console.print(f"[green]Started new session{label}:[/green] {session_key}")
     return session_key
 
@@ -497,7 +497,9 @@ async def handle_standalone_slash_command(
         return True
 
     if parts := _slash_parts(cmd, "/new"):
-        title = parts[1].strip() if len(parts) > 1 else None
+        # Standalone mode never reaches ``sessions.create``, so the title is
+        # normalized here -- the same shape ``/rename`` below stores (#1618).
+        title = normalize_session_name(parts[1]) if len(parts) > 1 else None
         await _replace_with_new_session(context, title=title)
         return True
 

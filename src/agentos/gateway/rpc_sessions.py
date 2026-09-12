@@ -862,7 +862,11 @@ async def _handle_sessions_create(params: dict | None, ctx: RpcContext) -> dict:
     if not isinstance(params, dict):
         params = {}
     agent_id = normalize_agent_id(params.get("agentId", "main"))
-    display_name = params.get("displayName")
+    # Same normalizer ``sessions.rename`` and ``sessions.patch`` use: the name
+    # is user-typed (``/new <title>`` pastes arrive here verbatim) and is
+    # later rendered on a terminal, so control bytes, newlines and length
+    # are cut down before storage rather than on every read (#1618).
+    display_name = normalize_session_name(params.get("displayName"))
     message = params.get("message")
     model = _model_value(params.get("model")) or _agent_registry_model(ctx, agent_id)
     kind = params.get("kind") or params.get("sessionKind")
