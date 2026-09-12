@@ -1013,6 +1013,49 @@ async def test_root_wipe_is_hard_blocked_at_the_exec_approval_boundary() -> None
         assert result["sensitive_path"] == "/"
 
 
+@pytest.mark.asyncio
+async def test_relative_delete_target_resolves_against_workdir_at_the_exec_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #1579 at the real entry point: ``exec_command`` passes both the
+    workspace and the resolved workdir, which was exactly the case where the
+    workdir got discarded. ``rm -rf .aws/config`` run from ``$HOME`` must be
+    hard-blocked, and the same command run inside the workspace must not be."""
+    home = tmp_path / "home"
+    (home / ".aws").mkdir(parents=True)
+    workspace = tmp_path / "workspace"
+    (workspace / "packages" / "app").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.workspace_dir = str(workspace)
+    ctx.elevated = "bypass"
+
+    blocked = await shell._check_exec_approval(
+        "exec_command",
+        "rm -rf .aws/config",
+        str(home),
+        "command requires approval",
+        None,
+        False,
+    )
+    assert blocked is not None
+    assert blocked["status"] == "blocked"
+    assert blocked["reason"] == "sensitive_path"
+    assert blocked["sensitive_path"] == "~/.aws"
+
+    allowed = await shell._check_exec_approval(
+        "exec_command",
+        "rm -rf build",
+        str(workspace / "packages" / "app"),
+        "command requires approval",
+        None,
+        False,
+    )
+    assert allowed is None
+
+
 def test_sandbox_request_for_resolves_relative_workdir(tmp_path: Path) -> None:
     """Relative workdir in _sandbox_request_for must resolve against workspace (#1562)."""
     ws = tmp_path / "ws"

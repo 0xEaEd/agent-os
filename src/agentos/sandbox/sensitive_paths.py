@@ -493,17 +493,39 @@ def sensitive_target_in_command(
         return None
     from agentos.sandbox.intent_cache import _extract_intents
 
-    effective_workspace = workspace
-    if effective_workspace is None:
-        effective_workspace = cwd if cwd is not None else Path.cwd()
+    # Two different notions: ``cwd`` is what a relative target resolves
+    # against (the directory the command executes in), ``workspace`` is what
+    # "inside the workspace" is measured against. Collapsing them made ``rm
+    # -rf config`` in ``~/.aws`` look like ``<workspace>/config``.
+    base_dir = _resolve_command_cwd(cwd, workspace)
+    # With no configured workspace, the execution directory is the only
+    # boundary there is -- the ``/root`` container exception hangs off it.
+    effective_workspace = workspace if workspace is not None else base_dir
 
-    for _kind, target in _extract_intents(command, base_dir=effective_workspace):
+    for _kind, target in _extract_intents(command, base_dir=base_dir):
         if _is_root_target(target):
             return _ROOT_TARGET_MARKER
         marker = sensitive_path_marker(target, workspace=effective_workspace)
         if marker is not None:
             return marker
     return None
+
+
+def _resolve_command_cwd(cwd: str | Path | None, workspace: str | Path | None) -> Path:
+    """Directory a command's relative targets resolve against.
+
+    Mirrors ``shell._effective_workdir``: an absolute ``cwd`` is taken as
+    given, a relative one is anchored to the workspace, and with neither the
+    workspace itself (or, failing that, the process cwd) is the anchor.
+    """
+    if cwd is not None:
+        raw = Path(cwd).expanduser()
+        if raw.is_absolute() or workspace is None:
+            return raw
+        return Path(workspace).expanduser() / raw
+    if workspace is not None:
+        return Path(workspace).expanduser()
+    return Path.cwd()
 
 
 def build_block_envelope(
