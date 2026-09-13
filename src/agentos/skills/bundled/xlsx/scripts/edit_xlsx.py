@@ -79,6 +79,13 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
                 continue
             if value is _MISSING:
                 continue
+            try:
+                row_idx = int(row)
+                col_idx = int(col)
+                if row_idx < 1 or col_idx < 1:
+                    continue
+            except (ValueError, TypeError):
+                continue
             ws = wb[sheet_name]
             as_text = bool(op.get("as_text"))
             coerced = _coerce(value, as_text)
@@ -87,7 +94,10 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             # explicit null only *reads* the cell and the old value survives
             # while this loop still counts the edit as applied. Fetching the
             # cell first also leaves its style untouched.
-            cell = ws.cell(row=int(row), column=int(col))
+            try:
+                cell = ws.cell(row=row_idx, column=col_idx)
+            except (ValueError, TypeError):
+                continue
             cell.value = coerced
             if as_text and isinstance(coerced, str):
                 # Assigning a string that starts with ``=`` makes openpyxl mark
@@ -109,8 +119,11 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             sheet_name = op.get("sheet")
             rng = op.get("range")
             if sheet_name in wb.sheetnames and isinstance(rng, str):
-                wb[sheet_name].merge_cells(rng)
-                applied += 1
+                try:
+                    wb[sheet_name].merge_cells(rng)
+                    applied += 1
+                except ValueError:
+                    pass
     return applied
 
 

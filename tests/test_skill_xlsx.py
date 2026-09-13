@@ -571,3 +571,34 @@ def test_clearing_a_cell_keeps_its_style(
     cell = load_workbook(str(out))["S"].cell(row=1, column=1)
     assert cell.value is None
     assert cell.number_format == "0.00%"
+
+
+def test_edit_xlsx_skips_invalid_set_cell_coordinates_and_merge_ranges() -> None:
+    from openpyxl import Workbook
+
+    _, edit_xlsx, _ = _import_scripts()
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "Sheet1"
+
+    ops = [
+        # Zero / negative / non-integer coordinates: must be skipped without crashing
+        {"op": "set_cell", "sheet": "Sheet1", "row": 0, "col": 1, "value": "zero_row"},
+        {"op": "set_cell", "sheet": "Sheet1", "row": -1, "col": 1, "value": "neg_row"},
+        {"op": "set_cell", "sheet": "Sheet1", "row": 1, "col": 0, "value": "zero_col"},
+        {"op": "set_cell", "sheet": "Sheet1", "row": 1, "col": -5, "value": "neg_col"},
+        {"op": "set_cell", "sheet": "Sheet1", "row": "invalid", "col": 1, "value": "bad_row"},
+        {"op": "set_cell", "sheet": "Sheet1", "row": 1, "col": "invalid", "value": "bad_col"},
+        # Malformed merge range: must be skipped without crashing
+        {"op": "merge_cells", "sheet": "Sheet1", "range": "not-a-valid-range"},
+        # Valid set_cell: must succeed
+        {"op": "set_cell", "sheet": "Sheet1", "row": 1, "col": 1, "value": "valid_value"},
+        # Valid merge_cells: must succeed
+        {"op": "merge_cells", "sheet": "Sheet1", "range": "B1:C2"},
+    ]
+
+    applied = edit_xlsx.apply_ops(wb, ops)
+    assert applied == 2
+    assert ws.cell(row=1, column=1).value == "valid_value"
+
