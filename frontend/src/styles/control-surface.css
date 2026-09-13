@@ -543,6 +543,7 @@
     .env-stage__header,
     .mcp-stage__header,
     .cfg-stage__header,
+    .mem-stage__header,
     .setup-stage__header,
     .settings-stage__header
   ) {
@@ -572,7 +573,8 @@
     .ap-stage__header,
     .env-stage__header,
     .mcp-stage__header,
-    .cfg-stage__header
+    .cfg-stage__header,
+    .mem-stage__header
   ) {
   margin-bottom: 1.5rem;
 }
@@ -601,6 +603,7 @@
     .env-stage__title-block,
     .mcp-stage__title-block,
     .cfg-stage__title-block,
+    .mem-stage__title-block,
     .setup-stage__title-block,
     .settings-stage__title-block
   ) {
@@ -650,6 +653,7 @@
     .ch-stage__subtitle,
     .ap-stage__subtitle,
     .cfg-stage__subtitle,
+    .mem-stage__subtitle,
     .setup-stage__subtitle,
     .settings-stage__subtitle
   ) {
@@ -670,6 +674,7 @@
     .sess-stage__actions,
     .cron-stage__actions,
     .cfg-stage__actions,
+    .mem-stage__actions,
     .setup-stage__aside,
     .settings-stage__actions
   ) {
@@ -1385,6 +1390,7 @@
       .env-stage__header,
       .mcp-stage__header,
       .cfg-stage__header,
+      .mem-stage__header,
       .setup-stage__header,
       .settings-stage__header
     ) {
@@ -1404,6 +1410,7 @@
       .env-stage__actions,
       .mcp-stage__actions,
       .cfg-stage__actions,
+      .mem-stage__actions,
       .setup-stage__aside,
       .settings-stage__actions
     ) {
@@ -1506,6 +1513,7 @@
       .ap-stage__header,
       .env-stage__header,
       .cfg-stage__header,
+      .mem-stage__header,
       .setup-stage__header,
       .settings-stage__header
     ) {
@@ -1640,6 +1648,7 @@
       .sess-stage__actions,
       .cron-stage__actions,
       .cfg-stage__actions,
+      .mem-stage__actions,
       .setup-stage__aside,
       .settings-stage__actions
     )

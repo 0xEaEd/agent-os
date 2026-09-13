@@ -5,7 +5,10 @@ const css = readFileSync('src/views/memory/memory.css', 'utf8')
 
 describe('Memory view CSS contract', () => {
   it('contains layout and panel styling for curated grids and stat cards', () => {
-    expect(css).toMatch(/\.mem-view\s*\{[\s\S]*?max-width:\s*1200px;/)
+    expect(css).toMatch(/\.mem-stage\s*\{[\s\S]*?width:\s*100%;/)
+    expect(css).not.toMatch(/max-width:\s*1200px;/)
+    expect(css).toMatch(/\.mem-stage__header\s*\{[\s\S]*?position:\s*relative;/)
+    expect(css).toMatch(/\.mem-stage__subtitle\s*\{[\s\S]*?max-width:/)
     expect(css).toMatch(/\.mem-curated-grid\s*\{[\s\S]*?display:\s*grid;/)
     expect(css).toMatch(/\.mem-stat-card\s*\{[\s\S]*?border-radius:\s*var\(--radius-card/)
   })

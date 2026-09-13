@@ -128,12 +128,27 @@ describe('MemoryPage', () => {
     renderMemoryPage()
 
     expect(screen.getByRole('heading', { level: 1, name: 'Memory' })).toBeInTheDocument()
+    expect(screen.getByText('Control · Memory')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(screen.getByText('Follow strict type checking')).toBeInTheDocument()
       expect(screen.getByText('Prefers concise responses')).toBeInTheDocument()
       expect(screen.getByText('Vector search enabled')).toBeInTheDocument()
     })
+  })
+
+  it('mounts the hero on the shared Control stage header so the signal field stays behind it', () => {
+    const { container } = renderMemoryPage()
+
+    const header = container.querySelector('header.mem-stage__header')
+    expect(header).not.toBeNull()
+    expect(header?.querySelector('.mem-stage__title-block .t-label')?.textContent).toBe(
+      'Control · Memory',
+    )
+    expect(header?.querySelector('h1.t-display')?.textContent).toBe('Memory')
+    expect(header?.querySelector('.mem-stage__subtitle')).not.toBeNull()
+    expect(header?.querySelector('.mem-stage__actions')).not.toBeNull()
+    expect(container.querySelector('.mem-header')).toBeNull()
   })
 
   it('switches to Knowledge Base tab and displays documents', async () => {
