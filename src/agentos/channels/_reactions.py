@@ -10,6 +10,11 @@ from typing import Any, Protocol
 from agentos.channels.types import IncomingMessage
 
 SLACK_STATUS_EMOJI = {"received": "white_check_mark", "running": "eyes", "failed": "x"}
+# Slack answers these when the mark is already in the requested state: a
+# redelivered event re-adds a present reaction (``already_reacted``) or a user
+# removed the emoji before we did (``no_reaction``). Both leave the message
+# exactly as intended, so they are successes, not reasons to disable.
+SLACK_BENIGN_REACTION_ERRORS = frozenset({"already_reacted", "no_reaction"})
 
 class StatusReactor(Protocol):
     async def received(self, message: IncomingMessage) -> None: ...
@@ -89,7 +94,7 @@ class SlackStatusReactor(_BaseStatusReactor):
         resp = await self._channel._get_client().post(path, json=payload)
         if resp.status_code == 403: self._disable("missing_oauth_scope"); return False
         resp.raise_for_status(); data = resp.json()
-        if data.get("ok"): return True
+        if data.get("ok") or data.get("error") in SLACK_BENIGN_REACTION_ERRORS: return True
         if data.get("error") in {"missing_scope", "not_allowed_token_type"}: self._disable("missing_oauth_scope"); return False
         raise RuntimeError(f"Slack API error: {data.get('error')}")
 
