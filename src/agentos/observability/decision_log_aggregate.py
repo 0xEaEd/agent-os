@@ -34,11 +34,17 @@ def parse_log_line(line: str) -> dict | None:
 
 def within_window(ts_str: str, cutoff: datetime) -> bool:
     """True iff the ISO timestamp string is at or after ``cutoff``."""
+    if not isinstance(ts_str, str):
+        return False
     try:
         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-    except ValueError:
+        if ts.tzinfo is None and cutoff.tzinfo is not None:
+            ts = ts.replace(tzinfo=UTC)
+        elif ts.tzinfo is not None and cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=UTC)
+        return ts >= cutoff
+    except (ValueError, TypeError, AttributeError):
         return False
-    return ts >= cutoff
 
 
 def aggregate_co_occurrences(
