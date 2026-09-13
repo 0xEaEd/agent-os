@@ -574,3 +574,47 @@ def test_parse_hunk_header_rejects_malformed_input(header: str) -> None:
 
     with pytest.raises(ValueError, match="Invalid hunk header"):
         _parse_hunk_header(header)
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_out_of_workspace_absolute_path_requests_approval(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("old\n", encoding="utf-8")
+    token = current_tool_context.set(
+        ToolContext(
+            workspace_dir=str(workspace),
+            session_key="agent:main:test",
+            agent_id="main",
+        )
+    )
+    apply_patch = _original_async(patch_tool.apply_patch)
+    patch = f"""*** Begin Patch
+*** Update File: {outside.resolve()}
+@@@ -1,1 +1,1 @@@
+-old
++new
+*** End Patch"""
+    try:
+        first = json.loads(await apply_patch(patch))
+        assert first["status"] == "approval_required"
+        approval_id = first["approval_id"]
+        get_approval_queue().resolve(approval_id, True)
+        result = await apply_patch(patch, approval_id=approval_id)
+        assert result == "Applied patch: 1 file(s) modified"
+        assert outside.read_text(encoding="utf-8") == "new\n"
+    finally:
+        current_tool_context.reset(token)
+
+
+def test_apply_patch_relative_traversal_rejected(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with pytest.raises(ValueError, match="Path traversal detected"):
+        patch_tool._validate_path("../outside.txt", workspace)
+    with pytest.raises(ValueError, match="Path traversal detected"):
+        patch_tool._validate_path("sub/../../outside.txt", workspace)
+

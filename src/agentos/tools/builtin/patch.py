@@ -191,12 +191,17 @@ def _default_patch_root() -> Path:
 
 
 def _validate_path(path: str, root: Path | None = None) -> Path:
-    """Resolve path and ensure it stays within the active patch root."""
+    """Resolve path and ensure relative paths do not escape the active patch root."""
+    from agentos.tools.path_aliases import resolve_workspace_alias
+
     root = root if root is not None else _default_patch_root()
     reject_foreign_host_path(path, platform=os.name, workspace=root)
     raw = Path(path).expanduser()
+    alias = resolve_workspace_alias(raw, root)
+    if alias is not None:
+        return alias.resolve()
     resolved = (root / raw).resolve() if not raw.is_absolute() else raw.resolve()
-    if not resolved.is_relative_to(root):
+    if not raw.is_absolute() and not resolved.is_relative_to(root):
         raise ValueError(f"Path traversal detected: {path!r} resolves outside patch root")
     return resolved
 
