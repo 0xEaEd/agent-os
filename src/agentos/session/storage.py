@@ -1829,9 +1829,12 @@ class SessionStorage:
     ) -> list[dict[str, Any]]:
         """Full-text search across transcript entries.
 
-        ``project_id`` restricts hits to transcripts of sessions in that
-        project. Returns dicts with: id, session_key, role, snippet,
-        created_at.
+        ``session_id`` accepts either the internal session UUID or the
+        public ``session_key`` -- agents only ever see the key (it is what
+        the results carry), so filtering on the UUID column alone would make
+        every key-scoped search come back empty. ``project_id`` restricts
+        hits to transcripts of sessions in that project. Returns dicts with:
+        id, session_key, role, snippet, created_at.
         """
         safe_q = self.sanitize_fts_query(query)
         if safe_q == '""':
@@ -1841,8 +1844,8 @@ class SessionStorage:
         params: list[Any] = [safe_q]
         joins = ""
         if session_id:
-            clauses.append("t.session_id = ?")
-            params.append(session_id)
+            clauses.append("(t.session_id = ? OR t.session_key = ?)")
+            params.extend([session_id, canonicalize_session_key(session_id)])
         if project_id:
             joins = "JOIN sessions s ON s.session_id = t.session_id "
             clauses.append("s.project_id = ?")
