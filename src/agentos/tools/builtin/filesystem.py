@@ -178,12 +178,18 @@ def _notify_bootstrap_source_write(path: Path) -> None:
     ctx.on_bootstrap_source_write(ctx.agent_id or "main", rel)
 
 
-def _binary_file_error(path: str, p: Path, *, reason: str | None = None) -> ToolError:
+def _binary_file_error(
+    path: str,
+    p: Path,
+    *,
+    action: str = "read",
+    reason: str | None = None,
+) -> ToolError:
     hint = ""
     if p.suffix.lower() in _SPREADSHEET_EXTENSIONS:
         hint = " Use read_spreadsheet(path=...) for CSV/TSV/Excel workbook data."
     detail = f" ({reason})" if reason else ""
-    return ToolError(f"Cannot read binary file as text: {path}{detail}.{hint}")
+    return ToolError(f"Cannot {action} binary file as text: {path}{detail}.{hint}")
 
 
 def _looks_binary(raw: bytes, p: Path) -> str | None:
@@ -930,9 +936,19 @@ async def edit_file(path: str, old_text: str, new_text: str, approval_id: str | 
         return json.dumps(approval)
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
+    if not p.is_file():
+        raise IsADirectoryError(f"Path is a directory: {path}")
 
     loop = asyncio.get_running_loop()
-    original = await loop.run_in_executor(None, p.read_text, "utf-8")
+    sample: bytes = await loop.run_in_executor(None, _read_binary_sample, p)
+    binary_reason = _looks_binary(sample, p)
+    if binary_reason:
+        raise _binary_file_error(path, p, action="edit", reason=binary_reason)
+
+    try:
+        original = await loop.run_in_executor(None, p.read_text, "utf-8")
+    except UnicodeDecodeError as exc:
+        raise _binary_file_error(path, p, action="edit", reason="not valid UTF-8") from exc
 
     # The matcher is the CPU-bound part of an edit, not the read or the write:
     # a miss on a large file sweeps every window in it. Run it in the same

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentos.tools.builtin import filesystem as fs
-from agentos.tools.types import CallerKind, ToolContext, current_tool_context
+from agentos.tools.types import CallerKind, ToolContext, ToolError, current_tool_context
 
 
 def _original_async(fn: Callable[..., Awaitable[str]]) -> Callable[..., Awaitable[str]]:
@@ -120,3 +120,31 @@ async def test_missing_file_still_reports_file_not_found(tmp_path: Path) -> None
     with tool_context(tmp_path):
         with pytest.raises(FileNotFoundError):
             await edit_file(str(tmp_path / "absent.py"), "a", "b")
+
+
+@pytest.mark.asyncio
+async def test_edit_file_rejects_directory_path(tmp_path: Path) -> None:
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    with tool_context(tmp_path):
+        with pytest.raises(IsADirectoryError, match="Path is a directory"):
+            await edit_file(str(subdir), "old", "new")
+
+
+@pytest.mark.asyncio
+async def test_edit_file_rejects_binary_file(tmp_path: Path) -> None:
+    target = tmp_path / "image.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x80")
+    with tool_context(tmp_path):
+        with pytest.raises(ToolError, match="Cannot edit binary file as text"):
+            await edit_file(str(target), "old", "new")
+
+
+@pytest.mark.asyncio
+async def test_edit_file_rejects_invalid_utf8(tmp_path: Path) -> None:
+    target = tmp_path / "broken.txt"
+    target.write_bytes(b"some valid prefix \xff\xfe invalid utf8")
+    with tool_context(tmp_path):
+        with pytest.raises(ToolError, match="not valid UTF-8"):
+            await edit_file(str(target), "old", "new")
+
