@@ -275,23 +275,27 @@ export function MemoryPage() {
   const status = statusQuery.data
 
   return (
-    <div className="mem-view">
-      {/* Header */}
-      <div className="mem-header">
-        <div className="mem-title-group">
-          <h1>{t('memory.title')}</h1>
-          <p>{t('memory.subtitle')}</p>
+    <div className="mem-stage">
+      <header className="mem-stage__header">
+        <div className="mem-stage__title-block">
+          <span className="t-label">{t('memory.eyebrow')}</span>
+          <h1 className="t-display">{t('memory.title')}</h1>
+          <p className="mem-stage__subtitle">{t('memory.subtitle')}</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => handleReindex(false)}>
-            <RefreshCwIcon className="w-4 h-4 mr-1.5" />
-            {t('memory.reindex')}
+        <div className="mem-stage__actions">
+          <Button
+            variant="outline"
+            title={t('memory.reindex')}
+            onClick={() => handleReindex(false)}
+          >
+            <RefreshCwIcon />
+            <span>{t('memory.reindex')}</span>
           </Button>
-          <Button variant="outline" size="sm" onClick={handleRefresh}>
-            {t('memory.refresh')}
+          <Button variant="outline" title={t('memory.refresh')} onClick={handleRefresh}>
+            <span>{t('memory.refresh')}</span>
           </Button>
         </div>
-      </div>
+      </header>
 
       {/* Stats Summary */}
       <div className="mem-stats-grid">

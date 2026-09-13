@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Web UI: the Memory page now uses the shared Control hero header, so the
+  signal background no longer overlaps the stat cards and the page matches
+  Health / Overview / Usage (#1927).
+
 ## [2026.9.13] - 2026-09-13
 
 ### Changed

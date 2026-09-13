@@ -115,6 +115,24 @@ describe('Control surface CSS contract', () => {
     )
   })
 
+  it('places Memory on the shared Control hero so the signal field cannot overlap its stats', () => {
+    expect(controlCss).toMatch(
+      /:is\([\s\S]*?\.mem-stage__header[\s\S]*?\) \{[\s\S]*?min-height: 10rem;[\s\S]*?padding: 1\.5rem 1\.75rem;/,
+    )
+    expect(controlCss).toMatch(
+      /:is\([\s\S]*?\.cfg-stage__header,\s*\.mem-stage__header[\s\S]*?\) \{\s*margin-bottom: 1\.5rem;/,
+    )
+    expect(controlCss).toMatch(
+      /:is\([\s\S]*?\.mem-stage__title-block[\s\S]*?\) \{[\s\S]*?min-width: 0;/,
+    )
+    expect(controlCss).toMatch(
+      /:is\([\s\S]*?\.mem-stage__subtitle[\s\S]*?\) \{[\s\S]*?max-width: 66ch;/,
+    )
+    expect(controlCss).toMatch(
+      /:is\([\s\S]*?\.mem-stage__actions[\s\S]*?\) \{[\s\S]*?justify-content: flex-end;/,
+    )
+  })
+
   it('places Settings on the shared Control hero and action rhythm', () => {
     expect(controlCss).toMatch(
       /:is\([\s\S]*?\.settings-stage__header[\s\S]*?\) \{[\s\S]*?min-height: 10rem;[\s\S]*?padding: 1\.5rem 1\.75rem;/,
