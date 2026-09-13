@@ -1206,6 +1206,9 @@ async def process(
     offset: int | None = None,
     limit: int | None = None,
 ) -> str:
+    if action not in PROCESS_ACTIONS:
+        raise ToolError("Invalid action: list|poll|log|kill|remove|write|submit|eof")
+
     if action == "list":
         sessions = [_bg_session_payload(session) for session in _iter_visible_bg_sessions()]
         return json.dumps({"status": "ok", "action": action, "sessions": sessions})
