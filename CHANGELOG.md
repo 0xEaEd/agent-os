@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.13] - 2026-09-13
+
 ### Changed
 
 - The `c0` router tier on the `bankr`, `opencap` and `surplus` tier profiles
@@ -70,6 +72,284 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`registry_session_max_entries`, `registry_cache_max_entries`,
   `registry_cache_ttl_seconds`)
   ([#1131](https://github.com/use-agent-os/agent-os/issues/1131)).
+- The four unconditional shell blocks now land in the sandbox denial ledger.
+  `_record_shell_denial`'s docstring promised a §8.3/§8.5 record for every
+  shell-layer denial, but its only caller was the interactive approval path on
+  `approval_denied`; a denylisted binary from `check_safe_bin`, the
+  sensitive-path block, the workspace lockdown and the workspace write-deny
+  all raised or returned their envelope without touching the ledger, so the
+  most severe refusals were exactly the ones missing from the audit trail and
+  no §8.3 stale-output purge ran for them. All four now record through a new
+  `DenialLedger.record_audit_denial` in both `exec_command` and
+  `background_process`. It keeps the per-fingerprint count and the purge and
+  deliberately leaves the §8.5 pause counter and the §8.4 `last_fingerprint`
+  alone: the pause is permanent, threshold 3, gates every `@sandboxed` tool,
+  and the sensitive-path check is a text scan, so routing hard blocks into it
+  would have let `cat ~/.ssh/id_rsa` three times lock `echo hello` for the
+  life of the session. `_sandbox_request_for` moves inside the `try` so a
+  removed process cwd cannot replace a clean block envelope with a raise
+  ([#1513](https://github.com/use-agent-os/agent-os/issues/1513)).
+- Inline compaction no longer overwrites a follow-up that arrived while the
+  turn was running. `persist_compaction_result` derived the rows to replace
+  from counts on the *live* transcript, so a `sessions.send` appended between
+  the agent loading its history and the `CompactionEvent` being persisted
+  fell into the overwritten tail and vanished from both the live and the
+  canonical transcript. `TurnRunner._load_history` now records a
+  `TranscriptSnapshot` (session id plus the `message_id` of the last row the
+  history was built from), the persist adapter hands it through, and the
+  manager rewrites and archives only rows inside that snapshot — later rows
+  are re-appended verbatim with the same `message_id`, and the summary's
+  `covered_through_id` never reaches them. A snapshot whose session or anchor
+  row is gone (same-key reset, truncate, manual compaction) is rejected and
+  reported as a failed persist rather than written over the newer transcript
+  ([#1645](https://github.com/use-agent-os/agent-os/issues/1645)).
+- Structured cron schedules honour the `timezone` alias.
+  `coerce_schedule_from_params` read only `schedule.tz`, so a schedule
+  carrying `schedule.timezone` — the spelling the expression-shorthand path
+  already accepts — was silently scheduled in UTC: a job asked for at 09:00
+  Shanghai ran at 09:00 UTC. A new `_schedule_tz` helper accepts either
+  spelling, rejects a conflict between the two and a non-string value
+  (including the falsy ones `raw.get("tz") or ""` used to swallow), and the
+  top-level conflict check goes through it too, so a `schedule.timezone` that
+  disagrees with a top-level `tz` raises instead of being overwritten.
+  `cron.update`'s explicit-clear detection learns the alias as well
+  ([#1603](https://github.com/use-agent-os/agent-os/issues/1603)).
+- `sessions.create` normalizes `displayName` the way `rename` and `patch`
+  already do. It was the one gateway write path that skipped
+  `normalize_session_name`, and `SessionNode.display_name` carries no
+  validation of its own, so raw ANSI/OSC bytes reached whatever terminal later
+  rendered the session list, and a pasted multi-line or over-long `/new`
+  title broke the single-line, ≤120-character shape list rows assume. Control
+  characters are dropped, whitespace collapsed, the name trimmed to
+  `MAX_SESSION_NAME_LENGTH`, blank stored as `None`, a non-string rejected;
+  the standalone TUI's `/new <title>` normalizes and escapes the title itself
+  since it never reaches the gateway
+  ([#1618](https://github.com/use-agent-os/agent-os/issues/1618)).
+- The `cron-watchers` skill no longer consumes items it never reported.
+  `_watermark.select_new` recorded every fresh id as seen while the three
+  watchers printed only `fresh[:limit]`, so anything past `--limit` was lost
+  for good — `watch_github.py` fetches 30 per page against a default limit of
+  10, so one busy poll could drop 20 items. `select_new` now takes the limit
+  and commits only the ids it returns; the surplus surfaces on following
+  runs, drained oldest-first so what is deferred is the newest and stays on
+  the page longest. `--limit` must be at least 1, and the silent first run
+  still adopts the whole feed
+  ([#1674](https://github.com/use-agent-os/agent-os/issues/1674)).
+- The `pdf-toolkit` `--tables-strategy` applies to both axes. `extract.py`
+  set only `vertical_strategy`, so `text` still looked for ruling lines on
+  one axis and found nothing on the borderless tables it is documented for,
+  while `explicit` — which needs line coordinates the script cannot supply —
+  crashed inside pdfplumber on every call. `explicit` is removed from the
+  choices and from `SKILL.md`; `extract()` rejects it with a clear
+  `ValueError` ([#1673](https://github.com/use-agent-os/agent-os/issues/1673)).
+- The `docx` skill's `replace_text` reaches placeholders inside tables.
+  `apply_ops` iterated `doc.paragraphs`, which python-docx limits to the body,
+  so a field inside a table — where contract, report and invoice fields
+  usually live — was never replaced and the op reported zero applications; a
+  non-dict op crashed with `AttributeError`. It now walks body paragraphs
+  plus every table cell, recursing into nested tables and visiting a merged
+  cell once, and skips non-dict ops the way `edit_xlsx` already does
+  ([#1653](https://github.com/use-agent-os/agent-os/issues/1653)).
+- `ProviderSelector.override_model(model, fallbacks=...)` rebases the held
+  position onto the rebuilt chain. It rebuilt `_chain` but left `_index` and
+  the breaker admission at positions computed against the old chain, so a
+  selector that `resolve()` had already moved onto a fallback either crashed
+  with `IndexError` on the next `resolve()` when the new chain was shorter, or
+  silently kept serving whatever now sat at the stale index without asking
+  the breaker. Auto-Pilot issues exactly this override on the live request
+  path, so a tier switch during a provider outage could take down the turn.
+  The position now follows its *provider* into the new chain — the admission
+  may be this turn's half-open probe, which a second `resolve()` must not
+  treat as already in flight — and resets to the primary when the provider
+  is gone, as `sync_primary` already does
+  ([#1616](https://github.com/use-agent-os/agent-os/issues/1616)).
+- `apply_patch` to `USER.md`, `memory.md` or a nested `memory_source_dir`
+  refreshes the memory snapshot. `patch._memory_source_rel_path` kept its own
+  copy of the "which files feed the snapshot" rule and knew only `MEMORY.md`
+  under the single patch root, so the edit stayed invisible to the model for
+  the rest of the session while the same edit through `write_file` or
+  `edit_file` fired `on_memory_source_write`. The patch tool now delegates to
+  `filesystem._memory_source_rel_path`, which takes the patch root as an extra
+  root — one classifier, no drift
+  ([#1625](https://github.com/use-agent-os/agent-os/issues/1625)).
+- Slack Approve/Deny clicks resolve on entries not literally named `slack`.
+  `_handle_slack_interactive` compared the session key's channel segment
+  against `SlackChannel.channel_id`, a dataclass default the registry never
+  overwrote, while session keys embed the *entry name* — so on any other
+  entry name every click logged `slack.interactive_mismatch` and the approval
+  never resolved. `SlackChannel` gains a `name` field, the registry's flat
+  path passes `entry.name` to any adapter that accepts one, and the check
+  compares against it the way Discord, Telegram and Teams compare against
+  `self.config.name`. `channel_id` is left alone: it keys
+  `pending_overflow_policy_per_channel`
+  ([#1606](https://github.com/use-agent-os/agent-os/issues/1606)).
+- The same defect on Discord: `_handle_discord_component_interaction`
+  compared against the literal `discord`, because `DiscordChannelConfig`
+  never declared a `name` field for the registry to populate. Every
+  multi-account Discord setup has at least one entry not named `discord`, and
+  on those every approve/deny click was rejected as a mismatch
+  ([#1600](https://github.com/use-agent-os/agent-os/issues/1600)).
+- The provider circuit breaker releases its half-open probe slot on a
+  request-shaped failure. `record_failure` ignores non-tripping kinds
+  (`MODEL_NOT_FOUND`, `BAD_REQUEST`, `UNSUPPORTED_FEATURE`, …) because they
+  describe the request, not the provider — but when the ignored failure *was*
+  the probe, the early return left `probe_started_at` set and `allow()`
+  blocked every other caller for a full cooldown window (up to 600s by
+  default), parking a provider nothing had shown to be unhealthy. Such a
+  failure now clears the probe and leaves state, counters and backoff
+  untouched, so the next caller becomes the probe
+  ([#1602](https://github.com/use-agent-os/agent-os/issues/1602)).
+- `apply_patch` treats a bare empty hunk line as blank context. Both loops in
+  `_apply_hunk` skipped an empty line outright, but a blank context line is
+  written as `""` at least as often as `" "` — editors, terminals, CI and most
+  model output strip the trailing space — so verification fell out of step
+  with the file and produced a spurious `Context mismatch` pointing at the
+  wrong line. A blank that merely separates a hunk from the next marker is
+  still ignored ([#1577](https://github.com/use-agent-os/agent-os/issues/1577)).
+- `TerminalChannel.receive()` works on Windows. `_get_reader` handed
+  `sys.stdin` to `loop.connect_read_pipe`, which the Proactor loop registers
+  with IOCP and fails with `WinError 6 The handle is invalid` from the first
+  `readline()`, after the dead transport was already cached. Windows now reads
+  a line in the default executor under the existing reader lock; POSIX keeps
+  the `StreamReader` path; both share one `errors="replace"` decode and strip
+  a trailing CRLF as one terminator
+  ([#1575](https://github.com/use-agent-os/agent-os/issues/1575)).
+- Nullable unions spelled `{"type": ["null"]}`, `{"type": null}`,
+  `{"const": null}` or `{"enum": [null]}` collapse like `{"type": "null"}`.
+  `_is_null_schema` recognised only the last, so the others survived as an
+  uncollapsed `anyOf` — the exact construct the module exists to remove
+  before a schema reaches a provider that rejects it — and the type-array
+  case was rewritten to two identical `string` branches. Type wins over
+  const/enum, a branch that admits any real value is never null, and null
+  literals are dropped from a type array alongside `"null"`
+  ([#1573](https://github.com/use-agent-os/agent-os/issues/1573)).
+- `grep_search`'s `include` glob matches path-qualified patterns. The filter
+  ran `fnmatch` against `fp.name` only, so `tests/*.py` could never match and
+  the tool answered "No matches" — indistinguishable, to the agent, from
+  "this code does not exist". It now matches the filename first and then the
+  path relative to the search base, so bare patterns with a literal prefix
+  keep working, and a `**/` segment also matches zero directories
+  ([#1571](https://github.com/use-agent-os/agent-os/issues/1571)).
+- The email channel refuses to send into an unknown thread instead of mailing
+  the Message-ID. `_resolve_target` fell back to treating `reply_to` as a
+  mailbox whenever the thread was not in the in-memory routing cache — but
+  `reply_to` is an RFC 5322 Message-ID with a mailbox's `local@domain` shape
+  and a domain chosen by whoever sent the original mail, so after a restart or
+  LRU eviction the reply went to that address. An unknown thread with no
+  `metadata["to"]` now raises and logs `email.send_unknown_thread`. Scheduler
+  and heartbeat delivery, which relied on the fallback for operator-configured
+  addresses, pass `metadata["to"]` — but only when `channel_id` is a
+  configured recipient rather than a thread key
+  ([#1570](https://github.com/use-agent-os/agent-os/issues/1570)).
+- `gate_action` resolves a relative `cwd` against the workspace.
+  `_resolve_workspace` accepted `cwd` only when absolute and otherwise fell
+  through to the workspace root, while `action_fingerprint` hashes `cwd`, so
+  every relative `workdir` collapsed onto one fingerprint. For `@sandboxed`
+  tools with a fixed `argv_factory` such as `git_status`, `cwd` is the only
+  discriminator, which made `post_denial_guard` auto-deny a call in `repoB`
+  as `REPEATED_SAME_INTENT` after the human had denied `repoA`. A relative
+  `cwd` is now joined lexically onto the workspace root, mirroring
+  `shell._effective_workdir`
+  ([#1595](https://github.com/use-agent-os/agent-os/issues/1595)).
+- `sensitive_target_in_command` resolves relative destructive targets against
+  the command's `cwd`, not the workspace root. Whenever `workspace` was
+  passed, `cwd` was discarded, so `rm -rf config` with `workdir=~/.aws`
+  resolved to `<workspace>/config`, matched no sensitive basename, and the
+  hard block "ordinary approval cannot override" never fired; `rm -rf
+  .aws/config` from `$HOME` and `rm -rf ../.ssh` slipped past the whole-text
+  scan the same way. The two notions are now kept apart: `cwd` anchors a
+  relative target, `workspace` measures "inside the workspace", and with no
+  workspace configured the `/root` container exception keeps working
+  ([#1579](https://github.com/use-agent-os/agent-os/issues/1579)).
+- `read_spreadsheet` no longer crashes on a CSV/TSV cell over Python's
+  process-wide 131,072-character field limit — one embedded JSON blob, log
+  line or base64 column raised an unhandled `_csv.Error`. The limit is raised
+  to `len(text)` for the duration of the parse (never `sys.maxsize`, so a
+  malformed quote cannot swallow an arbitrarily large file as one field),
+  restored in a `finally`, and guarded by a lock because the limit is
+  process-global and the read runs on the shared executor; any remaining
+  `csv.Error` becomes a `ToolError`
+  ([#1580](https://github.com/use-agent-os/agent-os/issues/1580)).
+- `cron.remove` on an unknown job id is `NOT_FOUND`. `scheduler.remove_job`
+  already returned `False`, but the RPC handler discarded it and the CLI then
+  invented `{"removed": true}`; it now raises `KeyError` like `cron.status`
+  and `cron.update` ([#1598](https://github.com/use-agent-os/agent-os/issues/1598)).
+- Concurrent skill installs no longer clobber each other's lockfile entries.
+  `install()` and `uninstall()` each did their own `load` → mutate → `save`
+  with no locking, so whichever save landed last won, built from a load taken
+  before the other writer's save — 20 concurrent installs dropped 19 entries.
+  `Lockfile.update(path, mutate)` holds an exclusive OS-level lock (fcntl /
+  msvcrt, on a sibling `*.lock` file so acquiring it never depends on the
+  lockfile being valid JSON) across the whole cycle, and `save()` writes
+  atomically through a temp file and `os.replace`
+  ([#1557](https://github.com/use-agent-os/agent-os/issues/1557)).
+- Status reactions settle on the failure path. Only `completed()` popped
+  `_active` and removed the progress emoji; on the `TaskQueueFullError` path
+  dispatch calls `received` then `failed` and returns, so a rejected message
+  kept both ✅ and ❌ forever and leaked one `_active` entry per rejection.
+  `failed()` is now terminal: it clears the progress marks, keeps ❌ as the
+  outcome, and tracks nothing that a later call would have to reclaim
+  ([#1560](https://github.com/use-agent-os/agent-os/issues/1560)).
+- `run_job_now` executes the row the reservation read, not the snapshot
+  taken before it. An `update()` landing between the two reads meant the
+  operator who had just saved a change and clicked "run now" got the old
+  payload, prompt or timeout — and since `handler_key` derives from the
+  payload kind, an edit from an agent turn to a reminder dispatched to the
+  old handler. The handler is resolved from the reserved row too, and a
+  missing handler finalizes the reservation the way `timer._run_single` does
+  ([#1555](https://github.com/use-agent-os/agent-os/issues/1555)).
+- Background shell output decodes multibyte UTF-8 across chunk boundaries.
+  `_read_bg_output` decoded each 4096-byte chunk with `errors="replace"`, so a
+  CJK character or emoji straddling a boundary came out as `U+FFFD`. It now
+  feeds an incremental decoder and flushes at EOF
+  ([#1535](https://github.com/use-agent-os/agent-os/issues/1535)).
+- `ApprovalQueue.wait(approval_id, timeout=X)` no longer denies an approval
+  when the caller's own bounded wait elapses. The per-call timeout was
+  treated as the approval's expiry, so a Web UI poll with `timeout=10` on an
+  approval whose real lifespan was the 300s default permanently wrote
+  `resolved = 1, approved = 0` after ten seconds, and the operator's later
+  Approve raised `Approval already resolved`. The approval is denied only once
+  `created_at + default_timeout` has genuinely elapsed; otherwise `wait()`
+  returns `False` and leaves it pending
+  ([#1568](https://github.com/use-agent-os/agent-os/issues/1568)).
+- `execute_code` shows the whole script in its approval prompt. It passed
+  `command=code[:200]` into `_check_exec_approval`, and that string is what
+  the human reviewing the approval sees, so a script whose first 200
+  characters were imports or a docstring presented as harmless while the
+  destructive statement that triggered the prompt was never shown. The
+  sensitive-access scan already ran over the full code; only the payload was
+  truncated ([#1567](https://github.com/use-agent-os/agent-os/issues/1567)).
+- The git tool resolves a relative `workdir` against the workspace. It was
+  returned unresolved, so `_run_git` resolved it against the process CWD and
+  inspected `$PWD/<workdir>` whenever the gateway ran anywhere but the
+  workspace. It now mirrors `shell._effective_workdir`: a relative path joins
+  onto `ctx.workspace_dir` and resolves lexically; absolute paths pass through
+  ([#1566](https://github.com/use-agent-os/agent-os/issues/1566)).
+- `read_spreadsheet` finds a sheet literally named `"1"`. The positional
+  reading of `sheet` was tested before the exact-name match, so on a workbook
+  whose sheets were `["Summary", "1"]`, `sheet="1"` silently returned
+  `Summary` and every numeric sheet name — years, step numbers, product codes
+  — was unreachable. The exact-name match now wins; positional selection is
+  only outranked, never removed
+  ([#1569](https://github.com/use-agent-os/agent-os/issues/1569)).
+- `MemorySyncManager.sync()` no longer discards session-delta recorded while
+  it was running. It snapshotted `has_pending()` at the top, awaited file and
+  session indexing, and then unconditionally `reset()` the tracker — so a
+  burst of `notify_message()` calls that arrived mid-sync, never covered by
+  that sync's own work, was wiped by its completion and had to accumulate a
+  fresh threshold from zero. `SessionDeltaTracker` gains `snapshot()` and
+  `consume(snapshot)`, which subtracts the snapshotted amount instead of
+  zeroing, and the `session-delta` threshold guard is kept
+  ([#1521](https://github.com/use-agent-os/agent-os/issues/1521)).
+- The Windows shell denylist covers every delete spelling. `del` and `rmdir`
+  were listed but `rd`, `erase` and `Remove-Item` were not, and the entries
+  that duplicated them in `DEFAULT_WARNLIST_WIN` were dead code because the
+  denylist is checked first. `rd` and `erase` are anchored to a command
+  position — start, `;`, `&`, `|` or newline, optionally behind a `cmd /c` or
+  `powershell` wrapper — so a word like `record` does not trip them,
+  `Remove-Item` joins the list, the force-push pattern tolerates flags between
+  `push` and `--force`, and the dead warnlist entries are removed
+  ([#1464](https://github.com/use-agent-os/agent-os/issues/1464)).
 
 ## [2026.9.11] - 2026-09-11
 
