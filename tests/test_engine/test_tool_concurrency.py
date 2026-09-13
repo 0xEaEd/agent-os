@@ -231,14 +231,28 @@ async def test_sessions_send_same_target_serializes() -> None:
 
 @pytest.mark.asyncio
 async def test_six_safe_tools_run_concurrent() -> None:
-    """Six safe tools should complete in roughly one sleep period, not six."""
+    """All six safe tools must be in flight at the same time.
+
+    Concurrency is proven with a rendezvous rather than wall-clock timing:
+    every handler registers itself and then waits until all six have
+    entered.  Serial dispatch would leave the first handler waiting
+    forever, so the rendezvous times out and the test fails
+    deterministically, regardless of how loaded the CI runner is.
+    """
     assert len(_SAFE_SAMPLE) == 6, "Need at least 6 safe tools in _SAFE_TOOL_NAMES"
 
     call_order: list[str] = []
+    timed_out: list[str] = []
+    all_in_flight = asyncio.Event()
 
     async def _handler(tc: ToolCall) -> ToolResult:
         call_order.append(tc.tool_name)
-        await asyncio.sleep(_TOOL_SLEEP_S)
+        if len(call_order) == len(_SAFE_SAMPLE):
+            all_in_flight.set()
+        try:
+            await asyncio.wait_for(all_in_flight.wait(), timeout=5.0)
+        except TimeoutError:
+            timed_out.append(tc.tool_name)
         return ToolResult(
             tool_use_id=tc.tool_use_id,
             tool_name=tc.tool_name,
@@ -253,23 +267,15 @@ async def test_six_safe_tools_run_concurrent() -> None:
         tool_handler=_handler,
     )
 
-    t0 = time.monotonic()
     await _collect(agent)
-    elapsed = time.monotonic() - t0
 
-    # Concurrent: should be ~0.2 s; serial would be ~1.2 s
-    assert elapsed < 0.60, (
-        f"Expected concurrent execution (<0.60 s), got {elapsed:.3f} s. "
-        "Safe tools may still be running serially."
-    )
-    # Speed-up vs serial lower bound
-    serial_estimate = len(_SAFE_SAMPLE) * _TOOL_SLEEP_S
-    assert elapsed * 3 < serial_estimate, (
-        f"Expected at least 3x speedup over serial ({serial_estimate:.1f} s), "
-        f"got {elapsed:.3f} s"
-    )
-    # All 6 tools were called
+    # All 6 tools were called, and every one of them saw the others in
+    # flight -- a serial dispatcher would have left the early ones waiting.
     assert sorted(call_order) == sorted(_SAFE_SAMPLE)
+    assert timed_out == [], (
+        f"Safe tools {timed_out} timed out waiting for the rendezvous; "
+        "they may be running serially."
+    )
 
 
 @pytest.mark.asyncio
