@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import mimetypes
 from dataclasses import dataclass, field
@@ -15,6 +14,8 @@ from agentos.artifacts import (
     ArtifactBudgetError,
     ArtifactStore,
     artifact_payload,
+    ensure_file_within_budget,
+    sha256_file,
 )
 from agentos.tools.types import ToolContext
 
@@ -111,8 +112,16 @@ def auto_publish_omitted_workspace_artifacts(
         if not _text_mentions_written_file(final_text, record):
             continue
 
+        max_bytes = (
+            ctx.artifact_max_bytes
+            if ctx.artifact_max_bytes is not None
+            else DEFAULT_ARTIFACT_MAX_BYTES
+        )
         try:
-            target_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+            # Size first, from stat(); hashing and publishing only read files
+            # that already fit the budget.
+            ensure_file_within_budget(target, max_bytes)
+            target_sha256 = sha256_file(target)
             artifact_key = (target_sha256, target.name)
             if artifact_key in known_artifact_keys:
                 continue
@@ -132,9 +141,7 @@ def auto_publish_omitted_workspace_artifacts(
                     name=target.name,
                     mime=artifact_mime,
                     source="auto_publish_omitted",
-                    max_bytes=ctx.artifact_max_bytes
-                    if ctx.artifact_max_bytes is not None
-                    else DEFAULT_ARTIFACT_MAX_BYTES,
+                    max_bytes=max_bytes,
                     disk_budget_bytes=ctx.artifact_disk_budget_bytes
                     if ctx.artifact_disk_budget_bytes is not None
                     else DEFAULT_ARTIFACT_DISK_BUDGET_BYTES,

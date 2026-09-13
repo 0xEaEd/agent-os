@@ -135,6 +135,26 @@ def artifact_download_url(artifact_id: str) -> str:
     return f"/api/v1/artifacts/{_validate_artifact_id(artifact_id)}"
 
 
+def ensure_file_within_budget(path: str | Path, max_bytes: int | None) -> None:
+    """Raise ``ArtifactBudgetError`` when ``path`` is larger than ``max_bytes``.
+
+    Uses ``stat()`` only, so callers can refuse an oversize file without
+    reading it.
+    """
+    size = Path(path).stat().st_size
+    if max_bytes is not None and size > max_bytes:
+        raise ArtifactBudgetError(f"artifact exceeds per-file budget ({size} > {max_bytes})")
+
+
+def sha256_file(path: str | Path, *, chunk_size: int = 64 * 1024) -> str:
+    """SHA-256 of a file read in ``chunk_size`` pieces, never whole."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class ArtifactStore:
     """Session-scoped artifact store rooted outside the web static tree."""
 
@@ -219,6 +239,10 @@ class ArtifactStore:
         max_bytes: int | None = DEFAULT_ARTIFACT_MAX_BYTES,
         disk_budget_bytes: int | None = DEFAULT_ARTIFACT_DISK_BUDGET_BYTES,
     ) -> ArtifactRef:
+        # Reject on the size the filesystem reports before loading anything:
+        # publish_bytes() re-checks len(payload), but a multi-GB workspace file
+        # must not be pulled into the gateway process just to be turned away.
+        ensure_file_within_budget(path, max_bytes)
         payload = Path(path).read_bytes()
         return self.publish_bytes(
             payload,

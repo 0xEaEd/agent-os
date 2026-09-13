@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import mimetypes
 import os
@@ -16,6 +15,8 @@ from agentos.artifacts import (
     ArtifactBudgetError,
     ArtifactStore,
     artifact_payload,
+    ensure_file_within_budget,
+    sha256_file,
 )
 from agentos.tools.path_aliases import resolve_workspace_alias
 from agentos.tools.path_policy import reject_foreign_host_path
@@ -209,7 +210,14 @@ async def publish_artifact(
     if not target.is_file():
         raise ToolError(f"artifact path is not a file: {path}")
 
-    target_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+    max_bytes = (
+        ctx.artifact_max_bytes if ctx.artifact_max_bytes is not None else DEFAULT_ARTIFACT_MAX_BYTES
+    )
+    try:
+        ensure_file_within_budget(target, max_bytes)
+    except ArtifactBudgetError as exc:
+        raise ToolError(str(exc)) from exc
+    target_sha256 = sha256_file(target)
     for published in reversed(ctx.published_artifacts):
         if published.get("sha256") != target_sha256:
             continue
@@ -268,9 +276,7 @@ async def publish_artifact(
             name=artifact_name,
             mime=artifact_mime,
             source="publish_artifact",
-            max_bytes=ctx.artifact_max_bytes
-            if ctx.artifact_max_bytes is not None
-            else DEFAULT_ARTIFACT_MAX_BYTES,
+            max_bytes=max_bytes,
             disk_budget_bytes=ctx.artifact_disk_budget_bytes
             if ctx.artifact_disk_budget_bytes is not None
             else DEFAULT_ARTIFACT_DISK_BUDGET_BYTES,
