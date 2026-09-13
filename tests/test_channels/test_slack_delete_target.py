@@ -118,7 +118,7 @@ async def test_delete_api_error_reports_message_id() -> None:
         ("slack", "C99999999", "C11111111|1712345678.123456", "C11111111|1712345678.123456"),
         ("slack", "", "1712345678.123456", "1712345678.123456"),
         ("telegram", "12345", "678", "12345|678"),
-        ("discord", "C99999999", "678", "678"),
+        ("feishu", "oc_demo", "678", "678"),
     ],
 )
 def test_delete_message_id_encodes_target(channel, target, message_id, expected) -> None:
