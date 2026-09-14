@@ -127,7 +127,9 @@ Each range writes one output file: `output_dir/input_001.pdf`,
 python {baseDir}/scripts/form_fill.py form.pdf data.json --out filled.pdf
 ```
 
-`data.json` maps field name → string value:
+`data.json` maps field name → string value. It must be a single JSON object —
+a list of objects, or any other shape, is refused with exit 2 and no output
+file is written:
 
 ```json
 {
