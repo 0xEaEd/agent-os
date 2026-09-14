@@ -9,6 +9,7 @@ prints ``## No commits yet on main`` and ``git_diff`` returns empty.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -80,3 +81,44 @@ async def test_git_log_count_cannot_request_unlimited_history(
     await git.git_log(count=-1, workdir=str(empty_repo))
 
     assert "--max-count=1" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_empty_repository_is_detected_in_any_language(
+    empty_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """git translates its messages, so the state is read, not the wording."""
+    real_run_git = git._run_git
+
+    async def _localised(*args: str, cwd: str | None = None) -> str:
+        if args[0] == "log":
+            raise RuntimeError(
+                "git log failed (exit 128):\n"
+                "fatal: votre branche actuelle 'main' ne contient aucun commit"
+            )
+        return await real_run_git(*args, cwd=cwd)
+
+    monkeypatch.setattr(git, "_run_git", _localised)
+
+    assert await git.git_log(workdir=str(empty_repo)) == "(no commits yet)"
+
+
+@pytest.mark.asyncio
+async def test_a_repository_with_commits_never_reports_empty(empty_repo: Path) -> None:
+    """The probe must not answer "empty" for a repo that simply failed."""
+    subprocess.run(
+        ["git", "-C", str(empty_repo), "commit", "--allow-empty", "-m", "first", "--no-gpg-sign"],
+        check=True,
+        capture_output=True,
+        env={
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@example.com",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.com",
+            "PATH": os.environ.get("PATH", ""),
+            "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+        },
+    )
+
+    assert await git._repo_has_no_commits(str(empty_repo)) is False
+    assert "first" in await git.git_log(workdir=str(empty_repo))

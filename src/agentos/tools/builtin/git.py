@@ -15,12 +15,6 @@ from agentos.tools.registry import tool
 from agentos.tools.types import current_tool_context
 
 _NO_COMMITS_MESSAGE = "(no commits yet)"
-# What git says when HEAD points at an unborn branch. The second form is what
-# older versions report for the same state.
-_NO_COMMITS_MARKERS = (
-    "does not have any commits yet",
-    "bad default revision 'HEAD'",
-)
 
 
 def _effective_workdir(workdir: str | None) -> str | None:
@@ -119,6 +113,21 @@ async def _run_git(*args: str, cwd: str | None = None) -> str:
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed (exit {proc.returncode}):\n{output}")
     return output
+
+
+async def _repo_has_no_commits(cwd: str | None) -> bool:
+    """True when the repository is readable but holds nothing committed yet.
+
+    ``rev-list --all --count`` answers ``0`` on an unborn branch and exits
+    non-zero outside a repository, so it separates "nothing committed yet"
+    from real breakage. Asking for the count beats matching the error text:
+    git translates its messages, so a non-English runner would miss the
+    marker and hand the raw exit 128 back to the caller.
+    """
+    try:
+        return (await _run_git("rev-list", "--all", "--count", cwd=cwd)).strip() == "0"
+    except RuntimeError:
+        return False
 
 
 def build_request_for_git(args: tuple[str, ...], cwd: Path, action_kind: str, policy):
@@ -255,18 +264,19 @@ async def git_log(count: int = 10, workdir: str | None = None) -> str:
     # git reads --max-count=-1 as "unlimited", so a negative count would dump
     # the whole history instead of the handful of commits the caller asked for.
     count = max(1, count)
+    cwd = _effective_workdir(workdir)
     try:
         return await _run_git(
             "log",
             f"--max-count={count}",
             "--oneline",
             "--decorate",
-            cwd=_effective_workdir(workdir),
+            cwd=cwd,
         )
-    except RuntimeError as exc:
+    except RuntimeError:
         # A branch with no commits yet is a state, not a failure: git_status
         # reports it and git_diff returns empty, so log says so too rather
         # than raising exit 128 out through the turn loop.
-        if any(marker in str(exc) for marker in _NO_COMMITS_MARKERS):
+        if await _repo_has_no_commits(cwd):
             return _NO_COMMITS_MESSAGE
         raise
