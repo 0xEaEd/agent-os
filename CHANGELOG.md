@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- `multi-search-engine` skill: a `firecrawl` engine backed by Firecrawl's
+  `/v2/search`, keyed by the `FIRECRAWL_API_KEY` that `web_fetch` already
+  uses for its Firecrawl escalation, so an install with that key gets the
+  engine without further setup. Metadata only -- no `scrapeOptions`, so a
+  call spends search credits, not a page scrape per hit -- and included in
+  `--engines auto` when the key is set.
 - Skills: a `{python}` placeholder next to `{baseDir}`. `skill_view` expands
   it to the interpreter AgentOS itself runs on (`sys.executable` of the
   gateway), and every bundled `SKILL.md` now invokes its scripts as

@@ -1,6 +1,6 @@
 ---
 name: multi-search-engine
-description: "Query the web through multiple search engines (DuckDuckGo, Brave, Tavily, SerpAPI, and X/Twitter via xAI x_search) with a single CLI surface. Trigger when the user asks for a research search, fact lookup, source discovery, current discussion on X, or wants to compare engines for coverage. The skill aggregates per-engine result lists and normalizes them into a uniform JSON shape for downstream skills (deep-research is the primary consumer). `--engines auto` (the default) runs DuckDuckGo plus every engine whose API key or xAI credential is present; a requested engine without its key records a per-engine error and the run continues."
+description: "Query the web through multiple search engines (DuckDuckGo, Brave, Tavily, SerpAPI, Firecrawl, and X/Twitter via xAI x_search) with a single CLI surface. Trigger when the user asks for a research search, fact lookup, source discovery, current discussion on X, or wants to compare engines for coverage. The skill aggregates per-engine result lists and normalizes them into a uniform JSON shape for downstream skills (deep-research is the primary consumer). `--engines auto` (the default) runs DuckDuckGo plus every engine whose API key or xAI credential is present; a requested engine without its key records a per-engine error and the run continues."
 homepage: ""
 provenance:
   origin: clawhub-mit0
@@ -102,10 +102,11 @@ addition to their citations; page-style engines never populate it.
 | `brave` | yes | `BRAVE_SEARCH_API_KEY` or legacy `BRAVE_API_KEY` | High-quality results, generous free tier, recency filter |
 | `tavily` | yes | `TAVILY_API_KEY` | Designed for AI agents, returns clean JSON |
 | `serpapi` | yes | `SERPAPI_API_KEY` | Google results via an aggregator; paid |
+| `firecrawl` | yes | `FIRECRAWL_API_KEY` | Firecrawl `/v2/search`, metadata only (no page scrape); same key `web_fetch` uses for its Firecrawl escalation |
 | `x` | yes | xAI login (`agentos auth login xai`) or `XAI_API_KEY` | Posts and threads on X via xAI's server-side `x_search`; returns an answer plus citations. Slow (60–120s) and billed to your xAI account, not through `agentos cost` — see `docs/x-search.md` |
 
 `--engines auto` (default) expands to `duckduckgo` plus each of `brave`,
-`tavily`, `serpapi` whose key is set, plus `x` when an xAI credential is
+`tavily`, `serpapi`, `firecrawl` whose key is set, plus `x` when an xAI credential is
 available. Explicit names can be mixed in (`--engines auto,brave`), and
 duplicates are dropped. With no keys configured, `auto` is DuckDuckGo only.
 
