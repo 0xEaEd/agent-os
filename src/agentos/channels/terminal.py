@@ -32,6 +32,7 @@ class TerminalChannel:
     sender_id: str = "user"
     _reader: asyncio.StreamReader | None = field(default=None, init=False, repr=False)
     _reader_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _write_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def _get_reader(self) -> asyncio.StreamReader:
         async with self._reader_lock:
@@ -46,19 +47,26 @@ class TerminalChannel:
     async def _read_line(self) -> bytes:
         """Return one raw line from stdin, ``b""`` at EOF.
 
-        On Windows the read runs in the default executor under
-        ``_reader_lock`` so overlapping ``receive()`` calls take turns
-        instead of racing for lines. Cancelling the awaiting task does not
-        unblock the worker thread: it keeps waiting for the next line and
-        discards it, and interpreter exit joins it, so wrap ``receive()`` in
-        a timeout only with that in mind.
+        Both branches hold ``_reader_lock`` across the read so overlapping
+        ``receive()`` calls take turns instead of racing for lines. The
+        POSIX branch needs it as much as the Windows one: entering
+        ``StreamReader.readline()`` while an earlier one is still waiting
+        raises ``RuntimeError``, which a caller retrying after a timeout
+        would otherwise hit. On Windows the read runs in the default
+        executor; cancelling the awaiting task does not unblock the worker
+        thread: it keeps waiting for the next line and discards it, and
+        interpreter exit joins it, so wrap ``receive()`` in a timeout only
+        with that in mind.
         """
         if _ON_WINDOWS:
             loop = asyncio.get_running_loop()
             async with self._reader_lock:
                 return await loop.run_in_executor(None, self._blocking_readline)
+        # _get_reader releases the lock before returning, so re-acquiring
+        # here does not deadlock on the non-reentrant asyncio.Lock.
         reader = await self._get_reader()
-        return await reader.readline()
+        async with self._reader_lock:
+            return await reader.readline()
 
     async def receive(self) -> IncomingMessage:
         """Read one line from stdin and return as IncomingMessage."""
@@ -71,24 +79,33 @@ class TerminalChannel:
             content=content,
         )
 
+    async def _write(self, text: str) -> None:
+        """Write one message to stdout, serialized against other writers.
+
+        The gateway delivers replies concurrently -- ``_ChannelInFlightSet``
+        allows several per channel -- and every one of them lands on this
+        adapter's single shared stdout. Without the lock each write is
+        handed to the executor independently, so they print in completion
+        order rather than call order and a slow write lets later ones
+        overtake it.
+        """
+        loop = asyncio.get_running_loop()
+        async with self._write_lock:
+            await loop.run_in_executor(None, self._write_stdout, text)
+
     async def send(self, message: OutgoingMessage) -> None:
         """Write message content to stdout."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._write_stdout, message.content)
+        await self._write(message.content)
         log.debug("terminal.send", content=message.content[:80])
 
     async def edit(self, message_id: str, content: str) -> None:
         """Edit is not supported on terminal; re-print with prefix."""
-        prefix = f"[edit:{message_id}] "
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._write_stdout, prefix + content)
+        await self._write(f"[edit:{message_id}] " + content)
         log.debug("terminal.edit", message_id=message_id)
 
     async def delete(self, message_id: str) -> None:
         """Delete is not supported on terminal; print a notice."""
-        notice = f"[deleted:{message_id}]\n"
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._write_stdout, notice)
+        await self._write(f"[deleted:{message_id}]\n")
         log.debug("terminal.delete", message_id=message_id)
 
     # ------------------------------------------------------------------

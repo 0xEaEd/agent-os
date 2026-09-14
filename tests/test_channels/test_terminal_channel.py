@@ -1,23 +1,29 @@
-"""``TerminalChannel`` stdin reads on Windows.
+"""``TerminalChannel`` stdin reads and stdout ordering.
 
 ``_get_reader`` hands ``sys.stdin`` to ``loop.connect_read_pipe``. On the
 default Windows ``ProactorEventLoop`` that registers the handle with IOCP,
 which only accepts overlapped handles -- a console handle is not one, so the
 transport dies with ``OSError: [WinError 6] The handle is invalid`` and every
 ``receive()`` fails. ``send``/``edit`` already run blocking stdio in a thread;
-these tests pin ``receive`` to the same approach on Windows and leave the
-POSIX ``StreamReader`` path untouched.
+these tests pin ``receive`` to the same approach on Windows.
+
+They also cover the adapter's two shared resources. Overlapping reads take
+turns on both platforms -- a second ``StreamReader.readline()`` entered
+while the first is still waiting raises ``RuntimeError`` -- and concurrent
+writes to the one stdout keep call order rather than completion order.
 """
 
 from __future__ import annotations
 
 import asyncio
 import io
+import time
 
 import pytest
 
 from agentos.channels import terminal as terminal_module
 from agentos.channels.terminal import TerminalChannel
+from agentos.channels.types import OutgoingMessage
 
 
 def _binary_stdin(data: bytes) -> io.TextIOWrapper:
@@ -93,6 +99,55 @@ async def test_windows_receive_copes_with_a_text_only_stdin(
     message = await TerminalChannel().receive()
 
     assert message.content == "typed"
+
+
+@pytest.mark.asyncio
+async def test_posix_overlapping_receives_take_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entering readline() twice at once raises; the lock must serialize.
+
+    A caller that wraps ``receive()`` in a timeout and retries lands here:
+    the cancelled read can still be waiting when the next one starts.
+    """
+    monkeypatch.setattr(terminal_module, "_ON_WINDOWS", False)
+    reader = asyncio.StreamReader()
+
+    async def _reader(self: TerminalChannel) -> asyncio.StreamReader:
+        return reader
+
+    monkeypatch.setattr(TerminalChannel, "_get_reader", _reader)
+    channel = TerminalChannel()
+
+    first = asyncio.create_task(channel.receive())
+    await asyncio.sleep(0)  # let the first read reach readline()
+    second = asyncio.create_task(channel.receive())
+    await asyncio.sleep(0)
+
+    reader.feed_data(b"one\ntwo\n")
+    messages = await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+
+    assert [m.content for m in messages] == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sends_keep_call_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concurrent deliveries share one stdout; call order must survive."""
+    written: list[int] = []
+
+    def _slow_write(text: str) -> None:
+        # Earlier messages take longest, so an unserialized write lets the
+        # later ones finish first -- exactly the reordering being fixed.
+        index = int(text)
+        time.sleep(0.02 * (5 - index) if index < 5 else 0)
+        written.append(index)
+
+    monkeypatch.setattr(TerminalChannel, "_write_stdout", staticmethod(_slow_write))
+    channel = TerminalChannel()
+
+    await asyncio.gather(*[channel.send(OutgoingMessage(content=str(i))) for i in range(8)])
+
+    assert written == list(range(8))
 
 
 @pytest.mark.asyncio
