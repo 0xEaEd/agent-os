@@ -12,23 +12,14 @@ Strengths: privacy-friendly, no rate limit at moderate volumes, returns a
 mix of public-web sources without strong personalization. Weaknesses: less
 recency-tuned than Brave; result ranking shifts week-to-week.
 
+Rate limiting shows up as an HTTP 202 "anomaly" page rather than a 4xx. The
+script retries once after a short pause and then records a
+`DuckDuckGo bot challenge` error for the engine, so an empty `results` list
+with an empty `errors` list genuinely means no organic hits. Redirect links
+(`/l/?uddg=…`) are unquoted to the destination URL and sponsored `y.js` links
+are dropped before `--limit` is applied.
+
 Use when: general web search where you want a "neutral" baseline.
-
-### Bing
-
-HTML scrape. Strengths: large index, often surfaces sources Google or
-DuckDuckGo miss. Weaknesses: rate-limits aggressively; structure changes
-break the parser without warning.
-
-Use when: need broad coverage and DuckDuckGo's results feel thin.
-
-### Baidu / Sogou / 360
-
-Chinese-language web search. Use one of the three; cross-check with a
-second when stakes are high. Baidu has the largest index; Sogou favors
-Tencent properties; 360 has slightly different ad patterns.
-
-Use when: query is in Chinese or topic is China-specific.
 
 ## API-key engines
 
@@ -54,23 +45,44 @@ HTML.
 ### SerpAPI
 
 `SERPAPI_API_KEY` from <https://serpapi.com>. Aggregator that proxies
-Google, Bing, Baidu, Yahoo, etc., returning a uniform JSON shape. Paid
-tiers; no free tier beyond a small credit.
+Google (the script requests `engine=google`), returning a uniform JSON
+shape. Paid tiers; no free tier beyond a small credit.
 
-Use when: parity across engines matters and the project has the budget.
+Use when: Google parity matters and the project has the budget.
+
+### X (xAI `x_search`)
+
+Credential: the xAI OAuth login stored by `agentos auth login xai`
+(`~/.agentos/auth.json`), or `XAI_API_KEY`. OAuth wins when both exist. The
+script reads the stored access token and never refreshes it; the gateway
+does that on its own `x_search` turns, so an expired token with no API key
+is reported as an error.
+
+The engine POSTs to xAI's Responses API with the server-side `x_search`
+tool. Unlike the page engines it returns a synthesized **answer** (emitted
+under the top-level `answers` key) plus **citations** to the posts it used
+(emitted as `results` rows with `engine: "x"`, empty snippet, title falling
+back to the URL when xAI only supplies a citation index). A complex query
+runs 60–120s and is billed to the xAI account directly — it does not show
+up in `agentos cost`.
+
+Use when: the question is about current discussion, reactions, or claims
+on X. Skip it (`--engines duckduckgo`) for a plain web lookup where the
+xAI latency and cost buy nothing.
 
 ## Routing decision tree
 
 ```
-Does the query contain CJK characters?
-  yes → baidu (+ sogou for cross-check)
-   no → continue
+Start with --engines auto
+  = duckduckgo
+  + brave / tavily / serpapi for each key that is set
+  + x when an xAI login or XAI_API_KEY exists
 Is the topic time-sensitive (last 24h)?
-  yes → brave or tavily
-   no → continue
-Is BRAVE_SEARCH_API_KEY or BRAVE_API_KEY set?
-  yes → brave + duckduckgo
-   no → duckduckgo + bing
+  yes → make sure brave or tavily is in the list; x for live discussion
+Is it a plain web lookup and cost matters?
+  yes → --engines duckduckgo (drops the xAI call)
+Does it hinge on what people are saying on X?
+  yes → x must be in the list; read `answers` first, cite `results`
 ```
 
 ## Per-engine result limits
@@ -78,23 +90,34 @@ Is BRAVE_SEARCH_API_KEY or BRAVE_API_KEY set?
 Default `--limit 10` is safe across engines. Higher limits:
 
 - DuckDuckGo: HTML returns up to ~30; beyond that, scrape the next page
-- Brave: API tops out at 20 per request
+- Brave: API tops out at 20 per request (the script clamps and logs)
 - Tavily: 5 results on the free tier, 20 on paid
-- Bing: HTML returns ~10 per page; pagination requires extra requests
+- SerpAPI: `num` up to 100, billed per request regardless
+- X: `--limit` caps the citation rows; the answer text is not truncated
 
 ## Anti-patterns
 
 - **Asking N engines in a tight loop without jitter**: rate limits will
-  cascade. Sleep 200-500ms between requests, more for scraping engines.
+  cascade. Sleep 200-500ms between requests, more for DuckDuckGo.
 - **Trusting a single engine's top result as ground truth**: ranking is
   noisy. Cross-check with a second engine.
-- **Running all 8 engines on every query**: redundant. Pick 2-3 by topic.
+- **Requesting engines that are not implemented**: only `duckduckgo`,
+  `brave`, `tavily`, `serpapi`, and `x` exist; anything else is recorded
+  as `unknown engine`.
+- **Running `x` on every trivial query**: it is the slowest and the only
+  engine that spends money per call.
 
 ## Maintenance notes
 
-The HTML-scraping engines (DuckDuckGo, Bing, Baidu, Sogou, 360) all break
-when the upstream site reshuffles its CSS. Treat the parsers as
-expected-to-fail-eventually code: the script logs parse failures rather
-than crashing, and the calling agent should be able to fall back to
-another engine on the spot. Routine maintenance is to test each parser
-against a known query monthly.
+DuckDuckGo is the only HTML scraper and breaks when the upstream site
+reshuffles its CSS. Treat the parser as expected-to-fail-eventually code:
+the script records parse failures and challenges per engine rather than
+crashing, and the calling agent should fall back to another engine on the
+spot. Routine maintenance is to test the parser against a known query
+monthly. Keep the script's own `AgentOS-multi-search-engine` User-Agent:
+on 2026-09-14 a browser-style Chrome UA was the one being served the 202
+challenge while the honest UA passed. Other keyless engines were evaluated
+on 2026-09-14 and rejected:
+Bing serves poisoned, irrelevant results to non-browser clients (worse than
+an empty list), Brave's HTML front end answers 429 with a captcha, and
+Mojeek returns 403.
