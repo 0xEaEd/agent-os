@@ -947,6 +947,9 @@ async def edit_file(path: str, old_text: str, new_text: str, approval_id: str | 
         p.write_text(updated, encoding="utf-8")
 
     await loop.run_in_executor(None, _write)
+    # Same bookkeeping as write_file / apply_patch: an edited deliverable is
+    # still a workspace write, and artifact delivery only sees the ones recorded.
+    record_workspace_file_write(p)
     _notify_memory_source_write(p)
     _notify_bootstrap_source_write(p)
     summary = f"replaced {len(old_text)} chars with {len(new_text)} chars"
