@@ -180,6 +180,8 @@ async def _read_image_file(path: str) -> tuple[bytes, str]:
             "Pass a real local file path or HTTP(S) URL. If this is a chat attachment, "
             "answer from the attached image directly instead of calling the image tool."
         )
+    if not p.is_file():
+        raise SafeToolError(f"Path is a directory: {path}")
     ext = p.suffix.lstrip(".").lower()
     if ext == "pdf":
         loop = asyncio.get_running_loop()
@@ -674,6 +676,8 @@ async def pdf(
         return json.dumps(path_block)
     if not p.exists():
         raise SafeToolError(f"PDF file not found: {path} (resolved={p})")
+    if not p.is_file():
+        raise SafeToolError(f"Path is a directory: {path}")
 
     try:
         import pdfplumber
@@ -965,6 +969,8 @@ async def _resolve_supported_audio_file_for_tool(
         raise SafeToolError(path_block["message"])
     if not resolved.exists():
         raise SafeToolError(f"Audio file not found: {path} (resolved={resolved})")
+    if not resolved.is_file():
+        raise SafeToolError(f"Path is a directory: {path}")
     ext = resolved.suffix.lstrip(".").lower()
     if ext not in _SUPPORTED_AUDIO_FORMATS:
         raise ToolError(
