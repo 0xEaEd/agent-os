@@ -666,3 +666,114 @@ def test_artifact_store_sanitizes_dot_and_empty_filenames(tmp_path: Path, unsafe
         source="publish_artifact",
     )
     assert ref.name == "artifact"
+
+
+def _forbid_whole_file_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A multi-GB workspace file must be rejected on ``st_size`` alone; loading
+    # it first is the bug (#1760).
+    def _boom(self: Path) -> bytes:
+        raise AssertionError(f"read_bytes() must not be called for {self.name}")
+
+    monkeypatch.setattr(Path, "read_bytes", _boom)
+
+
+def test_sha256_file_hashes_in_chunks_and_matches_whole_file_digest(tmp_path: Path) -> None:
+    import hashlib
+
+    from agentos.artifacts import sha256_file
+
+    target = tmp_path / "blob.bin"
+    payload = bytes(range(256)) * 1000  # well over one 64 KiB chunk
+    target.write_bytes(payload)
+
+    assert sha256_file(target) == hashlib.sha256(payload).hexdigest()
+
+
+def test_artifact_store_publish_file_checks_size_before_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ArtifactStore(tmp_path / "media")
+    target = tmp_path / "too-big.txt"
+    target.write_bytes(b"abcdef")
+    _forbid_whole_file_reads(monkeypatch)
+
+    with pytest.raises(ArtifactBudgetError, match=r"per-file budget \(6 > 5\)"):
+        store.publish_file(
+            target,
+            session_id="session-1",
+            session_key="agent:main:webchat:session-1",
+            mime="text/plain",
+            source="publish_artifact",
+            max_bytes=5,
+        )
+    assert not list((tmp_path / "media").rglob("too-big.txt"))
+
+
+@pytest.mark.asyncio
+async def test_publish_artifact_tool_rejects_oversize_file_without_reading_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output = workspace / "large.bin"
+    output.write_bytes(b"x" * 64)
+    ctx = ToolContext(
+        caller_kind=CallerKind.WEB,
+        workspace_dir=str(workspace),
+        artifact_media_root=str(tmp_path / "media"),
+        artifact_session_id="session-1",
+        session_key="agent:main:webchat:session-1",
+        artifact_max_bytes=32,
+    )
+    _forbid_whole_file_reads(monkeypatch)
+
+    token = current_tool_context.set(ctx)
+    try:
+        with pytest.raises(ToolError, match=r"artifact exceeds per-file budget \(64 > 32\)"):
+            await publish_artifact(path="large.bin")
+    finally:
+        current_tool_context.reset(token)
+
+    assert ctx.published_artifacts == []
+    assert not (tmp_path / "media").exists()
+
+
+@pytest.mark.asyncio
+async def test_publish_artifact_tool_reads_the_file_once_after_the_budget_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output = workspace / "report.txt"
+    output.write_text("ready", encoding="utf-8")
+    ctx = ToolContext(
+        caller_kind=CallerKind.WEB,
+        workspace_dir=str(workspace),
+        artifact_media_root=str(tmp_path / "media"),
+        artifact_session_id="session-1",
+        session_key="agent:main:webchat:session-1",
+    )
+    # The only whole-file read left is the store's, after the budget check;
+    # hashing no longer adds a second copy of the file in memory.
+    reads: list[str] = []
+    real_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self: Path) -> bytes:
+        reads.append(self.name)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    token = current_tool_context.set(ctx)
+    try:
+        result = await publish_artifact(path="report.txt")
+    finally:
+        current_tool_context.reset(token)
+
+    payload = json.loads(result)
+    assert payload["status"] == "published"
+    assert payload["artifact"]["sha256"] == hashlib.sha256(b"ready").hexdigest()
+    assert payload["artifact"]["size"] == 5
+    assert reads == ["report.txt"]
