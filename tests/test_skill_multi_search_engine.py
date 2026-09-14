@@ -38,6 +38,35 @@ def test_eligibility_with_python(monkeypatch: pytest.MonkeyPatch) -> None:
     assert check_eligibility(spec, EligibilityContext.auto())
 
 
+def test_engine_keys_are_declared_optional_so_no_key_hides_the_skill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every key unlocks an engine; none is a reason to withhold the skill."""
+    for name in (
+        "BRAVE_SEARCH_API_KEY",
+        "TAVILY_API_KEY",
+        "SERPAPI_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "XAI_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        "agentos.skills.eligibility.shutil.which",
+        lambda name: "/usr/bin/python3" if name in {"python", "python3"} else None,
+    )
+    spec = _spec()
+    assert spec is not None
+    declared = {e.name: e.required for e in spec.metadata.requires.env}
+    assert declared == {
+        "BRAVE_SEARCH_API_KEY": False,
+        "TAVILY_API_KEY": False,
+        "SERPAPI_API_KEY": False,
+        "FIRECRAWL_API_KEY": False,
+        "XAI_API_KEY": False,
+    }
+    assert check_eligibility(spec, EligibilityContext.auto())
+
+
 def test_brave_without_key_fails_soft(monkeypatch: pytest.MonkeyPatch) -> None:
     """Engine missing its API key must not crash the run; record an error and continue."""
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)

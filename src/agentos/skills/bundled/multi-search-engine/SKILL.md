@@ -8,13 +8,33 @@ provenance:
   upstream_url: https://clawhub.ai/multi-search-engine
   maintained_by: AgentOS
 metadata:
-  {
-    "platform":
-      {
-        "emoji": "🔍",
-        "requires": { "anyBins": ["python", "python3"] },
-      },
-  }
+  platform:
+    emoji: "🔍"
+    requires:
+      anyBins: [python, python3]
+      # All optional: each one unlocks an engine for `--engines auto`; the skill
+      # runs on DuckDuckGo alone with none of them set.
+      env:
+        - name: BRAVE_SEARCH_API_KEY
+          description: Brave Search API key; enables the brave engine.
+          url: https://brave.com/search/api/
+          required: false
+        - name: TAVILY_API_KEY
+          description: Tavily API key; enables the tavily engine.
+          url: https://tavily.com
+          required: false
+        - name: SERPAPI_API_KEY
+          description: SerpAPI key; enables the serpapi engine (Google results).
+          url: https://serpapi.com
+          required: false
+        - name: FIRECRAWL_API_KEY
+          description: Firecrawl API key; enables the firecrawl engine (shared with web_fetch).
+          url: https://firecrawl.dev
+          required: false
+        - name: XAI_API_KEY
+          description: xAI API key; enables the x engine when no `agentos auth login xai` session exists.
+          url: https://console.x.ai
+          required: false
 entrypoint:
   command: "{python} {baseDir}/scripts/search.py"
   args:

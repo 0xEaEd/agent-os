@@ -558,6 +558,16 @@ used to widen what the agent is allowed to do. Edit `~/.agentos/.env` by hand
 if you genuinely need one of them. Variables already
 set that way keep working; only writing through AgentOS is gated.
 
+What `agentos env list` knows about comes from three places: the setup specs
+of providers the runtime can actually drive (a provider catalogued for the
+setup UI with no client behind it -- Exa, Perplexity, and a number of LLM
+vendors -- contributes nothing, so its key is not offered as "needed"),
+built-in tools that read a variable directly (`web_fetch`'s
+`FIRECRAWL_API_KEY`), and `requires.env` in installed skill manifests. A skill
+entry declared with `required: false` unlocks a feature of the skill when set
+-- an extra engine, say -- and its absence does not hide the skill. Anything
+present in `.env` that none of those declare is listed as `custom`.
+
 If `agentos env list` reports a variable as coming from `process env`, the
 shell that started the gateway exported it and that value wins over the file.
 Editing the file will not change anything until the export is removed.

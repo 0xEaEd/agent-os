@@ -12,9 +12,11 @@ Sources, most authoritative first:
    provider the setup flow already knows how to configure. Their ``env_key``
    is the same string the runtime reads, so the catalog stays correct by
    construction when a provider is added.
-2. **Skill manifests** — ``requires.env`` in a skill's frontmatter, which may
+2. **Built-in tools** that read a variable straight from ``os.environ`` and
+   have no setup spec (``web_fetch``'s Firecrawl escalation).
+3. **Skill manifests** — ``requires.env`` in a skill's frontmatter, which may
    carry a description and a link to where the credential comes from.
-3. **The user's own ``.env``** — anything present but undeclared is surfaced as
+4. **The user's own ``.env``** — anything present but undeclared is surfaced as
    ``custom`` rather than hidden, so a variable an operator added by hand is
    still manageable from the UI.
 
@@ -91,8 +93,17 @@ def _is_env_var_name(value: str) -> bool:
     return bool(value) and value.isupper() and ENV_NAME_RE.match(value) is not None
 
 
-def _provider_specs() -> list[EnvVarSpec]:
-    """Return catalog entries derived from the onboarding provider families."""
+def _provider_specs(*, runtime_only: bool = False) -> list[EnvVarSpec]:
+    """Return catalog entries derived from the onboarding provider families.
+
+    ``runtime_only`` drops providers whose setup spec says
+    ``runtime_supported=False`` -- Exa, Perplexity, and a dozen LLM vendors
+    that are catalogued for the setup UI but have no client behind them. The
+    environment surface uses that: a key the runtime never reads should not be
+    offered as "needed by perplexity". The managed-credential refuse list does
+    not: a name AgentOS may authenticate with later is still one an untrusted
+    skill must not be handed.
+    """
     from agentos.onboarding.audio_specs import list_audio_provider_setup_specs
     from agentos.onboarding.image_generation_specs import (
         list_image_generation_provider_setup_specs,
@@ -124,6 +135,8 @@ def _provider_specs() -> list[EnvVarSpec]:
     entries: list[EnvVarSpec] = []
     for category, kind, specs in families:
         for spec in specs:
+            if runtime_only and getattr(spec, "runtime_supported", True) is False:
+                continue
             env_key = str(getattr(spec, "env_key", "") or "").strip()
             if not _is_env_var_name(env_key):
                 continue
@@ -145,6 +158,30 @@ def _provider_specs() -> list[EnvVarSpec]:
                 )
             )
     return entries
+
+
+def _builtin_tool_specs() -> list[EnvVarSpec]:
+    """Return catalog entries for variables built-in tools read directly.
+
+    These have no onboarding spec to derive from — the tool reads
+    ``os.environ`` itself — so without an entry here the variable is invisible
+    on the environment surface until the operator happens to set it, at which
+    point it shows up as ``custom`` with no explanation.
+    """
+    return [
+        EnvVarSpec(
+            name="FIRECRAWL_API_KEY",
+            description=(
+                "API key for Firecrawl. Lets web_fetch escalate JS-heavy or anti-bot "
+                "pages, and enables the firecrawl engine of the multi-search-engine skill."
+            ),
+            url="https://firecrawl.dev",
+            secret=True,
+            category=CATEGORY_SEARCH,
+            owner="web_fetch",
+            required=False,
+        ),
+    ]
 
 
 def _skill_specs(loader: SkillLoader | None) -> list[EnvVarSpec]:
@@ -208,7 +245,11 @@ def build_catalog(
     smaller mistake than printing something sensitive.
     """
     catalog: dict[str, EnvVarSpec] = {}
-    for entry in [*_provider_specs(), *_skill_specs(loader)]:
+    for entry in [
+        *_provider_specs(runtime_only=True),
+        *_builtin_tool_specs(),
+        *_skill_specs(loader),
+    ]:
         existing = catalog.get(entry.name)
         if existing is None:
             catalog[entry.name] = entry
