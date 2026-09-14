@@ -233,7 +233,9 @@ def _jwt_expiry(token: str) -> float | None:
     except (ValueError, UnicodeDecodeError):
         return None
     exp = claims.get("exp") if isinstance(claims, dict) else None
-    return float(exp) if isinstance(exp, int | float) else None
+    # Tuple, not ``int | float``: a runtime union needs 3.10, and this script
+    # must at least fail loudly-but-gracefully on an older PATH python.
+    return float(exp) if isinstance(exp, (int, float)) else None
 
 
 @dataclass

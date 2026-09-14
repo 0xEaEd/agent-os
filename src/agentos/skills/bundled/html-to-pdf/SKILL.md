@@ -78,8 +78,8 @@ appropriate only when the user explicitly asks for code.
 ## Quick start
 
 ```bash
-python {baseDir}/scripts/render.py --html report.html --out report.pdf
-python {baseDir}/scripts/render.py --html invoice.html --out invoice.pdf --page-size A4
+{python} {baseDir}/scripts/render.py --html report.html --out report.pdf
+{python} {baseDir}/scripts/render.py --html invoice.html --out invoice.pdf --page-size A4
 ```
 
 The script accepts a local file path, a `file://` URL, or an `http(s)://`

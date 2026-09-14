@@ -356,18 +356,25 @@ def _skill_setup_note(skill: Any) -> str:
 
 
 def _skill_dir_note(skill: Any) -> str:
-    """Return a leading ``[Skill directory: ...]`` line, or ``""``.
+    """Return leading ``[Skill directory: ...]`` / ``[Skill interpreter: ...]`` lines, or ``""``.
 
     A skill body says where its own scripts are; nothing else in a session
     does. Without this the model reads ``python3 .../scripts/lp_read.py``,
     looks for that path under the workspace, finds nothing, and concludes the
     skill is not installed — so state the directory outright, whether or not
-    the body happened to name it.
+    the body happened to name it. The interpreter line is for bodies that
+    still say a bare ``python``: the user's PATH python is not the one that
+    has the skill's dependencies, AgentOS's own is.
     """
     base_dir = str(getattr(skill, "base_dir", "") or "")
     if not base_dir:
         return ""
-    return f"[Skill directory: {base_dir}]\n\n"
+    from agentos.skills.resources import skill_python
+
+    return (
+        f"[Skill directory: {base_dir}]\n"
+        f"[Skill interpreter: {skill_python()} — run the skill's Python scripts with it]\n\n"
+    )
 
 
 def _skill_config_block(skill: Any) -> str:

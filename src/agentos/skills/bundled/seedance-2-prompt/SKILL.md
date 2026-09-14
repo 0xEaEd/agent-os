@@ -16,7 +16,7 @@ metadata:
       anyBins: ["python", "python3"]
       envAny: ["OPENROUTER_API_KEY", "ARK_API_KEY"]
 entrypoint:
-  command: python {baseDir}/scripts/generate_video.py
+  command: "{python} {baseDir}/scripts/generate_video.py"
   args:
     - --prompt
     - "{{ with.prompt }}"

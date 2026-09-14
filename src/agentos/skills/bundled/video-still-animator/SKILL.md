@@ -12,7 +12,7 @@ metadata:
       bins: ["ffmpeg"]
       anyBins: ["python", "python3"]
 entrypoint:
-  command: python {baseDir}/scripts/animate.py
+  command: "{python} {baseDir}/scripts/animate.py"
   args:
     - --input
     - "{{ with.input_image }}"

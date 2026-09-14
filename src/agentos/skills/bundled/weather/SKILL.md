@@ -27,7 +27,7 @@ metadata:
       },
   }
 entrypoint:
-  command: python {baseDir}/scripts/weather_fetch.py
+  command: "{python} {baseDir}/scripts/weather_fetch.py"
   args:
     - --location
     - "{{ with.location | default(inputs.user_message) }}"

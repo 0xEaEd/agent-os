@@ -648,7 +648,7 @@ costs: a full turn every five minutes for a job that is almost always a no-op.
 
 ```
 cron(action="add", schedule={"kind": "cron", "expr": "*/5 * * * *"},
-     task="python3 {baseDir}/scripts/ratchet.py tick --all --broadcast --json — report the "
+     task="{python} {baseDir}/scripts/ratchet.py tick --all --broadcast --json — report the "
           "result, and raise the alarm if any state is NEEDS_ATTENTION",
      job_kind="agent_turn", session_target="isolated")
 ```

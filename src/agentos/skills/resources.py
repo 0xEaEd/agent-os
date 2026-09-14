@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path, PurePosixPath
 
 _RESOURCE_DIRS = ("references", "scripts", "assets", "templates")
@@ -11,16 +12,41 @@ _RESOURCE_DIRS = ("references", "scripts", "assets", "templates")
 # so it names its own files through this placeholder instead of a real path.
 SKILL_BASE_DIR_PLACEHOLDER = "{baseDir}"
 
+# Likewise for the interpreter. A skill script needs the Python that AgentOS
+# itself runs on: that is the one guaranteed to have the skill's dependencies
+# and to be new enough for its syntax. A bare ``python`` in a shell command is
+# whatever the user's PATH says — a Homebrew 3.9 with a stray ``httpx``, or
+# nothing at all on Windows — and every bundled script used to inherit that.
+SKILL_PYTHON_PLACEHOLDER = "{python}"
 
-def expand_skill_placeholders(text: str, base_dir: str) -> str:
-    """Resolve ``{baseDir}`` in a skill body against its install directory.
+
+def skill_python() -> str:
+    """Return the interpreter a skill script should run under, shell-quoted.
+
+    ``sys.executable`` of the gateway process. Wrapped in double quotes when
+    the path carries whitespace so it survives both ``sh`` and ``cmd``.
+    """
+    executable = sys.executable or "python"
+    if any(ch.isspace() for ch in executable):
+        return f'"{executable}"'
+    return executable
+
+
+def expand_skill_placeholders(text: str, base_dir: str, python: str | None = None) -> str:
+    """Resolve ``{baseDir}`` and ``{python}`` in a skill body.
+
+    ``{baseDir}`` becomes the skill's install directory and ``{python}`` the
+    interpreter AgentOS runs on (``python`` overrides it, for tests).
 
     Only ever called on the copy handed to the model. Expanding at load time
     would put a machine-specific absolute path into ``SkillSpec.content``, which
     ``skill_edit`` writes back to disk when it is asked to change frontmatter
     and not the body.
     """
-    if not text or not base_dir:
+    if not text:
+        return text
+    text = text.replace(SKILL_PYTHON_PLACEHOLDER, python or skill_python())
+    if not base_dir:
         return text
     return text.replace(SKILL_BASE_DIR_PLACEHOLDER, base_dir)
 

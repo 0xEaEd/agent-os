@@ -709,7 +709,7 @@ def skills_init(
 
     if with_script:
         frontmatter["entrypoint"] = {
-            "command": "python {baseDir}/scripts/run.py",
+            "command": "{python} {baseDir}/scripts/run.py",
             "args": [
                 "--message",
                 "{{ inputs.user_message }}",
@@ -745,7 +745,7 @@ This skill includes an executable script `scripts/run.py` that is invoked by the
 The entrypoint configures the command:
 ```yaml
 entrypoint:
-  command: python {baseDir}/scripts/run.py
+  command: "{python} {baseDir}/scripts/run.py"
   args:
     - --message
     - "{{ inputs.user_message }}"

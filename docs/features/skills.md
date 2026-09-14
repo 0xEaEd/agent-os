@@ -167,6 +167,35 @@ GMGN skills (`gmgn-token`, `gmgn-market`, `gmgn-portfolio`, `gmgn-track`,
 the group wears the AgentOS mark. Every mark ships with the client; no manifest
 field points the UI at an image, remote or local.
 
+## How a Skill Reaches Its Own Scripts
+
+A `SKILL.md` is written before anyone knows where it will be installed or which
+Python will be running, so it names both through placeholders that the tool
+layer fills in when the body is handed to the agent (`skill_view`):
+
+| Placeholder | Becomes | Why |
+| --- | --- | --- |
+| `{baseDir}` | The skill's own install directory | Bundled skills live under site-packages on one machine and under a workspace on the next; an absolute path is wrong everywhere but where it was typed. |
+| `{python}` | The interpreter AgentOS itself runs on (`sys.executable` of the gateway) | A bare `python` in a shell command is whatever the user's PATH says — a Homebrew 3.9 with a stray `httpx`, or nothing at all on Windows. Only AgentOS's own interpreter is guaranteed to carry the skill's dependencies and to be new enough for its syntax. |
+
+So a script invocation in a skill body is written as:
+
+```bash
+{python} {baseDir}/scripts/run.py --flag value
+```
+
+and an `entrypoint.command` in frontmatter as `"{python} {baseDir}/scripts/run.py"`
+(quoted — YAML would otherwise read the leading `{` as a mapping). `agentos
+skills init --with-script` scaffolds it that way. The expanded text also leads
+with `[Skill directory: …]` and `[Skill interpreter: …]` lines, so a third-party
+skill that still says `python3 script.py` can be steered onto the right
+interpreter too.
+
+Expansion happens only on the copy the agent reads. The file on disk keeps the
+placeholders, which is what lets `skill_edit` write it back without baking a
+machine-specific path into it, and what lets the same skill directory move
+between machines.
+
 ## Whether the Agent Is Offered a Skill
 
 Installed, eligible, and offered are three different states. A skill can be

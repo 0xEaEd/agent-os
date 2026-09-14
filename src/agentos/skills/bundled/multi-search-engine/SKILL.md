@@ -16,7 +16,7 @@ metadata:
       },
   }
 entrypoint:
-  command: python {baseDir}/scripts/search.py
+  command: "{python} {baseDir}/scripts/search.py"
   args:
     - --query
     - "{{ with.query | default(inputs.user_message) }}"
@@ -51,7 +51,7 @@ beyond `pip install use-agent-os`).
 ## Quick start
 
 ```bash
-python {baseDir}/scripts/search.py \
+{python} {baseDir}/scripts/search.py \
     --query "openclaw skill registry" \
     --engines auto \
     --limit 10 \

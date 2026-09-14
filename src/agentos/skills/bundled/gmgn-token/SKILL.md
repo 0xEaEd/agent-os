@@ -692,7 +692,7 @@ publish what it writes:
 ```bash
 gmgn-cli market kline --chain sol --address <addr> --resolution 1h \
   --from <unix_ts> --to <unix_ts> --raw \
-  | python3 {baseDir}/scripts/kline_chart.py \
+  | {python} {baseDir}/scripts/kline_chart.py \
       --symbol <SYMBOL> --chain sol --resolution 1h \
       --output <symbol>-1h.chart.json
 ```

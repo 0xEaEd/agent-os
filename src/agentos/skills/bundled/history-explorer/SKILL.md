@@ -8,7 +8,7 @@ metadata:
   requires:
     anyBins: ["python", "python3"]
 entrypoint:
-  command: python {baseDir}/scripts/explore.py
+  command: "{python} {baseDir}/scripts/explore.py"
   args:
     - --query
     - "{{ with.query | truncate(512) }}"
@@ -29,7 +29,7 @@ Lightweight read-only view over `~/.agentos/logs/decisions-*.jsonl`. Aggregates 
 ## Usage
 
 ```
-uv run python {baseDir}/scripts/explore.py \
+uv run {python} {baseDir}/scripts/explore.py \
   --log-dir ~/.agentos/logs \
   --query "Co-occurring chains for PDF workflows" \
   --window-days 30 \

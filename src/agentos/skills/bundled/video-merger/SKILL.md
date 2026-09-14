@@ -15,7 +15,7 @@ metadata:
       bins: ["ffmpeg", "ffprobe"]
       anyBins: ["python", "python3"]
 entrypoint:
-  command: python {baseDir}/scripts/merge.py
+  command: "{python} {baseDir}/scripts/merge.py"
   args:
     - --input
     - "{{ with.input_dir }}"

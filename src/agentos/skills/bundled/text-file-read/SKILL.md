@@ -11,7 +11,7 @@ metadata:
     requires:
       anyBins: ["python", "python3"]
 entrypoint:
-  command: python {baseDir}/scripts/read.py
+  command: "{python} {baseDir}/scripts/read.py"
   args:
     - --input
     - "{{ with.input }}"

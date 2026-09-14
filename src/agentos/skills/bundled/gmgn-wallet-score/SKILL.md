@@ -72,7 +72,7 @@ four arguments are optional and default to `3.0` / `0.05` / `0.2` / `200` — pa
 when the user wants a customized backtest.
 
 ```bash
-python3 {baseDir}/scripts/score.py <FILL_IN_WALLET_ADDRESS> <FILL_IN_CHAIN> <FILL_IN_LANG> \
+{python} {baseDir}/scripts/score.py <FILL_IN_WALLET_ADDRESS> <FILL_IN_CHAIN> <FILL_IN_LANG> \
   [<FILL_IN_LATENCY>] [<FILL_IN_SLIPPAGE>] [<FILL_IN_GAS>] [<FILL_IN_SAMPLE>]
 ```
 

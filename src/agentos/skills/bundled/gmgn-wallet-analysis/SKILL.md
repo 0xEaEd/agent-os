@@ -329,7 +329,7 @@ A token contract address queries successfully and returns zeros for every field.
 ## Step 2 — Run the dossier
 
 ```bash
-python3 {baseDir}/scripts/analyze.py <WALLET> <CHAIN> <LANG> [--latency <seconds>] [--brief]
+{python} {baseDir}/scripts/analyze.py <WALLET> <CHAIN> <LANG> [--latency <seconds>] [--brief]
 ```
 
 - `<CHAIN>` — `sol` for base58 addresses; `bsc` for `0x…` unless the user names another chain

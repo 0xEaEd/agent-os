@@ -54,7 +54,7 @@ the input as the visual style baseline. Only choose path C when the user says
 Dump structure as JSON for inspection without mutating anything.
 
 ```bash
-python {baseDir}/scripts/inspect_docx.py /path/to/doc.docx
+{python} {baseDir}/scripts/inspect_docx.py /path/to/doc.docx
 ```
 
 Output schema:
@@ -84,7 +84,7 @@ When the change is "swap this string" or "fill these placeholders": mutate
 runs in place. This preserves all theme/style/font settings.
 
 ```bash
-python {baseDir}/scripts/edit_docx.py input.docx ops.json --out output.docx
+{python} {baseDir}/scripts/edit_docx.py input.docx ops.json --out output.docx
 ```
 
 `ops.json` is a list of operations:
@@ -136,7 +136,7 @@ success — silent failures are common.
 ## Path C: Create from scratch
 
 ```bash
-python {baseDir}/scripts/create_docx.py spec.json --out out.docx
+{python} {baseDir}/scripts/create_docx.py spec.json --out out.docx
 ```
 
 `spec.json` describes content declaratively:

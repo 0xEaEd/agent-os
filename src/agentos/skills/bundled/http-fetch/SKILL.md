@@ -8,7 +8,7 @@ metadata:
   requires:
     anyBins: ["python", "python3"]
 entrypoint:
-  command: python {baseDir}/scripts/http_fetch.py
+  command: "{python} {baseDir}/scripts/http_fetch.py"
   args:
     - --url
     - "{{ with.url }}"

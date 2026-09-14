@@ -114,8 +114,8 @@ prints text grouped by slide. This is always available because python-pptx is
 the only hard dependency.
 
 ```bash
-python {baseDir}/scripts/extract_text.py /path/to/deck.pptx
-python {baseDir}/scripts/extract_text.py /path/to/deck.pptx --json
+{python} {baseDir}/scripts/extract_text.py /path/to/deck.pptx
+{python} {baseDir}/scripts/extract_text.py /path/to/deck.pptx --json
 ```
 
 For programmatic use, call python-pptx directly:
