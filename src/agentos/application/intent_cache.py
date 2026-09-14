@@ -140,6 +140,103 @@ _RM_LONG_CAPABILITIES: dict[str, str] = {
 # Shell command separators that terminate a single ``rm`` invocation.
 _SHELL_SEPARATORS = (";", "&&", "||", "|", "&")
 
+# Deletion spellings other than ``rm``. Each is graded by its own flag grammar,
+# because the same letter means different things to different commands: ``/s``
+# recurses for ``rd`` but selects a *subdirectory sweep* for ``del``, and ``-p``
+# prunes ancestors for ``rmdir`` while it means nothing to ``rm`` (#1015).
+#
+# ``unlink`` carries no grade: it unlinks exactly one name and has no recursive,
+# parent-pruning or force spelling.
+#
+# ``rmdir``/``rd`` with no switch stay plain, the same call ``os.rmdir`` gets
+# above: an empty directory holds nothing, so grading it would buy a prompt and
+# no protection.
+#
+# ``rmdir -p`` is graded ``parents`` alone rather than ``recursive+parents`` the
+# way ``os.removedirs`` is. That is the weaker of the two readings, and it is
+# the safe one: a cached grade only covers a retry whose capabilities it is a
+# *superset* of, so a ``parents`` approval still re-prompts for a recursive
+# delete. The cost is one extra prompt when an operator paraphrases
+# ``rmdir -p X`` as ``os.removedirs("X")``.
+_CMD_DIR_SWITCHES: dict[str, str] = {"s": _RECURSIVE, "q": _FORCE}
+_CMD_FILE_SWITCHES: dict[str, str] = {"s": _RECURSIVE, "f": _FORCE, "q": _FORCE}
+_RMDIR_SHORT_CAPABILITIES: dict[str, str] = {"p": _PARENTS}
+_RMDIR_LONG_CAPABILITIES: dict[str, str] = {"--parents": _PARENTS}
+_REMOVE_ITEM_PARAMETERS: dict[str, str] = {"-recurse": _RECURSIVE, "-force": _FORCE}
+
+#: command name (lowercased) -> (POSIX ``-x`` flags, POSIX ``--word`` flags,
+#: cmd.exe ``/x`` switches, PowerShell ``-Word`` parameters).
+_DELETE_SPELLINGS: dict[str, tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, str]]]
+_DELETE_SPELLINGS = {
+    "rmdir": (_RMDIR_SHORT_CAPABILITIES, _RMDIR_LONG_CAPABILITIES, _CMD_DIR_SWITCHES, {}),
+    "rd": ({}, {}, _CMD_DIR_SWITCHES, {}),
+    "del": ({}, {}, _CMD_FILE_SWITCHES, {}),
+    "erase": ({}, {}, _CMD_FILE_SWITCHES, {}),
+    "unlink": ({}, {}, {}, {}),
+    "remove-item": ({}, {}, {}, _REMOVE_ITEM_PARAMETERS),
+}
+
+# ``rm`` is matched case-sensitively, the way the POSIX command is spelled;
+# cmd.exe and PowerShell resolve their own names case-insensitively, so those
+# are matched that way. Longer names come first so ``rmdir`` is not consumed as
+# a bare ``rm``.
+#
+# The name must not follow a ``.`` or a word character: ``os.rmdir("/tmp/d")``
+# and ``Path("x").unlink()`` are Python spellings, already extracted (and
+# graded) by ``_PY_DELETE_PATTERNS``. Matching them here as shell commands too
+# regraded the paraphrase and broke the ``rm X`` -> ``os.rmdir("X")``
+# short-circuit. ``/usr/bin/rmdir`` still matches — ``/`` is not a word
+# character — so an absolute-path invocation is not lost.
+_DELETE_COMMAND_RE = re.compile(
+    r"(?<![\w.])(?P<cmd>rmdir|unlink|rm|(?i:rmdir|unlink|remove-item|erase|del|rd))"
+    r"\b(?P<tail>[^;\n&|]*)"
+)
+
+
+def _delete_invocation_capabilities(
+    tokens: list[str],
+    spelling: tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, str]],
+) -> frozenset[str]:
+    """Grade one non-``rm`` deletion argument list by the flags it carries.
+
+    ``rm`` keeps :func:`_rm_invocation_capabilities` to itself. Its grammar is
+    already pinned by tests and carries the ``getopt_long`` abbreviation rule,
+    and folding four more flag dialects into it would put that behaviour at
+    risk for no gain — these spellings share none of its options.
+
+    Stops flag parsing at ``--`` for the POSIX spellings, the way they do.
+    PowerShell parameters are prefix-matched because PowerShell accepts any
+    unambiguous abbreviation: ``Remove-Item -rec`` recurses, and grading it as
+    a plain delete would reopen the bypass.
+    """
+    short, long, switches, parameters = spelling
+    capabilities: set[str] = set()
+    for token in tokens:
+        if token == "--":
+            break
+        lowered = token.lower()
+        if switches and lowered.startswith("/") and len(lowered) > 1:
+            cap = switches.get(lowered[1:])
+            if cap is not None:
+                capabilities.add(cap)
+            continue
+        if parameters and lowered.startswith("-") and len(lowered) > 1:
+            capabilities.update(
+                cap for option, cap in parameters.items() if option.startswith(lowered)
+            )
+            continue
+        if token.startswith("--"):
+            name = lowered.partition("=")[0]
+            capabilities.update(
+                cap for option, cap in long.items() if len(name) > 2 and option.startswith(name)
+            )
+        elif token.startswith("-") and len(token) > 1:
+            for char in token[1:]:
+                cap = short.get(char)
+                if cap is not None:
+                    capabilities.add(cap)
+    return frozenset(capabilities)
+
 
 def _rm_invocation_capabilities(tokens: list[str]) -> frozenset[str]:
     """Grade one ``rm`` argument list by the escalating flags it carries.
@@ -265,24 +362,38 @@ def _command_spans(command: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
-    """Pull every ``rm`` argument out, tagged with that invocation's flags.
+def _extract_shell_delete_targets(command: str) -> list[tuple[str, frozenset[str]]]:
+    """Pull every deletion argument out, tagged with that invocation's flags.
 
-    Handles ``rm a b c``, ``rm -rf /a /b``, quoted paths, and stops at shell
-    separators. Uses ``finditer`` so ``rm foo; rm -rf /bar`` yields targets
-    from both invocations independently — and each keeps its own capability
-    set, so the ``-rf`` on the second does not leak onto the first. Does not
-    try to be a full shell parser — falls back to whitespace split on shlex
-    errors (unbalanced quotes).
+    Covers ``rm`` plus the spellings an operator or a model reaches for on the
+    other platforms — ``rmdir``, ``rd``, ``del``, ``erase``, ``unlink`` and
+    PowerShell's ``Remove-Item``. Matching only ``rm`` meant every one of those
+    yielded zero targets, so ``sensitive_target_in_command`` never saw their
+    paths and the root-wipe and sensitive-path hard blocks were bypassed
+    outright (#1015).
+
+    Handles ``rm a b c``, ``rm -rf /a /b``, ``rmdir /s /q C:\\``,
+    ``del /f /q ~/.ssh/id_rsa``, ``Remove-Item -Recurse -Force /``, quoted
+    paths, and stops at shell separators. Uses ``finditer`` so
+    ``rm foo; rmdir -p /bar`` yields targets from both invocations
+    independently — and each keeps its own capability set, so the ``-rf`` on
+    one does not leak onto the other. Does not try to be a full shell parser —
+    falls back to whitespace split on shlex errors (unbalanced quotes).
+
+    A cmd.exe switch is also kept as a target, because ``/s`` is a switch on
+    Windows and an absolute path on POSIX and nothing in the string says which
+    shell will run it. That costs a spurious plain-delete intent for ``/s`` and
+    ``/q``; the alternative silently drops a real POSIX target, which is the
+    bypass this function exists to close.
 
     A ``rm`` inside a quoted argument is text, not a command: without that
     check ``grep -rn "rm" /etc/passwd`` extracted ``/etc/passwd`` and was
     hard-blocked as a delete, and the operator could not approve past it.
     """
-    # Match each ``rm`` invocation, stopping at shell separators.
-    # ``[^;\n&|]*`` captures everything from ``rm`` up to the next separator
-    # or end-of-expression, so each ``rm`` is tokenized independently.
-    pattern = re.compile(r"\brm\b([^;\n&|]*)")
+    # Match each deletion invocation, stopping at shell separators.
+    # ``[^;\n&|]*`` captures everything from the command up to the next
+    # separator or end-of-expression, so each one is tokenized independently.
+    pattern = _DELETE_COMMAND_RE
     # Position, not quoting, is what tells a command from a word here. Requiring
     # ``rm`` to start the string or follow a separator would look tighter but
     # drops ``sudo rm -rf /etc``, ``env FOO=1 rm …``, ``time rm …`` and
@@ -301,9 +412,10 @@ def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
     seen: set[tuple[str, frozenset[str]]] = set()
 
     for match in matches:
-        tail = match.group(1).strip()
+        tail = match.group("tail").strip()
         if not tail:
             continue
+        spelling = _DELETE_SPELLINGS.get(match.group("cmd").lower())
 
         token_sets: list[list[str]] = []
         try:
@@ -317,7 +429,11 @@ def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
                 token_sets.append(tail.split())
 
         for tokens in token_sets:
-            capabilities = _rm_invocation_capabilities(tokens)
+            capabilities = (
+                _rm_invocation_capabilities(tokens)
+                if spelling is None
+                else _delete_invocation_capabilities(tokens, spelling)
+            )
             for token in _rm_invocation_targets(tokens):
                 entry = (token, capabilities)
                 if entry in seen:
@@ -342,7 +458,7 @@ def _extract_intents(
     """
     if not command:
         return []
-    graded: list[tuple[str, frozenset[str]]] = list(_extract_rm_targets(command))
+    graded: list[tuple[str, frozenset[str]]] = list(_extract_shell_delete_targets(command))
     for pattern, capabilities in _PY_DELETE_PATTERNS:
         graded.extend((m.group(1), capabilities) for m in pattern.finditer(command))
 

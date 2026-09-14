@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import pytest
 
-from agentos.application.intent_cache import IntentApprovalCache, _extract_intents
+from agentos.application.intent_cache import (
+    IntentApprovalCache,
+    _extract_intents,
+    _extract_shell_delete_targets,
+)
+from agentos.sandbox.sensitive_paths import sensitive_target_in_command
 
 
 def _names_etc(targets: list[str]) -> bool:
@@ -467,3 +472,175 @@ class TestQuotedRmIsNotACommand:
         # An unclosed quote quotes the remainder, which is what the shell does
         # with it too, so nothing after it is read as a command.
         assert _extract_intents('echo "rm -rf /etc') == []
+
+
+class TestNonRmDeletionSpellings:
+    """Issue #1015: only ``rm`` was extracted, so every other delete slipped past.
+
+    ``_extract_shell_delete_targets`` is asserted directly here rather than
+    through ``_extract_intents`` — raw targets arrive exactly as typed, so the
+    cases stay readable and platform-independent without a path-normalisation
+    helper standing between the command and the assertion.
+    """
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            ("rmdir /tmp/empty", [("/tmp/empty", frozenset())]),
+            ("rd /tmp/empty", [("/tmp/empty", frozenset())]),
+            ("del /tmp/a", [("/tmp/a", frozenset())]),
+            ("erase /tmp/a", [("/tmp/a", frozenset())]),
+            ("unlink /tmp/a", [("/tmp/a", frozenset())]),
+            ("Remove-Item /tmp/a", [("/tmp/a", frozenset())]),
+        ],
+    )
+    def test_every_enumerated_spelling_yields_its_target(
+        self, command: str, expected: list[tuple[str, frozenset[str]]]
+    ) -> None:
+        assert _extract_shell_delete_targets(command) == expected
+
+    def test_rm_extraction_is_unchanged(self) -> None:
+        """The guard: widening the alternation must not disturb ``rm`` itself."""
+        assert _extract_shell_delete_targets("rm -rf /etc") == [
+            ("/etc", frozenset({"recursive", "force"}))
+        ]
+
+    def test_rmdir_is_not_consumed_as_a_bare_rm(self) -> None:
+        """``rm`` comes after ``rmdir`` in the alternation for exactly this."""
+        assert _extract_shell_delete_targets("rmdir -p /a/b") == [("/a/b", frozenset({"parents"}))]
+
+    def test_bare_command_has_no_target(self) -> None:
+        assert _extract_shell_delete_targets("rmdir") == []
+        assert _extract_shell_delete_targets("del") == []
+
+    def test_each_invocation_keeps_its_own_capabilities(self) -> None:
+        """The ``/s`` on the second must not leak onto the first."""
+        targets = _extract_shell_delete_targets("del /tmp/a; rd /s /tmp/b")
+        assert ("/tmp/a", frozenset()) in targets
+        assert ("/tmp/b", frozenset({"recursive"})) in targets
+
+
+class TestNonRmDeletionGrading:
+    """Each spelling's escalating flags must grade, or approvals escalate silently."""
+
+    @pytest.mark.parametrize(
+        ("command", "capabilities"),
+        [
+            ("rd /s C:tmp", {"recursive"}),
+            ("rd /q C:tmp", {"force"}),
+            ("rd /s /q C:tmp", {"recursive", "force"}),
+            ("rmdir /S /Q C:tmp", {"recursive", "force"}),
+            ("del /f C:tmp", {"force"}),
+            ("del /s C:tmp", {"recursive"}),
+            ("erase /f /q C:tmp", {"force"}),
+            ("rmdir -p /a/b", {"parents"}),
+            ("rmdir --parents /a/b", {"parents"}),
+            ("Remove-Item -Recurse /a", {"recursive"}),
+            ("Remove-Item -Force /a", {"force"}),
+            ("Remove-Item -Recurse -Force /a", {"recursive", "force"}),
+            ("unlink /a", set()),
+        ],
+    )
+    def test_flags_grade_the_invocation(self, command: str, capabilities: set[str]) -> None:
+        targets = _extract_shell_delete_targets(command)
+        graded = [caps for target, caps in targets if not target.startswith("/s")]
+        assert any(caps == frozenset(capabilities) for caps in graded), targets
+
+    def test_powershell_parameters_are_prefix_matched(self) -> None:
+        """PowerShell accepts any unambiguous abbreviation, so ``-rec`` recurses."""
+        assert _extract_shell_delete_targets("Remove-Item -rec -f /a") == [
+            ("/a", frozenset({"recursive", "force"}))
+        ]
+
+    def test_windows_command_names_are_case_insensitive(self) -> None:
+        """cmd.exe and PowerShell resolve their own names without regard to case."""
+        assert _extract_shell_delete_targets("DEL /F C:tmp")
+        assert _extract_shell_delete_targets("REMOVE-ITEM -Recurse /a") == [
+            ("/a", frozenset({"recursive"}))
+        ]
+
+    def test_rm_stays_case_sensitive(self) -> None:
+        """POSIX ``rm`` is spelled in lower case; widening it was not asked for."""
+        assert _extract_shell_delete_targets("RM -rf /etc") == []
+
+    def test_end_of_flags_is_honoured(self) -> None:
+        assert _extract_shell_delete_targets("rmdir -- -p") == [("-p", frozenset())]
+
+
+class TestNonRmDeletionEscalation:
+    """The direction the issue did not report: approvals must not escalate.
+
+    #1015 asks for these commands to be *seen*. Being seen is not enough — a
+    plain ``del`` approval covering ``del /s`` would hand back the very
+    escalation #849 closed for ``rm``.
+    """
+
+    @pytest.mark.parametrize(
+        ("approved", "escalated"),
+        [
+            ("rd C:tmp", "rd /s C:tmp"),
+            ("del C:tmp", "del /f C:tmp"),
+            ("erase C:tmp", "erase /s C:tmp"),
+            ("rmdir /a/b", "rmdir -p /a/b"),
+            ("Remove-Item /a", "Remove-Item -Recurse /a"),
+            ("Remove-Item /a", "Remove-Item -Force /a"),
+        ],
+    )
+    def test_plain_approval_does_not_cover_the_escalated_form(
+        self, approved: str, escalated: str
+    ) -> None:
+        cache = IntentApprovalCache()
+        cache.record(approved)
+        assert cache.check(approved) is True
+        assert cache.check(escalated) is False
+
+    def test_escalated_approval_covers_the_plain_form(self) -> None:
+        """De-escalation is fine — the stronger op was already approved."""
+        cache = IntentApprovalCache()
+        cache.record("Remove-Item -Recurse -Force /a")
+        assert cache.check("Remove-Item /a") is True
+
+    def test_separator_bypass_is_closed_for_the_new_spellings(self) -> None:
+        """``del A; rd /s /q /`` must not ride in on the approval for ``del A``."""
+        cache = IntentApprovalCache()
+        cache.record("del /tmp/a")
+        assert cache.check("del /tmp/a; rd /s /q /") is False
+
+
+class TestNonRmDeletionHardBlocks:
+    """Issue #1015's headline: these commands must reach the hard blocks."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rmdir /s /q /",
+            "del /f /q ~/.ssh/id_rsa",
+            "Remove-Item -Recurse -Force /",
+            "unlink ~/.ssh/id_rsa",
+            "rd /s /q /",
+            "erase ~/.ssh/id_rsa",
+        ],
+    )
+    def test_destructive_command_is_hard_blocked(self, command: str) -> None:
+        assert sensitive_target_in_command(command) is not None
+
+    def test_reading_those_paths_is_still_ordinary_work(self) -> None:
+        """The guard: the block keys on a delete, not on the path appearing."""
+        assert sensitive_target_in_command("ls /") is None
+        assert sensitive_target_in_command("cat ~/.ssh/id_rsa") is None
+
+    def test_a_quoted_delete_is_data_not_a_command(self) -> None:
+        """Consistent with ``rm``: ``grep -rn 'del' /etc/passwd`` is not a delete."""
+        assert sensitive_target_in_command("grep -rn 'del' /etc/passwd") is None
+
+    def test_a_shell_c_delete_is_a_command(self) -> None:
+        """``sh -c "…"`` is executed, so the quoted span is command text.
+
+        The target is followed by ``&&`` rather than ending the string: a
+        closing quote at end-of-input is glued onto the last target (``/"``),
+        which is a pre-existing artefact of the tail capture — ``sh -c "rm -rf
+        /"`` is not blocked on ``main`` either. That gap is not #1015's and is
+        left alone here; this asserts the parity the fix is responsible for.
+        """
+        assert sensitive_target_in_command('sh -c "rd /s /q / && echo done"') is not None
+        assert sensitive_target_in_command('sh -c "rm -rf / && echo done"') is not None
