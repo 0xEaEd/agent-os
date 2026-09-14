@@ -16,20 +16,39 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 
 
-def split_ranges(spec: str) -> list[list[int]]:
+def _page_number(text: str, token: str) -> int:
+    if not text.isdigit():
+        raise ValueError(f"invalid page range {token!r}")
+    return int(text)
+
+
+def expand_token(token: str, total: int | None = None) -> range:
+    """Expand one page token: ``7``, ``3-5``, ``-5`` (from 1), ``3-`` (to end)."""
+    if "-" not in token:
+        page = _page_number(token, token)
+        return range(page, page + 1)
+    lo_s, hi_s = (part.strip() for part in token.split("-", 1))
+    # An omitted side is the usual way to write "up to" and "from here on";
+    # int("") used to raise straight out of the CLI as a bare ValueError.
+    lo = _page_number(lo_s, token) if lo_s else 1
+    if hi_s:
+        hi = _page_number(hi_s, token)
+    elif total is None:
+        raise ValueError(f"open-ended range {token!r} needs the page count")
+    else:
+        hi = total
+    if lo > hi:
+        lo, hi = hi, lo
+    return range(lo, hi + 1)
+
+
+def split_ranges(spec: str, total: int | None = None) -> list[list[int]]:
     groups: list[list[int]] = []
-    for token in spec.split(","):
-        token = token.strip()
+    for raw in spec.split(","):
+        token = raw.strip()
         if not token:
             continue
-        if "-" in token:
-            lo_s, hi_s = token.split("-", 1)
-            lo, hi = int(lo_s), int(hi_s)
-            if lo > hi:
-                lo, hi = hi, lo
-            groups.append(list(range(lo, hi + 1)))
-        else:
-            groups.append([int(token)])
+        groups.append(list(expand_token(token, total)))
     return groups
 
 
@@ -38,7 +57,7 @@ def split(input_path: Path, pages_spec: str, out_dir: Path) -> list[Path]:
     total = len(reader.pages)
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    for idx, group in enumerate(split_ranges(pages_spec), start=1):
+    for idx, group in enumerate(split_ranges(pages_spec, total), start=1):
         valid_pages = [p for p in group if 1 <= p <= total]
         if not valid_pages:
             continue
@@ -65,7 +84,11 @@ def main() -> int:
     if not args.input.is_file():
         print(f"error: input {args.input} not found", file=sys.stderr)
         return 2
-    written = split(args.input, args.pages, args.out)
+    try:
+        written = split(args.input, args.pages, args.out)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     print(
         json.dumps(
             {"files": [str(p) for p in written], "count": len(written)},

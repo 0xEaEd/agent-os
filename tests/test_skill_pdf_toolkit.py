@@ -109,6 +109,66 @@ def test_merge_range_parsing() -> None:
     assert merge.parse_ranges("1,99", 4) == [1]
 
 
+def _load_scripts() -> tuple[object, object]:
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import merge  # type: ignore[import-not-found]
+        import split  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+    return merge, split
+
+
+def test_open_ended_page_ranges_are_supported() -> None:
+    """``-5`` means "up to 5" and ``3-`` means "3 to the end".
+
+    Both used to split into an empty side and die in int("").
+    """
+    merge, split = _load_scripts()
+
+    assert merge.parse_ranges("-5", 10) == [1, 2, 3, 4, 5]
+    assert merge.parse_ranges("8-", 10) == [8, 9, 10]
+    assert merge.parse_ranges("-2,9-", 10) == [1, 2, 9, 10]
+    assert split.split_ranges("-3", 10) == [[1, 2, 3]]
+    assert split.split_ranges("9-", 10) == [[9, 10]]
+
+
+def test_malformed_page_tokens_raise_a_clear_value_error() -> None:
+    merge, split = _load_scripts()
+
+    for spec in ("abc", "1-2-3", "--5", "1,x"):
+        with pytest.raises(ValueError, match="invalid page range"):
+            merge.parse_ranges(spec, 10)
+        with pytest.raises(ValueError, match="invalid page range"):
+            split.split_ranges(spec, 10)
+
+
+def test_split_ranges_keeps_working_without_a_page_count() -> None:
+    """The page count stayed optional; only an open end actually needs it."""
+    merge, split = _load_scripts()
+
+    assert split.split_ranges("1-3") == [[1, 2, 3]]
+    with pytest.raises(ValueError, match="needs the page count"):
+        split.split_ranges("3-")
+    with pytest.raises(ValueError, match="needs the page count"):
+        merge.expand_token("3-")
+
+
+def test_malformed_pages_spec_exits_two(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI reports the error like its siblings rather than tracebacking."""
+    _merge, split = _load_scripts()
+
+    pdf = tmp_path / "in.pdf"
+    _make_one_page_pdf(pdf, "ALPHA")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["split.py", str(pdf), "--pages", "abc", "--out", str(tmp_path / "out")],
+    )
+
+    assert split.main() == 2
+
+
 def test_extract_creates_parent_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sys.path.insert(0, str(SCRIPTS))
     try:
