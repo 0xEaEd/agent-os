@@ -103,6 +103,23 @@ def _resolve_ffmpeg(explicit: str) -> str:
     return explicit
 
 
+def primary_font(font_chain: str) -> str:
+    """Return the first name of a comma-separated fallback chain.
+
+    ``force_style`` is itself a comma-separated list of ``key=value`` pairs,
+    so handing it the whole chain turned every fallback after the first into
+    a bare token libass cannot read: ``FontName=Microsoft YaHei,SimHei,...``
+    parses as a FontName plus several nameless entries, and the styling
+    quietly falls back to defaults. ASS ``FontName`` names exactly one font,
+    which is what ``--font`` has always documented ("First wins").
+    """
+    for name in font_chain.split(","):
+        candidate = name.strip()
+        if candidate:
+            return candidate
+    return font_chain.strip()
+
+
 def _escape_subtitle_path(path: str) -> str:
     """Escape a path for ffmpeg's ``subtitles=`` filter argument.
 
@@ -198,7 +215,7 @@ def main() -> int:
 
     srt_arg = _escape_subtitle_path(str(srt_path.resolve()))
     force_style_parts = [
-        f"FontName={args.font}",
+        f"FontName={primary_font(args.font)}",
         f"FontSize={args.font_size}",
         f"PrimaryColour={args.primary_colour}",
         f"OutlineColour={args.outline_colour}",
