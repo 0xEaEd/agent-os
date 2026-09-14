@@ -141,6 +141,8 @@ def test_evict_session_runtime_state_drops_bounded_registry_entries() -> None:
     plan.enable("doomed")
     plan.enable("kept")
     monitor._baselines["doomed"] = object()  # type: ignore[assignment]
+    monitor.notify_compaction("doomed")
+    monitor.notify_compaction("kept")
 
     evict_session_runtime_state("doomed")
 
@@ -149,6 +151,8 @@ def test_evict_session_runtime_state_drops_bounded_registry_entries() -> None:
     assert plan.is_enabled("doomed") is False
     assert plan.is_enabled("kept") is True
     assert "doomed" not in monitor._baselines
+    assert "kept" in monitor._baselines
+    assert monitor._baselines["kept"].reset_pending is True
 
 
 def test_denial_ledger_session_state_is_dropped_on_teardown() -> None:
