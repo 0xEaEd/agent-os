@@ -29,18 +29,33 @@ _LOOSE_IMAGE_LINE_RE = re.compile(r"^\s*(?:image|file)\s*:\s*(?P<target>\S+)\s*$
 
 
 def artifact_delivery_key(artifact: dict[str, Any]) -> str:
+    """Stable identity for one artifact on the channel delivery path.
+
+    Delivery identity matches ``ArtifactStore.find_existing_ref``: keyed on
+    content and name, or preferring unique artifact ``id`` when present.
+    ``sha256`` alone made two files with different names but matching bytes —
+    two empty CSVs, a template rendered per region, two placeholder images —
+    collapse into one, dropping the second.
+    """
+    for id_field in ("id", "artifact_id"):
+        val = artifact.get(id_field)
+        if isinstance(val, str) and val:
+            return f"id:{val}"
+
+    name = artifact.get("name")
+    qualifier = f"|name:{name}" if isinstance(name, str) and name else ""
     for field in (
         "sha256",
         "path",
         "channel_download_url",
         "signed_download_url",
         "download_url",
-        "id",
         "name",
     ):
         value = artifact.get(field)
         if value:
-            return f"{field}:{value}"
+            # "name" is already the qualifier; do not repeat it.
+            return f"{field}:{value}" if field == "name" else f"{field}:{value}{qualifier}"
     return ""
 
 
