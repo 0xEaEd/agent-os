@@ -211,6 +211,51 @@ def _serpapi_search(query: str, limit: int) -> list[Result]:
         return results
 
 
+_FIRECRAWL_MAX_LIMIT = 100  # Firecrawl /v2/search caps `limit` at 100 per source.
+_FIRECRAWL_MAX_QUERY_CHARS = 500
+# A Firecrawl search runs a live crawl behind the API; its own default timeout
+# is 60s, so the skill's 8s default would cut most calls short.
+FIRECRAWL_TIMEOUT_S = 30.0
+
+
+def _firecrawl_search(query: str, limit: int) -> list[Result]:
+    api_key = os.environ.get("FIRECRAWL_API_KEY")
+    if not api_key:
+        raise RuntimeError("FIRECRAWL_API_KEY not set; skipping")
+    with _client() as client:
+        response = client.post(
+            "https://api.firecrawl.dev/v2/search",
+            json={
+                "query": query[:_FIRECRAWL_MAX_QUERY_CHARS],
+                "limit": min(max(limit, 1), _FIRECRAWL_MAX_LIMIT),
+                # Metadata only: no scrapeOptions, so no per-result page scrape
+                # is billed and the call returns in seconds instead of a minute.
+                "sources": [{"type": "web"}],
+            },
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=FIRECRAWL_TIMEOUT_S,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("success", True):
+            raise RuntimeError(f"firecrawl: {payload.get('error') or 'unsuccessful response'}")
+        data = payload.get("data") or {}
+        # v2 nests by source; v1 returned a flat list.
+        items = data.get("web", []) if isinstance(data, dict) else data
+        results: list[Result] = []
+        for idx, item in enumerate((items or [])[:limit], start=1):
+            results.append(
+                Result(
+                    engine="firecrawl",
+                    title=item.get("title", ""),
+                    url=item.get("url", ""),
+                    snippet=item.get("description", ""),
+                    rank=idx,
+                )
+            )
+        return results
+
+
 # --- xAI x_search -----------------------------------------------------------
 
 
@@ -384,6 +429,7 @@ ENGINES: dict[str, EngineHandler] = {
     "brave": _brave_search,
     "tavily": _tavily_search,
     "serpapi": _serpapi_search,
+    "firecrawl": _firecrawl_search,
     "x": _x_search,
 }
 
@@ -392,6 +438,7 @@ _KEYED_ENGINES: dict[str, tuple[str, ...]] = {
     "brave": ("BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"),
     "tavily": ("TAVILY_API_KEY",),
     "serpapi": ("SERPAPI_API_KEY",),
+    "firecrawl": ("FIRECRAWL_API_KEY",),
 }
 
 
@@ -494,7 +541,7 @@ def _parse_args() -> argparse.Namespace:
         "--engines",
         default="auto",
         help=(
-            "Comma-separated engine list (auto,duckduckgo,brave,tavily,serpapi,x). "
+            "Comma-separated engine list (auto,duckduckgo,brave,tavily,serpapi,firecrawl,x). "
             "`auto` = duckduckgo + every key-backed engine whose key is set + x when an "
             "xAI credential is available."
         ),

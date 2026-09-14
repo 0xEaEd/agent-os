@@ -50,6 +50,18 @@ shape. Paid tiers; no free tier beyond a small credit.
 
 Use when: Google parity matters and the project has the budget.
 
+### Firecrawl
+
+`FIRECRAWL_API_KEY` from <https://firecrawl.dev> — the same key `web_fetch`
+uses to escalate JS-heavy pages, so an install that has one gets this engine
+for free. The script calls `POST /v2/search` with `sources: [{type: "web"}]`
+and **no `scrapeOptions`**, so each call bills the search credits only and
+returns title, URL, and description without scraping every hit. `limit` is
+capped at 100 and the query at 500 characters by the API.
+
+Use when: you want a second API-backed web index next to Brave/Tavily, or
+you already pay for Firecrawl and have no other key.
+
 ### X (xAI `x_search`)
 
 Credential: the xAI OAuth login stored by `agentos auth login xai`
@@ -75,7 +87,7 @@ xAI latency and cost buy nothing.
 ```
 Start with --engines auto
   = duckduckgo
-  + brave / tavily / serpapi for each key that is set
+  + brave / tavily / serpapi / firecrawl for each key that is set
   + x when an xAI login or XAI_API_KEY exists
 Is the topic time-sensitive (last 24h)?
   yes → make sure brave or tavily is in the list; x for live discussion
@@ -93,6 +105,7 @@ Default `--limit 10` is safe across engines. Higher limits:
 - Brave: API tops out at 20 per request (the script clamps and logs)
 - Tavily: 5 results on the free tier, 20 on paid
 - SerpAPI: `num` up to 100, billed per request regardless
+- Firecrawl: `limit` up to 100; results are metadata only unless you scrape
 - X: `--limit` caps the citation rows; the answer text is not truncated
 
 ## Anti-patterns
@@ -102,7 +115,7 @@ Default `--limit 10` is safe across engines. Higher limits:
 - **Trusting a single engine's top result as ground truth**: ranking is
   noisy. Cross-check with a second engine.
 - **Requesting engines that are not implemented**: only `duckduckgo`,
-  `brave`, `tavily`, `serpapi`, and `x` exist; anything else is recorded
+  `brave`, `tavily`, `serpapi`, `firecrawl`, and `x` exist; anything else is recorded
   as `unknown engine`.
 - **Running `x` on every trivial query**: it is the slowest and the only
   engine that spends money per call.

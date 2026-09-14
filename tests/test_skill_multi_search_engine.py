@@ -201,6 +201,7 @@ def _clear_engine_keys(monkeypatch: pytest.MonkeyPatch) -> None:
         "BRAVE_API_KEY",
         "TAVILY_API_KEY",
         "SERPAPI_API_KEY",
+        "FIRECRAWL_API_KEY",
         "XAI_API_KEY",
         "AGENTOS_X_SEARCH_MODEL",
     ):
@@ -405,6 +406,82 @@ def test_serpapi_maps_organic_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert call["params"]["num"] == 1
 
 
+# --- firecrawl ------------------------------------------------------------------
+
+
+def test_firecrawl_without_key_fails_soft(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_engine_keys(monkeypatch)
+    search = _import_search()
+    payload = search.search_all(query="q", engines=["firecrawl"], limit=3, strict=False)
+    assert payload["results"] == []
+    assert any("FIRECRAWL_API_KEY" in e["reason"] for e in payload["errors"])
+
+
+def test_firecrawl_maps_v2_web_results_metadata_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-key")
+    search = _import_search()
+    client = _FakeClient(
+        [
+            _Response(
+                payload={
+                    "success": True,
+                    "data": {
+                        "web": [
+                            {
+                                "title": "One",
+                                "url": "https://one.example",
+                                "description": "D1",
+                                "markdown": None,
+                            },
+                            {"title": "Two", "url": "https://two.example", "description": "D2"},
+                        ],
+                        "news": [{"title": "ignored", "url": "https://news.example"}],
+                    },
+                    "creditsUsed": 2,
+                }
+            )
+        ]
+    )
+    monkeypatch.setattr(search, "_client", lambda: client)
+
+    payload = search.search_all(query="q" * 600, engines=["firecrawl"], limit=150, strict=False)
+
+    assert payload["errors"] == []
+    assert [(r["rank"], r["url"], r["snippet"]) for r in payload["results"]] == [
+        (1, "https://one.example", "D1"),
+        (2, "https://two.example", "D2"),
+    ]
+    call = client.calls[0]
+    assert call["url"] == "https://api.firecrawl.dev/v2/search"
+    assert call["headers"]["Authorization"] == "Bearer fc-key"
+    assert call["json"]["sources"] == [{"type": "web"}]
+    assert "scrapeOptions" not in call["json"]  # metadata only, no per-page scrape credits
+    assert call["json"]["limit"] == 100  # API hard cap
+    assert len(call["json"]["query"]) == 500  # API max query length
+    assert call["timeout"] == search.FIRECRAWL_TIMEOUT_S
+
+
+def test_firecrawl_accepts_legacy_flat_data_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-key")
+    search = _import_search()
+    client = _FakeClient(
+        [_Response(payload={"success": True, "data": [{"title": "T", "url": "https://t.example"}]})]
+    )
+    monkeypatch.setattr(search, "_client", lambda: client)
+    payload = search.search_all(query="q", engines=["firecrawl"], limit=5, strict=False)
+    assert payload["results"][0]["url"] == "https://t.example"
+
+
+def test_firecrawl_unsuccessful_body_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-key")
+    search = _import_search()
+    client = _FakeClient([_Response(payload={"success": False, "error": "Insufficient credits"})])
+    monkeypatch.setattr(search, "_client", lambda: client)
+    payload = search.search_all(query="q", engines=["firecrawl"], limit=5, strict=False)
+    assert payload["results"] == []
+    assert any("Insufficient credits" in e["reason"] for e in payload["errors"])
+
+
 # --- x (xAI x_search) -----------------------------------------------------------
 
 _X_PAYLOAD: dict[str, object] = {
@@ -553,16 +630,18 @@ def test_auto_adds_keyed_engines_and_x_when_credentialed(
 ) -> None:
     _clear_engine_keys(monkeypatch)
     monkeypatch.setenv("SERPAPI_API_KEY", "serp-key")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-key")
     store = tmp_path / "auth.json"
     _write_auth_store(store, _jwt(exp=time.time() + 3600))
     monkeypatch.setenv("AGENTOS_AUTH_STORE", str(store))
     search = _import_search()
-    assert search.resolve_engines(["auto"]) == ["duckduckgo", "serpapi", "x"]
+    assert search.resolve_engines(["auto"]) == ["duckduckgo", "serpapi", "firecrawl", "x"]
     # Explicit names mix with auto and are deduplicated in order.
     assert search.resolve_engines(["brave", "auto", "x"]) == [
         "brave",
         "duckduckgo",
         "serpapi",
+        "firecrawl",
         "x",
     ]
 
