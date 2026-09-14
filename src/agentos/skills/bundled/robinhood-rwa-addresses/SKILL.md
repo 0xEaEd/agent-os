@@ -18,7 +18,7 @@ metadata:
       },
   }
 entrypoint:
-  command: python3 {baseDir}/scripts/rwa_lookup.py
+  command: "{python} {baseDir}/scripts/rwa_lookup.py"
   args:
     - --query
     - "{{ with.query | default(inputs.user_message) }}"
@@ -102,22 +102,22 @@ one into a horizontal scroll. Answer in prose and let the grid carry the data.
 
 ```bash
 # By company name
-python3 {baseDir}/scripts/rwa_lookup.py --query "Apple"
+{python} {baseDir}/scripts/rwa_lookup.py --query "Apple"
 
 # By ticker
-python3 {baseDir}/scripts/rwa_lookup.py --query "AAPL"
+{python} {baseDir}/scripts/rwa_lookup.py --query "AAPL"
 
 # Limit matches
-python3 {baseDir}/scripts/rwa_lookup.py --query "Tesla" --limit 1
+{python} {baseDir}/scripts/rwa_lookup.py --query "Tesla" --limit 1
 
 # Include non-stock community tokens (off by default)
-python3 {baseDir}/scripts/rwa_lookup.py --query "GME" --include-community
+{python} {baseDir}/scripts/rwa_lookup.py --query "GME" --include-community
 
 # Skip the on-chain check (offline; every match comes back "unverified")
-python3 {baseDir}/scripts/rwa_lookup.py --query "Apple" --no-verify
+{python} {baseDir}/scripts/rwa_lookup.py --query "Apple" --no-verify
 
 # Point at a different Robinhood Chain node
-python3 {baseDir}/scripts/rwa_lookup.py --query "Apple" --rpc-url https://…
+{python} {baseDir}/scripts/rwa_lookup.py --query "Apple" --rpc-url https://…
 ```
 
 ## Show the results as cards in Web chat

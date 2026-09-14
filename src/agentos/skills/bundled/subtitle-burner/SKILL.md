@@ -12,7 +12,7 @@ metadata:
       bins: ["ffmpeg"]
       anyBins: ["python", "python3"]
 entrypoint:
-  command: python {baseDir}/scripts/burn.py
+  command: "{python} {baseDir}/scripts/burn.py"
   args:
     - --input
     - "{{ with.input }}"

@@ -8,7 +8,7 @@ metadata:
   requires:
     bins: ["git"]
 entrypoint:
-  command: python {baseDir}/scripts/git_diff.py
+  command: "{python} {baseDir}/scripts/git_diff.py"
   args:
     - --mode
     - "{{ with.mode | default('cached_fallback_worktree') }}"

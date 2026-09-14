@@ -31,6 +31,11 @@ BASE_DIR_REF = re.compile(r"\{baseDir\}/([A-Za-z0-9_./-]+)")
 #: absolute or home-anchored path instead of ``{baseDir}``.
 HOME_ANCHORED_SCRIPT = re.compile(r"python3?\s+(~|/Users/|/home/)[^\s`]*\.py")
 
+#: A bare ``python {baseDir}/…`` invocation. The interpreter has to come from
+#: ``{python}``: whatever ``python`` the user's PATH resolves to is not the one
+#: that has AgentOS's dependencies or its minimum version.
+BARE_PYTHON_SCRIPT = re.compile(r"\bpython3?\s+\{baseDir\}")
+
 
 def _skill_dirs() -> list[Path]:
     return sorted(p for p in BUNDLED.iterdir() if p.is_dir() and (p / "SKILL.md").is_file())
@@ -51,6 +56,17 @@ def test_every_basedir_script_reference_resolves() -> None:
 
     assert checked, "no {baseDir} references found — the regex stopped matching"
     assert not missing, "SKILL.md points at scripts that do not ship: " + "; ".join(missing)
+
+
+def test_bundled_skills_run_scripts_through_the_python_placeholder() -> None:
+    """No bundled SKILL.md invokes a ``{baseDir}`` script with a bare ``python``."""
+    offenders: list[str] = []
+    for skill_dir in _skill_dirs():
+        body = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        for match in BARE_PYTHON_SCRIPT.finditer(body):
+            line = body.count("\n", 0, match.start()) + 1
+            offenders.append(f"{skill_dir.name}:{line}")
+    assert not offenders, "use `{python} {baseDir}/…`, not a PATH python: " + ", ".join(offenders)
 
 
 def test_gmgn_skills_reach_their_scripts_through_basedir(tmp_path: Path) -> None:

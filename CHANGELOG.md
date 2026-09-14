@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Skills: a `{python}` placeholder next to `{baseDir}`. `skill_view` expands
+  it to the interpreter AgentOS itself runs on (`sys.executable` of the
+  gateway), and every bundled `SKILL.md` now invokes its scripts as
+  `{python} {baseDir}/scripts/…` instead of a bare `python`. A bare `python`
+  is whatever the user's PATH resolves to -- on one machine a Homebrew 3.9
+  that happened to carry `httpx`, so `multi-search-engine` imported fine and
+  then died on `isinstance(x, int | float)`; on a fresh Windows box nothing at
+  all -- while only AgentOS's own interpreter is guaranteed to have the
+  skill's dependencies and its minimum version. The expanded body also leads
+  with a `[Skill interpreter: …]` line so third-party skills that still say
+  `python3 script.py` are steered onto it. `agentos skills init --with-script`
+  scaffolds the new form, and a test rejects any bundled skill that regresses
+  to a PATH python.
 - `multi-search-engine` skill: an `x` engine that runs xAI's server-side
   `x_search` (X/Twitter) from the same CLI, using the OAuth login stored by
   `agentos auth login xai` or `XAI_API_KEY` -- it reads the stored access

@@ -16,7 +16,7 @@ metadata:
       anyBins: ["python", "python3"]
       envAny: ["OPENROUTER_API_KEY"]
 entrypoint:
-  command: python {baseDir}/scripts/generate_image.py
+  command: "{python} {baseDir}/scripts/generate_image.py"
   args:
     - --prompt
     - "{{ with.prompt }}"

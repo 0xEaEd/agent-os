@@ -54,7 +54,7 @@ applies a natural-language edit; `pdf-toolkit` applies an explicit operation.
 ## Path A: Extract
 
 ```bash
-python {baseDir}/scripts/extract.py /path/to/doc.pdf --json
+{python} {baseDir}/scripts/extract.py /path/to/doc.pdf --json
 ```
 
 Output:
@@ -90,13 +90,13 @@ sibling skill that wraps an OCR engine (out of scope here).
 Merge full files:
 
 ```bash
-python {baseDir}/scripts/merge.py a.pdf b.pdf c.pdf --out combined.pdf
+{python} {baseDir}/scripts/merge.py a.pdf b.pdf c.pdf --out combined.pdf
 ```
 
 Or merge specific page ranges with the manifest form:
 
 ```bash
-python {baseDir}/scripts/merge.py manifest.json --out combined.pdf
+{python} {baseDir}/scripts/merge.py manifest.json --out combined.pdf
 ```
 
 `manifest.json`:
@@ -113,7 +113,7 @@ Page ranges are 1-based, comma-separated, hyphen for ranges. Omit `pages` to
 include the whole file. Splits use the same syntax in reverse:
 
 ```bash
-python {baseDir}/scripts/split.py input.pdf --pages "1-3,7,10-12" --out output_dir/
+{python} {baseDir}/scripts/split.py input.pdf --pages "1-3,7,10-12" --out output_dir/
 ```
 
 Each range writes one output file: `output_dir/input_001.pdf`,
@@ -124,7 +124,7 @@ Each range writes one output file: `output_dir/input_001.pdf`,
 ## Path C: Form fill
 
 ```bash
-python {baseDir}/scripts/form_fill.py form.pdf data.json --out filled.pdf
+{python} {baseDir}/scripts/form_fill.py form.pdf data.json --out filled.pdf
 ```
 
 `data.json` maps field name → string value:

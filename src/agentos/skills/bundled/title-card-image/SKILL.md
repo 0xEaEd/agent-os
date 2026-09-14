@@ -11,7 +11,7 @@ metadata:
     requires:
       anyBins: ["python", "python3"]
 entrypoint:
-  command: python {baseDir}/scripts/render.py
+  command: "{python} {baseDir}/scripts/render.py"
   args:
     - --text
     - "{{ with.text }}"

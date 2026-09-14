@@ -125,7 +125,7 @@ def test_init_success_with_script(temp_home: Path, monkeypatch: pytest.MonkeyPat
     parts = skill_md.read_text(encoding="utf-8").split("---")
     frontmatter = yaml.safe_load(parts[1])
     assert "entrypoint" in frontmatter
-    assert frontmatter["entrypoint"]["command"] == "python {baseDir}/scripts/run.py"
+    assert frontmatter["entrypoint"]["command"] == "{python} {baseDir}/scripts/run.py"
 
     # Verify run.py is executable boilerplate
     script_content = run_py.read_text(encoding="utf-8")

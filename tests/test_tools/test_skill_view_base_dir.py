@@ -13,18 +13,19 @@ from pathlib import Path
 import pytest
 
 from agentos.skills.loader import SkillLoader
+from agentos.skills.resources import skill_python
 from agentos.tools.builtin import skill_tools as skill_tools_module
 from agentos.tools.registry import get_default_registry
 
 BUNDLED_BODY = """Run it with:
 
 ```bash
-python3 {baseDir}/scripts/run.py --check
+{python} {baseDir}/scripts/run.py --check
 ```
 
 ## Usage
 
-Point it at a deck: `python3 {baseDir}/scripts/run.py deck.pptx`.
+Point it at a deck: `{python} {baseDir}/scripts/run.py deck.pptx`.
 """
 
 WORKSPACE_BODY = "Notes helper. Scripts live under {baseDir}/scripts.\n"
@@ -97,7 +98,8 @@ async def test_skill_view_expands_base_dir_in_body(skill_loader: SkillLoader) ->
     result = await _skill_view("deck")
 
     assert "{baseDir}" not in result
-    assert f"python3 {base_dir}/scripts/run.py --check" in result
+    assert "{python}" not in result
+    assert f"{skill_python()} {base_dir}/scripts/run.py --check" in result
 
 
 @pytest.mark.asyncio
@@ -106,7 +108,9 @@ async def test_skill_view_states_the_skill_directory(skill_loader: SkillLoader) 
 
     result = await _skill_view("deck")
 
-    assert result.startswith(f"[Skill directory: {base_dir}]\n\n")
+    assert result.startswith(
+        f"[Skill directory: {base_dir}]\n[Skill interpreter: {skill_python()} — "
+    )
 
 
 @pytest.mark.asyncio
@@ -117,8 +121,10 @@ async def test_skill_view_section_expands_and_states_directory(
 
     result = await _skill_view("deck", section="Usage")
 
-    assert result.startswith(f"[Skill directory: {base_dir}]\n\n")
-    assert f"python3 {base_dir}/scripts/run.py deck.pptx" in result
+    assert result.startswith(
+        f"[Skill directory: {base_dir}]\n[Skill interpreter: {skill_python()} — "
+    )
+    assert f"{skill_python()} {base_dir}/scripts/run.py deck.pptx" in result
     assert "{baseDir}" not in result
 
 
@@ -128,7 +134,7 @@ async def test_skill_view_expands_explicit_skill_md_request(skill_loader: SkillL
 
     result = await _skill_view("deck", file_path="SKILL.md")
 
-    assert f"python3 {base_dir}/scripts/run.py --check" in result
+    assert f"{skill_python()} {base_dir}/scripts/run.py --check" in result
     assert "{baseDir}" not in result
 
 

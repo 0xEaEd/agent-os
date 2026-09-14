@@ -18,7 +18,7 @@ metadata:
       },
   }
 entrypoint:
-  command: python3 {baseDir}/scripts/chain_stocks.py
+  command: "{python} {baseDir}/scripts/chain_stocks.py"
   args:
     - --query
     - "{{ with.query | default(inputs.user_message) }}"
@@ -77,20 +77,20 @@ A network fault is not evidence about a contract. Report `null` as uncertainty.
 
 ```bash
 # Price + on-chain state by name or ticker
-python3 {baseDir}/scripts/chain_stocks.py --query "Apple"
-python3 {baseDir}/scripts/chain_stocks.py --query TSLA
+{python} {baseDir}/scripts/chain_stocks.py --query "Apple"
+{python} {baseDir}/scripts/chain_stocks.py --query TSLA
 
 # A wallet's holding and its USD value
-python3 {baseDir}/scripts/chain_stocks.py --query NVDA --holder 0xYourWallet
+{python} {baseDir}/scripts/chain_stocks.py --query NVDA --holder 0xYourWallet
 
 # Verify an arbitrary address without resolving a name
-python3 {baseDir}/scripts/chain_stocks.py --address 0x7e86381a763f0ecca2bdf27c54eac403ddd48123
+{python} {baseDir}/scripts/chain_stocks.py --address 0x7e86381a763f0ecca2bdf27c54eac403ddd48123
 
 # Skip the price read (fewer calls, no feed fetch)
-python3 {baseDir}/scripts/chain_stocks.py --query MSFT --no-price
+{python} {baseDir}/scripts/chain_stocks.py --query MSFT --no-price
 
 # Point at a dedicated provider instead of the rate-limited public RPC
-python3 {baseDir}/scripts/chain_stocks.py --query SPY --rpc-url https://your-provider/rpc
+{python} {baseDir}/scripts/chain_stocks.py --query SPY --rpc-url https://your-provider/rpc
 ```
 
 ## The card renders itself

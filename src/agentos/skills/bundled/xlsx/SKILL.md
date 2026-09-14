@@ -50,7 +50,7 @@ input as the formatting baseline. Choose path C only when the user says
 ## Path A: Inspect
 
 ```bash
-python {baseDir}/scripts/inspect_xlsx.py /path/to/book.xlsx
+{python} {baseDir}/scripts/inspect_xlsx.py /path/to/book.xlsx
 ```
 
 Output:
@@ -88,7 +88,7 @@ instead.
 ## Path B: Edit in place
 
 ```bash
-python {baseDir}/scripts/edit_xlsx.py book.xlsx ops.json --out edited.xlsx
+{python} {baseDir}/scripts/edit_xlsx.py book.xlsx ops.json --out edited.xlsx
 ```
 
 `ops.json`:
@@ -132,7 +132,7 @@ Rules:
 ## Path C: Create from scratch
 
 ```bash
-python {baseDir}/scripts/create_xlsx.py spec.json --out out.xlsx
+{python} {baseDir}/scripts/create_xlsx.py spec.json --out out.xlsx
 ```
 
 Spec:

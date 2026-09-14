@@ -42,7 +42,7 @@ When the user asks to analyze holders for a token, extract `--chain` and `--addr
 Run the following command, replacing the placeholders with the actual values:
 
 ```bash
-python3 {baseDir}/scripts/analyze.py <FILL_IN_TOKEN_ADDRESS> <FILL_IN_CHAIN> <FILL_IN_LANG>
+{python} {baseDir}/scripts/analyze.py <FILL_IN_TOKEN_ADDRESS> <FILL_IN_CHAIN> <FILL_IN_LANG>
 ```
 
 - FILL_IN_CHAIN: `sol` for Solana addresses; for EVM `0x...` addresses use `auto` unless the user explicitly specifies a chain (`bsc`/`eth`/`base`)

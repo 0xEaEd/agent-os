@@ -11,7 +11,7 @@ metadata:
     requires:
       anyBins: ["python", "python3"]
 entrypoint:
-  command: python {baseDir}/scripts/build_srt.py
+  command: "{python} {baseDir}/scripts/build_srt.py"
   args:
     - --output
     - "{{ with.output_path }}"
