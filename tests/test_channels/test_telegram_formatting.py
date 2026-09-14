@@ -338,3 +338,64 @@ def test_a_url_inside_a_code_span_is_untouched() -> None:
     assert render_telegram_html("`https://x.test/a__b__c`") == (
         "<code>https://x.test/a__b__c</code>"
     )
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("This is _italic text_ in markdown.", "This is <i>italic text</i> in markdown."),
+        ("_lead_ and _tail_", "<i>lead</i> and <i>tail</i>"),
+        ("(_parenthesised_)", "(<i>parenthesised</i>)"),
+        ("_multi_word_run_", "<i>multi_word_run</i>"),
+        ("**bold** and _italic_ and *also*", "<b>bold</b> and <i>italic</i> and <i>also</i>"),
+    ],
+)
+def test_single_underscore_renders_italic(markdown: str, expected: str) -> None:
+    """`_text_` is the most common italic shape in LLM output; it reached
+    Telegram as raw underscores while `*text*` and `__text__` rendered."""
+    assert render_telegram_html(markdown) == expected
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        "call snake_case_identifier here",
+        "use _private and _internal names",
+        "the value_ trailing_ ones",
+        "__init__ style dunder",
+        "a _ lone underscore _ pair",
+        "no _italic_here because it continues",
+        "sha_a1_b2 and sha_c3_d4",
+    ],
+)
+def test_single_underscore_leaves_identifiers_alone(markdown: str) -> None:
+    """Intraword underscores are not emphasis (CommonMark), so identifiers
+    with several underscores must not sprout <i> tags."""
+    rendered = render_telegram_html(markdown)
+    assert "<i>" not in rendered
+    assert rendered == markdown.replace("__init__", "<b>init</b>")
+
+
+def test_single_underscore_does_not_touch_a_parked_link_or_code_span() -> None:
+    rendered = render_telegram_html("[t](https://x.test/_a_b_) and `_code_` and _em_")
+    assert rendered == (
+        '<a href="https://x.test/_a_b_">t</a> and <code>_code_</code> and <i>em</i>'
+    )
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("Press ` ` to jump.", "Press <code> </code> to jump."),
+        ("run `  test  ` now", "run <code> test </code> now"),
+        ("run ` test ` now", "run <code>test</code> now"),
+        ("run `test ` now", "run <code>test </code> now"),
+        ("run ` test` now", "run <code> test</code> now"),
+        ("blank `   ` span", "blank <code>   </code> span"),
+    ],
+)
+def test_code_span_keeps_interior_whitespace(markdown: str, expected: str) -> None:
+    """CommonMark strips one leading and one trailing space only when both are
+    present and the span is not all spaces; `.strip()` collapsed `` ` ` `` to
+    an empty <code></code>."""
+    assert render_telegram_html(markdown) == expected

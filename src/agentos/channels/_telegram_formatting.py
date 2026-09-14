@@ -36,7 +36,12 @@ def _replace_code_spans(text: str) -> tuple[str, list[str]]:
             output.append(marker)
             cursor = marker_end
             continue
-        content = text[marker_end:closing].strip()
+        content = text[marker_end:closing]
+        # CommonMark: drop one space from each end only when both are present
+        # and the span is not all spaces, so `` ` ` `` stays a single space and
+        # `` `  x  ` `` keeps one on each side instead of being stripped bare.
+        if len(content) >= 2 and content[0] == " " and content[-1] == " " and content.strip():
+            content = content[1:-1]
         placeholder = f"\x00TG_CODE_{len(chunks)}\x00"
         chunks.append(f"<code>{html.escape(content)}</code>")
         output.append(placeholder)
@@ -67,6 +72,9 @@ def _render_inline(text: str) -> str:
     rendered = re.sub(r"__(?=\S)(.+?)(?<=\S)__", r"<b>\1</b>", rendered)
     rendered = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", r"<s>\1</s>", rendered)
     rendered = re.sub(r"(?<!\*)\*(?=\S)(.+?)(?<=\S)\*(?!\*)", r"<i>\1</i>", rendered)
+    # Word-boundary guards keep `snake_case_identifiers` intact: an opening `_`
+    # must not follow a word character and a closing one must not precede one.
+    rendered = re.sub(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)", r"<i>\1</i>", rendered)
     # Restore in reverse order of protection: code spans were parked first, so
     # they come back last and a restored code span is never rescanned.
     for index, href in enumerate(hrefs):
