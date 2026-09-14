@@ -148,6 +148,73 @@ class TestNameSegments:
     def test_ordinary_names(self, name: str) -> None:
         assert not redact._is_credential_name(name)
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # Qualifiers that can only mean key material (#1901), in each of
+            # the three casings ``_name_segments`` reduces.
+            "signing_key",
+            "SIGNING_KEY",
+            "signingKey",
+            "x-signing-key",
+            "encryption_key",
+            "ENCRYPTION_KEY",
+            "encryptionKey",
+            "account_key",
+            "AccountKey",
+            "account-key",
+        ],
+    )
+    def test_key_qualifier_names(self, name: str) -> None:
+        assert redact._is_credential_name(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["sort_key", "cache_key", "partition_key", "license_key", "consumer_key", "deploy_key"],
+    )
+    def test_bare_key_names_stay_ordinary(self, name: str) -> None:
+        """``key`` alone is a map entry; the pair list must not widen to every ``*_key``."""
+        assert not redact._is_credential_name(name)
+
+
+class TestKeyQualifierAssignments:
+    """SIGNING_KEY sits in the same env dump as SECRET_KEY; both must mask (#1901)."""
+
+    VALUE = "9f2b7c41ae55d0e3bb84aa11"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "SIGNING_KEY={v}",
+            "ENCRYPTION_KEY={v}",
+            '"signingKey": "{v}"',
+            "AccountKey={v}",
+        ],
+    )
+    def test_an_env_dump_masks_the_value(self, line: str) -> None:
+        out = redact.redact_terminal_output(line.format(v=self.VALUE) + "\n", "printenv")
+        assert self.VALUE not in out
+
+    @pytest.mark.parametrize("line", ["SIGNING_KEY={v}", "ENCRYPTION_KEY={v}"])
+    def test_a_dotenv_read_masks_the_value(self, line: str) -> None:
+        out = redact.redact_file_output(line.format(v=self.VALUE) + "\n", path=".env")
+        assert self.VALUE not in out
+
+    def test_an_azure_connection_string_masks_its_account_key(self) -> None:
+        """``;`` ends an unquoted value, so it also has to start the next assignment."""
+        line = (
+            "AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;"
+            f"AccountName=prodstore;AccountKey={self.VALUE}==;EndpointSuffix=core.windows.net\n"
+        )
+        out = redact.redact_terminal_output(line, "printenv")
+        assert self.VALUE not in out
+        assert "AccountName=prodstore" in out
+        assert "EndpointSuffix=core.windows.net" in out
+
+    def test_a_semicolon_separated_ordinary_assignment_is_untouched(self) -> None:
+        line = "OPTS=a=1;sort_key=name;partition_key=region\n"
+        assert redact.redact_terminal_output(line, "printenv") == line
+
 
 class TestRedaction:
     def test_masks_a_vendor_key_but_keeps_it_recognisable(self) -> None:
