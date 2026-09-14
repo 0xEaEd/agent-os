@@ -61,8 +61,17 @@ class TerminalChannel:
         return await reader.readline()
 
     async def receive(self) -> IncomingMessage:
-        """Read one line from stdin and return as IncomingMessage."""
+        """Read one line from stdin and return as IncomingMessage.
+
+        Raises ``EOFError`` once stdin is exhausted -- a closed pipe, a
+        redirected file that ran out, or Ctrl+D/Ctrl+Z. Only EOF yields an
+        empty read: a blank line still carries its ``b"\\n"``. Without that
+        split a caller looping on ``receive()`` cannot tell the two apart and
+        spins on a closed stdin, dispatching an empty message per turn.
+        """
         line_bytes = await self._read_line()
+        if not line_bytes:
+            raise EOFError("stdin is closed")
         content = line_bytes.decode(errors="replace").removesuffix("\n").removesuffix("\r")
         log.debug("terminal.receive", content=content[:80])
         return IncomingMessage(

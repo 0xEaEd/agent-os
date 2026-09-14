@@ -50,14 +50,45 @@ async def test_windows_receive_reads_a_line_without_connect_read_pipe(
 
 
 @pytest.mark.asyncio
-async def test_windows_receive_reports_eof_as_empty_content(
+async def test_windows_receive_raises_eof_when_stdin_is_exhausted(
     windows: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """EOF must be distinguishable from a blank line, or callers spin."""
     monkeypatch.setattr("sys.stdin", _binary_stdin(b""))
 
-    message = await TerminalChannel().receive()
+    with pytest.raises(EOFError):
+        await TerminalChannel().receive()
 
-    assert message.content == ""
+
+@pytest.mark.asyncio
+async def test_windows_receive_keeps_a_blank_line_distinct_from_eof(
+    windows: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("sys.stdin", _binary_stdin(b"\n"))
+    channel = TerminalChannel()
+
+    blank = await channel.receive()
+
+    assert blank.content == ""
+    with pytest.raises(EOFError):
+        await channel.receive()
+
+
+@pytest.mark.asyncio
+async def test_posix_receive_raises_eof_when_stdin_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(terminal_module, "_ON_WINDOWS", False)
+    reader = asyncio.StreamReader()
+    reader.feed_eof()
+
+    async def _reader(self: TerminalChannel) -> asyncio.StreamReader:
+        return reader
+
+    monkeypatch.setattr(TerminalChannel, "_get_reader", _reader)
+
+    with pytest.raises(EOFError):
+        await TerminalChannel().receive()
 
 
 @pytest.mark.asyncio

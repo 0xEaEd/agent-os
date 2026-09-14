@@ -427,7 +427,8 @@ async def run_channel_dispatch(
 ) -> None:
     """Receive-dispatch-respond loop for a channel adapter.
 
-    Runs forever, processing one message at a time.  Each concern is
+    Processes one message at a time, until the adapter reports its input
+    stream is exhausted by raising ``EOFError``.  Each concern is
     handled by a private helper to keep this function under ~25 lines.
 
     Reply delivery is fire-and-forget via ``asyncio.create_task``; the
@@ -438,7 +439,13 @@ async def run_channel_dispatch(
         cap = _compute_channel_cap(config)
         _in_flight = _ChannelInFlightSet(cap)
     while True:
-        msg = await channel.receive()
+        try:
+            msg = await channel.receive()
+        except EOFError:
+            # Input stream exhausted (stdin closed on a terminal channel).
+            # Returning ends the loop; retrying would spin on the closed pipe.
+            log.info("channel_dispatch.input_closed", session_prefix=session_prefix)
+            return
         base_session_key = session_key_builder(msg)
         # Resolve any per-chat "current session" pointer set by a prior /new.
         # The derived base key stays the stable pointer-map handle.
