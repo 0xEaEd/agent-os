@@ -14,6 +14,14 @@ from agentos.tools.path_policy import reject_foreign_host_path
 from agentos.tools.registry import tool
 from agentos.tools.types import current_tool_context
 
+_NO_COMMITS_MESSAGE = "(no commits yet)"
+# What git says when HEAD points at an unborn branch. The second form is what
+# older versions report for the same state.
+_NO_COMMITS_MARKERS = (
+    "does not have any commits yet",
+    "bad default revision 'HEAD'",
+)
+
 
 def _effective_workdir(workdir: str | None) -> str | None:
     ctx = current_tool_context.get()
@@ -244,10 +252,21 @@ async def git_commit(
     record_payload=False,
 )
 async def git_log(count: int = 10, workdir: str | None = None) -> str:
-    return await _run_git(
-        "log",
-        f"--max-count={count}",
-        "--oneline",
-        "--decorate",
-        cwd=_effective_workdir(workdir),
-    )
+    # git reads --max-count=-1 as "unlimited", so a negative count would dump
+    # the whole history instead of the handful of commits the caller asked for.
+    count = max(1, count)
+    try:
+        return await _run_git(
+            "log",
+            f"--max-count={count}",
+            "--oneline",
+            "--decorate",
+            cwd=_effective_workdir(workdir),
+        )
+    except RuntimeError as exc:
+        # A branch with no commits yet is a state, not a failure: git_status
+        # reports it and git_diff returns empty, so log says so too rather
+        # than raising exit 128 out through the turn loop.
+        if any(marker in str(exc) for marker in _NO_COMMITS_MARKERS):
+            return _NO_COMMITS_MESSAGE
+        raise
