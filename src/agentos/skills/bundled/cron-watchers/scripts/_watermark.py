@@ -69,10 +69,19 @@ def load_seen(name: str) -> list[str]:
 
 
 def save_seen(name: str, ids: list[str]) -> None:
-    """Persist the most recent ids, trimmed so the file cannot grow forever."""
+    """Persist the most recent ids, trimmed so the file cannot grow forever.
+
+    Duplicates are collapsed on the way in, keeping the first occurrence. The
+    trim keeps the newest ``MAX_REMEMBERED_IDS``, so a repeated id that was
+    allowed to occupy several slots would shorten the watcher's real memory and
+    let an older id fall off the end sooner than it should.
+    """
     path = watermark_path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    trimmed = [str(item) for item in ids][-MAX_REMEMBERED_IDS:]
+    unique: dict[str, None] = {}
+    for item in ids:
+        unique.setdefault(str(item), None)
+    trimmed = list(unique)[-MAX_REMEMBERED_IDS:]
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps({"seen": trimmed}), encoding="utf-8")
     tmp.replace(path)

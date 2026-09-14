@@ -416,6 +416,17 @@ def test_select_new_deduplicates_ids_within_one_poll(state_dir):
     assert watermark.load_seen("dupes") == ["a", "b", "c"]
 
 
+def test_save_seen_collapses_duplicates_so_the_budget_is_not_wasted(state_dir):
+    """The trim keeps the newest MAX_REMEMBERED_IDS. A repeated id holding
+    several of those slots shortens the watcher's real memory, so an older id
+    falls off the end sooner and can be reported a second time."""
+    watermark = _watermark_module()
+
+    watermark.save_seen("budget", ["a", "b", "a", "c", "b"])
+
+    assert watermark.load_seen("budget") == ["a", "b", "c"]
+
+
 def test_duplicates_do_not_consume_the_limit_twice(state_dir):
     """The cap counts distinct fresh ids: a duplicate must not push a real item
     out of this run's report."""
