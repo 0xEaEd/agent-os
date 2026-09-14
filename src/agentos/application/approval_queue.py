@@ -264,11 +264,17 @@ class ApprovalQueue:
                 return
             raise ValueError(f"Approval already resolved: {approval_id}")
 
+        # Fold the elevation into the persisted params: get()/status() re-read
+        # the row, so anything written only onto the in-memory entry is lost on
+        # the very next lookup (and on restart).
+        params = dict(entry.params)
+        if approved and elevated_mode in VALID_ELEVATED_MODES:
+            params["elevatedMode"] = elevated_mode
         cursor = self._conn.execute(
             "UPDATE approval_queue "
-            "SET resolved = 1, approved = ? "
+            "SET resolved = 1, approved = ?, params = ? "
             "WHERE approval_id = ? AND resolved = 0",
-            (1 if approved else 0, approval_id),
+            (1 if approved else 0, self._serialize_params(params), approval_id),
         )
         if cursor.rowcount != 1:
             self._conn.rollback()
@@ -288,7 +294,6 @@ class ApprovalQueue:
         self._pending[approval_id] = entry
 
         if approved and elevated_mode in VALID_ELEVATED_MODES:
-            entry.params["elevatedMode"] = elevated_mode
             session_key = str(entry.params.get("sessionKey") or "").strip()
             if session_key:
                 self.set_elevated_mode(session_key, elevated_mode)
