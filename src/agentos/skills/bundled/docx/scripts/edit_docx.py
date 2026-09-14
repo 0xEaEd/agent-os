@@ -28,9 +28,12 @@ from docx.table import Table, _Cell
 from docx.text.paragraph import Paragraph
 
 
-def _replace_run(para: Paragraph, run_idx: int, text: str) -> None:
-    if 0 <= run_idx < len(para.runs):
-        para.runs[run_idx].text = text
+def _replace_run(para: Paragraph, run_idx: int, text: str) -> bool:
+    """Overwrite one run's text; return whether the run existed."""
+    if not 0 <= run_idx < len(para.runs):
+        return False
+    para.runs[run_idx].text = text
+    return True
 
 
 def _replace_text_in_paragraph(para: Paragraph, find: str, replacement: str) -> bool:
@@ -112,12 +115,19 @@ def apply_ops(doc: Document, ops: list[dict[str, Any]]) -> int:
             continue
         kind = op.get("op")
         if kind == "replace_run":
+            # Bounds are checked explicitly rather than by catching IndexError:
+            # a negative index would otherwise wrap round to the end of the
+            # document and edit a paragraph the op never named.
             try:
-                para = doc.paragraphs[int(op["para"])]
-            except (KeyError, IndexError, ValueError):
+                para_idx = int(op["para"])
+                run_idx = int(op.get("run", 0))
+            except (KeyError, TypeError, ValueError):
                 continue
-            _replace_run(para, int(op.get("run", 0)), str(op.get("text", "")))
-            applied += 1
+            paragraphs = doc.paragraphs
+            if not 0 <= para_idx < len(paragraphs):
+                continue
+            if _replace_run(paragraphs[para_idx], run_idx, str(op.get("text", ""))):
+                applied += 1
         elif kind == "replace_text":
             find = str(op.get("find", ""))
             replacement = str(op.get("with", ""))

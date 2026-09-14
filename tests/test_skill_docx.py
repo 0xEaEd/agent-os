@@ -378,3 +378,68 @@ def test_apply_ops_skips_non_dict_ops() -> None:
 
     assert applied == 1
     assert doc.paragraphs[0].text == "Hello Wei"
+
+
+def _two_paragraph_document() -> object:
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph("Hello world")
+    doc.add_paragraph("Second paragraph")
+    return doc
+
+
+def test_replace_run_reports_whether_it_wrote() -> None:
+    edit_docx = _edit_docx_module()
+    paragraph = _paragraph([("Hello ", False), ("world", True)])
+
+    assert edit_docx._replace_run(paragraph, 1, "there") is True
+    assert edit_docx._replace_run(paragraph, 2, "nope") is False
+    assert edit_docx._replace_run(paragraph, -1, "nope") is False
+    assert [run.text for run in paragraph.runs] == ["Hello ", "there"]
+
+
+@pytest.mark.parametrize("run_idx", [1, 99, -1])
+def test_apply_ops_does_not_count_an_out_of_bounds_run(run_idx: int) -> None:
+    """A replace_run that wrote nothing must not be reported as applied (#1896)."""
+    edit_docx = _edit_docx_module()
+    doc = _two_paragraph_document()
+
+    applied = edit_docx.apply_ops(
+        doc, [{"op": "replace_run", "para": 0, "run": run_idx, "text": "New text"}]
+    )
+
+    assert applied == 0
+    assert doc.paragraphs[0].text == "Hello world"
+
+
+@pytest.mark.parametrize("para_idx", [2, 99, -1])
+def test_apply_ops_does_not_count_an_out_of_bounds_paragraph(para_idx: int) -> None:
+    """A negative index must not silently wrap to the end of the document."""
+    edit_docx = _edit_docx_module()
+    doc = _two_paragraph_document()
+
+    applied = edit_docx.apply_ops(
+        doc, [{"op": "replace_run", "para": para_idx, "run": 0, "text": "New text"}]
+    )
+
+    assert applied == 0
+    assert [p.text for p in doc.paragraphs] == ["Hello world", "Second paragraph"]
+
+
+def test_apply_ops_counts_only_the_replace_runs_that_wrote() -> None:
+    edit_docx = _edit_docx_module()
+    doc = _two_paragraph_document()
+
+    applied = edit_docx.apply_ops(
+        doc,
+        [
+            {"op": "replace_run", "para": 0, "run": 0, "text": "Hi world"},
+            {"op": "replace_run", "para": 0, "run": 5, "text": "dropped"},
+            {"op": "replace_run", "para": 1, "run": 0, "text": "Last paragraph"},
+            {"op": "replace_run", "para": "x", "run": 0, "text": "dropped"},
+        ],
+    )
+
+    assert applied == 2
+    assert [p.text for p in doc.paragraphs] == ["Hi world", "Last paragraph"]
