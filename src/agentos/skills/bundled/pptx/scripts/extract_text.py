@@ -75,21 +75,32 @@ def _table_text(shape) -> list[str]:
     return out
 
 
-def _slide_text(slide) -> list[str]:
-    """Walk shapes (and one level of grouped shapes) collecting text."""
+def _shapes_text(shapes) -> list[str]:
+    """Collect text from *shapes*, descending into groups at any depth.
+
+    A group shape carries no text of its own; its members do, and those
+    members may themselves be groups. Expanding a single level (what this did
+    before) silently dropped everything nested two groups deep or more.
+    """
     out: list[str] = []
-    for shape in slide.shapes:
+    for shape in shapes:
         out.extend(_shape_text(shape))
         out.extend(_table_text(shape))
-        # one level of group expansion (sufficient for most decks)
-        if getattr(shape, "shape_type", None) and getattr(shape, "shapes", None):
-            try:
-                for inner in shape.shapes:
-                    out.extend(_shape_text(inner))
-                    out.extend(_table_text(inner))
-            except (AttributeError, TypeError):
-                pass
+        # Only a group shape has a shape tree of its own.
+        members = getattr(shape, "shapes", None)
+        if members is None:
+            continue
+        try:
+            members = list(members)
+        except (AttributeError, TypeError):
+            continue
+        out.extend(_shapes_text(members))
     return out
+
+
+def _slide_text(slide) -> list[str]:
+    """Walk a slide's shapes, grouped shapes included, collecting text."""
+    return _shapes_text(slide.shapes)
 
 
 def _notes_text(slide) -> str:
