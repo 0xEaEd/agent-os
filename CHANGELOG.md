@@ -6,7 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `multi-search-engine` skill: an `x` engine that runs xAI's server-side
+  `x_search` (X/Twitter) from the same CLI, using the OAuth login stored by
+  `agentos auth login xai` or `XAI_API_KEY` -- it reads the stored access
+  token and never refreshes it, since refresh is the gateway's job. Citations
+  land in `results` (`engine: "x"`) and the synthesized answer in a new
+  top-level `answers` key. Also a `serpapi` engine (`SERPAPI_API_KEY`) and
+  `--engines auto`, now the default: DuckDuckGo plus every key-backed engine
+  whose key is set, plus `x` when an xAI credential exists. The payload
+  reports the resolved list under `engines`.
+
 ### Fixed
+
+- `multi-search-engine` skill: a DuckDuckGo bot challenge (HTTP 202 with an
+  "anomaly" page) used to come back as an empty success with no error; the
+  script now retries once and then records a per-engine error, so an empty
+  `results` with empty `errors` genuinely means no hits. DuckDuckGo redirect
+  links (`/l/?uddg=`) are unquoted to the destination URL, sponsored `y.js`
+  links are dropped, filtering happens before `--limit`, and snippets keep
+  their word spacing across `<b>` tags (#1917). `SKILL.md` and `engines.md`
+  no longer advertise Bing, Baidu, Sogou, 360 -- none were implemented, so the
+  agent kept requesting `bing` and getting `unknown engine`; the default
+  engine list no longer names Brave unconditionally either.
 
 - Web UI: the Memory page now uses the shared Control hero header, so the
   signal background no longer overlaps the stat cards and the page matches
