@@ -167,6 +167,25 @@ GMGN skills (`gmgn-token`, `gmgn-market`, `gmgn-portfolio`, `gmgn-track`,
 the group wears the AgentOS mark. Every mark ships with the client; no manifest
 field points the UI at an image, remote or local.
 
+## Declaring the Variables a Skill Reads
+
+`metadata.agentos.requires.env` (or `metadata.platform.requires.env`) lists
+the environment variables a skill's scripts read. Each entry carries a
+`description` and a `url` so the Environment page and `agentos env list` can
+say what the variable is for and where to obtain it, and `secret` when the
+name-based heuristic would guess wrong. `required` defaults to `true`; set it
+to `false` for a variable that unlocks part of the skill rather than gating all
+of it -- the `multi-search-engine` skill declares every engine key that way, so
+it stays offered on DuckDuckGo alone and grows engines as keys appear. A
+required variable that is missing hides the skill and is reported by
+`agentos skills doctor`; an optional one only shows as unset on the
+Environment page.
+
+Declared variables are also the ones forwarded into the `execute_code`
+sandbox when the skill is viewed, which is how a script running there can
+read its own key. AgentOS's own provider credentials are refused to hub and
+local skills; a bundled skill may declare them.
+
 ## How a Skill Reaches Its Own Scripts
 
 A `SKILL.md` is written before anyone knows where it will be installed or which

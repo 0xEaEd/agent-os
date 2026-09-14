@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Environment page / `agentos env list`: `FIRECRAWL_API_KEY` is now listed
+  under Search, owned by `web_fetch`. The tool reads it straight from the
+  environment for its Firecrawl escalation, so nothing in onboarding derived
+  it and the key was invisible until an operator set it by hand. The
+  `multi-search-engine` skill declares every engine key it reads
+  (`BRAVE_SEARCH_API_KEY`, `TAVILY_API_KEY`, `SERPAPI_API_KEY`,
+  `FIRECRAWL_API_KEY`, `XAI_API_KEY`) as optional, so `SERPAPI_API_KEY` appears
+  under Skills and each key names the engine it unlocks.
 - `multi-search-engine` skill: a `firecrawl` engine backed by Firecrawl's
   `/v2/search`, keyed by the `FIRECRAWL_API_KEY` that `web_fetch` already
   uses for its Firecrawl escalation, so an install with that key gets the
@@ -39,6 +47,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Skills: `requires.env` entries declared with `required: false` no longer hide
+  the skill when unset. The flag was parsed and shown on the Environment page
+  but eligibility and `skills doctor` gated on every declared name regardless,
+  so a skill could not declare an optional key without disappearing from
+  installs that lacked it.
+- Environment page / `agentos env list`: keys of providers the runtime cannot
+  drive (`EXA_API_KEY`, `PERPLEXITY_API_KEY`, and the LLM vendors catalogued
+  with `runtime_supported=False`) are no longer offered as "needed by" that
+  provider. Nothing reads them; a value set anyway is still listed, as
+  `custom`. The managed-credential list that keeps such names away from
+  untrusted skills is unchanged.
 - `multi-search-engine` skill: a DuckDuckGo bot challenge (HTTP 202 with an
   "anomaly" page) used to come back as an empty success with no error; the
   script now retries once and then records a per-engine error, so an empty

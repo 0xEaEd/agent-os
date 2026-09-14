@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from agentos import env_catalog
-from agentos.env_catalog import CATEGORY_CUSTOM, CATEGORY_PROVIDER, CATEGORY_SKILL
-from agentos.skills.eligibility import EligibilityContext, diagnose_eligibility
+from agentos.env_catalog import CATEGORY_CUSTOM, CATEGORY_PROVIDER, CATEGORY_SEARCH, CATEGORY_SKILL
+from agentos.skills.eligibility import EligibilityContext, check_eligibility, diagnose_eligibility
 from agentos.skills.loader import SkillLoader
 from agentos.skills.types import SkillEnvVar, SkillRequires
 
@@ -118,7 +118,86 @@ class TestManifestParsing:
         assert diagnose_eligibility(skill, EligibilityContext.auto()).eligible is True
 
 
+@pytest.fixture
+def loader_with_optional_env_skill(tmp_path: Path) -> SkillLoader:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    _write_skill(
+        skills,
+        "searcher",
+        "      env:\n"
+        "        - name: SEARCHER_PRIMARY_KEY\n"
+        "          description: Needed for every call\n"
+        "        - name: SEARCHER_EXTRA_KEY\n"
+        "          description: Unlocks a second backend\n"
+        "          required: false\n",
+    )
+    return SkillLoader(bundled_dir=skills, snapshot_path=tmp_path / "snapshot.json")
+
+
+class TestOptionalEnv:
+    """``required: false`` gates a feature inside the skill, not the skill."""
+
+    def test_missing_optional_env_does_not_hide_the_skill(
+        self, loader_with_optional_env_skill: SkillLoader, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SEARCHER_PRIMARY_KEY", "k")
+        monkeypatch.delenv("SEARCHER_EXTRA_KEY", raising=False)
+        skill = next(s for s in loader_with_optional_env_skill.load_all() if s.name == "searcher")
+        assert check_eligibility(skill, EligibilityContext.auto()) is True
+        report = diagnose_eligibility(skill, EligibilityContext.auto())
+        assert report.eligible is True
+        assert report.missing_env == []
+
+    def test_missing_required_env_still_hides_it(
+        self, loader_with_optional_env_skill: SkillLoader, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("SEARCHER_PRIMARY_KEY", raising=False)
+        monkeypatch.setenv("SEARCHER_EXTRA_KEY", "k")
+        skill = next(s for s in loader_with_optional_env_skill.load_all() if s.name == "searcher")
+        assert check_eligibility(skill, EligibilityContext.auto()) is False
+        report = diagnose_eligibility(skill, EligibilityContext.auto())
+        # Only the hard requirement is reported as the reason.
+        assert report.missing_env == ["SEARCHER_PRIMARY_KEY"]
+
+    def test_optional_env_is_still_catalogued(
+        self, loader_with_optional_env_skill: SkillLoader
+    ) -> None:
+        catalog = env_catalog.build_catalog(loader_with_optional_env_skill)
+        entry = catalog["SEARCHER_EXTRA_KEY"]
+        assert entry.owner == "searcher"
+        assert entry.required is False
+
+
 class TestCatalog:
+    def test_builtin_tool_keys_are_listed_without_a_setup_spec(self) -> None:
+        # web_fetch reads FIRECRAWL_API_KEY straight from os.environ; nothing
+        # in onboarding derives it, so the catalog carries it explicitly.
+        catalog = env_catalog.build_catalog()
+        entry = catalog["FIRECRAWL_API_KEY"]
+        assert entry.category == CATEGORY_SEARCH
+        assert entry.owner == "web_fetch"
+        assert entry.secret is True
+        assert entry.required is False
+        assert entry.url
+
+    def test_metadata_only_providers_do_not_contribute_a_key(self) -> None:
+        # Exa and Perplexity are catalogued for the setup UI with
+        # runtime_supported=False and have no provider class; offering their
+        # keys as "needed" sends the operator to buy one nothing reads.
+        catalog = env_catalog.build_catalog()
+        assert "PERPLEXITY_API_KEY" not in catalog
+        assert "EXA_API_KEY" not in catalog
+        assert "GROQ_API_KEY" not in catalog
+        # ...but a key the operator set anyway is still shown, as custom.
+        catalog = env_catalog.build_catalog(present_names={"PERPLEXITY_API_KEY"})
+        assert catalog["PERPLEXITY_API_KEY"].category == CATEGORY_CUSTOM
+
+    def test_managed_credentials_still_cover_metadata_only_providers(self) -> None:
+        from agentos.tools.env_passthrough import agentos_managed_credentials
+
+        assert "PERPLEXITY_API_KEY" in agentos_managed_credentials()
+
     def test_provider_keys_come_from_the_setup_specs(self) -> None:
         # Derived, not hand-listed: adding a provider must not require also
         # remembering to add its key here.

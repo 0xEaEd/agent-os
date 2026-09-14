@@ -90,8 +90,9 @@ def check_eligibility(spec: SkillSpec, ctx: EligibilityContext) -> bool:
             if not any(_has_bin(b, ctx) for b in meta.requires.any_bins):
                 return False
 
-        # 6. Required env vars
-        for name in meta.requires.env_names:
+        # 6. Required env vars. Optional ones (``required: false``) gate a
+        # feature inside the skill, not the skill itself.
+        for name in meta.requires.required_env_names:
             if not _has_env(name, ctx):
                 return False
 
@@ -207,7 +208,7 @@ def diagnose_eligibility(spec: SkillSpec, ctx: EligibilityContext) -> Eligibilit
                     reasons.append(f"Need one of: {', '.join(meta.requires.any_bins)}")
 
             for declared in meta.requires.env:
-                if not _has_env(declared.name, ctx):
+                if declared.required and not _has_env(declared.name, ctx):
                     missing_env.append(declared.name)
                     missing_env_detail.append(declared)
                     reasons.append(f"Missing env var: {declared.name}")

@@ -162,6 +162,15 @@ class SkillRequires:
         """Return just the variable names, for callers that only check presence."""
         return [entry.name for entry in self.env]
 
+    @property
+    def required_env_names(self) -> list[str]:
+        """Return the names the skill cannot run without.
+
+        An entry declared with ``required: false`` unlocks an extra engine or
+        feature when set; its absence is not a reason to hide the skill.
+        """
+        return [entry.name for entry in self.env if entry.required]
+
 
 @dataclass
 class SkillInstallSpec:
