@@ -49,6 +49,11 @@ def _delete_message_id(channel: str, target: str, message_id: str) -> str:
     """
     if channel in ("telegram", "slack") and target and "|" not in message_id:
         return f"{target}|{message_id}"
+    if channel == "discord" and target and "|" not in message_id:
+        # A Discord message id is only addressable through its channel; the
+        # adapter resolves ``<channel_id>|<message_id>`` the same way Telegram
+        # does, so ``target`` is not silently dropped on delete.
+        return f"{target}|{message_id}"
     return message_id
 
 
