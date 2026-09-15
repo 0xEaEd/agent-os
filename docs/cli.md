@@ -410,6 +410,20 @@ agentos configure x-search --no-x-search-enabled
 The `x_search` tool stays hidden from the agent until an xAI credential is
 reachable. See [`x-search.md`](x-search.md).
 
+Image generation:
+
+```sh
+agentos configure image --image-provider openai --primary dall-e-3 --api-key-env OPENAI_API_KEY
+agentos configure image --no-image-enabled
+```
+
+Memory embedding:
+
+```sh
+agentos configure memory --memory-provider onnx --onnx-dir ~/.agentos/models/embeddings/google-embeddinggemma-300m
+agentos configure memory --memory-provider openai --model text-embedding-3-small --api-key-env OPENAI_API_KEY
+```
+
 Channels:
 
 Built-in channel types are `discord`, `email`, `slack`, and `telegram`; `agentos
