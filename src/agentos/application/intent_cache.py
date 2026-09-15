@@ -162,16 +162,25 @@ _CMD_DIR_SWITCHES: dict[str, str] = {"s": _RECURSIVE, "q": _FORCE}
 _CMD_FILE_SWITCHES: dict[str, str] = {"s": _RECURSIVE, "f": _FORCE, "q": _FORCE}
 _RMDIR_SHORT_CAPABILITIES: dict[str, str] = {"p": _PARENTS}
 _RMDIR_LONG_CAPABILITIES: dict[str, str] = {"--parents": _PARENTS}
+# PowerShell resolves ``del``, ``erase``, ``rd`` and ``rmdir`` to ``Remove-Item``,
+# so every one of them accepts ``-Recurse``/``-Force`` and each is shared below.
+# A parameter that matches nothing falls through to the POSIX tables, which is
+# what keeps ``rmdir -p`` graded as parent-pruning rather than swallowed.
 _REMOVE_ITEM_PARAMETERS: dict[str, str] = {"-recurse": _RECURSIVE, "-force": _FORCE}
 
 #: command name (lowercased) -> (POSIX ``-x`` flags, POSIX ``--word`` flags,
 #: cmd.exe ``/x`` switches, PowerShell ``-Word`` parameters).
 _DELETE_SPELLINGS: dict[str, tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, str]]]
 _DELETE_SPELLINGS = {
-    "rmdir": (_RMDIR_SHORT_CAPABILITIES, _RMDIR_LONG_CAPABILITIES, _CMD_DIR_SWITCHES, {}),
-    "rd": ({}, {}, _CMD_DIR_SWITCHES, {}),
-    "del": ({}, {}, _CMD_FILE_SWITCHES, {}),
-    "erase": ({}, {}, _CMD_FILE_SWITCHES, {}),
+    "rmdir": (
+        _RMDIR_SHORT_CAPABILITIES,
+        _RMDIR_LONG_CAPABILITIES,
+        _CMD_DIR_SWITCHES,
+        _REMOVE_ITEM_PARAMETERS,
+    ),
+    "rd": ({}, {}, _CMD_DIR_SWITCHES, _REMOVE_ITEM_PARAMETERS),
+    "del": ({}, {}, _CMD_FILE_SWITCHES, _REMOVE_ITEM_PARAMETERS),
+    "erase": ({}, {}, _CMD_FILE_SWITCHES, _REMOVE_ITEM_PARAMETERS),
     "unlink": ({}, {}, {}, {}),
     "remove-item": ({}, {}, {}, _REMOVE_ITEM_PARAMETERS),
 }
@@ -188,9 +197,54 @@ _DELETE_SPELLINGS = {
 # short-circuit. ``/usr/bin/rmdir`` still matches — ``/`` is not a word
 # character — so an absolute-path invocation is not lost.
 _DELETE_COMMAND_RE = re.compile(
-    r"(?<![\w.])(?P<cmd>rmdir|unlink|rm|(?i:rmdir|unlink|remove-item|erase|del|rd))"
+    r"(?<![\w.-])(?P<cmd>rmdir|unlink|rm|(?i:rmdir|unlink|remove-item|erase|del|rd))"
     r"\b(?P<tail>[^;\n&|]*)"
 )
+
+#: Commands that run whatever follows them, so a deletion verb after one is
+#: still the command being executed. ``env`` also carries ``NAME=value``
+#: assignments, which are accepted in the same position.
+_COMMAND_WRAPPERS = frozenset(
+    {"sudo", "doas", "env", "time", "nohup", "command", "xargs", "busybox"}
+)
+
+
+def _in_command_position(command: str, span_start: int, match_start: int) -> bool:
+    """Whether the verb matched at *match_start* is the command being run.
+
+    ``rm`` does not need this: it is long enough, and specific enough, that a
+    bare occurrence is almost always the command. ``del`` and ``rd`` are
+    ordinary English and ordinary path segments, so without an anchor
+    ``grep -rn del /etc/passwd`` and ``cat /srv/del/x /etc/passwd`` extracted
+    ``/etc`` and were hard-blocked — and a hard block cannot be approved past,
+    so reading a file became impossible (#1015 review).
+
+    Command position is the start of the expression, the text after a
+    separator, or the text after a wrapper that runs what follows it. A wrapper
+    may carry its own arguments (``sudo -u root del …``), which is why anything
+    after the first wrapper is accepted.
+    """
+    region = command[span_start:match_start]
+    for separator in ("\n", ";", "&&", "||", "|", "&"):
+        region = region.rpartition(separator)[2]
+
+    boundary = max(region.rfind(" "), region.rfind("\t"))
+    token_prefix = region[boundary + 1 :]
+    # Only a directory prefix may sit in front of the verb: ``/usr/bin/rmdir``
+    # is an invocation, ``/srv/del/x`` is a path that contains the word.
+    if token_prefix and not token_prefix.endswith(("/", "\\")):
+        return False
+
+    seen_wrapper = False
+    for token in region[: boundary + 1].split():
+        if "=" in token and not token.startswith("-"):
+            continue
+        if token.rpartition("/")[2].rpartition("\\")[2].lower() in _COMMAND_WRAPPERS:
+            seen_wrapper = True
+            continue
+        if not seen_wrapper:
+            return False
+    return True
 
 
 def _delete_invocation_capabilities(
@@ -221,10 +275,23 @@ def _delete_invocation_capabilities(
                 capabilities.add(cap)
             continue
         if parameters and lowered.startswith("-") and len(lowered) > 1:
-            capabilities.update(
-                cap for option, cap in parameters.items() if option.startswith(lowered)
-            )
-            continue
+            # PowerShell binds a parameter to its value with ``:`` as readily
+            # as with a space, so the name has to come off the token before the
+            # prefix match: ``-Recurse:$true`` matched no option at all and the
+            # invocation came back plain, which let a plain approval cover a
+            # recursive delete.
+            name = _parameter_name(lowered)
+            matched = {
+                cap
+                for option, cap in parameters.items()
+                if len(name) > 1 and option.startswith(name)
+            }
+            if matched:
+                capabilities.update(matched)
+                continue
+            # Not a PowerShell parameter after all: the same verb may be
+            # spelled POSIX on this line (``rmdir -p``), so fall through
+            # rather than swallowing the token.
         if token.startswith("--"):
             name = lowered.partition("=")[0]
             capabilities.update(
@@ -261,6 +328,51 @@ def _rm_invocation_capabilities(tokens: list[str]) -> frozenset[str]:
                 if cap is not None:
                     capabilities.add(cap)
     return frozenset(capabilities)
+
+
+def _parameter_name(token: str) -> str:
+    """The parameter name of a PowerShell token, without any bound value."""
+    return token.partition(":")[0].partition("=")[0]
+
+
+def _delete_invocation_targets(
+    tokens: list[str],
+    parameters: dict[str, str],
+) -> list[str]:
+    """Non-flag arguments of one non-``rm`` invocation, plus bound path values.
+
+    Under PowerShell every Windows deletion verb here — ``del``, ``erase``,
+    ``rd``, ``rmdir``, ``rm`` — is an alias of ``Remove-Item``, and a parameter
+    can carry its value on the same token: ``-Path:/etc/passwd``.
+    :func:`_rm_invocation_targets` skips any token starting with ``-``, so the
+    path went missing along with the hard block that depends on it.
+
+    A token whose name grades the invocation (``-Recurse:$true``) is a flag,
+    not a path, and is left to :func:`_delete_invocation_capabilities`.
+    """
+    targets = _rm_invocation_targets(tokens)
+    end_of_flags = False
+    for token in tokens:
+        if token == "--":
+            end_of_flags = True
+            continue
+        if end_of_flags or not token.startswith("-") or len(token) < 2:
+            continue
+        name, separator, value = _split_bound_parameter(token)
+        if not separator or not value:
+            continue
+        if any(option.startswith(name.lower()) for option in parameters):
+            continue
+        targets.append(value)
+    return targets
+
+
+def _split_bound_parameter(token: str) -> tuple[str, str, str]:
+    """Split ``-Name:value`` / ``-Name=value`` into name, separator and value."""
+    colon = token.partition(":")
+    if colon[1]:
+        return colon
+    return token.partition("=")
 
 
 def _rm_invocation_targets(tokens: list[str]) -> list[str]:
@@ -400,11 +512,24 @@ def _extract_shell_delete_targets(command: str) -> list[tuple[str, frozenset[str
     # ``xargs rm`` — a command prefix is ordinary, so that spelling trades a
     # false positive for a bypass.
     executable = _command_spans(command)
-    matches = [
-        match
-        for match in pattern.finditer(command)
-        if any(start <= match.start() < end for start, end in executable)
-    ]
+    matches = []
+    for match in pattern.finditer(command):
+        span = next(
+            ((start, end) for start, end in executable if start <= match.start() < end),
+            None,
+        )
+        if span is None:
+            continue
+        # ``rm`` is matched wherever it is executable; the shorter verbs are
+        # ordinary words and path segments, so they must be in command
+        # position and must end their own token -- ``/srv/del/x`` is a path,
+        # ``/usr/bin/rmdir`` is an invocation.
+        if match.group("cmd").lower() != "rm":
+            if match.group("tail")[:1] in ("/", "\\", "."):
+                continue
+            if not _in_command_position(command, span[0], match.start()):
+                continue
+        matches.append(match)
     if not matches:
         return []
 
@@ -434,7 +559,12 @@ def _extract_shell_delete_targets(command: str) -> list[tuple[str, frozenset[str
                 if spelling is None
                 else _delete_invocation_capabilities(tokens, spelling)
             )
-            for token in _rm_invocation_targets(tokens):
+            invocation_targets = (
+                _rm_invocation_targets(tokens)
+                if spelling is None
+                else _delete_invocation_targets(tokens, spelling[3])
+            )
+            for token in invocation_targets:
                 entry = (token, capabilities)
                 if entry in seen:
                     continue

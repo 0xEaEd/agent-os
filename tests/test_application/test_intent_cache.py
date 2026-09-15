@@ -10,6 +10,8 @@ See https://github.com/use-agent-os/agent-os/pull/546
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from agentos.application.intent_cache import (
@@ -18,6 +20,14 @@ from agentos.application.intent_cache import (
     _extract_shell_delete_targets,
 )
 from agentos.sandbox.sensitive_paths import sensitive_target_in_command
+
+#: The Windows spelling these cases are written in. POSIX ``shlex`` strips the
+#: backslash on a POSIX host, where cmd.exe does not run anyway, so the token
+#: arrives as ``C:tmp`` there. The grade is what the cases assert; the token
+#: shape is platform-dependent and named here rather than sidestepped by
+#: writing a path without a separator.
+WINDOWS_PATH = "C:\\tmp"
+WINDOWS_TARGET = WINDOWS_PATH if os.name == "nt" else "C:tmp"
 
 
 def _names_etc(targets: list[str]) -> bool:
@@ -526,13 +536,13 @@ class TestNonRmDeletionGrading:
     @pytest.mark.parametrize(
         ("command", "capabilities"),
         [
-            ("rd /s C:tmp", {"recursive"}),
-            ("rd /q C:tmp", {"force"}),
-            ("rd /s /q C:tmp", {"recursive", "force"}),
-            ("rmdir /S /Q C:tmp", {"recursive", "force"}),
-            ("del /f C:tmp", {"force"}),
-            ("del /s C:tmp", {"recursive"}),
-            ("erase /f /q C:tmp", {"force"}),
+            ("rd /s C:\\tmp", {"recursive"}),
+            ("rd /q C:\\tmp", {"force"}),
+            ("rd /s /q C:\\tmp", {"recursive", "force"}),
+            ("rmdir /S /Q C:\\tmp", {"recursive", "force"}),
+            ("del /f C:\\tmp", {"force"}),
+            ("del /s C:\\tmp", {"recursive"}),
+            ("erase /f /q C:\\tmp", {"force"}),
             ("rmdir -p /a/b", {"parents"}),
             ("rmdir --parents /a/b", {"parents"}),
             ("Remove-Item -Recurse /a", {"recursive"}),
@@ -554,7 +564,7 @@ class TestNonRmDeletionGrading:
 
     def test_windows_command_names_are_case_insensitive(self) -> None:
         """cmd.exe and PowerShell resolve their own names without regard to case."""
-        assert _extract_shell_delete_targets("DEL /F C:tmp")
+        assert _extract_shell_delete_targets("DEL /F C:\\tmp")
         assert _extract_shell_delete_targets("REMOVE-ITEM -Recurse /a") == [
             ("/a", frozenset({"recursive"}))
         ]
@@ -578,9 +588,9 @@ class TestNonRmDeletionEscalation:
     @pytest.mark.parametrize(
         ("approved", "escalated"),
         [
-            ("rd C:tmp", "rd /s C:tmp"),
-            ("del C:tmp", "del /f C:tmp"),
-            ("erase C:tmp", "erase /s C:tmp"),
+            ("rd C:\\tmp", "rd /s C:\\tmp"),
+            ("del C:\\tmp", "del /f C:\\tmp"),
+            ("erase C:\\tmp", "erase /s C:\\tmp"),
             ("rmdir /a/b", "rmdir -p /a/b"),
             ("Remove-Item /a", "Remove-Item -Recurse /a"),
             ("Remove-Item /a", "Remove-Item -Force /a"),
@@ -644,3 +654,180 @@ class TestNonRmDeletionHardBlocks:
         """
         assert sensitive_target_in_command('sh -c "rd /s /q / && echo done"') is not None
         assert sensitive_target_in_command('sh -c "rm -rf / && echo done"') is not None
+
+
+class TestWindowsPathTokenisation:
+    """The Windows spelling, asserted as it actually tokenises on each host."""
+
+    def test_a_windows_path_keeps_its_grade_on_either_host(self) -> None:
+        """``rd /s /q C:\\Windows`` is recursive+force wherever it is parsed."""
+        targets = _extract_shell_delete_targets(f"rd /s /q {WINDOWS_PATH}")
+
+        assert (WINDOWS_TARGET, frozenset({"recursive", "force"})) in targets
+
+    def test_the_backslash_survives_only_where_cmd_exe_runs(self) -> None:
+        """Pre-existing tokenisation, pinned rather than worked around.
+
+        POSIX ``shlex`` reads ``C:\\tmp`` as an escape and yields ``C:tmp``. A
+        POSIX host does not run cmd.exe, so nothing is lost there — but the
+        difference is real and belongs in a test rather than in a path written
+        without a separator.
+        """
+        targets = [target for target, _ in _extract_shell_delete_targets(f"rd {WINDOWS_PATH}")]
+
+        assert (WINDOWS_PATH in targets) is (os.name == "nt")
+        assert WINDOWS_TARGET in targets
+
+
+class TestPowerShellBoundParameters:
+    """``-Parameter:value`` binds on one token, and both halves have to be read.
+
+    Under PowerShell every deletion verb here is an alias of ``Remove-Item``,
+    and a parameter can carry its value with ``:`` as readily as with a space.
+    ``_rm_invocation_targets`` skips any token starting with ``-``, so the path
+    went missing along with the hard block that depends on it.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "Remove-Item -Path:/etc/passwd -Recurse",
+            "Remove-Item -LiteralPath:/ -Recurse -Force",
+            "Remove-Item -Path=/etc/passwd",
+            "del -Path:/etc/passwd",
+        ],
+    )
+    def test_a_bound_path_still_reaches_the_hard_block(self, command: str) -> None:
+        assert sensitive_target_in_command(command) is not None
+
+    def test_a_bound_path_is_extracted_as_the_target(self) -> None:
+        assert _extract_shell_delete_targets("Remove-Item -Path:/etc/passwd") == [
+            ("/etc/passwd", frozenset())
+        ]
+
+    @pytest.mark.parametrize(
+        "token",
+        ["-Recurse:$true", "-recurse:$true", "-rec:$true", "-Recurse=$true"],
+    )
+    def test_a_bound_switch_still_grades_the_invocation(self, token: str) -> None:
+        """``option.startswith(whole_token)`` matched nothing, so it graded plain."""
+        targets = _extract_shell_delete_targets(f"Remove-Item {token} /tmp/x")
+
+        assert ("/tmp/x", frozenset({"recursive"})) in targets
+
+    def test_a_bound_switch_is_not_mistaken_for_a_path(self) -> None:
+        """``$true`` is a value, not something to delete."""
+        targets = [target for target, _ in _extract_shell_delete_targets("rd -Recurse:$true /a")]
+
+        assert targets == ["/a"]
+
+    def test_a_plain_approval_does_not_cover_a_bound_switch(self) -> None:
+        """The escalation this class exists to close, through the cache."""
+        cache = IntentApprovalCache()
+        cache.record("Remove-Item /tmp/x")
+
+        assert cache.check("Remove-Item /tmp/x") is True
+        assert cache.check("Remove-Item -Recurse:$true /tmp/x") is False
+
+
+class TestCommandPositionAnchor:
+    """``del`` and ``rd`` are ordinary words, so position decides.
+
+    A hard block cannot be approved past, so a false positive here does not
+    cost a prompt — it makes reading a file impossible. ``rm`` keeps its
+    position-free matching: it is specific enough that a bare occurrence is the
+    command, and requiring a position would drop ``sudo rm``/``xargs rm``.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "grep -rn del /etc/passwd",
+            "echo del /etc/passwd",
+            "cat /srv/del/x /etc/passwd",
+            "grep -rn rd /etc/passwd",
+            "ls /var/erase /etc/passwd",
+        ],
+    )
+    def test_a_verb_that_is_not_the_command_is_not_a_delete(self, command: str) -> None:
+        assert sensitive_target_in_command(command) is None
+        assert _extract_shell_delete_targets(command) == []
+
+    def test_a_url_path_segment_is_not_a_delete(self) -> None:
+        assert _extract_intents("curl https://x.io/rd/asset -o /tmp/a") == []
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "del /etc/passwd",
+            "sudo del /etc/passwd",
+            "sudo -u root del /etc/passwd",
+            "doas del /etc/passwd",
+            "env FOO=1 del /etc/passwd",
+            "FOO=1 del /etc/passwd",
+            "time rd /s /q /etc",
+            "nohup del /etc/passwd",
+            "command del /etc/passwd",
+            "xargs del /etc/passwd",
+            "busybox rm /etc/passwd",
+            "ls; del /etc/passwd",
+            "ls && del /etc/passwd",
+            "ls | xargs del /etc/passwd",
+            "/usr/bin/rmdir /etc/foo",
+        ],
+    )
+    def test_a_verb_in_command_position_is_still_a_delete(self, command: str) -> None:
+        assert sensitive_target_in_command(command) is not None
+
+    def test_rm_keeps_its_position_free_matching(self) -> None:
+        """Passes either way by design: the anchor is for the short verbs only."""
+        assert sensitive_target_in_command("sudo rm -rf /etc") is not None
+        assert sensitive_target_in_command("xargs rm -rf /etc") is not None
+        assert sensitive_target_in_command("timeout 5 rm -rf /etc") is not None
+
+
+class TestDeleteVerbsInsideFlags:
+    """A verb spelled inside a flag is not an invocation.
+
+    ``(?<![\\w.])`` admitted a leading ``-``, so ``-rd`` and ``--rm`` matched.
+    That swallowed the real command's flags and regraded it.
+    """
+
+    def test_a_flag_spelled_like_a_verb_does_not_swallow_the_real_command(self) -> None:
+        """``xargs -rd '\\n' rm -rf /etc`` is a recursive force delete of /etc."""
+        assert _extract_intents("xargs -rd '\\n' rm -rf /etc") == [
+            ("delete:recursive+force", "/etc")
+        ]
+
+    def test_a_flag_spelled_like_a_verb_invents_no_intent(self) -> None:
+        assert _extract_intents("docker run --rm -it ubuntu bash") == []
+        assert _extract_shell_delete_targets("tar --delete -f a.tar x") == []
+
+    @pytest.mark.parametrize(
+        ("verb", "flag", "capability"),
+        [
+            ("rd", "-Recurse", "recursive"),
+            ("del", "-Force", "force"),
+            ("erase", "-Recurse", "recursive"),
+            ("rmdir", "-Force", "force"),
+        ],
+    )
+    def test_a_powershell_alias_grades_remove_item_parameters(
+        self, verb: str, flag: str, capability: str
+    ) -> None:
+        """PowerShell resolves these names to ``Remove-Item``, so they take its flags.
+
+        Without the shared table the parameter graded nothing and a plain
+        approval covered the escalated form — the same hole as ``-Recurse:$true``,
+        one spelling over.
+        """
+        assert _extract_shell_delete_targets(f"{verb} {flag} /a") == [
+            ("/a", frozenset({capability}))
+        ]
+
+    def test_a_posix_flag_on_the_same_verb_still_grades(self) -> None:
+        """The fall-through: a PowerShell table must not swallow ``rmdir -p``."""
+        assert _extract_shell_delete_targets("rmdir -p /a/b") == [("/a/b", frozenset({"parents"}))]
+        assert _extract_shell_delete_targets("rmdir --parents /a") == [
+            ("/a", frozenset({"parents"}))
+        ]
