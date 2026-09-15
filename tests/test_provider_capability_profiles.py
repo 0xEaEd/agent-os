@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from agentos.provider.context_capabilities import (
     NativeCompactionSupport,
     PromptCacheSupport,
@@ -7,6 +9,7 @@ from agentos.provider.context_capabilities import (
     provider_state_continuity_diagnostic,
 )
 from agentos.provider.model_catalog import ModelCatalog
+from agentos.provider.types import ModelInfo
 
 
 def test_deepseek_provider_profile_enables_deepseek_reasoning_format() -> None:
@@ -310,3 +313,50 @@ def test_provider_state_continuity_diagnostic_ignores_expired_native_state() -> 
     assert diagnostic.provider_state_loss_risk is False
     assert diagnostic.active_state_kind is None
     assert diagnostic.portable_fallback_available is True
+
+
+class TestProviderNameCasing:
+    """`llm.provider` is a plain string, so "OpenAI" is valid config (#1899).
+
+    The special-cased provider branches must match on the normalised
+    ``provider_id`` the rest of the function already uses, not on the raw
+    string, or a capitalised name silently falls through to the generic
+    default and loses reasoning support.
+    """
+
+    @pytest.mark.parametrize("provider_name", ["openai", "OpenAI", "OPENAI", " openai "])
+    def test_direct_openai_gpt_5_keeps_reasoning(self, provider_name: str) -> None:
+        caps = ModelCatalog().get_capabilities(
+            "gpt-5.6", provider_name=provider_name, base_url="https://api.openai.com/v1"
+        )
+
+        assert caps.supports_reasoning is True
+        assert caps.reasoning_format == "openai"
+
+    @pytest.mark.parametrize("provider_name", ["openai", "OpenAI"])
+    def test_deepseek_behind_an_openai_labelled_proxy_keeps_its_format(
+        self, provider_name: str
+    ) -> None:
+        caps = ModelCatalog().get_capabilities(
+            "deepseek-chat", provider_name=provider_name, base_url="https://api.deepseek.com/v1"
+        )
+
+        assert caps.supports_reasoning is True
+        assert caps.reasoning_format == "deepseek"
+
+    @pytest.mark.parametrize("provider_name", ["Anthropic", "Ollama"])
+    def test_native_providers_take_their_own_branch_whatever_the_case(
+        self, provider_name: str
+    ) -> None:
+        """The early return must fire before any catalog lookup can override it."""
+        catalog = ModelCatalog()
+        catalog._models["reasoning-model"] = ModelInfo(
+            provider="openrouter", model_id="reasoning-model", supports_reasoning=True
+        )
+
+        caps = catalog.get_capabilities("reasoning-model", provider_name=provider_name)
+
+        assert caps == catalog.get_capabilities(
+            "reasoning-model", provider_name=provider_name.lower()
+        )
+        assert caps.supports_reasoning is False

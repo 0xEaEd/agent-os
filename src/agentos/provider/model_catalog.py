@@ -235,17 +235,19 @@ class ModelCatalog:
         base_url: str = "",
     ) -> ModelCapabilities:
         """Resolve ModelCapabilities for a model based on provider and catalog data."""
-        if provider_name == "anthropic":
-            return ModelCapabilities()
-        if provider_name == "ollama":
-            return ModelCapabilities()
+        # ``llm.provider`` is a plain string, so "OpenAI" and "openai" are the
+        # same provider; every branch below matches on the normalised id.
         provider_id = provider_name.strip().lower()
+        if provider_id == "anthropic":
+            return ModelCapabilities()
+        if provider_id == "ollama":
+            return ModelCapabilities()
         try:
             provider_spec = get_provider_spec(provider_id)
         except UnknownProviderError:
             provider_spec = None
 
-        if provider_name == "openai" and "deepseek" in base_url.lower():
+        if provider_id == "openai" and "deepseek" in base_url.lower():
             return ModelCapabilities(
                 supports_reasoning=True, supports_tools=True, reasoning_format="deepseek"
             )
@@ -259,7 +261,7 @@ class ModelCatalog:
             )
         model_l = model_id.strip().lower()
         if (
-            provider_name == "openai"
+            provider_id == "openai"
             and "api.openai.com" in base_url.lower()
             and model_l.startswith(("gpt-5", "o1", "o3", "o4"))
         ):
