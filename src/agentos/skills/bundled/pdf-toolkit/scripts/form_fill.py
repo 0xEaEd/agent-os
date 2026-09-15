@@ -69,8 +69,23 @@ def main() -> int:
     if not args.data.is_file():
         print(f"error: data {args.data} not found", file=sys.stderr)
         return 2
-    raw = json.loads(args.data.read_text(encoding="utf-8"))
-    data = {str(k): str(v) for k, v in (raw.items() if isinstance(raw, dict) else [])}
+    try:
+        raw = json.loads(args.data.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        # Both are "not a JSON document": a UTF-16 file from PowerShell's
+        # Out-File is as unusable as a truncated one.
+        print(f"error: data {args.data} is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    # A list of field objects is a routine slip for the caller that writes the
+    # data file; coercing it to {} used to fill nothing and still exit 0.
+    if not isinstance(raw, dict):
+        print(
+            f"error: data {args.data} must be a JSON object of field -> value, "
+            f"got {type(raw).__name__}",
+            file=sys.stderr,
+        )
+        return 2
+    data = {str(k): str(v) for k, v in raw.items()}
     pages = fill(args.input, data, args.out)
     print(json.dumps({"pages_processed": pages, "fields": len(data)}, ensure_ascii=False))
     return 0
