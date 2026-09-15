@@ -97,6 +97,7 @@ Curate agent notes and user preferences:
 ```sh
 agentos memory curated get --target memory
 agentos memory curated add "Always run unit tests before submitting PRs"
+agentos memory curated remove "Always run unit tests before submitting PRs"
 ```
 
 Search and inspect memory:

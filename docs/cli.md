@@ -717,9 +717,12 @@ agentos memory list --source all
 agentos memory ingest /path/to/docs
 agentos memory curated get --target memory
 agentos memory curated add "Important project convention"
+agentos memory curated remove "Important project convention"
 agentos memory search "preference"
 agentos memory show <path>
+agentos memory embedding-download
 agentos memory raw-fallbacks list
+agentos memory raw-fallbacks show <path>
 ```
 
 Read: [`features/memory.md`](features/memory.md)
