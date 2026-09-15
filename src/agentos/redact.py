@@ -173,6 +173,13 @@ _QUALIFIED_NAME_PAIRS: frozenset[tuple[str, str]] = frozenset(
         ("secret", "key"),
         ("session", "token"),
         ("service", "key"),
+        # Qualifiers that can only mean key material. ``key`` on its own stays
+        # out (``sort_key``, ``partition_key`` are field names), but nothing
+        # signs a token, encrypts a column or authenticates a storage account
+        # with a value the model is meant to read.
+        ("signing", "key"),
+        ("encryption", "key"),
+        ("account", "key"),
     }
 )
 
@@ -276,7 +283,7 @@ def _is_secret_literal_value(value: str) -> bool:
 # place instead of being re-encoded in every regex.
 _ASSIGNMENT_RE = re.compile(
     r"""(?ix)
-    (?:^|[\s"'{,(])                     # start of a token
+    (?:^|[\s"'{,(;])                    # start of a token
     (?:\d+\t)?                          # grep -n line prefix
     (?:[+\-]{1,2})?                     # diff marker: unified +/-, combined ++/--
     ([A-Za-z][A-Za-z0-9_.\-]{0,64})     # name
