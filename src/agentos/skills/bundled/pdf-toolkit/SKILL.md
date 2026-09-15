@@ -117,7 +117,10 @@ include the whole file. Splits use the same syntax in reverse:
 ```
 
 Each range writes one output file: `output_dir/input_001.pdf`,
-`output_dir/input_002.pdf`, …
+`output_dir/input_002.pdf`, … The JSON summary lists each file with the pages
+it holds under `parts`, and any requested page past the end of the document
+under `skipped_pages` — check it before reporting the split as done. A spec
+with no page in range exits 2 and writes nothing.
 
 ---
 

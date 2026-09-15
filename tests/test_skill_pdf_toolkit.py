@@ -71,7 +71,7 @@ def test_merge_split_extract_round_trip(tmp_path: Path) -> None:
 
     out_dir = tmp_path / "split_out"
     parts = split.split(combined, "1,2", out_dir)
-    assert len(parts) == 2
+    assert len(parts.files) == 2
 
     payload = extract.extract(combined, tables_strategy=None)
     assert payload["pages"] == 2

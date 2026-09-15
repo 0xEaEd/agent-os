@@ -4,6 +4,10 @@ Each disjoint range becomes one output file: <stem>_001.pdf, _002.pdf, ...
 
 Usage:
     split.py input.pdf --pages "1-3,5,7-9" --out out_dir/
+
+Pages past the end of the document are never written silently: the summary
+lists them under ``skipped_pages``, and a spec with no page in range is an
+error rather than an empty success.
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
@@ -33,23 +38,40 @@ def split_ranges(spec: str) -> list[list[int]]:
     return groups
 
 
-def split(input_path: Path, pages_spec: str, out_dir: Path) -> list[Path]:
+@dataclass
+class SplitResult:
+    """What a split actually produced, including what it could not."""
+
+    total_pages: int
+    parts: list[tuple[Path, list[int]]] = field(default_factory=list)
+    skipped_pages: list[int] = field(default_factory=list)
+
+    @property
+    def files(self) -> list[Path]:
+        return [path for path, _ in self.parts]
+
+
+def split(input_path: Path, pages_spec: str, out_dir: Path) -> SplitResult:
     reader = PdfReader(str(input_path))
-    total = len(reader.pages)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    for idx, group in enumerate(split_ranges(pages_spec), start=1):
-        valid_pages = [p for p in group if 1 <= p <= total]
+    result = SplitResult(total_pages=len(reader.pages))
+    for group in split_ranges(pages_spec):
+        valid_pages = [p for p in group if 1 <= p <= result.total_pages]
+        result.skipped_pages.extend(p for p in group if not 1 <= p <= result.total_pages)
         if not valid_pages:
             continue
         writer = PdfWriter()
         for page_num in valid_pages:
             writer.add_page(reader.pages[page_num - 1])
-        out_path = out_dir / f"{input_path.stem}_{idx:03d}.pdf"
+        # Number the files that exist, not the groups in the spec: a caller
+        # globbing the output directory expects _001 to be the first part.
+        out_path = out_dir / f"{input_path.stem}_{len(result.parts) + 1:03d}.pdf"
+        # Created here, not up front, so a spec with no page in range leaves
+        # nothing behind — not even an empty directory.
+        out_dir.mkdir(parents=True, exist_ok=True)
         with out_path.open("wb") as fh:
             writer.write(fh)
-        written.append(out_path)
-    return written
+        result.parts.append((out_path, valid_pages))
+    return result
 
 
 def _parse_args() -> argparse.Namespace:
@@ -65,10 +87,28 @@ def main() -> int:
     if not args.input.is_file():
         print(f"error: input {args.input} not found", file=sys.stderr)
         return 2
-    written = split(args.input, args.pages, args.out)
+    result = split(args.input, args.pages, args.out)
+    if not result.parts:
+        print(
+            f"error: no page in {args.pages!r} exists in {args.input} ({result.total_pages} pages)",
+            file=sys.stderr,
+        )
+        return 2
+    if result.skipped_pages:
+        skipped = ", ".join(str(p) for p in result.skipped_pages)
+        print(
+            f"warn: skipped pages outside 1-{result.total_pages} of {args.input}: {skipped}",
+            file=sys.stderr,
+        )
     print(
         json.dumps(
-            {"files": [str(p) for p in written], "count": len(written)},
+            {
+                "files": [str(p) for p in result.files],
+                "count": len(result.parts),
+                "parts": [{"file": str(p), "pages": pages} for p, pages in result.parts],
+                "skipped_pages": result.skipped_pages,
+                "total_pages": result.total_pages,
+            },
             ensure_ascii=False,
         )
     )
