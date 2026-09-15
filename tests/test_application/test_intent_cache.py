@@ -794,10 +794,16 @@ class TestDeleteVerbsInsideFlags:
     """
 
     def test_a_flag_spelled_like_a_verb_does_not_swallow_the_real_command(self) -> None:
-        """``xargs -rd '\\n' rm -rf /etc`` is a recursive force delete of /etc."""
-        assert _extract_intents("xargs -rd '\\n' rm -rf /etc") == [
-            ("delete:recursive+force", "/etc")
-        ]
+        """``xargs -rd '\\n' rm -rf /etc`` is a recursive force delete of /etc.
+
+        The target is matched with :func:`_names_etc` rather than compared
+        literally: Windows resolves a drive-relative ``/etc`` against the
+        working drive, so the runner sees ``D:\\etc``.
+        """
+        intents = _extract_intents("xargs -rd '\\n' rm -rf /etc")
+
+        assert [kind for kind, _ in intents] == ["delete:recursive+force"]
+        assert _names_etc([target for _, target in intents]), intents
 
     def test_a_flag_spelled_like_a_verb_invents_no_intent(self) -> None:
         assert _extract_intents("docker run --rm -it ubuntu bash") == []
