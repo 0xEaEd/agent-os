@@ -377,16 +377,16 @@ TOKEN_Y ({short_address})
   Signal strength: MEDIUM
 ```
 
-For STRONG signals: proceed to full token research before acting — see [`docs/workflow-token-research.md`](../../docs/workflow-token-research.md)
+For STRONG signals: proceed to full token research before acting — see the `gmgn-token` skill.
 For MEDIUM signals: monitor and wait for more wallets to confirm before acting.
 
 If no convergence signals are detected: output "No cluster signals detected in this result set."
 
-To research any token surfaced by smart money activity, follow [`docs/workflow-token-research.md`](../../docs/workflow-token-research.md)
+To research any token surfaced by smart money activity, see the `gmgn-token` skill.
 
-**Smart money leaderboard / wallet profiling:** When the user asks "which smart money wallets are best to follow", "rank wallets by win rate", or wants to compare wallet performance — use `track smartmoney` to collect active wallet addresses, then batch-query their stats via `gmgn-portfolio stats`. Full workflow: [`docs/workflow-smart-money-profile.md`](../../docs/workflow-smart-money-profile.md)
+**Smart money leaderboard / wallet profiling:** When the user asks "which smart money wallets are best to follow", "rank wallets by win rate", or wants to compare wallet performance — use `track smartmoney` to collect active wallet addresses, then batch-query their stats via `gmgn-portfolio stats`.
 
-**Daily brief:** When the user asks for a market overview ("what's the market like today", "what is smart money buying today", "give me a daily brief") — combine `track smartmoney` + `track kol` with `gmgn-market trending`. Full workflow: [`docs/workflow-daily-brief.md`](../../docs/workflow-daily-brief.md)
+**Daily brief:** When the user asks for a market overview ("what's the market like today", "what is smart money buying today", "give me a daily brief") — combine `track smartmoney` + `track kol` with `gmgn-market trending`.
 
 ## Safety Constraints
 
