@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `pdf` tool: a page range that names the same page twice (`1-3,2`) no longer
+  extracts it twice, which duplicated the text and charged the duplicate
+  against the page budget.
+
 - `pdf-toolkit` `merge.py`: a manifest range running past an input's last page
   no longer contributes fewer pages — or none at all — while reporting success.
   The JSON summary now carries `skipped_pages` (per input file) and
