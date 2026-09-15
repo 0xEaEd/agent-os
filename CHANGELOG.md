@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Skills (hub scanner): `_strip_code_blocks` only recognized exactly-
+  three-backtick fences, so a `~~~`-fenced or 4-space/tab-indented
+  example (both CommonMark-valid) was scanned as plain text and scored
+  `severity="dangerous"` -- the same outcome a real exfiltration
+  attempt produces. Confirmed `scan_result.verdict == "dangerous"`
+  hard-blocks a hub install unless the caller passes `force=True`, so a
+  legitimately-written community skill using either convention would
+  fail to install with no indication it's a false positive. Tilde and
+  backtick fences are now matched by a single ordered pattern so a
+  fence of one marker type can no longer be closed by an unrelated
+  later occurrence of the other marker -- the previous two-independent-
+  patterns approach let a backtick run inside a `~~~` block pair with
+  an unrelated backtick run further down the document, silently
+  exempting the prose in between from every check -- plus a
+  conservative indented-code-block stripper
+  (#2324).
+
 ## [2026.9.16] - 2026-09-16
 
 ### Fixed

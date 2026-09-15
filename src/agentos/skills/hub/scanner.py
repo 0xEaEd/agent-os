@@ -55,13 +55,96 @@ class ScanResult:
     strategy: str = "skill-md-v1"
 
 
+_FENCED_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```|~~~[\s\S]*?~~~")
+
+
+def _replace_with_blanks(m: re.Match[str]) -> str:
+    return "\n" * m.group(0).count("\n")
+
+
+def _strip_fenced_code_blocks(text: str) -> str:
+    """Replace fenced code blocks with blank lines to preserve line numbering.
+
+    CommonMark fences may open with backticks *or* tildes; only backticks
+    were recognised before this, so a perfectly ordinary ``~~~bash`` example
+    -- CommonMark-valid, and common in some doc generators -- was left as
+    plain text and scored the same as a live exfiltration attempt.
+
+    Both markers are matched by one alternation (`` ```...``` `` or
+    ``~~~...~~~``) applied in a single left-to-right pass, not by running a
+    full backtick pass over the whole text and then a full tilde pass. That
+    ordering matters: two independent whole-text passes each ignore the
+    other marker's spans, so a backtick run that happens to sit *inside* an
+    earlier, still-open ``~~~`` block could still be picked up by the
+    backtick pass as its own fence-open, and its non-greedy search for the
+    next literal ``` `` ``` could then land *past* the tilde block's own
+    closer -- silently swallowing real prose (and any following legitimate
+    fence) in between as if it were code. That is a missed detection, the
+    direction that actually matters for a security scanner, not just a
+    false positive. A single alternation avoids this because a regex
+    engine tries alternatives at the *earliest* position where either can
+    match, so whichever marker actually opens first in the document is the
+    one recognised as the fence -- no backreference tying the two marker
+    types together is needed, so this still doesn't require capturing the
+    whole opening run the way a generalised `` `{3,}`` `` pattern would.
+
+    For any single document that only uses one marker, this is
+    byte-for-byte identical to running that marker's pattern alone, since
+    the other alternative can never match -- including the existing,
+    deliberately-unfixed backtick edge case (a fence of four-or-more
+    backticks whose body itself contains a literal run of exactly three)
+    that a generalised `` `{3,}` `` pattern would change but this does not.
+    """
+    return _FENCED_CODE_BLOCK_RE.sub(_replace_with_blanks, text)
+
+
+def _strip_indented_code_blocks(text: str) -> str:
+    """Replace CommonMark indented code blocks (4+ spaces, or a tab) with
+    blank lines, the same way fenced ones are stripped.
+
+    Deliberately conservative in both directions a security check can fail
+    (see 6.6): only a run of indented lines bounded by a blank line (or
+    start/end of text) on *both* sides is treated as code. CommonMark itself
+    doesn't require a trailing blank line to end the block -- a change in
+    indentation is enough -- so this recognises strictly fewer blocks than
+    the spec, and says nothing about list-item or blockquote continuation
+    text, which a fuller block parser would need to place correctly. That
+    means some real indented code stays scanned as prose; the alternative
+    (an indentation heuristic that's too eager) risks exempting real prose
+    from the checks below, which is the direction that actually matters for
+    a security scanner -- under-recognizing costs a false positive an
+    author can route around with force=True, over-recognizing costs a
+    missed detection.
+    """
+    lines = text.split("\n")
+    out = list(lines)
+    total = len(lines)
+    i = 0
+    while i < total:
+        indented = lines[i].startswith("    ") or lines[i].startswith("\t")
+        if indented and (i == 0 or lines[i - 1].strip() == ""):
+            j = i
+            while j < total and (
+                lines[j].startswith("    ") or lines[j].startswith("\t") or lines[j].strip() == ""
+            ):
+                j += 1
+            end = j
+            while end > i and lines[end - 1].strip() == "":
+                end -= 1
+            if end > i and (end == total or lines[end].strip() == ""):
+                for k in range(i, end):
+                    out[k] = ""
+                i = end
+                continue
+        i += 1
+    return "\n".join(out)
+
+
 def _strip_code_blocks(text: str) -> str:
-    """Replace fenced code blocks with blank lines to preserve line numbering."""
-
-    def _replace_with_blanks(m: re.Match[str]) -> str:
-        return "\n" * m.group(0).count("\n")
-
-    return re.sub(r"```[\s\S]*?```", _replace_with_blanks, text)
+    """Replace every recognised code block (fenced or indented) with blank
+    lines, to preserve line numbering for the checks that run on the rest.
+    """
+    return _strip_indented_code_blocks(_strip_fenced_code_blocks(text))
 
 
 def scan_skill(skill_md_content: str) -> ScanResult:
