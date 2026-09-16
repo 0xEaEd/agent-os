@@ -230,6 +230,15 @@ async def test_stream_total_deadline_hit_mid_wait_closes_the_provider_stream_onc
     timeout above: this is the total deadline being crossed *while* the
     per-iteration wait was in flight, discovered only after the wait
     times out. It shared the exact same missing-close bug.
+
+    The margin below has to clear ``asyncio``'s own timer-firing slop, not
+    just be "short": ``BaseEventLoop._run_once`` treats a scheduled callback
+    as ready once ``when < now + clock_resolution``, i.e. it may fire up to
+    one clock-resolution period *early*. On Windows that resolution is
+    commonly ~15.6ms, so a margin under that (this used to be 10ms) let
+    ``asyncio.wait``'s timeout fire before ``loop.time()`` had actually
+    crossed ``total_deadline``, taking the iteration-timeout branch instead
+    of the total-deadline one on Windows CI while passing everywhere else.
     """
     agent = Agent.__new__(Agent)
     agent.config = MagicMock(timeout=1.0, iteration_timeout=10.0)
@@ -254,7 +263,7 @@ async def test_stream_total_deadline_hit_mid_wait_closes_the_provider_stream_onc
         async for _event in agent._stream_provider_events_with_deadline(
             provider_stream(),
             loop=loop,
-            total_deadline=loop.time() + 0.01,
+            total_deadline=loop.time() + 0.25,
         ):
             pass
 
