@@ -62,7 +62,7 @@ def aggregate_co_occurrences(
     if not log_dir.is_dir():
         return []
     for log_path in sorted(log_dir.glob("decisions-*.jsonl")):
-        for raw in log_path.read_text(encoding="utf-8").splitlines():
+        for raw in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
             payload = parse_log_line(raw)
             if not payload:
                 continue
