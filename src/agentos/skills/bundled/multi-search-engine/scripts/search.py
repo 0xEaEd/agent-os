@@ -563,7 +563,10 @@ def main() -> int:
         args.out.write_text(encoded, encoding="utf-8")
     else:
         sys.stdout.write(encoded)
+    if args.strict and payload.get("errors"):
+        return 1
     return 0
+
 
 
 if __name__ == "__main__":

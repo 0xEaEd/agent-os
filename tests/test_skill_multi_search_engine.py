@@ -212,6 +212,37 @@ def test_search_creates_parent_directory(tmp_path: Path, monkeypatch: pytest.Mon
     assert out.is_file()
 
 
+def test_main_strict_fails_on_engine_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    search = _import_search()
+    monkeypatch.setattr(
+        search,
+        "search_all",
+        lambda *args, **kwargs: {
+            "query": "q",
+            "results": [],
+            "errors": [{"engine": "brave", "reason": "missing key"}],
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["search.py", "--query", "test", "--strict"])
+    assert search.main() == 1
+
+
+def test_main_non_strict_succeeds_on_engine_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    search = _import_search()
+    monkeypatch.setattr(
+        search,
+        "search_all",
+        lambda *args, **kwargs: {
+            "query": "q",
+            "results": [],
+            "errors": [{"engine": "brave", "reason": "missing key"}],
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["search.py", "--query", "test"])
+    assert search.main() == 0
+
+
+
 # --- helpers for the engine tests below ---------------------------------------
 
 
