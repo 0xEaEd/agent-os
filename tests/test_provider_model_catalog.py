@@ -140,3 +140,18 @@ async def test_fetch_openrouter_adds_app_attribution_headers() -> None:
     model = catalog.get("openai/gpt-4o")
     assert model is not None
     assert model.context_window == 128_000
+
+
+def test_openai_reasoning_models_recognized_without_base_url() -> None:
+    catalog = ModelCatalog()
+    for model_id in ("o1", "o1-mini", "o3-mini", "o4-preview", "gpt-5-mini"):
+        caps_default = catalog.get_capabilities(model_id, provider_name="openai")
+        assert caps_default.supports_reasoning is True
+        assert caps_default.reasoning_format == "openai"
+
+        caps_explicit = catalog.get_capabilities(
+            model_id, provider_name="openai", base_url="https://api.openai.com/v1"
+        )
+        assert caps_explicit.supports_reasoning is True
+        assert caps_explicit.reasoning_format == "openai"
+

@@ -262,7 +262,7 @@ class ModelCatalog:
         model_l = model_id.strip().lower()
         if (
             provider_id == "openai"
-            and "api.openai.com" in base_url.lower()
+            and (not base_url or "api.openai.com" in base_url.lower())
             and model_l.startswith(("gpt-5", "o1", "o3", "o4"))
         ):
             return ModelCapabilities(
