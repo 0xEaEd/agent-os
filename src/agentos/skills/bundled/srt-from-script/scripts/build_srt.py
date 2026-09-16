@@ -114,7 +114,7 @@ def main() -> int:
 
     if args.script:
         try:
-            text = Path(args.script).read_text(encoding="utf-8")
+            text = Path(args.script).read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             print(f"Error: cannot read --script {args.script!r}: {exc}", file=sys.stderr)
             return 1
