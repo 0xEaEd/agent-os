@@ -53,6 +53,50 @@ def parse_ranges(spec: str | None, total: int) -> list[int]:
     return [p for p in requested_pages(spec, total) if 1 <= p <= total]
 
 
+class ManifestError(ValueError):
+    """A manifest that cannot be used. Reported as ``error:`` / exit 2, never
+    as a traceback: the caller passed bad input, the script did not break."""
+
+
+def load_manifest(path: Path) -> list[dict[str, str]]:
+    """Read and validate a manifest file, or raise :class:`ManifestError`.
+
+    Every shape checked here used to escape as a traceback. ``not json`` raised
+    ``JSONDecodeError``; ``["a.pdf", "b.pdf"]`` — a bare list of paths, the
+    obvious thing to try — raised ``TypeError: string indices must be
+    integers`` from ``item["file"]``; and ``[{"pages": "1-2"}]`` raised
+    ``KeyError: 'file'``. ``pages`` is type-checked too, because
+    ``[{"file": "a.pdf", "pages": 3}]`` reaches ``spec.split(",")`` on an int.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ManifestError(f"manifest {path} is not valid JSON: {exc}") from exc
+    if not isinstance(raw, list):
+        raise ManifestError("manifest must be a JSON array")
+    items: list[dict[str, str]] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ManifestError(
+                f"manifest entry {index} must be an object with a "
+                f'"file" key, got {type(entry).__name__}'
+            )
+        if "file" not in entry:
+            raise ManifestError(f'manifest entry {index} is missing the "file" key')
+        # ``file`` is required, so ``None`` is as wrong as an int -- it must not
+        # get the "absent is fine" treatment ``pages`` gets below, or a null
+        # slips through to be skipped later instead of named here.
+        if not isinstance(entry["file"], str):
+            raise ManifestError(
+                f'manifest entry {index} has a non-string "file": {entry["file"]!r}'
+            )
+        pages = entry.get("pages")
+        if pages is not None and not isinstance(pages, str):
+            raise ManifestError(f'manifest entry {index} has a non-string "pages": {pages!r}')
+        items.append(entry)
+    return items
+
+
 @dataclass
 class MergeResult:
     """What a merge actually wrote, including the pages it could not."""
@@ -73,6 +117,14 @@ def merge(items: Iterable[dict[str, str]], out: Path) -> MergeResult:
     writer = PdfWriter()
     result = MergeResult()
     for item in items:
+        # ``load_manifest`` rejects these shapes up front, but ``merge`` is also
+        # called directly, and an unusable entry there should skip like a missing
+        # file rather than raise ``TypeError``/``KeyError`` from inside the loop.
+        # Skipping every entry leaves ``pages_written`` at 0, which the caller
+        # already treats as a failure.
+        if not isinstance(item, dict) or not isinstance(item.get("file"), str):
+            print(f"warn: skipping unusable manifest entry {item!r}", file=sys.stderr)
+            continue
         path = Path(item["file"])
         if not path.is_file():
             print(f"warn: missing {path}", file=sys.stderr)
@@ -113,9 +165,10 @@ def main() -> int:
         if not manifest_path.is_file():
             print(f"error: manifest {manifest_path} not found", file=sys.stderr)
             return 2
-        items = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(items, list):
-            print("error: manifest must be a JSON array", file=sys.stderr)
+        try:
+            items = load_manifest(manifest_path)
+        except ManifestError as exc:
+            print(f"error: {exc}", file=sys.stderr)
             return 2
     else:
         items = [{"file": p} for p in args.inputs]
