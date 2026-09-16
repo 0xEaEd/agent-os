@@ -418,6 +418,13 @@ class SlackChannel:
             log.error("slack.send_failed", channel="", error="no_target_channel")
             raise RuntimeError("Slack send has no target channel")
 
+        has_meta_payload = any(
+            k not in ("channel", "thread_ts") and v is not None for k, v in meta.items()
+        )
+        if not (message.content or "").strip() and not has_meta_payload:
+            log.warning("slack.send_empty", channel=channel)
+            return
+
         segments = self._split_content_for_send(message.content)
         client = self._get_client()
         last_ts: str | None = None

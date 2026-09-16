@@ -97,3 +97,26 @@ async def test_send_chunking_puts_extra_metadata_only_on_the_last_chunk() -> Non
     for call in calls[:-1]:
         assert "blocks" not in call
     assert calls[-1]["blocks"] == [{"type": "divider"}]
+
+
+@pytest.mark.asyncio
+async def test_send_empty_content_without_metadata_is_skipped() -> None:
+    channel, calls = _channel()
+    await channel.send(OutgoingMessage(content="", reply_to="C123"))
+    await channel.send(OutgoingMessage(content="   ", reply_to="C123"))
+    assert len(calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_send_empty_content_with_metadata_blocks_is_posted() -> None:
+    channel, calls = _channel()
+    await channel.send(
+        OutgoingMessage(
+            content="",
+            reply_to="C123",
+            metadata={"blocks": [{"type": "divider"}]},
+        )
+    )
+    assert len(calls) == 1
+    assert calls[0]["blocks"] == [{"type": "divider"}]
+
