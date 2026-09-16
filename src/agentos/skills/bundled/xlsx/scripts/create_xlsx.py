@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,16 @@ def _coerce(value: Any) -> Any:
     return value
 
 
+def _sanitize_sheet_title(name: Any, fallback: str) -> str:
+    if not name or not isinstance(name, str):
+        return fallback
+    # Excel forbids * ? : / \ [ ] and restricts sheet names to 31 chars
+    cleaned = re.sub(r"[*?:/\\\[\]]", "_", name).strip(" '")
+    if not cleaned:
+        return fallback
+    return cleaned[:31]
+
+
 def build(spec: dict[str, Any]) -> Workbook:
     wb = Workbook()
     default_sheet = wb.active
@@ -46,11 +57,13 @@ def build(spec: dict[str, Any]) -> Workbook:
     for idx, sheet_spec in enumerate(sheets):
         if not isinstance(sheet_spec, dict):
             continue
+        fallback = "Sheet1" if idx == 0 else f"Sheet{idx + 1}"
+        title = _sanitize_sheet_title(sheet_spec.get("name"), fallback)
         if idx == 0:
             ws = default_sheet
-            ws.title = str(sheet_spec.get("name") or "Sheet1")
+            ws.title = title
         else:
-            ws = wb.create_sheet(title=str(sheet_spec.get("name") or f"Sheet{idx + 1}"))
+            ws = wb.create_sheet(title=title)
 
         for row in sheet_spec.get("rows", []):
             ws.append([_coerce(v) for v in row])

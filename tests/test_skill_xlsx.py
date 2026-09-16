@@ -571,3 +571,27 @@ def test_clearing_a_cell_keeps_its_style(
     cell = load_workbook(str(out))["S"].cell(row=1, column=1)
     assert cell.value is None
     assert cell.number_format == "0.00%"
+
+
+def test_create_xlsx_sanitizes_invalid_sheet_names() -> None:
+    create_xlsx, _, _ = _import_scripts()
+    wb = create_xlsx.build(
+        {
+            "sheets": [
+                {"name": "Summary: 2026/09", "rows": [["A"]]},
+                {"name": "Quarterly_Financial_Performance_Report", "rows": [["B"]]},
+                {"name": "Invalid * [Sheet] ?", "rows": [["C"]]},
+                {"name": "   ", "rows": [["D"]]},
+            ]
+        }
+    )
+    # Colons and slashes sanitized to underscores
+    assert "Summary_ 2026_09" in wb.sheetnames
+    # Truncated to 31 characters
+    assert len(wb.sheetnames[1]) <= 31
+    assert wb.sheetnames[1] == "Quarterly_Financial_Performance"
+    # Wildcards and brackets replaced
+    assert wb.sheetnames[2] == "Invalid _ _Sheet_ _"
+    # Whitespace-only falls back to Sheet4
+    assert wb.sheetnames[3] == "Sheet4"
+
