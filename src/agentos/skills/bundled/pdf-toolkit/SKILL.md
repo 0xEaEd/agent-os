@@ -110,7 +110,13 @@ Or merge specific page ranges with the manifest form:
 ```
 
 Page ranges are 1-based, comma-separated, hyphen for ranges. Omit `pages` to
-include the whole file. Splits use the same syntax in reverse:
+include the whole file. The JSON summary reports `pages_written` together with
+any requested page the input does not have under `skipped_pages` (one entry per
+file) and any input that was not found under `missing_files` — check both before
+reporting the merge as done. A merge in which no requested page exists exits 2
+and writes no file, rather than leaving a zero-page PDF behind.
+
+Splits use the same syntax in reverse:
 
 ```bash
 {python} {baseDir}/scripts/split.py input.pdf --pages "1-3,7,10-12" --out output_dir/
