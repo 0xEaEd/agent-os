@@ -53,9 +53,9 @@ def test_key_is_stable_across_calls() -> None:
     assert artifact_delivery_key(artifact) == artifact_delivery_key(dict(artifact))
 
 
-def test_prefers_id_over_content_and_name() -> None:
+def test_prefers_content_and_name_over_id() -> None:
     artifact = {"id": "art-1", "sha256": SHA, "name": "report.csv"}
-    assert artifact_delivery_key(artifact) == "id:art-1"
+    assert artifact_delivery_key(artifact) == f"sha256:{SHA}|name:report.csv"
 
 
 def test_falls_back_through_the_field_order() -> None:
