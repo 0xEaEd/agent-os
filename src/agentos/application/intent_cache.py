@@ -208,6 +208,15 @@ _COMMAND_WRAPPERS = frozenset(
     {"sudo", "doas", "env", "time", "nohup", "command", "xargs", "busybox"}
 )
 
+#: Shell reserved words that run the command following them. Each is only one
+#: while it is itself in command position, so ``echo then del x`` stays text.
+_COMMAND_KEYWORDS = frozenset({"{", "!", "do", "then", "else", "elif", "if", "while", "until"})
+
+# Group and substitution openers: the command inside ``( … )``, ``$( … )`` and
+# ``` `…` ``` runs wherever the opener sits. ``{`` opens a group too, but
+# ``${`` opens a parameter expansion, so ``echo ${del}`` is not a delete.
+_COMMAND_OPENER_RE = re.compile(r"[(`]|(?<!\$)\{")
+
 
 def _in_command_position(command: str, span_start: int, match_start: int) -> bool:
     """Whether the verb matched at *match_start* is the command being run.
@@ -220,13 +229,22 @@ def _in_command_position(command: str, span_start: int, match_start: int) -> boo
     so reading a file became impossible (#1015 review).
 
     Command position is the start of the expression, the text after a
-    separator, or the text after a wrapper that runs what follows it. A wrapper
+    separator or a group/substitution opener (``{``, ``(``, ``$(``, a
+    backtick), the text after a reserved word that runs what follows it
+    (``do``, ``then``, ``else`` …), or the text after a wrapper. A wrapper
     may carry its own arguments (``sudo -u root del …``), which is why anything
     after the first wrapper is accepted.
     """
     region = command[span_start:match_start]
     for separator in ("\n", ";", "&&", "||", "|", "&"):
         region = region.rpartition(separator)[2]
+    # A backtick only opens a substitution when an odd number precede the verb;
+    # after an even number it has closed, and ``echo `pwd` del x`` is text.
+    opener_end = 0
+    for opener in _COMMAND_OPENER_RE.finditer(region):
+        if opener.group() != "`" or region.count("`", 0, opener.end()) % 2:
+            opener_end = opener.end()
+    region = region[opener_end:]
 
     boundary = max(region.rfind(" "), region.rfind("\t"))
     token_prefix = region[boundary + 1 :]
@@ -237,6 +255,8 @@ def _in_command_position(command: str, span_start: int, match_start: int) -> boo
 
     seen_wrapper = False
     for token in region[: boundary + 1].split():
+        if not seen_wrapper and token in _COMMAND_KEYWORDS:
+            continue
         if "=" in token and not token.startswith("-"):
             continue
         if token.rpartition("/")[2].rpartition("\\")[2].lower() in _COMMAND_WRAPPERS:

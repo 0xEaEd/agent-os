@@ -837,3 +837,76 @@ class TestDeleteVerbsInsideFlags:
         assert _extract_shell_delete_targets("rmdir --parents /a") == [
             ("/a", frozenset({"parents"}))
         ]
+
+
+class TestCompoundCommandOpeners:
+    """A verb after a group opener or a reserved word is still the command.
+
+    The anchor only knew separators and wrappers, so ``{ del …; }``,
+    ``do unlink …`` and ``$(rmdir …)`` yielded nothing while the same ``rm``
+    was hard-blocked — the short verbs lost a block ``rm`` keeps.
+    """
+
+    @pytest.mark.parametrize(
+        ("command", "rm_command"),
+        [
+            ("{ del /etc/passwd; }", "{ rm /etc/passwd; }"),
+            (
+                "for f in a b; do unlink ~/.ssh/id_rsa; done",
+                "for f in a b; do rm ~/.ssh/id_rsa; done",
+            ),
+            ("if true; then del /etc/passwd; fi", "if true; then rm /etc/passwd; fi"),
+            ("if false; then :; else rd /s /q /etc; fi", "if false; then :; else rm -rf /etc; fi"),
+            ("while true; do erase /etc/passwd; done", "while true; do rm /etc/passwd; done"),
+            ("`rmdir /etc/foo`", "`rm /etc/foo`"),
+            ("$(rmdir /etc/foo)", "$(rm /etc/foo)"),
+            ("echo $(del /etc/passwd)", "echo $(rm /etc/passwd)"),
+            ("(unlink ~/.ssh/id_rsa)", "(rm ~/.ssh/id_rsa)"),
+            ("! del /etc/passwd", "! rm /etc/passwd"),
+            ("then sudo del /etc/passwd", "then sudo rm /etc/passwd"),
+        ],
+    )
+    def test_a_verb_after_an_opener_is_hard_blocked_like_rm(
+        self, command: str, rm_command: str
+    ) -> None:
+        assert sensitive_target_in_command(rm_command) is not None
+        assert sensitive_target_in_command(command) is not None
+
+    @pytest.mark.parametrize(
+        ("command", "rm_command"),
+        [
+            ("`rmdir /etc/foo`", "`rm /etc/foo`"),
+            ("$(rmdir /etc/foo)", "$(rm /etc/foo)"),
+            ("(unlink ~/.ssh/id_rsa)", "(rm ~/.ssh/id_rsa)"),
+            ("{ unlink ~/.ssh/id_rsa; }", "{ rm ~/.ssh/id_rsa; }"),
+        ],
+    )
+    def test_a_verb_after_an_opener_extracts_the_target_rm_does(
+        self, command: str, rm_command: str
+    ) -> None:
+        """Including the trailing-paren artefact, which is ``rm``'s on ``main`` too."""
+        assert _extract_shell_delete_targets(command) == _extract_shell_delete_targets(rm_command)
+        assert _extract_shell_delete_targets(command) != []
+
+    def test_else_keeps_the_invocation_grade(self) -> None:
+        assert _extract_shell_delete_targets("if a; then :; else rd /s /q /; fi") == [
+            ("/s", frozenset({"recursive", "force"})),
+            ("/q", frozenset({"recursive", "force"})),
+            ("/", frozenset({"recursive", "force"})),
+        ]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo then del /etc/passwd",
+            "grep -rn do del /etc/passwd",
+            "echo `pwd` del /etc/passwd",
+            "echo $(pwd) del /etc/passwd",
+            "echo ${del} /etc/passwd",
+            "cat /srv/{a,del}/x /etc/passwd",
+        ],
+    )
+    def test_an_opener_or_keyword_out_of_position_is_still_text(self, command: str) -> None:
+        """Passes either way by design: the openers must not widen the anchor."""
+        assert sensitive_target_in_command(command) is None
+        assert _extract_shell_delete_targets(command) == []
