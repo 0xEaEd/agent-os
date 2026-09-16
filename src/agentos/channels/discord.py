@@ -50,6 +50,7 @@ from agentos.channels.types import (
 )
 from agentos.engine.native_commands import discord_application_commands
 from agentos.env import trust_env as _trust_env
+from agentos.util.bounded_registry import BoundedRegistry
 
 log = structlog.get_logger(__name__)
 
@@ -60,6 +61,11 @@ _DISCORD_THREAD_CHANNEL_TYPES = {10, 11, 12}
 _DISCORD_APPLICATION_COMMAND_INTERACTION_TYPE = 2
 _DISCORD_DEFERRED_CHANNEL_MESSAGE_RESPONSE_TYPE = 5
 _DISCORD_MESSAGE_TEXT_LIMIT = 2000
+#: Ceiling on the channel-type / thread-parent caches fed by gateway events. A
+#: busy guild emits these for every channel and thread it ever creates, so the
+#: caches evict least-recently-used entries instead of growing for the life
+#: of the connection. Sized for channels, not sessions, hence the override.
+_MAX_CACHED_CHANNEL_CONTEXTS = 10_000
 
 # Gateway intents bitmask
 GATEWAY_INTENTS = (
@@ -192,8 +198,22 @@ class DiscordChannel:
     )
     _rate_limiter: RateLimiter = field(default_factory=RateLimiter, init=False, repr=False)
     _sent_messages: dict[str, str] = field(default_factory=dict, init=False, repr=False)
-    _channel_types: dict[str, int] = field(default_factory=dict, init=False, repr=False)
-    _thread_parent_channels: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _channel_types: BoundedRegistry[str, int] = field(
+        default_factory=lambda: BoundedRegistry(
+            name="DiscordChannel._channel_types",
+            max_entries=_MAX_CACHED_CHANNEL_CONTEXTS,
+        ),
+        init=False,
+        repr=False,
+    )
+    _thread_parent_channels: BoundedRegistry[str, str] = field(
+        default_factory=lambda: BoundedRegistry(
+            name="DiscordChannel._thread_parent_channels",
+            max_entries=_MAX_CACHED_CHANNEL_CONTEXTS,
+        ),
+        init=False,
+        repr=False,
+    )
 
     @property
     def capability_profile(self) -> ChannelCapabilityProfile:
@@ -571,13 +591,16 @@ class DiscordChannel:
         if not isinstance(channel_id, str) or not channel_id:
             return data
         enriched = dict(data)
-        if "channel_type" not in enriched and channel_id in self._channel_types:
-            enriched["channel_type"] = self._channel_types[channel_id]
-        if (
-            "thread_parent_channel_id" not in enriched
-            and channel_id in self._thread_parent_channels
-        ):
-            enriched["thread_parent_channel_id"] = self._thread_parent_channels[channel_id]
+        # ``get`` marks the entry recently used, so a channel that is still
+        # active is not the one evicted when new channels arrive.
+        if "channel_type" not in enriched:
+            channel_type = self._channel_types.get(channel_id)
+            if channel_type is not None:
+                enriched["channel_type"] = channel_type
+        if "thread_parent_channel_id" not in enriched:
+            parent_id = self._thread_parent_channels.get(channel_id)
+            if parent_id is not None:
+                enriched["thread_parent_channel_id"] = parent_id
         return enriched
 
     @staticmethod
