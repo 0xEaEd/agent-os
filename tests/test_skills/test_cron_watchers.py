@@ -69,7 +69,9 @@ def base_url(state_dir):
         thread.join(timeout=10)
 
 
-def _run(script: str, *args: str, env_home: Path) -> subprocess.CompletedProcess[str]:
+def _run(
+    script: str, *args: str, env_home: Path, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     # A deliberately small environment, so a watcher cannot reach the
     # developer's own state. Windows is the exception: a child started without
     # the system variables cannot initialise Winsock, and every fetch then dies
@@ -85,6 +87,8 @@ def _run(script: str, *args: str, env_home: Path) -> subprocess.CompletedProcess
     # Loopback must never go through a proxy the runner happens to configure.
     env["NO_PROXY"] = "127.0.0.1,localhost"
     env["no_proxy"] = "127.0.0.1,localhost"
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, str(SCRIPTS / script), *args],
         capture_output=True,
@@ -302,6 +306,72 @@ def test_github_rejects_an_unknown_scope(state_dir):
     result = _run("watch_github.py", "--repo", "o/n", "--scope", "stars", env_home=state_dir)
 
     assert result.returncode == 2  # argparse rejects the choice
+
+
+def test_github_issues_scope_skips_pull_requests(state_dir, base_url):
+    repo_dir = state_dir / "repos" / "owner" / "repo"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    payload = [
+        {
+            "number": 101,
+            "title": "A real issue",
+            "user": {"login": "alice"},
+            "html_url": "https://github.com/owner/repo/issues/101",
+            "pull_request": None,
+        },
+        {
+            "number": 102,
+            "title": "A pull request",
+            "user": {"login": "bob"},
+            "html_url": "https://github.com/owner/repo/pull/102",
+            "pull_request": {"url": "https://api.github.com/repos/owner/repo/pulls/102"},
+        },
+    ]
+    (repo_dir / "issues").write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _run(
+        "watch_github.py",
+        "--repo",
+        "owner/repo",
+        "--scope",
+        "issues",
+        "--first-run-reports",
+        env_home=state_dir,
+        extra_env={"GITHUB_API_URL": base_url},
+    )
+
+    assert result.returncode == 0
+    assert "issue #101 A real issue (by alice)" in result.stdout
+    assert "102" not in result.stdout
+    assert "A pull request" not in result.stdout
+
+
+def test_github_pulls_scope_reports_pull_requests(state_dir, base_url):
+    repo_dir = state_dir / "repos" / "owner" / "repo"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    payload = [
+        {
+            "number": 102,
+            "title": "A pull request",
+            "user": {"login": "bob"},
+            "html_url": "https://github.com/owner/repo/pull/102",
+        },
+    ]
+    (repo_dir / "pulls").write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _run(
+        "watch_github.py",
+        "--repo",
+        "owner/repo",
+        "--scope",
+        "pulls",
+        "--first-run-reports",
+        env_home=state_dir,
+        extra_env={"GITHUB_API_URL": base_url},
+    )
+
+    assert result.returncode == 0
+    assert "PR #102 A pull request (by bob)" in result.stdout
 
 
 # ── --limit must not consume the backlog (Issue #1674) ──────────────────────

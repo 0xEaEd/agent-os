@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from _watermark import positive_int, select_new  # noqa: E402
 
-API_ROOT = "https://api.github.com"
+API_ROOT = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
 USER_AGENT = "AgentOS-cron-watcher/1.0"
 SCOPES = ("issues", "pulls", "releases")
 
