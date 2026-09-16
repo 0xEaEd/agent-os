@@ -290,11 +290,29 @@ def test_an_unrelated_model_mention_is_not_a_missing_model() -> None:
     )
 
 
-def test_404_outside_the_openai_compatible_family_is_unchanged() -> None:
-    """Guard: the change is scoped to the family the issue reports."""
+def test_404_on_the_anthropic_family_is_a_missing_model() -> None:
+    """#1359 left this branch at UNKNOWN on purpose; #2234 asks for the opposite.
+
+    The scoping this test used to guard is still guarded — by the providers in
+    neither family, below — but Anthropic answers an unknown model with 404 and
+    ``not_found_error``, so UNKNOWN here meant SURFACE and a halted turn.
+    """
     assert (
         classify_provider_error(
             provider_name="anthropic",
+            status_code=404,
+            raw_code="not_found_error",
+            message="a resource was not found",
+        )
+        is ProviderFailureKind.MODEL_NOT_FOUND
+    )
+
+
+def test_404_outside_both_provider_families_is_unchanged() -> None:
+    """Guard: neither #1359 nor #2234 made 404 a global rule."""
+    assert (
+        classify_provider_error(
+            provider_name="some_unregistered_provider",
             status_code=404,
             raw_code="not_found_error",
             message="a resource was not found",
