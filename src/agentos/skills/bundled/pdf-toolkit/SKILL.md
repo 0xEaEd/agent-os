@@ -207,6 +207,7 @@ switch back.
 | Extracted text is empty | Scanned PDF, no text layer | OCR is out of scope; use a separate OCR skill |
 | Garbled characters in extract | PDF uses a custom font encoding | Try `pdfplumber.open(path, laparams={...})` with `char_margin` adjustments |
 | Merged PDF is huge | Underlying PDFs include large embedded fonts | Subset fonts via `pypdf` `compress_content_streams()` |
+| `merge.py` exits 2 with `error: manifest entry N ...` | The manifest is not an array of `{"file": ..., "pages": ...}` objects — a bare `["a.pdf"]` list of paths is the usual cause | Wrap each path: `[{"file": "a.pdf"}]`. `pages` is optional but must be a string when present (`"1-3"`, not `3`) |
 | Form fill silently no-ops | Field name in JSON does not match PDF field name | Run with `--list-fields` first to see exact names |
 | Pages out of order after split | Range overlap collapsed unexpectedly | Use disjoint ranges, e.g. `1-3,4-6` not `1-5,3-6` |
 
