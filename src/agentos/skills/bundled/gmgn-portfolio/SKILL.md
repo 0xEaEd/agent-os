@@ -38,7 +38,7 @@ metadata:
 
 Use the `gmgn-cli` tool to query wallet portfolio data based on the user's request.
 
-**For full wallet analysis (holdings + stats + activity + verdict), follow [`docs/workflow-wallet-analysis.md`](../../docs/workflow-wallet-analysis.md)**
+**For full wallet analysis (holdings + stats + activity + verdict), follow the `gmgn-wallet-analysis` skill.**
 
 ## Core Concepts
 
@@ -386,12 +386,12 @@ Show the `[Identity: ...]` line only if `common` is present in the response. For
 
 ## Workflow
 
-For full wallet analysis including trade history and follow-through on top holdings, see [`docs/workflow-wallet-analysis.md`](../../docs/workflow-wallet-analysis.md)
+For full wallet analysis including trade history and follow-through on top holdings, see the `gmgn-wallet-analysis` skill.
 
-For in-depth trading style analysis, copy-trade ROI estimation, and smart money leaderboard comparison, see [`docs/workflow-smart-money-profile.md`](../../docs/workflow-smart-money-profile.md)
+For in-depth trading style analysis, copy-trade ROI estimation, and smart money leaderboard comparison, see the smart money profile workflow.
 
 **When to use which:**
-- User asks "is this wallet worth following" → [`docs/workflow-wallet-analysis.md`](../../docs/workflow-wallet-analysis.md)
-- User asks "what's this wallet's trading style", "when does he take profit", "smart money profile", "if I copied this wallet what would my return be" → [`docs/workflow-smart-money-profile.md`](../../docs/workflow-smart-money-profile.md)
-- User wants to compare multiple smart money wallets by winrate/PnL → [`docs/workflow-smart-money-profile.md`](../../docs/workflow-smart-money-profile.md) Step 5 (leaderboard)
+- User asks "is this wallet worth following" → full wallet analysis via `gmgn-wallet-analysis`
+- User asks "what's this wallet's trading style", "when does he take profit", "smart money profile", "if I copied this wallet what would my return be" → smart money profile workflow
+- User wants to compare multiple smart money wallets by winrate/PnL → smart money leaderboard comparison
 - User asks "what tokens did this dev create", "dev 发过哪些币", "查一下这个 dev 的代币", "dev 创建记录" → use `portfolio created-tokens --chain <chain> --wallet <creator_address>` directly. Get the creator address first via `token info` if only a token address is given.

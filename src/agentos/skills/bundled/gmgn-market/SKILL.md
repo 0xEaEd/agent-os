@@ -478,15 +478,15 @@ The response is `data.rank` — an array of rank items. Each item represents one
 
 ## Workflow: Discover Trading Opportunities via Trending
 
-Full workflow for discovering market opportunities: [`docs/workflow-market-opportunities.md`](../../docs/workflow-market-opportunities.md)
+Full workflow for discovering market opportunities:
 
 Steps: fetch trending (50 results, safe filters) → AI multi-factor analysis (smart money, volume, momentum, liquidity, maturity) → present top 5 table with rationale → offer deep dive or swap.
 
-When results contain interesting tokens, proceed to full token due diligence: [`docs/workflow-token-research.md`](../../docs/workflow-token-research.md)
+When results contain interesting tokens, proceed to full token due diligence with `gmgn-token`.
 
-**For new / launchpad tokens** (`market trenches`): apply the structured early project screening workflow that includes security check and smart money entry detection — [`docs/workflow-early-project-screening.md`](../../docs/workflow-early-project-screening.md)
+**For new / launchpad tokens** (`market trenches`): apply the structured early project screening workflow that includes security check and smart money entry detection.
 
-**For a daily market overview** (user asks "what's the market like today", "give me a daily brief", "what is smart money buying today"): combine `market trending` + `market trenches` with `gmgn-track smartmoney` — [`docs/workflow-daily-brief.md`](../../docs/workflow-daily-brief.md)
+**For a daily market overview** (user asks "what's the market like today", "give me a daily brief", "what is smart money buying today"): combine `market trending` + `market trenches` with `gmgn-track smartmoney` for the daily brief workflow.
 
 ## Token Quality Filter Criteria
 
@@ -508,7 +508,7 @@ When evaluating tokens returned from `market trending` or `market trenches`, app
 
 **Strong buy signal combination:** `smart_degen_count ≥ 3` + `rug_ratio < 0.2` + `creator_close` + `is_wash_trading = false` + `liquidity > $50k` → high-quality opportunity, proceed to full token research.
 
-For full due diligence on any token surfaced here: [`docs/workflow-token-research.md`](../../docs/workflow-token-research.md)
+For full due diligence on any token surfaced here, see the `gmgn-token` skill.
 
 ## Token Lifecycle Stage
 

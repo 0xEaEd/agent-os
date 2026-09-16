@@ -827,9 +827,9 @@ Check the two critical fields:
 
 **User override**: The user may explicitly skip this check by saying "I already checked" or "skip security check". In that case, document that the check was skipped in the confirmation summary. This is the only valid override — do NOT skip the check silently.
 
-For a quick pre-swap due diligence checklist (info + security + pool + smart money, 4 steps), see [`docs/workflow-token-due-diligence.md`](../../docs/workflow-token-due-diligence.md)
+For a quick pre-swap due diligence checklist (info + security + pool + smart money, 4 steps), run the safety checks above.
 
-For full token research before swapping, see [`docs/workflow-token-research.md`](../../docs/workflow-token-research.md)
+For full token research before swapping, see the `gmgn-token` skill.
 
 ## Execution Guidelines
 
