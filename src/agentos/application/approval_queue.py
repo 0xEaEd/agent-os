@@ -174,7 +174,8 @@ class ApprovalQueue:
         # a plain read rather than queue behind a writer in another process.
         due = self._conn.execute(
             "SELECT 1 FROM approval_queue "
-            "WHERE (resolved = 0 AND created_at <= ?) OR (resolved = 1 AND created_at <= ?) "
+            "WHERE (resolved = 0 AND created_at <= ?) "
+            "OR (resolved = 1 AND (consumed = 1 OR approved = 0) AND created_at <= ?) "
             "LIMIT 1",
             (expired_before, prune_before),
         ).fetchone()
@@ -198,13 +199,15 @@ class ApprovalQueue:
             pruned = [
                 str(row["approval_id"])
                 for row in self._conn.execute(
-                    "SELECT approval_id FROM approval_queue WHERE resolved = 1 AND created_at <= ?",
+                    "SELECT approval_id FROM approval_queue "
+                    "WHERE resolved = 1 AND (consumed = 1 OR approved = 0) AND created_at <= ?",
                     (prune_before,),
                 ).fetchall()
             ]
             if pruned:
                 self._conn.execute(
-                    "DELETE FROM approval_queue WHERE resolved = 1 AND created_at <= ?",
+                    "DELETE FROM approval_queue "
+                    "WHERE resolved = 1 AND (consumed = 1 OR approved = 0) AND created_at <= ?",
                     (prune_before,),
                 )
             self._conn.commit()
@@ -351,11 +354,12 @@ class ApprovalQueue:
         params = dict(entry.params)
         if approved and elevated_mode in VALID_ELEVATED_MODES:
             params["elevatedMode"] = elevated_mode
+        now = time.time()
         cursor = self._conn.execute(
             "UPDATE approval_queue "
-            "SET resolved = 1, approved = ?, params = ? "
+            "SET resolved = 1, approved = ?, params = ?, created_at = ? "
             "WHERE approval_id = ? AND resolved = 0",
-            (1 if approved else 0, self._serialize_params(params), approval_id),
+            (1 if approved else 0, self._serialize_params(params), now, approval_id),
         )
         if cursor.rowcount != 1:
             self._conn.rollback()
@@ -371,6 +375,7 @@ class ApprovalQueue:
         entry = self.get(approval_id)
         entry.approved = bool(approved)
         entry.resolved = True
+        entry.created_at = now
         entry._event.set()
         self._pending[approval_id] = entry
 

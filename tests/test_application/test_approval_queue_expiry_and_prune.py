@@ -232,3 +232,26 @@ def test_retention_never_undercuts_the_approval_lifespan(tmp_path) -> None:
     queue.consume(approval_id)
     assert queue.get(approval_id).consumed is True
     queue.close()
+
+
+def test_late_resolved_approval_survives_sweep_for_consumption(tmp_path) -> None:
+    # Issue #2487: an approval created hours ago but resolved now must not be
+    # pruned by sweep before it is consumed.
+    queue = ApprovalQueue(
+        default_timeout=7200.0,
+        db_path=str(tmp_path / "aq.sqlite"),
+        resolved_retention=3600.0,
+    )
+    approval_id = queue.request("exec", {"toolName": "exec_command"})
+    # Created 2 hours ago (within 7200s timeout, but older than 3600s retention)
+    _backdate(queue, approval_id, seconds=7000.0)
+
+    queue.resolve(approval_id, True)
+
+    # Subsequent sweep must not delete the newly resolved, unconsumed approval
+    queue.list_pending()
+
+    queue.consume(approval_id)
+    assert queue.get(approval_id).consumed is True
+    queue.close()
+
