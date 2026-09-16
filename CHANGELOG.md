@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Provider: a genuinely failed tool result could reach the model as a bare
+  digest with no failure information. `_final_hard_cap_payload_once` asked
+  `_tool_content_is_critical` about content that up to three earlier
+  compaction tiers had already truncated, and those tiers slice on raw
+  character position with no idea where `execution_status` sits. Whether the
+  diagnostics survived depended only on where the marker happened to be in the
+  JSON: a marker in the middle was lost at the *first* tier, a trailing one at
+  the emergency tier, and only a leading one reached the hard cap. Criticality
+  is now decided once, on the original content, before any tier runs, and that
+  verdict is carried into every tier that rewrites tool content. Preserved
+  results keep each diagnostic field bounded rather than verbatim, and if the
+  preserved form no longer fits the budget the whole chain is rebuilt without
+  preservation, so this can never turn a request that previously succeeded
+  into `ProviderRequestBudgetExceededError` (#2363).
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.
