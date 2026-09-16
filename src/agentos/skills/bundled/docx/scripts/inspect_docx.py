@@ -17,17 +17,34 @@ from docx.opc.exceptions import PackageNotFoundError
 from docx.table import Table, _Cell
 
 
-def _table_rows(tbl: Table) -> list[list[str]]:
-    """Read a table row by row, straight from its ``<w:tc>`` elements.
+def _extract_tables(doc: Document) -> list[list[list[str]]]:
+    """Extract tables walking <w:tc> directly.
 
-    ``row.cells`` maps each row onto the table grid: it repeats a
-    horizontally merged cell once per column it spans and resolves a
-    vertically merged one against the row above, raising ``ValueError`` on
-    the irregular grids other generators emit. ``edit_docx`` avoids the same
-    API for the same reason. Reading ``<w:tc>`` directly visits each cell
-    exactly once and cannot raise.
+    Avoids ValueError on irregular grids and repeats on merged cells,
+    and recurses into nested tables.
     """
-    return [[_Cell(tc, tbl).text for tc in row._tr.tc_lst] for row in tbl.rows]
+    result: list[list[list[str]]] = []
+
+    def _walk_table(tbl: Table) -> None:
+        rows: list[list[str]] = []
+        nested_to_walk: list[Table] = []
+        for tr in tbl._tbl.tr_lst:
+            row_cells: list[str] = []
+            for tc in tr.tc_lst:
+                cell = _Cell(tc, tbl)
+                row_cells.append(cell.text)
+                if cell.tables:
+                    nested_to_walk.extend(cell.tables)
+            if row_cells:
+                rows.append(row_cells)
+        if rows:
+            result.append(rows)
+        for nested in nested_to_walk:
+            _walk_table(nested)
+
+    for tbl in doc.tables:
+        _walk_table(tbl)
+    return result
 
 
 def inspect(path: Path) -> dict[str, Any]:
@@ -47,7 +64,7 @@ def inspect(path: Path) -> dict[str, Any]:
             }
         )
 
-    tables: list[list[list[str]]] = [_table_rows(tbl) for tbl in doc.tables]
+    tables = _extract_tables(doc)
 
     body_xml = doc.element.body.xml if doc.element is not None else ""
     has_tracked_changes = "<w:ins" in body_xml or "<w:del" in body_xml
@@ -74,12 +91,13 @@ def main() -> int:
     if not args.path.is_file():
         print(f"error: {args.path} not found", file=sys.stderr)
         return 2
+    if args.path.suffix.lower() != ".docx":
+        print(f"error: expected .docx, got {args.path.suffix!r}", file=sys.stderr)
+        return 2
     try:
         payload = inspect(args.path)
-    except (PackageNotFoundError, BadZipFile) as exc:
-        # Anything that is not a readable .docx package: a renamed file, a
-        # truncated download, a zip that never finished writing.
-        print(f"error: {args.path} is not a readable .docx file ({exc})", file=sys.stderr)
+    except (PackageNotFoundError, BadZipFile, Exception) as exc:  # noqa: BLE001
+        print(f"error: failed to parse {args.path}: {exc}", file=sys.stderr)
         return 2
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     if args.out is not None:

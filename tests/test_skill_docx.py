@@ -380,28 +380,95 @@ def test_apply_ops_skips_non_dict_ops() -> None:
     assert doc.paragraphs[0].text == "Hello Wei"
 
 
-def _inspect_module():
+def test_inspect_docx_handles_irregular_vertical_merge(tmp_path: Path) -> None:
+    """Issue #2154: inspect_docx raised ValueError on irregular grids with vMerge."""
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
     sys.path.insert(0, str(SCRIPTS))
     try:
         import inspect_docx  # type: ignore[import-not-found]
     finally:
         sys.path.pop(0)
-    return inspect_docx
+
+    doc = Document()
+    doc.add_paragraph("Table test")
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(0, 1))
+    table.cell(0, 0).text = "Merged"
+    table.cell(1, 0).text = "Row2 Col1"
+    continue_marker = OxmlElement("w:vMerge")
+    continue_marker.set(qn("w:val"), "continue")
+    table.cell(1, 1)._tc.get_or_add_tcPr().append(continue_marker)
+
+    out_file = tmp_path / "test_merge.docx"
+    doc.save(str(out_file))
+
+    res = inspect_docx.inspect(out_file)
+    assert len(res["tables"]) == 1
+    assert res["tables"][0][0] == ["Merged"]
+
+
+def test_inspect_docx_nested_tables(tmp_path: Path) -> None:
+    """Issue #2154: nested tables are inspected."""
+    from docx import Document
+
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import inspect_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+
+    doc = Document()
+    outer = doc.add_table(rows=1, cols=1)
+    outer.cell(0, 0).text = "Outer Cell"
+    inner = outer.cell(0, 0).add_table(rows=1, cols=1)
+    inner.cell(0, 0).text = "Inner Cell"
+
+    out_file = tmp_path / "test_nested.docx"
+    doc.save(str(out_file))
+
+    res = inspect_docx.inspect(out_file)
+    assert len(res["tables"]) == 2
+    flat_texts = [cell for tbl in res["tables"] for row in tbl for cell in row]
+    assert any("Outer Cell" in cell for cell in flat_texts)
+    assert any("Inner Cell" in cell for cell in flat_texts)
+
+
+def test_inspect_docx_rejects_non_docx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #2154: inspect_docx should exit with code 2 on non-docx files."""
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import inspect_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+
+    txt_file = tmp_path / "notes.txt"
+    txt_file.write_text("not a docx", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", ["inspect_docx.py", str(txt_file)])
+    assert inspect_docx.main() == 2
+
+    # Also reject corrupted or invalid .docx files
+    bad_docx = tmp_path / "invalid.docx"
+    bad_docx.write_text("not a real docx archive", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["inspect_docx.py", str(bad_docx)])
+    assert inspect_docx.main() == 2
 
 
 def test_inspect_does_not_duplicate_a_vertically_merged_cell(tmp_path: Path) -> None:
-    """``row.cells`` resolves a vertical merge against the row above.
+    """Issue #2154: row.cells resolves a vertical merge against the row above."""
+    from docx import Document
 
-    The continuation row holds no text of its own, yet the grid-mapped API
-    reports the merged cell's text again, so the dump claimed content in a
-    row that does not have it. Reading ``<w:tc>`` directly -- what
-    ``edit_docx`` already does -- reports each cell exactly once.
-    """
-    from docx import Document as _Document
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import inspect_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
 
-    inspect_docx = _inspect_module()
     doc_path = tmp_path / "merged.docx"
-    doc = _Document()
+    doc = Document()
     tbl = doc.add_table(rows=2, cols=3)
     tbl.cell(0, 0).text = "SPAN"
     tbl.cell(0, 1).text = "B1"
@@ -412,18 +479,22 @@ def test_inspect_does_not_duplicate_a_vertically_merged_cell(tmp_path: Path) -> 
     doc.save(str(doc_path))
 
     rows = inspect_docx.inspect(doc_path)["tables"][0]
-
     assert rows[0] == ["SPAN", "B1", "C1"]
     assert rows[1] == ["", "B2", "C2"]
 
 
 def test_inspect_does_not_repeat_a_horizontally_merged_cell(tmp_path: Path) -> None:
-    """A cell spanning two columns is one cell, not two identical ones."""
-    from docx import Document as _Document
+    """Issue #2154: A cell spanning two columns is one cell, not two identical ones."""
+    from docx import Document
 
-    inspect_docx = _inspect_module()
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import inspect_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+
     doc_path = tmp_path / "wide.docx"
-    doc = _Document()
+    doc = Document()
     tbl = doc.add_table(rows=1, cols=3)
     tbl.cell(0, 0).text = "WIDE"
     tbl.cell(0, 2).text = "Y"
@@ -431,33 +502,25 @@ def test_inspect_does_not_repeat_a_horizontally_merged_cell(tmp_path: Path) -> N
     doc.save(str(doc_path))
 
     rows = inspect_docx.inspect(doc_path)["tables"][0]
-
     assert len(rows[0]) == 2
     assert rows[0][1] == "Y"
 
 
-def test_inspect_reports_an_unreadable_file_as_exit_two(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A renamed or truncated file is a bad input, not a crash."""
-    inspect_docx = _inspect_module()
-    bad = tmp_path / "invalid.docx"
-    bad.write_text("not a docx at all", encoding="utf-8")
-
-    monkeypatch.setattr(sys, "argv", ["inspect_docx.py", str(bad)])
-
-    assert inspect_docx.main() == 2
-
-
 def test_inspect_still_reads_an_ordinary_table(tmp_path: Path) -> None:
-    from docx import Document as _Document
+    from docx import Document
 
-    inspect_docx = _inspect_module()
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import inspect_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+
     doc_path = tmp_path / "plain.docx"
-    doc = _Document()
+    doc = Document()
     tbl = doc.add_table(rows=2, cols=2)
     for (r, c), value in {(0, 0): "A", (0, 1): "B", (1, 0): "C", (1, 1): "D"}.items():
         tbl.cell(r, c).text = value
     doc.save(str(doc_path))
 
     assert inspect_docx.inspect(doc_path)["tables"][0] == [["A", "B"], ["C", "D"]]
+
