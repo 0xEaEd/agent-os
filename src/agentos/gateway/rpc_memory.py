@@ -821,6 +821,17 @@ async def _handle_knowledge_base_ingest(params: dict | None, ctx: RpcContext) ->
                 rel_prefix = "knowledge_base"
             ingest_root = target_path
         else:
+            # Reject dirs that contain knowledge_base/ (e.g. workspace root).
+            # copytree into knowledge_base/<name> would nest kb into itself.
+            try:
+                kb_root.relative_to(target_path)
+            except ValueError:
+                pass
+            else:
+                raise ValueError(
+                    "cannot ingest a directory that contains knowledge_base/; "
+                    "ingest a subdirectory or individual files instead"
+                )
             dirname = target_path.name
             if not dirname or dirname in (".", ".."):
                 dirname = "imported"

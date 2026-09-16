@@ -328,3 +328,58 @@ async def test_rpc_knowledge_base_path_ingest_persists(tmp_path: Path):
         assert kb_list2.payload["count"] >= 2
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+async def test_rpc_knowledge_base_root_ingest_rejected(tmp_path: Path):
+    """Workspace-root ingest must not copytree into knowledge_base/ (nesting)."""
+    dispatcher = get_dispatcher()
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    memory_dir = workspace / "memory"
+    memory_dir.mkdir()
+    (memory_dir / "MEMORY.md").write_text("curated root", encoding="utf-8")
+    db_path = tmp_path / "memory.db"
+
+    store = LongTermMemoryStore(db_path)
+    await store.initialize()
+
+    sync_manager = MemorySyncManager(store=store, workspace_dir=workspace, memory_dir=memory_dir)
+    retriever = MemoryRetriever(store)
+    turn_capture = TurnCaptureService(workspace_dir=workspace, turns_dir=tmp_path / "turns")
+
+    manager = MemoryManager(
+        agent_id="main",
+        db_path=db_path,
+        store=store,
+        sync_manager=sync_manager,
+        retriever=retriever,
+        turn_capture=turn_capture,
+        workspace_dir=workspace,
+        memory_dir=memory_dir,
+    )
+
+    ctx = RpcContext(conn_id="test")
+    ctx.memory_managers = {"main": manager}
+
+    try:
+        # CLI reaches this via `agentos memory ingest .` (workspace root).
+        root_ingest = await dispatcher.dispatch(
+            "r1",
+            "memory.knowledge_base.ingest",
+            {"agentId": "main", "path": "."},
+            ctx,
+        )
+        assert not root_ingest.ok
+        assert "knowledge_base" in str(root_ingest.error).lower()
+
+        # Must not leave nested copy junk under knowledge_base/.
+        kb = workspace / "knowledge_base"
+        if kb.exists():
+            nested = list(kb.rglob("MEMORY.md"))
+            assert nested == [], nested
+            # Also no knowledge_base/workspace/... nesting
+            assert not (kb / "workspace").exists()
+    finally:
+        await store.close()
