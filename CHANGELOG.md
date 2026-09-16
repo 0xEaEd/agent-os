@@ -6,19 +6,152 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.16] - 2026-09-16
+
 ### Fixed
 
+- `apply_patch` spliced each hunk by the length of its header context and
+  then rebuilt the tail from the body, so a hunk whose body consumed a
+  different number of lines than the header declared duplicated or dropped
+  the lines after it; hunks now splice by what the body actually consumed
+  ([#2224](https://github.com/use-agent-os/agent-os/issues/2224)). A patch
+  whose last context line had no trailing newline was joined onto the next
+  line instead of ending there
+  ([#1907](https://github.com/use-agent-os/agent-os/issues/1907)).
+- `edit_file` and `write_file` rewrote a CRLF file with LF line endings on
+  every edit; both now preserve the file's existing line-ending style
+  ([#1909](https://github.com/use-agent-os/agent-os/issues/1909)).
+- `git_diff` diffed the working tree against the index, so staged work was
+  reported as "no changes"; it now diffs against `HEAD`
+  ([#1963](https://github.com/use-agent-os/agent-os/issues/1963)).
+- `glob_search` and `grep_search` returned an empty result for a base path
+  that does not exist instead of saying so
+  ([#1802](https://github.com/use-agent-os/agent-os/issues/1802)).
+- `config_get` reported a configured key as missing when its value was
+  `null`; the key is now returned with its null value
+  ([#1892](https://github.com/use-agent-os/agent-os/issues/1892)).
+- `subagents list` ignored its `spawned_by` filter and returned every
+  subagent ([#1799](https://github.com/use-agent-os/agent-os/issues/1799)).
+- The env-dump redaction gate only recognised `;`, `&&` and `|` as command
+  separators, so `env` on its own line after another command escaped
+  redaction; a newline is now a separator too
+  ([#1721](https://github.com/use-agent-os/agent-os/issues/1721)).
+- Artifact publishing: the in-turn file authoring dedupe matched on bytes
+  alone, so two attachments with identical content but different names or
+  MIME types collapsed into one
+  ([#1836](https://github.com/use-agent-os/agent-os/issues/1836)); the same
+  bytes-only identity let a published artifact shadow a differently-named
+  one ([#1793](https://github.com/use-agent-os/agent-os/issues/1793)); and the
+  auto-publish mention matcher fired on any substring, so a reply mentioning
+  `report.pdf.bak` published `report.pdf` -- a filename boundary is now
+  required ([#1978](https://github.com/use-agent-os/agent-os/issues/1978)).
+- Channels: `SlackChannel.send()` posted an oversized final reply in one
+  message and lost it to Slack's length limit; it now chunks through the
+  shared fence-aware splitter like Telegram and Discord already did
+  ([#2236](https://github.com/use-agent-os/agent-os/issues/2236)). Slack
+  message deletes and Discord edits/deletes resolved against the adapter's
+  most recent conversation rather than the message's own channel
+  ([#1807](https://github.com/use-agent-os/agent-os/issues/1807),
+  [#1883](https://github.com/use-agent-os/agent-os/issues/1883)); the
+  Microsoft Teams proactive-send fallback likewise targeted whoever spoke
+  last ([#1789](https://github.com/use-agent-os/agent-os/issues/1789)). The
+  Telegram renderer truncated a link destination at its first `)` even when
+  the parentheses were balanced, and only recognised a fence info string of
+  `[a-z]+`, so ```` ```c++ ```` or ```` ```objective-c ```` rendered as
+  literal text ([#2003](https://github.com/use-agent-os/agent-os/issues/2003)).
+  The channel `RateLimiter` did not advance its refill clock across a wait,
+  so the first request after a stall was charged twice
+  ([#1876](https://github.com/use-agent-os/agent-os/issues/1876)).
+- Providers: an Anthropic `404` and any provider's "model unavailable"
+  response are classified as `MODEL_NOT_FOUND` so the router falls through to
+  the next tier instead of retrying a model that does not exist
+  ([#2234](https://github.com/use-agent-os/agent-os/issues/2234),
+  [#1359](https://github.com/use-agent-os/agent-os/issues/1359)). Ollama tool
+  calls with empty `arguments` or a `null` details block no longer crash the
+  turn -- empty arguments are read as `{}`
+  ([#1950](https://github.com/use-agent-os/agent-os/issues/1950)).
+  `get_capabilities` matched provider branches case-sensitively, so
+  `Anthropic` fell through to the generic defaults
+  ([#1899](https://github.com/use-agent-os/agent-os/issues/1899)).
+- Scheduler: cancelling a cron job neither killed nor reaped its script
+  subprocess, leaving it running to completion and a zombie behind
+  ([#1949](https://github.com/use-agent-os/agent-os/issues/1949)); a cron
+  runtime turn kept running after its handler was cancelled
+  ([#1948](https://github.com/use-agent-os/agent-os/issues/1948)); and a
+  relative `workdir` resolved against the gateway's CWD instead of the cron
+  script's own directory
+  ([#1911](https://github.com/use-agent-os/agent-os/issues/1911)).
+  `cron-watchers` treated an empty watermark as "never ran" and re-delivered
+  everything, and could report one id twice in a single poll
+  ([#1946](https://github.com/use-agent-os/agent-os/issues/1946)).
+- Gateway and sessions: a turn whose start-up failed never released its
+  concurrency slot, so enough failures pinned the session at its limit
+  ([#1984](https://github.com/use-agent-os/agent-os/issues/1984)); a
+  session's locks could be evicted from the bounded registry while its turns
+  were still in flight, letting a second turn run unserialised
+  ([#1965](https://github.com/use-agent-os/agent-os/issues/1965)).
+  `ApprovalQueue` never reaped an approval that expired with no waiter and
+  never pruned resolved rows, so the table grew without bound
+  ([#1987](https://github.com/use-agent-os/agent-os/issues/1987)).
+  `TaskRuntime.list()` took its window from the oldest tasks, so the tasks
+  an operator actually cares about were the ones truncated
+  ([#1805](https://github.com/use-agent-os/agent-os/issues/1805)).
+  `display_name` was normalised only at the RPC boundary, so a direct
+  `SessionManager` caller could store a padded or empty name
+  ([#1973](https://github.com/use-agent-os/agent-os/issues/1973)), and
+  `search_transcript`'s session filter matched the id but not the session
+  key ([#1801](https://github.com/use-agent-os/agent-os/issues/1801)).
+- Engine and MCP: the protocol-leak guard flushed its buffer only on a clean
+  stream end, so a stream error dropped the text it was holding
+  ([#1796](https://github.com/use-agent-os/agent-os/issues/1796));
+  `events_wait` reported a timeout when its internal poll expired rather than
+  the caller's deadline
+  ([#1798](https://github.com/use-agent-os/agent-os/issues/1798)).
+- Memory: `memory_delete` did not notify `on_memory_write`, so the snapshot
+  kept serving the deleted entry
+  ([#1806](https://github.com/use-agent-os/agent-os/issues/1806)); a path
+  ingest indexed the content but never persisted it into `knowledge_base/`,
+  leaving a ghost index that pointed at nothing after restart -- ingest of
+  the workspace root or an absolute path outside it is now refused
+  ([#2365](https://github.com/use-agent-os/agent-os/issues/2365)).
+- Memory redaction recognised `secret`, `token` and `password` as key
+  qualifiers but not `signing`, `encryption` or `account`, so
+  `signing_key` and `account_key` leaked
+  ([#1901](https://github.com/use-agent-os/agent-os/issues/1901)); the name
+  splitter did not separate an all-caps acronym from the word after it, so
+  `APIKey`-style identifiers were left unmasked
+  ([#2007](https://github.com/use-agent-os/agent-os/issues/2007)).
+- CLI: `agentos sessions list` widened its fetch window only for `--search`,
+  so any other filter was applied to a truncated page and silently dropped
+  matches ([#1913](https://github.com/use-agent-os/agent-os/issues/1913));
+  gateway client events were not correlated to the turn in flight
+  ([#1790](https://github.com/use-agent-os/agent-os/issues/1790)).
 - `pdf` tool: a page range that names the same page twice (`1-3,2`) no longer
   extracts it twice, which duplicated the text and charged the duplicate
-  against the page budget.
-
-- `pdf-toolkit` `merge.py`: a manifest range running past an input's last page
-  no longer contributes fewer pages — or none at all — while reporting success.
-  The JSON summary now carries `skipped_pages` (per input file) and
-  `missing_files` alongside `pages_written`, dropped pages are warned on
-  stderr, and a merge in which no requested page exists exits 2 instead of
-  writing a valid zero-page PDF. This matches the contract `split.py` already
-  holds in the same skill.
+  against the page budget
+  ([#2229](https://github.com/use-agent-os/agent-os/issues/2229)).
+- `pdf-toolkit`: `merge.py` and `split.py` silently contributed fewer pages
+  -- or none at all -- when a manifest range ran past an input's last page,
+  while reporting success. Both now report `skipped_pages` (per input file)
+  and `missing_files` alongside `pages_written`, warn on stderr for dropped
+  pages, and exit 2 instead of writing a valid zero-page PDF when no
+  requested page exists
+  ([#2379](https://github.com/use-agent-os/agent-os/issues/2379),
+  [#1902](https://github.com/use-agent-os/agent-os/issues/1902)). An
+  unusable merge manifest is reported as an error result instead of raising
+  ([#1921](https://github.com/use-agent-os/agent-os/issues/1921)), and
+  `form_fill` refuses a data file whose top level is not an object
+  ([#1903](https://github.com/use-agent-os/agent-os/issues/1903)).
+- Document skills: docx `replace_text` skipped section headers and footers
+  ([#1888](https://github.com/use-agent-os/agent-os/issues/1888)) and counted
+  a `replace_run` as applied even when the run index was out of bounds and
+  nothing was written
+  ([#1896](https://github.com/use-agent-os/agent-os/issues/1896)); pptx
+  `extract_text` did not recurse into nested group shapes
+  ([#1894](https://github.com/use-agent-os/agent-os/issues/1894)); and the
+  bundled git-diff and pptx scripts re-encoded their stdout through the
+  console code page, mangling non-ASCII output on Windows -- both now write
+  bytes ([#1834](https://github.com/use-agent-os/agent-os/issues/1834)).
 - The Windows shell denylist covers `rm` and `ri`, PowerShell's remaining two
   built-in aliases for `Remove-Item` alongside `del`/`rmdir`/`rd`/`erase`/
   `Remove-Item` itself. Anchored to a command position the same way `rd` and
@@ -33,6 +166,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`rm-cache.cmd`, `rd-report.ps1`) is no longer denied
   ([#2100](https://github.com/use-agent-os/agent-os/issues/2100),
   [#1964](https://github.com/use-agent-os/agent-os/issues/1964)).
+- Docs: the `agentos memory` reference now lists every subcommand
+  ([#2354](https://github.com/use-agent-os/agent-os/issues/2354)), and the
+  gmgn skills no longer carry broken relative workflow links
+  ([#2361](https://github.com/use-agent-os/agent-os/issues/2361)).
 
 ## [2026.9.14] - 2026-09-14
 
