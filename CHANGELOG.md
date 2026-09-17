@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.17] - 2026-09-17
+
 ### Added
 
 - New bundled skill `musebook`: join and take part in musebook.lol, the text
@@ -14,13 +16,115 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `references/`. Muse is a recognized publisher, so the Skills page gives the
   Muse boards a tab of their own with the Muse mark, alongside Robinhood —
   later boards join it there.
+- `docs/cli.md` and `docs/configuration.md` now carry worked examples for
+  `agentos configure image` (`--image-provider`, `--primary`,
+  `--api-key-env`, `--no-image-enabled`) and `agentos configure memory`
+  (`--memory-provider`, `--onnx-dir`, `--model`, `--api-key-env`)
+  ([#2356](https://github.com/use-agent-os/agent-os/issues/2356)).
 
 ### Fixed
 
+- Email channel: `sender_allowed` derived the sender's domain with
+  `rpartition("@")`, which returns the whole string when there is no `@`, so
+  a `From` whose addr-spec was a bare domain matched its own `@domain` /
+  `*@domain` allowlist entry and bypassed the channel's only access control;
+  an address with no `@` is now rejected outright
+  ([#2078](https://github.com/use-agent-os/agent-os/issues/2078)). The
+  `References`/`In-Reply-To` reader split on whitespace, so two msg-ids
+  written with no CFWS between them (`<a@x><b@x>`, legal under RFC 5322)
+  collapsed into one id that matched nothing and the reply started a new
+  thread; ids are now read by their angle brackets
+  ([#2080](https://github.com/use-agent-os/agent-os/issues/2080)).
+- Discord: `send_streaming()` PATCHed the accumulated text with no check
+  against the 2000-character message cap, so a long streamed reply died with
+  a 400 mid-stream; it now rolls over into follow-up messages the way
+  `send()` and Telegram already do
+  ([#2105](https://github.com/use-agent-os/agent-os/issues/2105)). The
+  channel-type and thread-parent caches were unbounded dicts written on every
+  channel and thread gateway event; both are now `BoundedRegistry` instances
+  with read-LRU so a long-lived connection to an active guild stops growing
+  for the life of the process
+  ([#2088](https://github.com/use-agent-os/agent-os/issues/2088)).
+- Telegram renderer: a `~~~` fence was not recognised, so its body was
+  rendered as prose ([#2022](https://github.com/use-agent-os/agent-os/issues/2022));
+  the `__bold__` pass ate Python dunder identifiers (`__init__` became
+  `<b>init</b>`) and the table-label path dropped the underscores entirely,
+  while `_italic_` labels kept theirs
+  ([#2076](https://github.com/use-agent-os/agent-os/issues/2076)).
+- Channel pairing: the per-sender rate-limit map was never swept, so one
+  timestamp per sender who ever asked to pair stayed in the control file
+  forever; stamps older than the rate-limit window are now expired
+  ([#2350](https://github.com/use-agent-os/agent-os/issues/2350)).
+- `apply_patch` located `*** Begin Patch` and `*** End Patch` with two
+  independent scans, so an end marker quoted before the block (an echoed
+  transcript) or a hunk line that reads `*** End Patch` truncated the body
+  silently and the tool reported success for work it did not do; the end
+  marker is now the one that closes the block
+  ([#2084](https://github.com/use-agent-os/agent-os/issues/2084)).
+- `edit_file` fuzzy matching: the `trimmed_boundary` strategy searched for
+  `old_text.strip()`, so its span started after the line's indentation and
+  stopped before its newline, and the replacement was re-indented from an
+  empty first line — an `old_text` that differed only by trailing spaces
+  silently moved a `return` out of its `def`; the span now grows back over
+  exactly the whitespace `strip()` removed
+  ([#2050](https://github.com/use-agent-os/agent-os/issues/2050)).
+- `config set` refused to write a declared key whose current value is `null`
+  (`Key not found: auth.token`) because it walked the `exclude_none` view;
+  it now checks the declared schema
+  ([#2031](https://github.com/use-agent-os/agent-os/issues/2031)).
+- Cron: `agentos cron add --channel <name> --to <id>` saved the job with an
+  empty `channel_id` because the RPC reader only accepted `channelId`;
+  `bestEffort` was dropped on the same path, and `cron.update` raised on a
+  job whose stored delivery was `None`. One alias reader now serves the
+  RPC, CLI and tool spellings
+  ([#2093](https://github.com/use-agent-os/agent-os/issues/2093)).
+- `ProgressWatchdog` counted identical consecutive tool *errors* as a
+  repeated tool call, telling the model to "use what you already have" on a
+  failure; failing signatures now fall through to the repeated-error path
+  ([#2101](https://github.com/use-agent-os/agent-os/issues/2101)).
+- MCP stdio transport: a `tools/call` result the pinned SDK could not model
+  (`structuredContent` without `content`, an unknown block type, or an
+  `audio`/`resource_link` block on an older SDK) was reported to the model as
+  a tool error whose text was a pydantic dump; those results now pass through
+  as successes, matching `MCPSessionClient`
+  ([#2020](https://github.com/use-agent-os/agent-os/issues/2020)).
+- DuckDuckGo search: a result link spelled as a relative redirect
+  (`/l/?uddg=…`, the form the HTML endpoint uses most) reached the caller
+  raw, so a follow-up `web_fetch` had nothing routable; relative,
+  protocol-relative and absolute redirects all resolve to their target now
+  ([#2082](https://github.com/use-agent-os/agent-os/issues/2082)).
+- Ollama provider: a final chunk with `"prompt_eval_count": null` propagated
+  `None` into the session token counters and crashed the turn with a
+  `TypeError`; counts are coerced to `int` as the other providers already do
+  ([#2058](https://github.com/use-agent-os/agent-os/issues/2058)).
+- `agentos cost savings` and its PDF export preferred the engine's cost
+  *estimate* over the provider's *billed* figure whenever the estimate was
+  nonzero; `billed_cost_usd` is now authoritative, matching the session cost
+  rollup ([#2383](https://github.com/use-agent-os/agent-os/issues/2383)).
+- Redaction: `passphrase` and the `bot`+`token` pair (`DISCORD_BOT_TOKEN`,
+  `TELEGRAM_BOT_TOKEN`) are now credential names, so their values are
+  redacted by name rather than only when a value-pattern happens to match
+  ([#2068](https://github.com/use-agent-os/agent-os/issues/2068)).
+- Bundled skills: nine scripts (`docx`, `pdf-toolkit`, `xlsx`, `robinhood-*`)
+  printed their JSON result through `sys.stdout.encoding`, so on a Windows
+  console code page any non-ASCII character in the document raised
+  `UnicodeEncodeError` and the script died with a traceback; results are
+  written as UTF-8 ([#2334](https://github.com/use-agent-os/agent-os/issues/2334)).
+  `pdf-toolkit`'s `SKILL.md` advertised a `--clear-signatures` flag that
+  `form_fill.py` never declared, so following the instructions was an
+  `argparse` failure ([#2103](https://github.com/use-agent-os/agent-os/issues/2103)).
+  `deep-research` coerced a `--record` file that was not a JSON list to `[]`
+  and reported success with no evidence saved; it now exits 2 and leaves the
+  plan untouched, and invalid plan JSON is reported cleanly in `iterate.py`
+  and `compile.py` ([#2328](https://github.com/use-agent-os/agent-os/issues/2328)).
+  `srt-from-script` truncated a fractional `DURATION_S` to an integer, so
+  every cue after a `3.5`-second shot drifted earlier
+  ([#2070](https://github.com/use-agent-os/agent-os/issues/2070)).
 - `read_spreadsheet`: a phonetic guide (furigana) stored alongside an xlsx
   cell's text is no longer appended to the value. The shared-string reader took
   every `<t>` descendant, including the ones inside `<rPh>`, so a Japanese
-  workbook read back with each reading glued onto the word it annotates.
+  workbook read back with each reading glued onto the word it annotates
+  ([#2053](https://github.com/use-agent-os/agent-os/issues/2053)).
 
 ## [2026.9.16] - 2026-09-16
 
