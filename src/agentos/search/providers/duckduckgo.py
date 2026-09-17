@@ -19,6 +19,32 @@ _HEADERS = {
 }
 
 
+def _redirect_target(href: str) -> str:
+    """Return the page a DuckDuckGo ``/l/?uddg=`` redirect points at, else ``href``.
+
+    The HTML endpoint spells the redirect relative (``/l/?uddg=``),
+    protocol-relative (``//duckduckgo.com/l/?uddg=``) or absolute, so it is
+    recognised by its path on an empty or DuckDuckGo host rather than by a
+    prefix substring. An organic result that merely carries a ``uddg`` query
+    parameter of its own is not a redirect and is left as it is.
+    """
+
+    try:
+        parts = urllib.parse.urlsplit(href)
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        # A malformed organic link (``http://[bad/``) is not a redirect; the
+        # old substring check never raised, and ``diagnostics=False`` promises
+        # ``search()`` does not either.
+        return href
+    if parts.path != "/l/" or (
+        host and host != "duckduckgo.com" and not host.endswith(".duckduckgo.com")
+    ):
+        return href
+    target = urllib.parse.parse_qs(parts.query).get("uddg", [""])[0]
+    return target or href
+
+
 class DuckDuckGoProvider:
     """Search provider using DuckDuckGo HTML endpoint."""
 
@@ -103,9 +129,7 @@ class DuckDuckGoProvider:
             if "y.js" in href:
                 continue
 
-            # Clean DDG redirect URLs
-            if "//duckduckgo.com/l/?uddg=" in href:
-                href = urllib.parse.unquote(href.split("uddg=")[1].split("&")[0])
+            href = _redirect_target(href)
 
             snippet_elem = elem.select_one(".result__snippet")
             snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
