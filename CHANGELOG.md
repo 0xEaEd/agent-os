@@ -24,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   exempting the prose in between from every check -- plus a
   conservative indented-code-block stripper
   (#2324).
+- `read_spreadsheet`: a phonetic guide (furigana) stored alongside an xlsx
+  cell's text is no longer appended to the value. The shared-string reader took
+  every `<t>` descendant, including the ones inside `<rPh>`, so a Japanese
+  workbook read back with each reading glued onto the word it annotates.
 
 ## [2026.9.16] - 2026-09-16
 
