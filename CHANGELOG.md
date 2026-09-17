@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Security: `.pgpass` and `.netrc` are named credential files, the gate
+  fired for `cat ~/.pgpass`, and the password still reached the model --
+  the assignment pass only understands `name=value`, and neither format
+  has one (`.pgpass` is positional `host:port:db:user:password`; `.netrc`
+  is `machine H login U password P`). Each now gets a format rule keyed on
+  the file's basename, on both the terminal and the file-read surface,
+  masking the password whole rather than with the head/tail reveal meant
+  for identifying vendor keys (#2620).
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.
