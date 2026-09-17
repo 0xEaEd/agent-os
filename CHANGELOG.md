@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Skills (video-still-animator): `resolve_ffmpeg` had drifted from the copies
+  in video-merger and subtitle-burner -- it did not probe `C:\ffmpeg\bin` and
+  returned early (skipping every fixed location) whenever `LOCALAPPDATA` was
+  unset -- so an ffmpeg the other two skills found, this one reported as
+  `not found`. The three resolvers now probe the same locations in the same
+  order, and a test runs all three under one environment to keep it that way
+  (#2435).
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.
