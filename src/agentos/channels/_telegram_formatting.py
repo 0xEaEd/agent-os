@@ -6,16 +6,21 @@ import html
 import re
 
 _TABLE_DELIMITER_RE = re.compile(r"^:?-{3,}:?$")
-# A fence opens with three or more backticks followed by an info string, which
-# CommonMark takes to be the rest of the line: its first word is the language,
-# anything after it is attributes this renderer has no use for. The info string
-# may not contain a backtick, but is otherwise free-form (`c#`, `vb.net`,
-# `.env`, `text/x-python`), so the language is sanitised for the class
-# attribute separately rather than by refusing the fence -- a refused opener
-# left the *closing* fence to open a block that swallowed the rest of the
-# message. The closing fence must be at least as long as the opener and carry
-# no info string, so a ```` block can quote a ``` block verbatim.
-_FENCE_OPEN_RE = re.compile(r"^\s*(?P<fence>`{3,})(?P<info>[^`]*)$")
+# A fence opens with three or more backticks or tildes followed by an info
+# string, which CommonMark takes to be the rest of the line: its first word is
+# the language, anything after it is attributes this renderer has no use for.
+# A backtick info string may not contain a backtick (that is what keeps a
+# ``` code span unambiguous); a tilde one may contain anything, backticks
+# included, which is the reason to reach for `~~~` at all. The info string is
+# otherwise free-form (`c#`, `vb.net`, `.env`, `text/x-python`), so the
+# language is sanitised for the class attribute separately rather than by
+# refusing the fence -- a refused opener left the *closing* fence to open a
+# block that swallowed the rest of the message. The closing fence must use the
+# same character, be at least as long as the opener and carry no info string,
+# so a ```` block can quote a ``` block verbatim and a ~~~ block a ``` one.
+_FENCE_OPEN_RE = re.compile(
+    r"^\s*(?:(?P<ticks>`{3,})(?P<tick_info>[^`]*)|(?P<tildes>~{3,})(?P<tilde_info>.*))$"
+)
 _FENCE_LANGUAGE_MAX_LENGTH = 32
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(?P<text>.+?)\s*#*\s*$")
 _ORDERED_LIST_RE = re.compile(r"^(?P<indent>\s*)(?P<number>\d+)[.)]\s+(?P<text>.+)$")
@@ -321,7 +326,7 @@ def _fence_language(info: str) -> str:
 
 
 def _closing_fence_re(fence: str) -> re.Pattern[str]:
-    return re.compile(rf"^\s*`{{{len(fence)},}}\s*$")
+    return re.compile(rf"^\s*{re.escape(fence[0])}{{{len(fence)},}}\s*$")
 
 
 def render_telegram_html(markdown: str) -> str:
@@ -333,8 +338,12 @@ def render_telegram_html(markdown: str) -> str:
         line = lines[index]
         fence = _FENCE_OPEN_RE.match(line)
         if fence:
-            language = _fence_language(fence.group("info"))
-            closing_fence = _closing_fence_re(fence.group("fence"))
+            if fence.group("ticks") is not None:
+                marker, info = fence.group("ticks"), fence.group("tick_info")
+            else:
+                marker, info = fence.group("tildes"), fence.group("tilde_info")
+            language = _fence_language(info)
+            closing_fence = _closing_fence_re(marker)
             code_lines: list[str] = []
             index += 1
             while index < len(lines) and not closing_fence.match(lines[index]):
