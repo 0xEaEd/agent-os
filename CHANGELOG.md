@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `skill_edit` erased existing YAML frontmatter metadata (`requires`,
+  `install`, `metadata.agentos`, and custom keys) when updating a skill's
+  description or content ([#2426](https://github.com/use-agent-os/agent-os/issues/2426)).
+  Existing frontmatter and unmodified sections are now preserved.
 
 - `apply_patch`: an `*** Update File:` block with no `@@@ ` hunks — a
   unified-diff `@@ -1,1 +1,1 @@` header, a note, or nothing at all — is refused
