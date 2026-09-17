@@ -17,6 +17,7 @@ def _turn(
     savings_usd: float | None = 0.02,
     savings_pct: float | None = 20.5,
     cost_usd: float | None = 0.08,
+    billed_cost_usd: float | None = None,
     confidence: float | None = 0.5,
     tokens_input: int = 1000,
     tokens_output: int = 100,
@@ -41,6 +42,7 @@ def _turn(
             "routing_savings_pct": savings_pct,
             "routing_savings_usd_estimated_vs_baseline": savings_usd,
             "cost_usd": cost_usd,
+            "billed_cost_usd": billed_cost_usd,
         },
     }
 
@@ -167,6 +169,46 @@ def test_average_confidence_covers_only_scored_turns(tmp_path: Path) -> None:
     report = build_savings_report(tmp_path)
 
     assert report.avg_confidence == 0.5
+
+
+def test_actual_cost_prefers_billed_over_estimate_when_both_present(tmp_path: Path) -> None:
+    """The provider's billed figure is authoritative -- not whichever field is nonzero first."""
+    _write_log(
+        tmp_path,
+        "2026-09-01",
+        [_turn("2026-09-01", cost_usd=0.08, billed_cost_usd=0.11)],
+    )
+
+    report = build_savings_report(tmp_path)
+
+    assert report.actual_cost_usd == 0.11
+    assert report.by_day[0].actual_cost_usd == 0.11
+
+
+def test_actual_cost_falls_back_to_estimate_when_unbilled(tmp_path: Path) -> None:
+    """No regression: an estimate-only turn (no provider billing yet) still counts."""
+    _write_log(
+        tmp_path,
+        "2026-09-01",
+        [_turn("2026-09-01", cost_usd=0.08, billed_cost_usd=None)],
+    )
+
+    report = build_savings_report(tmp_path)
+
+    assert report.actual_cost_usd == 0.08
+
+
+def test_actual_cost_stays_zero_for_a_genuinely_free_turn(tmp_path: Path) -> None:
+    """Boundary: a turn priced at exactly 0.0 on both fields must report 0.0, not overshoot."""
+    _write_log(
+        tmp_path,
+        "2026-09-01",
+        [_turn("2026-09-01", cost_usd=0.0, billed_cost_usd=0.0)],
+    )
+
+    report = build_savings_report(tmp_path)
+
+    assert report.actual_cost_usd == 0.0
 
 
 def test_empty_log_dir_yields_a_zeroed_report(tmp_path: Path) -> None:
