@@ -25,6 +25,7 @@ _UNORDERED_LIST_RE = re.compile(r"^(?P<indent>\s*)[-+*]\s+(?P<text>.+)$")
 # of being cut at the first `)` with the remainder rendered as text after the
 # anchor. Deeper nesting is left as literal text rather than a truncated link.
 _LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://(?:[^\s()<]|\([^\s()<]*\))+)\)")
+_BARE_URL_RE = re.compile(r"(https?://(?:[^\s()<]|\([^\s()<]*\))+)")
 # CommonMark's blockquote marker: up to 3 leading spaces, `>`, then at most
 # one space before the content. `>quote` (no space) and `>` alone (an empty
 # quote line, used to separate paragraphs within one quote) both match.
@@ -67,6 +68,7 @@ def _render_inline(text: str) -> str:
     protected, code_chunks = _replace_code_spans(text)
     rendered = html.escape(protected)
     hrefs: list[str] = []
+    bare_urls: list[str] = []
 
     def _park_href(match: re.Match[str]) -> str:
         # Park the URL before the inline passes below run. They match `**`,
@@ -81,7 +83,12 @@ def _render_inline(text: str) -> str:
         hrefs.append(match.group(2))
         return f'<a href="\x00TG_HREF_{len(hrefs) - 1}\x00">{match.group(1)}</a>'
 
+    def _park_bare_url(match: re.Match[str]) -> str:
+        bare_urls.append(match.group(1))
+        return f"\x00TG_URL_{len(bare_urls) - 1}\x00"
+
     rendered = _LINK_RE.sub(_park_href, rendered)
+    rendered = _BARE_URL_RE.sub(_park_bare_url, rendered)
     rendered = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<b>\1</b>", rendered)
     rendered = re.sub(r"__(?=\S)(.+?)(?<=\S)__", r"<b>\1</b>", rendered)
     rendered = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", r"<s>\1</s>", rendered)
@@ -91,6 +98,8 @@ def _render_inline(text: str) -> str:
     rendered = re.sub(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)", r"<i>\1</i>", rendered)
     # Restore in reverse order of protection: code spans were parked first, so
     # they come back last and a restored code span is never rescanned.
+    for index, url in enumerate(bare_urls):
+        rendered = rendered.replace(f"\x00TG_URL_{index}\x00", url)
     for index, href in enumerate(hrefs):
         rendered = rendered.replace(f"\x00TG_HREF_{index}\x00", href)
     for index, chunk in enumerate(code_chunks):
@@ -188,9 +197,7 @@ def _render_table(headers: list[str], rows: list[list[str]]) -> list[str]:
     clean_headers = [_plain_inline(header) for header in headers]
     column_count = len(headers)
     if column_count == 2:
-        rendered = [
-            f"<b>{html.escape(clean_headers[0])} — {html.escape(clean_headers[1])}</b>"
-        ]
+        rendered = [f"<b>{html.escape(clean_headers[0])} — {html.escape(clean_headers[1])}</b>"]
         for row in rows:
             normalised = _normalize_row(row, column_count)
             label = normalised[0]
