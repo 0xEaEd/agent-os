@@ -1,15 +1,15 @@
 """``scan_skill`` must not flag CommonMark-valid code blocks it doesn't recognise.
 
-``_strip_code_blocks`` exists specifically so example shell commands inside
-documentation code blocks are not treated as live exfiltration/shell-injection
-attempts. It only recognised exactly-three-backtick fences: a ``~~~`` fence
-(common in some doc generators) or a 4-space/tab indented block (both
-CommonMark-valid) were left as plain text and scored the same as a real
-exfiltration attempt -- ``scan_result.verdict == "dangerous"`` **hard-blocks**
-a hub install (``installer.py``'s ``install()`` returns ``success=False``
-unless the caller passes ``force=True``), so this is not cosmetic: a
-legitimately-written community skill using either convention would fail to
-install, with no indication the finding is a false positive.
+``_strip_fenced_code_blocks`` exists specifically so example shell commands
+inside documentation code blocks are not treated as live
+exfiltration/shell-injection attempts. It only recognised exactly-three-
+backtick fences: a ``~~~`` fence (common in some doc generators) was left as
+plain text and scored the same as a real exfiltration attempt --
+``scan_result.verdict == "dangerous"`` **hard-blocks** a hub install
+(``installer.py``'s ``install()`` returns ``success=False`` unless the caller
+passes ``force=True``), so this is not cosmetic: a legitimately-written
+community skill using the ``~~~`` convention would fail to install, with no
+indication the finding is a false positive.
 
 There is no existing dedicated test file for this scanner before this change.
 """
@@ -19,36 +19,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentos.skills.hub.installer import SkillInstaller
-from agentos.skills.hub.scanner import scan_skill, scan_skill_bundle
+from agentos.skills.hub.scanner import scan_skill
 from agentos.skills.hub.source import SkillBundle, SkillMeta
 
-# --- the two reported false positives ---------------------------------------
+# --- the reported false positive ---------------------------------------------
 
 
 def test_tilde_fence_example_is_not_flagged() -> None:
     """Fails without the fix: scored 'dangerous', same as a real exfiltration
     attempt, purely because the fence uses ~~~ instead of ```."""
     content = "# My Skill\n\nExample usage:\n\n~~~bash\ncurl https://example.com/api/data\n~~~\n"
-
-    result = scan_skill(content)
-
-    assert result.verdict == "safe"
-    assert result.findings == []
-
-
-def test_indented_code_block_example_is_not_flagged() -> None:
-    """Fails without the fix: a 4-space indented example, CommonMark-valid
-    and common in hand-written docs, was never recognised as code at all."""
-    content = "# My Skill\n\nExample usage:\n\n    curl https://example.com/api/data\n"
-
-    result = scan_skill(content)
-
-    assert result.verdict == "safe"
-    assert result.findings == []
-
-
-def test_tab_indented_code_block_example_is_not_flagged() -> None:
-    content = "# My Skill\n\nExample usage:\n\n\tcurl https://example.com/api/data\n"
 
     result = scan_skill(content)
 
@@ -167,33 +147,6 @@ def test_hidden_unicode_is_still_caught() -> None:
 # --- boundaries this fix deliberately does not extend to --------------------
 
 
-def test_indented_list_continuation_is_not_exempted() -> None:
-    """Boundary not fixed: an indented line with no preceding blank line
-    (e.g. list continuation text) is not a CommonMark indented code block,
-    and must stay scanned as prose -- exempting it would risk masking a
-    real attack hidden in an indented list item."""
-    content = "- item one\n    curl https://evil.example.com/data\n"
-
-    result = scan_skill(content)
-
-    assert result.verdict == "dangerous"
-
-
-def test_indented_block_without_a_trailing_blank_line_is_not_exempted() -> None:
-    """Boundary not fixed, deliberately conservative: CommonMark itself ends
-    an indented block on any de-indented line, no trailing blank line
-    required, but this scanner requires one on both sides. Under-recognizing
-    costs a routable false positive; over-recognizing costs a missed
-    detection, which is the worse failure for a security check."""
-    content = (
-        "Example:\n\n    curl https://example.com/api/data\nNot code, continues immediately.\n"
-    )
-
-    result = scan_skill(content)
-
-    assert result.verdict == "dangerous"
-
-
 def test_mismatched_fence_markers_leave_everything_scanned() -> None:
     """An opening ~~~ fence with no matching ~~~ closer (only a ``` appears)
     must not create an unbounded 'stripped' region that swallows real
@@ -248,15 +201,3 @@ async def test_install_no_longer_hard_blocks_a_tilde_fenced_skill(tmp_path: Path
     assert result.success is True
     assert result.scan is not None
     assert result.scan.verdict == "safe"
-
-
-def test_scan_skill_bundle_reflects_the_same_fix_across_multiple_files() -> None:
-    result = scan_skill_bundle(
-        {
-            "SKILL.md": "# Demo\n\n~~~bash\ncurl https://example.com/api/data\n~~~\n",
-            "references/notes.md": "See:\n\n    curl https://example.com/api/data\n",
-        }
-    )
-
-    assert result.verdict == "safe"
-    assert result.findings == []

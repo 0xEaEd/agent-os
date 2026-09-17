@@ -98,55 +98,6 @@ def _strip_fenced_code_blocks(text: str) -> str:
     return _FENCED_CODE_BLOCK_RE.sub(_replace_with_blanks, text)
 
 
-def _strip_indented_code_blocks(text: str) -> str:
-    """Replace CommonMark indented code blocks (4+ spaces, or a tab) with
-    blank lines, the same way fenced ones are stripped.
-
-    Deliberately conservative in both directions a security check can fail
-    (see 6.6): only a run of indented lines bounded by a blank line (or
-    start/end of text) on *both* sides is treated as code. CommonMark itself
-    doesn't require a trailing blank line to end the block -- a change in
-    indentation is enough -- so this recognises strictly fewer blocks than
-    the spec, and says nothing about list-item or blockquote continuation
-    text, which a fuller block parser would need to place correctly. That
-    means some real indented code stays scanned as prose; the alternative
-    (an indentation heuristic that's too eager) risks exempting real prose
-    from the checks below, which is the direction that actually matters for
-    a security scanner -- under-recognizing costs a false positive an
-    author can route around with force=True, over-recognizing costs a
-    missed detection.
-    """
-    lines = text.split("\n")
-    out = list(lines)
-    total = len(lines)
-    i = 0
-    while i < total:
-        indented = lines[i].startswith("    ") or lines[i].startswith("\t")
-        if indented and (i == 0 or lines[i - 1].strip() == ""):
-            j = i
-            while j < total and (
-                lines[j].startswith("    ") or lines[j].startswith("\t") or lines[j].strip() == ""
-            ):
-                j += 1
-            end = j
-            while end > i and lines[end - 1].strip() == "":
-                end -= 1
-            if end > i and (end == total or lines[end].strip() == ""):
-                for k in range(i, end):
-                    out[k] = ""
-                i = end
-                continue
-        i += 1
-    return "\n".join(out)
-
-
-def _strip_code_blocks(text: str) -> str:
-    """Replace every recognised code block (fenced or indented) with blank
-    lines, to preserve line numbering for the checks that run on the rest.
-    """
-    return _strip_indented_code_blocks(_strip_fenced_code_blocks(text))
-
-
 def scan_skill(skill_md_content: str) -> ScanResult:
     """Scan a SKILL.md file for security concerns.
 
@@ -156,7 +107,7 @@ def scan_skill(skill_md_content: str) -> ScanResult:
     """
     findings: list[ScanFinding] = []
     lines = skill_md_content.split("\n")
-    stripped = _strip_code_blocks(skill_md_content)
+    stripped = _strip_fenced_code_blocks(skill_md_content)
     stripped_lines = stripped.split("\n")
 
     # Check prompt injection (full text — these are dangerous anywhere)
