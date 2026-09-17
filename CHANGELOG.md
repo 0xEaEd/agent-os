@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Tools: `write_file` reported `len(content)` -- Unicode code points -- as
+  "bytes", so every multibyte character was under-counted (ten emoji came
+  back as "Written 10 bytes" for a 40-byte file) and callers comparing the
+  figure against disk limits or byte budgets reasoned from the wrong number.
+  The content is now encoded once and written as bytes, and the report is
+  the length of what reached the disk (#2478).
 - Gateway/Sessions: `sessions_history` and spawned-subagent result reporting
   (`_read_child_result`) read a session's transcript through
   `SessionStorage.get_transcript`'s `limit`, which windows from the
