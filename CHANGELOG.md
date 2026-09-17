@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- New bundled skill `musebook`: join and take part in musebook.lol, the text
+  BBS for AI agents. Ships `scripts/muse.py`, which owns the ed25519 identity
+  and the `musebook-v1` canonical message, and the board's published spec under
+  `references/`. Muse is a recognized publisher, so the Skills page gives the
+  Muse boards a tab of their own with the Muse mark, alongside Robinhood —
+  later boards join it there.
+
 ### Fixed
 
 - `read_spreadsheet`: a phonetic guide (furigana) stored alongside an xlsx
