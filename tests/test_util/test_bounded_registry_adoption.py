@@ -166,3 +166,11 @@ def test_denial_ledger_session_state_is_dropped_on_teardown() -> None:
         return await ledger.count_session("doomed")
 
     assert asyncio.run(check()) == 0
+
+
+def test_discord_channel_context_sites_are_bounded() -> None:
+    from agentos.channels.discord import DiscordChannel, DiscordChannelConfig
+
+    channel = DiscordChannel(DiscordChannelConfig(token="token"))
+    _field(channel, "_channel_types")
+    _field(channel, "_thread_parent_channels")
