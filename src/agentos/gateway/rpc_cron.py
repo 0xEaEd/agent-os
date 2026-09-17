@@ -123,6 +123,12 @@ def _job_to_wire(j: Any, config: Any = None) -> dict[str, Any]:
         "next_run": _iso(d.get("next_run_at")),
         "last_run": _iso(d.get("last_run_at")),
         "lastResult": d.get("last_error"),
+        "last_status": (
+            "error" if d.get("last_error") else ("ok" if d.get("last_run_at") else None)
+        ),
+        "lastStatus": (  # same value for camelCase consumers
+            "error" if d.get("last_error") else ("ok" if d.get("last_run_at") else None)
+        ),
         "run_count": d.get("run_count", 0),
         "error_count": d.get("error_count", 0),
         "created_at": _iso(d.get("created_at")),
