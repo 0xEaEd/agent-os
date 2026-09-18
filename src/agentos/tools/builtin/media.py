@@ -780,6 +780,8 @@ def _parse_page_range(pages: str, total: int) -> list[int]:
                 indices.append(idx)
         else:
             raise SafeToolError(f"Invalid page range: {pages}")
+    if not indices:
+        raise SafeToolError(f"Invalid page range: {pages}")
     return indices
 
 

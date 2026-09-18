@@ -35,6 +35,15 @@ def test_parse_page_range_validation_errors() -> None:
     with pytest.raises(SafeToolError, match="Invalid page range"):
         _parse_page_range("abc", total=5)
 
+    with pytest.raises(SafeToolError, match="Invalid page range"):
+        _parse_page_range(",", total=5)
+
+    with pytest.raises(SafeToolError, match="Invalid page range"):
+        _parse_page_range(" , , ", total=5)
+
+    with pytest.raises(SafeToolError, match="Invalid page range"):
+        _parse_page_range("", total=5)
+
     with pytest.raises(SafeToolError, match="exceeds document length"):
         _parse_page_range("1-10", total=5)
 
