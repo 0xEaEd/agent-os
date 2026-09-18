@@ -62,6 +62,7 @@ from unilp.launchers import (  # noqa: E402
     derive_pool_candidates,
     is_locker_address,
     label_address,
+    labelled_hooks,
     launchers_for,
     probe_position_ids,
     queryable_launchers,
@@ -132,7 +133,7 @@ Global: --chain <key|id>  (default robinhood)   --rpc <url>   --json
         --mode logs|ticks   how reserves are read. "logs" replays ModifyLiquidity and
                             attributes each range to an owner; "ticks" walks the tick bitmap
                             (no logs, merges overlapping positions into segments).
-                            Default: logs on Robinhood, ticks on Base.
+                            Default: ticks on both chains — the RPCs cap eth_getLogs.
 """
 
 # ---------------------------------------------------------------------------
@@ -314,6 +315,15 @@ def pool_key_for_id(client, chain: dict, pool_id: str, args: dict | None = None)
             )
             if hit:
                 return hit["poolKey"]
+        # No queryable registry — a labelled hook still pins the PoolKey shape.
+        for _entry, hook in labelled_hooks(chain):
+            hit = next(
+                (c for c in derive_pool_candidates(chain, token, hook=hook)
+                 if c["poolId"].lower() == pool_id.lower()),
+                None,
+            )
+            if hit:
+                return hit["poolKey"]
         # No launcher, or none of its pools is this one — the pool may simply have no
         # hook, which puts it outside every registry. That candidate set is pure keccak,
         # so trying it costs nothing but a few hashes.
@@ -452,27 +462,66 @@ def discover_via_launcher(client, chain: dict, token: str) -> dict | None:
     fall back to the log scan.
     """
     found = resolve_launcher(client, chain, token)
-    if not found:
+    if found:
+        candidates = derive_pool_candidates(chain, token, hook=found["hook"],
+                                            numeraire=found["numeraire"])
+        return {"launcher": found, "inits": _confirm_candidates(client, chain, candidates)}
+    return discover_via_labelled_hooks(client, chain, token)
+
+
+def discover_via_labelled_hooks(client, chain: dict, token: str) -> dict | None:
+    """Find a token's pools through hooks the launcher table labels but cannot query.
+
+    Doppler publishes no Airlock on Robinhood Chain, so no registry says which tokens
+    it launched — yet its hook address is known, and every Doppler pool is
+    ``(token, quote, 0x800000, 200, hook)``. That makes the labelled hook a registry
+    of one: derive the candidate poolIds for every known quote and let one getSlot0
+    multicall say which exist. Cheap, and the only route on a chain whose RPC caps
+    ``eth_getLogs`` too tightly for an Initialize scan.
+
+    Returns None when no labelled hook yields an initialized pool.
+    """
+    hooks = labelled_hooks(chain)
+    if not hooks:
         return None
-
-    candidates = derive_pool_candidates(chain, token, hook=found["hook"],
-                                        numeraire=found["numeraire"])
+    candidates: list[dict] = []
+    owners: list[dict] = []
+    for entry, hook in hooks:
+        for candidate in derive_pool_candidates(chain, token, hook=hook):
+            candidates.append(candidate)
+            owners.append(entry)
     if not candidates:
-        return {"launcher": found, "inits": []}
+        return None
+    live = _confirm_candidates(client, chain, candidates)
+    if not live:
+        return None
+    live_ids = {c["poolId"].lower() for c in live}
+    entry, hook = next(
+        (owner, cand["poolKey"]["hooks"])
+        for owner, cand in zip(owners, candidates)
+        if cand["poolId"].lower() in live_ids
+    )
+    return {
+        "launcher": {
+            "launcher": entry["id"],
+            "name": entry["name"],
+            "kind": entry["kind"],
+            "docs": entry.get("docs"),
+            "token": checksum_address(token),
+            "hook": checksum_address(hook),
+            "locker": None,
+            "numeraire": None,
+            "extras": {"derivedFrom": "labelled hook"},
+        },
+        "inits": live,
+    }
 
-    slot0s = client.multicall([
-        {"address": chain["stateView"], "abi": STATE_VIEW_ABI,
-         "functionName": "getSlot0", "args": [c["poolId"]]}
-        for c in candidates
-    ])
 
-    inits = []
-    for candidate, slot0 in zip(candidates, slot0s):
-        # An uninitialized pool reads back as sqrtPriceX96 = 0 rather than reverting.
-        if slot0["status"] != "success" or int(slot0["result"][0]) == 0:
-            continue
-        inits.append({**candidate, "blockNumber": 0, "transactionHash": None})
-    return {"launcher": found, "inits": inits}
+def _scan_chunks(client, chain: dict) -> int:
+    """How many capped eth_getLogs windows a full scan of this chain would take."""
+    scan = chain["logScan"]
+    span = max(client.block_number() - scan.get("fromBlock", 0), 0)
+    return math.ceil(span / scan.get("chunkBlocks", 9_000)) or 1
 
 
 def _confirm_candidates(client, chain: dict, candidates: list[dict]) -> list[dict]:
@@ -546,7 +595,7 @@ def cmd_pools(client, chain: dict, args: dict) -> None:
             used_vanilla = True
             inits = discover_vanilla_pools(client, chain, token, quotes=vanilla_quotes)
             if not inits:
-                chunks = math.ceil(24_000_000 / chain["logScan"].get("chunkBlocks", 9_000))
+                chunks = _scan_chunks(client, chain)
                 print(f"\nNo known launchpad on {chain['name']} deployed {token}, no "
                       "hook-less pool pairs it with a known quote currency, and this "
                       "chain cannot serve a wide eth_getLogs range.")
@@ -725,7 +774,9 @@ def cmd_pools(client, chain: dict, args: dict) -> None:
     token_meta_ref = metas[token.lower()]
     print(heading(f"v4 pools holding {token_meta_ref['symbol']} on {chain['name']}"))
     if used_registry:
-        print(f"  launched by {launcher['name']} — pool(s) derived from its registry, "
+        source = ("its known hook" if launcher.get("extras", {}).get("derivedFrom")
+                  else "its registry")
+        print(f"  launched by {launcher['name']} — pool(s) derived from {source}, "
               f"no log scan. hook {launcher['hook']}")
     elif used_vanilla:
         print("  hook-less probe — poolIds derived with hooks = 0 across the "
@@ -1057,7 +1108,7 @@ def cmd_positions(client, chain: dict, args: dict) -> None:
     # ERC-721 Transfer logs, which a chain with a hard getLogs range cap cannot serve in
     # reasonable time. Refuse up front rather than appearing to hang.
     if chain["logScan"].get("supportsFullRange") is False and not args.get("scan-logs"):
-        chunks = math.ceil(24_000_000 / chain["logScan"].get("chunkBlocks", 9_000))
+        chunks = _scan_chunks(client, chain)
         print(f"\n{chain['name']} caps eth_getLogs ranges, so enumerating a wallet's v4 "
               f"positions needs ~{chunks} sequential requests.")
         print("\nOptions:")

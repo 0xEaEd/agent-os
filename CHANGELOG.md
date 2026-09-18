@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `senior-unilp-manager` on Robinhood Chain: the drpc endpoint now caps
+  `eth_getLogs` at 100k blocks, so `pools --token`, `positions` and the default
+  `--mode logs` reserve read died with a bare `eth_getLogs: HTTP 500` after
+  three retries, and the agent had no way to find the AGENTOS pool. The chain
+  entry now declares the cap and defaults to the tick-bitmap walk; `pools` and
+  `pool --id --token` derive the pool from the Doppler hook the launcher table
+  already labels and confirm it with one `getSlot0` (2 s instead of a failed
+  scan); `positions` refuses up front with the same options Base gets; and the
+  RPC client surfaces the JSON-RPC error carried in a 5xx body instead of
+  `HTTP 500`, retrying only when it names a transient condition.
+
 ## [2026.9.17] - 2026-09-17
 
 ### Added

@@ -100,9 +100,14 @@ CHAINS: dict[str, dict] = {
             NATIVE: "ETH",
         },
         "geckoNetwork": "robinhood",
-        "logScan": {"supportsFullRange": True, "chunkBlocks": 500_000, "fromBlock": 0},
+        # drpc caps eth_getLogs at 100k blocks here (HTTP 500, JSON-RPC code 22) and
+        # the v4 contracts deploy at block ~9070, so a full Initialize scan is ~650
+        # sequential requests. Never attempt one implicitly; discovery goes through
+        # the labelled Doppler hook instead (launchers.py), and reserves through the
+        # tick bitmap.
+        "logScan": {"supportsFullRange": False, "chunkBlocks": 100_000, "fromBlock": 9_070},
         # Logs are cheap here and carry per-owner attribution, so prefer them.
-        "rangeMode": "logs",
+        "rangeMode": "ticks",
     },
     "base": {
         "key": "base",
