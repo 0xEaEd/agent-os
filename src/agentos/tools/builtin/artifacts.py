@@ -396,7 +396,13 @@ async def publish_inline_artifacts(output: str, cwd: str | None = None) -> str:
             path = str(Path(cwd) / path)
         try:
             await publish_artifact(path=path, mime=mime)
-        except ToolError as exc:
+        # OSError as well as ToolError: the path comes from a marker the
+        # command's own output produced, so publishing it touches the file
+        # system with whatever that names. A PermissionError or a vanished
+        # file is a note next to the marker, the way every other failure
+        # here already is -- not an exception out of the shell tool that
+        # loses the command's real output along with it.
+        except (ToolError, OSError) as exc:
             replacements[marker] = f"[inline artifact not published: {exc}]"
             continue
         published += 1
