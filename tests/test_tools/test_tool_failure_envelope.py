@@ -126,3 +126,17 @@ def test_image_attachment_path_safe_tool_error_is_not_generic_internal_error() -
     assert "chat attachment" in envelope["user_message"]
     assert "internal error" not in envelope["user_message"]
     assert "secret" not in envelope["user_message"]
+
+
+def test_regex_pattern_error_preserves_syntax_details_in_envelope() -> None:
+    from agentos.tools.types import RegexPatternError
+
+    err = RegexPatternError(
+        "Invalid regex pattern: missing ), unterminated subpattern at position 1"
+    )
+    envelope = build_tool_failure_envelope(err, "grep_search")
+    assert envelope["status"] == "error"
+    assert envelope["tool"] == "grep_search"
+    assert envelope["error_class"] == "RegexPatternError"
+    assert "Invalid regex pattern" in envelope["user_message"]
+    assert "unterminated subpattern" in envelope["user_message"]

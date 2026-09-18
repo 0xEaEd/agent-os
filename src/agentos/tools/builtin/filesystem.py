@@ -31,7 +31,12 @@ from agentos.tools.fuzzy_match import (
 )
 from agentos.tools.path_policy import reject_foreign_host_path
 from agentos.tools.registry import tool
-from agentos.tools.types import ToolError, WorkspaceAccessError, current_tool_context
+from agentos.tools.types import (
+    RegexPatternError,
+    ToolError,
+    WorkspaceAccessError,
+    current_tool_context,
+)
 from agentos.tools.write_tracking import record_workspace_file_write
 
 log = structlog.get_logger(__name__)
@@ -1208,7 +1213,7 @@ async def grep_search(
         try:
             regex = re.compile(pattern)
         except re.error as e:
-            raise ValueError(f"Invalid regex pattern: {e}") from e
+            raise RegexPatternError(f"Invalid regex pattern: {e}") from e
 
         results: list[str] = []
 

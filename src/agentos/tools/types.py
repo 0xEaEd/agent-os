@@ -252,6 +252,10 @@ class UnsupportedSurfaceError(SafeToolError):
     )
 
 
+class RegexPatternError(SafeToolError, ValueError):
+    """Raised when grep_search receives an invalid regular expression."""
+
+
 class UnsupportedURLSchemeError(SafeToolUserMessage, ValueError):
     """Raised when a URL tool receives a URL without an HTTP(S) scheme."""
 
