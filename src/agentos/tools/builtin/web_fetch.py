@@ -21,7 +21,11 @@ from agentos.sandbox.integration import sandboxed
 from agentos.tools.registry import tool
 from agentos.tools.ssrf import validate_http_url_for_fetch
 from agentos.tools.ssrf_client import ssrf_guarded_client
-from agentos.tools.types import SSRFBlockedError, current_tool_context
+from agentos.tools.types import (
+    SSRFBlockedError,
+    UnsupportedURLSchemeError,
+    current_tool_context,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -228,7 +232,25 @@ async def web_fetch(
     max_chars: int | None = None,
 ) -> str:
     # --- SSRF guard ---
-    _check_ssrf(url)
+    try:
+        _check_ssrf(url)
+    except (SSRFBlockedError, UnsupportedURLSchemeError):
+        raise
+    except ValueError as exc:
+        err_result: dict[str, Any] = {
+            "url": url,
+            "final_url": url,
+            "status": 0,
+            "content_type": "",
+            "title": "",
+            "extract_mode": extract_mode,
+            "extractor": "none",
+            "truncated": False,
+            "length": 0,
+            "text": "",
+            "error": str(exc),
+        }
+        return json.dumps(err_result, ensure_ascii=False)
     from agentos.tools.builtin.web import _sensitive_body_block, _sensitive_url_marker
 
     marker = _sensitive_url_marker(url)

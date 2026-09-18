@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
 from agentos.result_budget import ToolResultBudgetPolicy, ToolRunBudgetPolicy
 from agentos.tools.builtin.web_fetch import (
     _apply_max_chars,
@@ -111,3 +118,35 @@ def test_resolve_effective_max_chars_run_budget_cap_still_applies_below_minimum(
         assert _resolve_effective_max_chars(999) == 50
     finally:
         current_tool_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_unresolvable_host_returns_structured_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import json
+    import socket
+    from pathlib import Path
+
+    from agentos.sandbox.config import SandboxSettings
+    from agentos.sandbox.integration import configure_runtime, reset_runtime
+    from agentos.tools.builtin.web_fetch import web_fetch
+
+    configure_runtime(
+        SandboxSettings(sandbox=False, security_grading=False, allow_legacy_mode=True),
+        workspace=Path(str(tmp_path)),
+    )
+    try:
+        def _mock_getaddrinfo(host: str, port: object) -> list[object]:
+            raise socket.gaierror(-2, "Name or service not known")
+
+        monkeypatch.setattr(socket, "getaddrinfo", _mock_getaddrinfo)
+
+        res = await web_fetch("https://nonexistent-domain-12345.example")
+        data = json.loads(res)
+        assert data["status"] == 0
+        assert "Cannot resolve hostname" in data["error"]
+        assert data["url"] == "https://nonexistent-domain-12345.example"
+    finally:
+        reset_runtime()
