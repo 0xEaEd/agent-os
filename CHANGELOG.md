@@ -18,6 +18,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- WebUI chat: "Move to project" and "Rename session" on a brand-new chat
+  (Cmd+Shift+O / `/new`, before the first message) failed with "Session not
+  found". The WebUI mints the session key client-side and the row only
+  appeared on the first send; `sessions.patch` and `sessions.rename` now
+  materialize that draft row for ephemeral webchat keys (any other key shape
+  still gets the strict not-found), and the chat drops its `new_chat` intent
+  once the move or rename succeeded so the first send is not rejected as a
+  `session_key conflict`.
+
 - `senior-unilp-manager`: a mint the wallet could cover, but not with the
   +100 bps buffer, was reported as "blocked on approvals — run approve". The
   gate now separates a balance shortfall from an approval problem and only

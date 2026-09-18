@@ -329,6 +329,11 @@ export function ChatPage() {
   }, [rpc, sessionKey])
   const sessionProjectName = sessionProjectId ? projectsById.get(sessionProjectId) : undefined
 
+  // The per-send session intent (chat.js:335 `_pendingSessionIntent`) — rides on
+  // the next send (e.g. 'new_chat'), and is carried through the pending queue
+  // (chat.js:8523/8547/8612). A ref: it is not rendered, only read at send time.
+  const pendingIntentRef = useRef<string | null>(null)
+
   const onRenameSession = useCallback(
     (name: string) => {
       const previous = sessionName
@@ -337,6 +342,9 @@ export function ChatPage() {
       void (async () => {
         try {
           await rpc.call('sessions.rename', { key: sessionKey, name })
+          // Same seam as the project move below: renaming an unsent new chat
+          // materializes its row, so the first send must not carry `new_chat`.
+          pendingIntentRef.current = null
           toast.success(name ? t('chat.sessionRenamed') : t('chat.sessionRenameCleared'))
         } catch (err) {
           setSessionName(previous)
@@ -356,6 +364,11 @@ export function ChatPage() {
       void (async () => {
         try {
           await rpc.call('sessions.patch', { key: sessionKey, projectId })
+          // A move on an unsent new chat materializes the session row server
+          // side, so the key now exists: the first send must go out as a plain
+          // continue. A `new_chat` intent against an existing key is rejected
+          // as a session_key conflict.
+          pendingIntentRef.current = null
           toast.success(projectId ? t('chat.sessionMoved') : t('chat.sessionMoveDetached'))
         } catch (err) {
           setSessionProjectId(previous)
@@ -366,11 +379,6 @@ export function ChatPage() {
     },
     [rpc, sessionKey, sessionProjectId],
   )
-
-  // The per-send session intent (chat.js:335 `_pendingSessionIntent`) — rides on
-  // the next send (e.g. 'new_chat'), and is carried through the pending queue
-  // (chat.js:8523/8547/8612). A ref: it is not rendered, only read at send time.
-  const pendingIntentRef = useRef<string | null>(null)
 
   // chat.js:6091-6110 — the pending QUEUE (queued sends while streaming/compacting).
   // The bridge lets the queue write back into the composer + attachments + intent

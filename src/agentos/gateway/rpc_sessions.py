@@ -1520,6 +1520,37 @@ async def _handle_sessions_abort(params: dict | None, ctx: RpcContext) -> dict:
     return {"aborted": cancelled, "key": key}
 
 
+async def _create_unsent_webchat_draft(
+    ctx: RpcContext, storage: Any, key: str, params: dict[str, Any]
+) -> Any:
+    """Materialize the row for a WebUI draft session, or raise ``KeyError``.
+
+    The WebUI mints a fresh ``agent:<id>:webchat:<suffix>`` key client-side
+    (Cmd+Shift+O / ``/new``) and the row only appears on the first
+    ``chat.send``. The chip still offers "Move to project" on that draft, so
+    the patch must create the row the send would have — same agent, no
+    display name — instead of rejecting a session the user can see. Any other
+    key shape keeps the strict not-found so a typo never mints a phantom row.
+    """
+    if not _is_ephemeral_webchat_session_key(key):
+        raise KeyError(f"Session not found: {key}")
+    # Validate the target project first: a bad move must leave no row behind.
+    target = params.get("projectId", params.get("project_id"))
+    if isinstance(target, str):
+        get_project = getattr(storage, "get_project", None)
+        if get_project is not None and await get_project(target) is None:
+            raise RpcHandlerError(
+                "project.not_found",
+                f"Project '{target}' does not exist",
+                details={"projectId": target},
+            )
+    get_or_create = getattr(ctx.session_manager, "get_or_create", None)
+    if get_or_create is None:
+        raise KeyError(f"Session not found: {key}")
+    session, _created = await get_or_create(key, agent_id=parse_agent_id(key))
+    return session
+
+
 @_d.method("sessions.patch")
 async def _handle_sessions_patch(params: dict | None, ctx: RpcContext) -> dict:
     key = _require_key(params)
@@ -1531,12 +1562,12 @@ async def _handle_sessions_patch(params: dict | None, ctx: RpcContext) -> dict:
     if storage is None:
         raise RpcUnavailableError("No session storage available")
 
+    params = require_params_dict(params)
     session = await storage.get_session(key)
     if session is None:
-        raise KeyError(f"Session not found: {key}")
+        session = await _create_unsent_webchat_draft(ctx, storage, key, params)
 
     update_values: dict[str, Any] = {}
-    params = require_params_dict(params)
     field_map = {
         "displayName": "display_name",
         "model": "model",
@@ -1628,7 +1659,14 @@ async def _handle_sessions_rename(params: dict | None, ctx: RpcContext) -> dict:
     if storage is None:
         raise RpcUnavailableError("No session storage available")
 
-    session = await _resolve_session_node(storage, key)
+    session = await storage.get_session(key)
+    if session is None:
+        if _is_ephemeral_webchat_session_key(key):
+            # An unsent WebUI draft (see ``sessions.patch``): the chip offers
+            # rename before the first send has created the row.
+            session = await _create_unsent_webchat_draft(ctx, storage, key, params)
+        else:
+            session = await _resolve_session_node(storage, key)
     resolved_key = str(getattr(session, "session_key", "") or key)
     previous = getattr(session, "display_name", None)
 
