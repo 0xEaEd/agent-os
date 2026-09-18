@@ -109,13 +109,46 @@ def _marker_span(lines: list[str]) -> tuple[int, int]:
     return start_idx, end_idx
 
 
+_SECTION_DIRECTIVES = ("*** Add File: ", "*** Update File: ", "*** Delete File: ")
+
+
+def _dedent_body(body: list[str]) -> list[str]:
+    """Shift a patch body that sits indented as a block back to column 0.
+
+    A patch quoted inside a Markdown list, blockquote or indented block carries
+    the same indentation on every line, so no ``*** Add File:`` / ``*** Update
+    File:`` / ``*** Delete File:`` directive matched and every operation was
+    skipped. The block's column is the indentation of its first section
+    directive -- every valid body opens with one, and every content line sits
+    at least one column further right, behind its ``+``/``-``/``" "`` prefix.
+
+    It is deliberately not the ``*** Begin Patch`` line's indentation: an
+    opening marker that drifted right in front of a flush body still parses
+    (see ``_marker_span``). Lines carrying the block indentation lose exactly
+    that much, so indentation inside the patched code is kept. A
+    whitespace-only line shorter than the block becomes a bare blank, which
+    the parser already reads as an empty line. Any other line is left alone so
+    the parser can still reject it rather than have it guessed into shape.
+    """
+    indent = next(
+        (_leading_ws(line) for line in body if line.lstrip().startswith(_SECTION_DIRECTIVES)),
+        "",
+    )
+    if not indent:
+        return body
+    return [
+        line[len(indent) :] if line.startswith(indent) else ("" if not line.strip() else line)
+        for line in body
+    ]
+
+
 def _parse_patch(patch_text: str) -> list[PatchOp]:
     """Parse patch text into a list of PatchOp objects."""
     lines = patch_text.splitlines()
 
     # Trim to content between markers
     start_idx, end_idx = _marker_span(lines)
-    body = lines[start_idx + 1 : end_idx]
+    body = _dedent_body(lines[start_idx + 1 : end_idx])
 
     ops: list[PatchOp] = []
     i = 0
@@ -181,6 +214,14 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
         else:
             i += 1
 
+    if not ops:
+        # Loud, not "Applied patch: no changes": a patch that fails is retried,
+        # one that reports success while dropping every operation is believed.
+        raise ValueError(
+            "No operations found between '*** Begin Patch' and '*** End Patch': "
+            "expected a '*** Add File: <path>', '*** Update File: <path>' or "
+            "'*** Delete File: <path>' line. Nothing was applied."
+        )
     return ops
 
 
