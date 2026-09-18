@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `http-fetch` skill: `--max-bytes` now bounds what is *read*, not just what is
+  printed. The whole body used to be downloaded and held in memory before the
+  cap was applied, and a slow or endless stream (SSE, a log tail) was waited on
+  until the skill runner's timeout killed the process with no output; the read
+  now stops one byte past the cap and closes the connection (#2895)
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.
