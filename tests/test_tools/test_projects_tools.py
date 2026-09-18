@@ -16,7 +16,7 @@ from agentos.session.storage import SessionStorage
 from agentos.tools.builtin import projects as projects_tool
 from agentos.tools.builtin.session_search import create_session_search_tool
 from agentos.tools.registry import ToolRegistry
-from agentos.tools.types import ToolContext, ToolError, current_tool_context
+from agentos.tools.types import SafeToolError, ToolContext, ToolError, current_tool_context
 
 SESSION_KEY = "agent:main:webchat:cafe0001"
 
@@ -229,3 +229,28 @@ async def test_session_search_project_scope_outside_project_notes(manager, stora
         current_tool_context.reset(token)
     assert data["results"] == []
     assert "not in a project" in data["note"]
+
+
+@pytest.mark.asyncio
+async def test_projects_create_empty_name_raises_safe_tool_error(manager):
+    with pytest.raises(SafeToolError, match="Project name cannot be empty"):
+        await projects_tool.projects_create(name="")
+
+
+@pytest.mark.asyncio
+async def test_projects_create_duplicate_name_raises_safe_tool_error(manager):
+    await projects_tool.projects_create(name="UniqueProj", agent_id="main")
+    with pytest.raises(SafeToolError, match="already exists"):
+        await projects_tool.projects_create(name="UniqueProj", agent_id="main")
+
+
+@pytest.mark.asyncio
+async def test_projects_update_empty_name_raises_safe_tool_error(manager):
+    project = json.loads(await projects_tool.projects_create(name="Proj1", agent_id="main"))
+    await manager.create(SESSION_KEY, agent_id="main", project_id=project["project_id"])
+    token = _set_ctx(SESSION_KEY)
+    try:
+        with pytest.raises(SafeToolError, match="Project name cannot be empty"):
+            await projects_tool.projects_update(project_id=project["project_id"], name="")
+    finally:
+        current_tool_context.reset(token)
