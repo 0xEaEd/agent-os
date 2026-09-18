@@ -304,6 +304,46 @@ def test_github_rejects_an_unknown_scope(state_dir):
     assert result.returncode == 2  # argparse rejects the choice
 
 
+def test_watch_github_filters_pull_requests_when_scope_is_issues(monkeypatch, tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("watch_github", SCRIPTS / "watch_github.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    fake_payload = [
+        {"number": 1, "title": "Real issue", "user": {"login": "alice"}},
+        {
+            "number": 2,
+            "title": "PR with dict",
+            "user": {"login": "bob"},
+            "pull_request": {"url": "..."},
+        },
+        {"number": 3, "title": "PR with null", "user": {"login": "carol"}, "pull_request": None},
+    ]
+    monkeypatch.setattr(module, "_fetch", lambda _url: fake_payload)
+    monkeypatch.setenv("AGENTOS_STATE_DIR", str(tmp_path / "state"))
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["watch_github.py", "--repo", "org/repo", "--scope", "issues", "--first-run-reports"],
+    )
+
+    import io
+
+    captured = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", captured)
+
+    ret = module.main()
+    assert ret == 0
+    output = captured.getvalue()
+    assert "Real issue" in output
+    assert "PR with dict" not in output
+    assert "PR with null" not in output
+
+
 # ── --limit must not consume the backlog (Issue #1674) ──────────────────────
 
 

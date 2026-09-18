@@ -106,7 +106,7 @@ def main() -> int:
         if not isinstance(item, dict):
             continue
         # The issues endpoint also returns PRs; keep the two watchers distinct.
-        if args.scope == "issues" and item.get("pull_request"):
+        if args.scope == "issues" and ("pull_request" in item or item.get("pull_request")):
             continue
         identifier, line = _describe(args.scope, item)
         if identifier:
