@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Email channel: a `message/rfc822` attachment (an original email attached
+  as a file, e.g. Outlook/Apple Mail "Forward as Attachment") is no longer
+  silently dropped. `_extract_attachments` relied on
+  `part.get_payload(decode=True)`, which returns `None` for this content
+  type since the part's payload is the embedded message object, not encoded
+  bytes -- the attachment vanished with no warning logged. It's now
+  extracted by serializing the embedded message.
+
 ## [2026.9.18] - 2026-09-18
 
 ### Added
