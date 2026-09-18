@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.18] - 2026-09-18
+
 ### Added
 
 - `senior-unilp-manager`: `mint --amount0/--amount1 max` sizes a position from
@@ -42,6 +44,97 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   scan); `positions` refuses up front with the same options Base gets; and the
   RPC client surfaces the JSON-RPC error carried in a 5xx body instead of
   `HTTP 500`, retrying only when it names a transient condition.
+
+- Channels: `artifact_delivery_key` consulted `sha256` first, and `sha256`
+  is a first-class artifact field, so two artifacts with matching bytes and
+  different names (two empty CSVs, a template rendered once per region)
+  collapsed to one key and `dedupe_artifacts_for_channel_delivery` silently
+  dropped the second — before the delivery log lines and outside the
+  `undelivered` list, so the reply could name a file the user never got.
+  Delivery identity is now `(content, name)`
+  ([#2133](https://github.com/use-agent-os/agent-os/issues/2133)).
+  `split_text_for_limit` (the shared chunking primitive behind Discord's and
+  Telegram's message-length caps) left a half-open code fence in the first
+  chunk when the fence opened the segment itself — the "back up to before the
+  fence" guard only fired when the backup point was greater than zero. The
+  fence is now closed on that chunk and reopened (with its original language
+  tag) on the next, computed via a fresh, independent cut rather than reusing
+  the caller's word/line-boundary cut, which could send the next call right
+  back to the same input — an infinite loop in every caller that splits
+  until the tail is empty
+  ([#2127](https://github.com/use-agent-os/agent-os/issues/2127)).
+- Microsoft Teams: `send()` handed the whole reply to `send_activity` as one
+  Activity, so a reply over the 40 KB payload cap failed with `413
+  MessageSizeTooBig` and delivered nothing. It now splits through the shared
+  `split_text_for_limit` at a 32 KB text budget measured the way the service
+  counts it (UTF-16 bytes of the JSON-encoded string, so CJK and emoji are not
+  undercounted), sends the pieces on one continued turn, and remembers every
+  chunk's activity id for `edit()`/`delete()`
+  ([#2114](https://github.com/use-agent-os/agent-os/issues/2114)).
+- Providers: a stream that fails after the HTTP 200 — Anthropic's
+  `event: error` (`overloaded_error`, `api_error`), an OpenAI-compatible
+  chunk carrying `error` (OpenRouter's `{"error": {"code": 502}}`), an Ollama
+  NDJSON `{"error": …}` line — was not recognised by any of the three stream
+  loops. Anthropic's ended with neither an `ErrorEvent` nor a `DoneEvent`, so
+  the turn truncated silently and the circuit breaker never learned the
+  provider was overloaded; OpenAI-compat and Ollama fell through to
+  `DoneEvent` and recorded a success for a failed turn. Each loop now yields
+  one `ErrorEvent` whose `code` carries the upstream error type
+  ([#2118](https://github.com/use-agent-os/agent-os/issues/2118),
+  [#2214](https://github.com/use-agent-os/agent-os/issues/2214)).
+- Gateway pid lock: `release()` unlinked `gateway.pid.lock`, and both
+  platform locks (`fcntl.flock`, `msvcrt.locking`) key on the open inode, not
+  the path, so during a supervisor restart a waiter holding the orphaned
+  inode and a newcomer opening a fresh one could both win and run two
+  gateways against one `STATE_DIR`. The anchor now stays on disk and
+  `release()` removes only `gateway.pid`. `acquire()` also probed liveness and
+  unlinked `gateway.pid` *before* taking the lock, so a false-negative probe
+  deleted a live gateway's pid file and then reported `pid=unknown`; it now
+  locks first and treats a pid file found under a freshly won lock as stale
+  by construction (logged as `gateway.pidlock.stale_overwritten`). The
+  SIGTERM/SIGINT handlers it installed were overwritten by uvicorn and would
+  have hard-killed the process had they run; they are gone
+  ([#2119](https://github.com/use-agent-os/agent-os/issues/2119),
+  [#2134](https://github.com/use-agent-os/agent-os/issues/2134),
+  [#2136](https://github.com/use-agent-os/agent-os/issues/2136)).
+- Injection guard: the `invisible_char` threat class fired on ZWJ (U+200D,
+  every compound emoji), ZWNJ (U+200C, Persian, Arabic and Indic word
+  shaping) and a leading BOM (every UTF-8 file that has been through Excel or
+  Notepad), and in enforce mode one such codepoint replaced the whole payload
+  with `[BLOCKED: …]`. The threat class now leaves out the two joiners and
+  strips one leading BOM before it looks; the normalization set is unchanged,
+  so `ignore<ZWJ>all prior instructions` is still caught as `prompt_override`
+  ([#2120](https://github.com/use-agent-os/agent-os/issues/2120)).
+- `CacheBreakMonitor._reset_pending` was a plain `set[str]` on the line after
+  the `BoundedRegistry` that #1131 gave `_baselines`, with no eviction: a
+  session compacted and then closed left its key behind on the module-level
+  singleton forever, and a reused session key inherited the stale flag and had
+  its first genuine cache-break report suppressed. The flag now lives on the
+  `_CacheBaseline` entry and is evicted with it
+  ([#2135](https://github.com/use-agent-os/agent-os/issues/2135)).
+- `cron-watchers`: `watch_http_json.py` dropped every item lacking
+  `--id-field` with a bare `continue`, so a typo'd field name produced exit 0
+  with nothing on stdout or stderr — indistinguishable from a feed with
+  nothing new, even under `--first-run-reports`. When items were fetched and
+  none carries the field it now names the field and the item count on stderr
+  and exits 1 before any watermark is written
+  ([#2106](https://github.com/use-agent-os/agent-os/issues/2106)).
+- `docx` and `xlsx` skills: `create_docx.py` and `create_xlsx.py` called
+  `spec.get(...)` on whatever JSON arrived, so a non-object spec crashed with
+  `AttributeError`, a scalar table row crashed `len()` (or, in xlsx, silently
+  fragmented into one cell per character), a heading `level` outside 0–9
+  raised straight out of `python-docx`, and a JSON syntax error reached the
+  caller as a raw traceback. Both now validate the spec shape and report
+  `error: …` with exit 2, the convention `edit_docx.py` and
+  `inspect_docx.py` already follow
+  ([#2018](https://github.com/use-agent-os/agent-os/issues/2018),
+  [#2056](https://github.com/use-agent-os/agent-os/issues/2056)).
+- Tests: `test_iteration_timeout_caps_tool_execution` bounded its run with a
+  0.25 s `wait_for` guard that sat below the 0.5 s tool it drives, so under
+  contention (Windows CI, three runs in a row) a working implementation
+  failed with a bare `TimeoutError`; the guard is now a 5 s hang guard rather
+  than a race with the behaviour under test
+  ([#2166](https://github.com/use-agent-os/agent-os/issues/2166)).
 
 ### Changed
 
@@ -338,18 +431,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   ([#2354](https://github.com/use-agent-os/agent-os/issues/2354)), and the
   gmgn skills no longer carry broken relative workflow links
   ([#2361](https://github.com/use-agent-os/agent-os/issues/2361)).
-
-- Channels: `split_text_for_limit` (the shared chunking primitive behind
-  Discord's and Telegram's message-length caps) left a half-open code
-  fence in the first chunk when the fence opened the segment itself --
-  the "back up to before the fence" guard only fired when the backup
-  point was greater than zero, and a fence with nothing before it on its
-  own line legitimately backs up to exactly zero. The fence is now closed
-  on that chunk and reopened (with its original language tag) on the
-  next, computed via a fresh, independent cut rather than reusing the
-  caller's word/line-boundary cut -- reusing it could send the next call
-  right back to the same input, an infinite loop in every caller that
-  splits until the tail is empty (#2127).
 
 ## [2026.9.14] - 2026-09-14
 
