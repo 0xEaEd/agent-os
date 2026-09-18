@@ -34,6 +34,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   RPC client surfaces the JSON-RPC error carried in a 5xx body instead of
   `HTTP 500`, retrying only when it names a transient condition.
 
+### Changed
+
+- Control UI: the Sessions and Projects views now ask `sessions.list` for 500
+  rows instead of 200, so a gateway with more than 200 sessions no longer
+  silently hides the oldest ones. Both views share one query cache, so the
+  page size now lives in a single `SESSIONS_LIST_LIMIT` constant.
+
 ## [2026.9.17] - 2026-09-17
 
 ### Added
