@@ -3,6 +3,17 @@ import json, subprocess, sys, time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
+from pathlib import Path
+
+# Bundled scripts run under AgentOS's own interpreter; the path insert only
+# matters in a source checkout where the package is not installed (#2804).
+_SRC_ROOT = str(Path(__file__).resolve().parents[5])
+if _SRC_ROOT not in sys.path:
+    sys.path.insert(0, _SRC_ROOT)
+from agentos.skills.stdio import configure_utf8_stdio  # noqa: E402
+
+configure_utf8_stdio()
+
 USAGE = f"Usage: {sys.argv[0]} <token_address> <chain> [zh|en]"
 
 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
@@ -35,7 +46,8 @@ if CHAIN == "auto" or (TOKEN_ADDR.startswith("0x") and CHAIN not in KNOWN_CHAINS
                 "--raw",
             ],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
         )
         if _r.returncode == 0:
@@ -81,7 +93,11 @@ def _get_list(resp):
 
 def run_cli(args, timeout=30):
     r = subprocess.run(
-        ["gmgn-cli"] + args + ["--raw"], capture_output=True, text=True, timeout=timeout
+        ["gmgn-cli"] + args + ["--raw"],
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
     )
     if r.returncode != 0:
         raise RuntimeError(r.stderr)
