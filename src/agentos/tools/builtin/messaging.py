@@ -118,8 +118,10 @@ async def message(
         raise ToolError(f"Invalid action: {action}. Must be send|react|delete")
 
     # Validate action-specific params
-    if action == "send" and not text:
-        raise ToolError("'text' is required for send action")
+    if action == "send" and (not text or not text.strip()):
+        raise ToolError(
+            "'text' is required and must not be empty or whitespace-only for send action"
+        )
     if action == "react" and (not message_id or not reaction):
         raise ToolError("'message_id' and 'reaction' required for react")
     if action == "delete" and not message_id:
