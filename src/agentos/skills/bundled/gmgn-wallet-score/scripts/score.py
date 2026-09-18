@@ -14,13 +14,26 @@ if len(sys.argv) < 3:
     )
     sys.exit(2)
 
-WALLET       = sys.argv[1]
-CHAIN        = sys.argv[2]
-LANG         = sys.argv[3] if len(sys.argv) > 3 else 'zh'
-LATENCY_S    = float(sys.argv[4]) if len(sys.argv) > 4 else 3.0    # entry lag, seconds
-SLIPPAGE_PCT = float(sys.argv[5]) if len(sys.argv) > 5 else 0.05   # one-sided, 0.05 = 5%
-GAS_USD      = float(sys.argv[6]) if len(sys.argv) > 6 else 0.2    # your cost per trade
-SAMPLE       = int(sys.argv[7])   if len(sys.argv) > 7 else 200    # activity rows, max 400
+WALLET = sys.argv[1]
+CHAIN = sys.argv[2]
+LANG = sys.argv[3] if len(sys.argv) > 3 else "zh"
+
+try:
+    LATENCY_S = float(sys.argv[4]) if len(sys.argv) > 4 else 3.0  # entry lag, seconds
+    if LATENCY_S < 0:
+        raise ValueError("latency_s must be non-negative")
+    SLIPPAGE_PCT = float(sys.argv[5]) if len(sys.argv) > 5 else 0.05  # one-sided, 0.05 = 5%
+    if SLIPPAGE_PCT < 0:
+        raise ValueError("slippage_pct must be non-negative")
+    GAS_USD = float(sys.argv[6]) if len(sys.argv) > 6 else 0.2  # your cost per trade
+    if GAS_USD < 0:
+        raise ValueError("gas_usd must be non-negative")
+    SAMPLE = int(sys.argv[7]) if len(sys.argv) > 7 else 200  # activity rows, max 400
+    if SAMPLE <= 0:
+        raise ValueError("sample must be positive")
+except ValueError as e:
+    print(f"Error: invalid numeric argument ({e})", file=sys.stderr)
+    sys.exit(2)
 
 ZH = (LANG == 'zh')
 def _(zh, en): return zh if ZH else en
