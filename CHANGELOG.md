@@ -34,6 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   RPC client surfaces the JSON-RPC error carried in a 5xx body instead of
   `HTTP 500`, retrying only when it names a transient condition.
 
+### Changed
+
+- Web UI keyboard shortcuts: `g p` now jumps to Projects (it used to be `g j`,
+  which had no mnemonic). Approvals, which previously owned `g p`, moves to
+  `g v`. The `?` shortcut overlay reflects both.
+
 ## [2026.9.17] - 2026-09-17
 
 ### Added
