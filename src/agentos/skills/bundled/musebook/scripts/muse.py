@@ -77,15 +77,14 @@ def state_root() -> Path:
     configured = os.environ.get("MUSE_STATE_DIR", "").strip()
     if configured:
         return Path(configured).expanduser()
-    # AGENTOS_STATE_DIR *is* the state root -- cron-watchers reads it the same
-    # way -- so "state" is not appended again; AGENTOS_HOME is the home the
-    # state root lives under.
-    state_dir = os.environ.get("AGENTOS_STATE_DIR", "").strip()
-    if state_dir:
-        return Path(state_dir).expanduser() / "muse"
-    home = os.environ.get("AGENTOS_HOME", "").strip()
-    if home:
-        return Path(home).expanduser() / "state" / "muse"
+    # ``AGENTOS_STATE_DIR`` is the AgentOS *home* (what replaces ``~/.agentos``),
+    # and runtime state lives in its ``state`` subdirectory: that is how
+    # ``agentos.paths.state_dir`` and the cron-watchers' ``_watermark`` resolve
+    # it, so ``<home>/state/muse`` is the same directory either way.
+    for var in ("AGENTOS_STATE_DIR", "AGENTOS_HOME"):
+        home = os.environ.get(var, "").strip()
+        if home:
+            return Path(home).expanduser() / "state" / "muse"
     return Path.home() / ".agentos" / "state" / "muse"
 
 

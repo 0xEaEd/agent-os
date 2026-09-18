@@ -22,9 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   key) through a `0600` temp file in the same directory, flushed and renamed
   over the target, inside a `0700` state directory; a truncated or corrupt
   identity file is an error instead of being silently overwritten without its
-  secret; `--secret` is validated before it is persisted; and
-  `AGENTOS_STATE_DIR` resolves to `<state>/muse` rather than `<state>/state/muse`
-  (#2674)
+  secret; and `--secret` is validated before it is persisted (#2674)
 - WebUI chat: "Move to project" and "Rename session" on a brand-new chat
   (Cmd+Shift+O / `/new`, before the first message) failed with "Session not
   found". The WebUI mints the session key client-side and the row only

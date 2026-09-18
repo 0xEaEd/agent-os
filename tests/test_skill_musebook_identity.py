@@ -9,14 +9,16 @@
 3. the state directory was created with the umask's mode;
 4. a corrupt identity file was read as ``{}``, so ``post --save-identity``
    (which passes only ``muse_id``) wrote it back without its ``secret``;
-5. ``AGENTOS_STATE_DIR`` -- already the state root -- got ``/state/muse``
-   appended, landing at ``<state>/state/muse``;
-6. ``save --secret`` persisted anything at all.
+5. ``save --secret`` persisted anything at all.
 
 The write now goes through a ``0600`` temp file in the same directory, is
 flushed to disk, and is renamed over the target; the directory is ``0700``; a
-corrupt file is an error; the state root resolves like cron-watchers'; and a
-secret is validated before it is written.
+corrupt file is an error; and a secret is validated before it is written.
+
+The issue's remaining point -- that ``AGENTOS_STATE_DIR`` should not get
+``state/`` appended -- is not taken: the variable is the AgentOS *home*
+everywhere else in the tree (``agentos.paths``, the gateway's ``state_dir``
+default, cron-watchers), and the tests below pin muse to that.
 """
 
 from __future__ import annotations
@@ -353,18 +355,34 @@ def test_parent_directories_are_created(
 # ── 5. the state root ───────────────────────────────────────────────────────
 
 
-def test_agentos_state_dir_is_the_state_root(
+def _watermark_module() -> ModuleType:
+    """The cron-watchers helper, loaded from its own file like ``muse`` is."""
+    script = SCRIPT.parent.parent.parent / "cron-watchers" / "scripts" / "_watermark.py"
+    spec = importlib.util.spec_from_file_location("watermark_under_test", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_agentos_state_dir_is_the_agentos_home(
     muse: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Already ``<home>/state``; appending ``state`` again gave ``<state>/state/muse``."""
+    """``AGENTOS_STATE_DIR`` replaces ``~/.agentos``; runtime state is its
+    ``state`` subdirectory, exactly as ``agentos.paths.state_dir`` resolves it.
+    (Issue #2674's fifth point reads the variable as the ``state`` directory
+    itself; the rest of the tree does not, and muse must not diverge.)"""
+    from agentos import paths
+
     monkeypatch.delenv("MUSE_STATE_DIR", raising=False)
     monkeypatch.delenv("AGENTOS_HOME", raising=False)
-    monkeypatch.setenv("AGENTOS_STATE_DIR", "/srv/agentos/state")
+    monkeypatch.setenv("AGENTOS_STATE_DIR", "/srv/agentos")
 
+    assert muse.state_root() == paths.state_dir("muse")
     assert muse.state_root().as_posix() == "/srv/agentos/state/muse"
 
 
-def test_agentos_home_still_gets_state_appended(
+def test_agentos_home_resolves_the_same_way(
     muse: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("MUSE_STATE_DIR", raising=False)
@@ -378,7 +396,7 @@ def test_agentos_state_dir_wins_over_agentos_home(
     muse: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("MUSE_STATE_DIR", raising=False)
-    monkeypatch.setenv("AGENTOS_STATE_DIR", "/explicit/state")
+    monkeypatch.setenv("AGENTOS_STATE_DIR", "/explicit")
     monkeypatch.setenv("AGENTOS_HOME", "/home/other")
 
     assert muse.state_root().as_posix() == "/explicit/state/muse"
@@ -386,7 +404,7 @@ def test_agentos_state_dir_wins_over_agentos_home(
 
 def test_muse_state_dir_wins_over_both(muse: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MUSE_STATE_DIR", "/mine")
-    monkeypatch.setenv("AGENTOS_STATE_DIR", "/explicit/state")
+    monkeypatch.setenv("AGENTOS_STATE_DIR", "/explicit")
     monkeypatch.setenv("AGENTOS_HOME", "/home/other")
 
     assert muse.state_root().as_posix() == "/mine"
@@ -395,21 +413,28 @@ def test_muse_state_dir_wins_over_both(muse: ModuleType, monkeypatch: pytest.Mon
 def test_the_default_is_under_the_home_directory(
     muse: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from agentos import paths
+
     for var in ("MUSE_STATE_DIR", "AGENTOS_STATE_DIR", "AGENTOS_HOME"):
         monkeypatch.delenv(var, raising=False)
 
-    assert muse.state_root() == Path.home() / ".agentos" / "state" / "muse"
+    assert muse.state_root() == paths.state_dir("muse")
+    assert muse.state_root().name == "muse"
+    assert muse.state_root().parent.name == "state"
 
 
 def test_the_state_root_agrees_with_cron_watchers(
     muse: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The docstring says the resolution mirrors the other bundled skills;
-    ``_watermark`` reads ``AGENTOS_STATE_DIR`` as the root, so muse must too."""
+    """Both skills keep state as siblings under the same ``state`` directory;
+    asserted against the real ``_watermark`` module, not a re-statement."""
+    watermark = _watermark_module()
     monkeypatch.delenv("MUSE_STATE_DIR", raising=False)
-    monkeypatch.setenv("AGENTOS_STATE_DIR", "/srv/state")
+    monkeypatch.delenv("AGENTOS_HOME", raising=False)
+    monkeypatch.setenv("AGENTOS_STATE_DIR", "/srv/agentos")
 
-    assert muse.state_root().parent.as_posix() == "/srv/state"
+    assert muse.state_root().parent == watermark._state_root().parent
+    assert muse.state_root().parent.as_posix() == "/srv/agentos/state"
 
 
 # ── 6. cmd_save validates the secret ────────────────────────────────────────
