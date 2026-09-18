@@ -6,7 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `senior-unilp-manager`: `mint --amount0/--amount1 max` sizes a position from
+  the signer's ERC-20 balance and caps the slippage buffer at that balance, so
+  "deposit all of it" no longer needs a hand-written `balanceOf` call or a
+  second run with `--slippage-bps 0`. Every pool the skill confirms on chain is
+  remembered in `state/unilp/pools/<chain>.json`, so `ticks --pool`, `pool
+  --id` and `mint --pool` resolve a PoolKey by id alone on chains whose RPC
+  cannot serve the `Initialize` log — no more `--token` on every call.
+
 ### Fixed
+
+- `senior-unilp-manager`: a mint the wallet could cover, but not with the
+  +100 bps buffer, was reported as "blocked on approvals — run approve". The
+  gate now separates a balance shortfall from an approval problem and only
+  points at `approve` for the latter.
 
 - `senior-unilp-manager` on Robinhood Chain: the drpc endpoint now caps
   `eth_getLogs` at 100k blocks, so `pools --token`, `positions` and the default

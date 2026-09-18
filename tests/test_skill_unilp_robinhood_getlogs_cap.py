@@ -24,6 +24,7 @@ import email.message
 import importlib
 import io
 import json
+import os
 import sys
 import urllib.error
 from pathlib import Path
@@ -66,6 +67,16 @@ def _load(name: str):
     finally:
         if added:
             sys.path.remove(entry)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_env(tmp_path, monkeypatch):
+    """``load_env()`` writes the real ``~/.agentos/.env`` into ``os.environ``; keep it out."""
+    monkeypatch.setenv("AGENTOS_HOME", str(tmp_path))
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 @pytest.fixture

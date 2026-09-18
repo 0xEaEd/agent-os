@@ -134,6 +134,7 @@ not serve. Three routes, cheapest first:
 
 | flag | what it does | cost |
 |---|---|---|
+| *(nothing)* | a pool `pools`, `pool` or `ticks` has already confirmed is remembered in `state/unilp/pools/<chain>.json` and found by id | free |
 | `--currency0 --currency1 --fee --tick-spacing [--hooks]` | give the PoolKey outright — works for **any** pool on any chain | free |
 | `--token <addr>` | derive it from the launchpad registry, or from the hook-less fee tiers | 1 multicall |
 | `--scan-logs` | scan `Initialize` logs anyway | very slow on Base |
@@ -256,7 +257,8 @@ looking for a different pool between steps — every deviation below cost a real
 minutes of wandering.
 
 ```bash
-# 1. Which pool? Take the one it prints as "recommended pool" — deepest TVL.
+# 1. Which pool? Take the one it prints as "recommended pool" — deepest TVL. This also
+#    remembers the pool's PoolKey on disk, so steps 2–5 need only the poolId.
 python3 "$S"/lp_read.py pools --token <addr>
 
 # 2. Ticks for the band. --from-current keeps it single-sided; the two --mcap flags go in
@@ -266,10 +268,14 @@ python3 "$S"/lp_read.py ticks --pool <poolId> \
 
 # 3. Dry run. Read `position type` from step 2: it names the currency, so use --amount0 for
 #    currency0 and --amount1 for currency1. Add --allow-hooked if step 1 said to.
+#    "All of it" is `--amount1 max`: the wallet balance is read for you and the slippage
+#    buffer is capped at it — do not query balanceOf yourself.
 python3 "$S"/lp_write.py mint --pool <poolId> \
-  --tick-lower <t> --tick-upper <t> --amount1 <n> [--allow-hooked]
+  --tick-lower <t> --tick-upper <t> --amount1 <n|max> [--allow-hooked]
 
 # 4. If step 3 exits 2 with "blocked on approvals" — approve, then repeat step 3.
+#    "blocked: the wallet cannot cover the amounts" is a sizing problem, not an approval
+#    one: use `--amount1 max` or a smaller amount, and do not run approve.
 python3 "$S"/lp_write.py approve --token <addr>
 
 # 5. Show the user the table from step 3, ask, and only then:
@@ -337,7 +343,10 @@ python3 "$S"/lp_write.py mint --pool <poolId> --tick-lower <t> --tick-upper <t> 
 ```
 
 Size with exactly one of `--amount0`, `--amount1`, or `--liquidity` (give both for a
-two-sided position). Ticks snap outward to `tickSpacing`.
+two-sided position). Ticks snap outward to `tickSpacing`. `--amount0 max` / `--amount1 max`
+(or `all`) sizes from the signer's ERC-20 balance and caps the slippage-padded maximum at
+that balance, so "deposit everything" is one flag and never trips the balance check; it is
+refused for the native currency, which has to keep gas.
 
 **Which currency a single-sided range takes — the one rule this section exists for.** A range
 entirely **above** the current price takes **currency0 only**; entirely **below** takes
@@ -735,6 +744,7 @@ different branches at every layer, and a hook can answer differently on each.
 | `NOTE: scanned N of M bitmap words` | A `--mode ticks` read was truncated — the totals are incomplete |
 | `poolId recompute … MISMATCH` | PoolKey does not hash to the id — usually the live `lpFee` was used instead of the `0x800000` dynamic flag |
 | `self-check … MISMATCH` | Log decode or tick math is off. Do not report the reserves |
+| `mint — blocked: the wallet cannot cover the amounts` | Approvals are fine; the balance is short of the slippage-padded maximum. `--amount0/--amount1 max`, a smaller amount, or a lower `--slippage-bps`. Do not run `approve` |
 | `pool has hook 0x…` | Intentional gate. Re-run with `--allow-hooked` after telling the user what the hook can do |
 | `range is entirely above/below the current price` | Wrong currency for a single-sided range; swap `--amount0` / `--amount1`. Above takes currency0, below takes currency1 — or just re-read `position type` from `ticks` |
 | `the price indexer is rate-limiting us …` | Temporary, not a property of the token. Wait ~60s and re-run the same command; a successful fetch is cached for 60s and shared across commands. Do not switch pools over it |
