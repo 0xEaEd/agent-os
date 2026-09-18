@@ -45,6 +45,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Web UI keyboard shortcuts: `g p` now jumps to Projects (it used to be `g j`,
+  which had no mnemonic). Approvals, which previously owned `g p`, moves to
+  `g v`. The `?` shortcut overlay reflects both.
+
 - Control UI: the Sessions and Projects views now ask `sessions.list` for 500
   rows instead of 200, so a gateway with more than 200 sessions no longer
   silently hides the oldest ones. Both views share one query cache, so the
