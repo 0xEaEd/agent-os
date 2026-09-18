@@ -79,7 +79,11 @@ def main() -> int:
     if not args.path.is_file():
         print(f"error: {args.path} not found", file=sys.stderr)
         return 2
-    payload = inspect(args.path, args.data_only)
+    try:
+        payload = inspect(args.path, args.data_only)
+    except Exception as exc:
+        print(f"error: failed to inspect {args.path}: {exc}", file=sys.stderr)
+        return 1
     text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)

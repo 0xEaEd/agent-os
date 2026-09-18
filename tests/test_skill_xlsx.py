@@ -571,7 +571,6 @@ def test_clearing_a_cell_keeps_its_style(
     assert cell.value is None
     assert cell.number_format == "0.00%"
 
-
 @pytest.mark.parametrize("spec", [None, [], "not-a-dict", 42, ("also", "not-a-dict")])
 def test_build_returns_a_base_workbook_for_a_non_dict_spec(spec: object) -> None:
     """A non-dict spec must not crash `.get()` -- it never had a `sheets` key to read."""
@@ -667,3 +666,18 @@ def test_create_xlsx_cli_reports_non_object_json_with_exit_code_2(
     assert create_xlsx.main() == 2
     assert "JSON spec must be an object" in capsys.readouterr().err
     assert not out.exists()
+
+
+def test_inspect_corrupted_file_returns_exit_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, _, inspect_xlsx = _import_scripts()
+    corrupt = tmp_path / "corrupt.xlsx"
+    corrupt.write_bytes(b"not an xlsx file")
+
+    monkeypatch.setattr(sys, "argv", ["inspect_xlsx.py", str(corrupt)])
+    exit_code = inspect_xlsx.main()
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "error: failed to inspect" in err
+
