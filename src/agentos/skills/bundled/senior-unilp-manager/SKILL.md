@@ -90,10 +90,14 @@ it needs `--allow-hooked`, and the next command. A launched token routinely has 
 pools of which one has real depth and the rest are dust at punitive fee tiers, so take the
 recommendation unless the user asked for a specific pool.
 
-**On Base, discovery goes through the launchpad registries, not logs.** Base cannot serve a
-wide `eth_getLogs` range. If no launchpad claims the token, the command probes for **hook-less
-pools** (see below) before giving up; only if that finds nothing does it exit 2 rather than
-hanging for an hour. Use `pool --id`, or `--scan-logs` to force a full scan.
+**Discovery goes through the launchpad registries, not logs — on both chains.** Neither RPC
+serves a wide `eth_getLogs` range (Base caps hard; the Robinhood endpoint refuses anything
+over 100k blocks, and the v4 contracts sit at block ~9k, so a full scan is ~660 requests). On
+Robinhood, Doppler publishes no registry, so the command derives the pool from the **hook the
+skill already knows** (`0x4e34…a544`, the AGENTOS launch hook) and confirms it with one
+`getSlot0`. If nothing claims the token it probes for **hook-less pools** (see below) before
+giving up; only if that finds nothing does it exit 2 rather than hanging. Use `pool --id` with
+the PoolKey, or `--scan-logs` to force the chunked scan (minutes, not seconds).
 
 ### Finding pools with **no hook**
 
@@ -140,11 +144,11 @@ a typo errors out instead of silently addressing the wrong pool. `--hooks` is op
 hook-less pool that discovery cannot reach. Pass `--fee 0x800000` for a dynamic-fee pool (hex
 is accepted); note that is the PoolKey fee, not the live `lpFee` from slot0.
 
-| `--mode` | `logs` (default on Robinhood) | `ticks` (default on Base) |
+| `--mode` | `logs` | `ticks` (default on both chains) |
 |---|---|---|
 | source | replays every `ModifyLiquidity` event | walks `StateView.getTickBitmap` |
 | rows are | individual LP positions, **with owner** | merged segments, no owner |
-| cost on Base | thousands of requests — unusable | ~36 calls, ~150 ms |
+| cost | Base: thousands of requests — unusable; Robinhood: ~660 chunks, ~4 min | ~36 calls, ~150 ms |
 
 Totals are exact either way — cross-checked on the AGENTOS pool: identical `amount0`, within
 1 wei on `amount1`. If a `ticks` read had to be truncated it prints which bitmap words were
@@ -722,6 +726,8 @@ different branches at every layer, and a hook can answer differently on each.
 | `no RPC url for …` | Set `RPC_ROBINHOOD_URL` / `RPC_BASE_URL`, or pass `--rpc <url>` |
 | `invalid --rpc scheme …` | The endpoint must be `http://` or `https://` |
 | `env var UNIV4_LP_PRIVATE_KEY is not set` | Set it in the agent environment — never as a flag |
+| `eth_getLogs: range over 100000 blocks is not supported …` | The Robinhood RPC caps log ranges. Do not switch RPCs or grep for the pool: `pools --token <addr>` derives it from the known hook, or give the PoolKey directly (`--currency0 --currency1 --fee 0x800000 --tick-spacing 200 --hooks <hook>`) |
+| `… Temporary internal error. Please retry …` | The RPC hiccuped; the script already retried 3×. Re-run the same command once |
 | `Base cannot serve a wide eth_getLogs range …` | Give the PoolKey directly (`--currency0 --currency1 --fee --tick-spacing`), or `--token <addr>` to derive it, or `--scan-logs` |
 | `could not derive the PoolKey for … from token …` | Not a launch pool, and not a hook-less pool at a conventional tier. Spell the PoolKey out, or `--scan-logs` |
 | `the PoolKey given on the command line does not describe …` | Recompute guard did its job. Check fee (`0x800000` for dynamic), tickSpacing, `--hooks`, and that `currency0 < currency1` |
