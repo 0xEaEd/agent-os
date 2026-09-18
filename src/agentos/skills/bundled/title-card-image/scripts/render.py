@@ -112,6 +112,19 @@ def main() -> int:
     parser.add_argument("--font", default=None, help="Optional explicit font path.")
     args = parser.parse_args()
 
+    if args.width <= 0 or args.height <= 0:
+        print("Error: --width and --height must be positive integers.", file=sys.stderr)
+        return 1
+    if args.font_size <= 0:
+        print("Error: --font-size must be a positive integer.", file=sys.stderr)
+        return 1
+    if args.subtitle_size <= 0:
+        print("Error: --subtitle-size must be a positive integer.", file=sys.stderr)
+        return 1
+    if args.max_chars_per_line <= 0:
+        print("Error: --max-chars-per-line must be a positive integer.", file=sys.stderr)
+        return 1
+
     try:
         from PIL import Image, ImageDraw  # type: ignore
     except ImportError as exc:
