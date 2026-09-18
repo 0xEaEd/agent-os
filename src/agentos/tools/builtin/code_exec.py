@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import math
 import os
 import re
 import shutil
@@ -764,7 +765,16 @@ async def execute_code(
         if approval_response is not None:
             return json.dumps(approval_response)
 
-    timeout = max(1.0, min(float(timeout), _MAX_TIMEOUT))
+    try:
+        numeric_timeout = float(timeout)
+        if math.isnan(numeric_timeout) or math.isinf(numeric_timeout) or numeric_timeout <= 0:
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise ToolError(
+            f"Invalid timeout: {timeout!r}. Timeout must be a positive number."
+        ) from None
+
+    timeout = max(1.0, min(numeric_timeout, _MAX_TIMEOUT))
 
     ctx = current_tool_context.get()
     runtime = get_runtime()
