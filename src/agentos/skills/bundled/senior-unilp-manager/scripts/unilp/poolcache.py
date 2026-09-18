@@ -24,7 +24,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from .journal import state_root
+from .chains import state_root
 from .v4_pool import normalize_pool_key
 
 _DIR = "pools"

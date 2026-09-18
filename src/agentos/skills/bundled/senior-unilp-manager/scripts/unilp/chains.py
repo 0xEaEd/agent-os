@@ -29,6 +29,23 @@ PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
 _env_loaded = False
 
 
+def state_root() -> Path:
+    """Where this skill keeps state (ratchet mandates, the pool cache).
+
+    ``UNILP_STATE_DIR`` wins, then ``$AGENTOS_HOME/state/unilp``, then
+    ``~/.agentos/state/unilp``. Lives here rather than in ``journal.py`` because the
+    journal needs ``fcntl`` and the read path must import on Windows too.
+    """
+    load_env()
+    configured = os.environ.get("UNILP_STATE_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    home = os.environ.get("AGENTOS_HOME")
+    if home:
+        return Path(home).expanduser() / "state" / "unilp"
+    return Path.home() / ".agentos" / "state" / "unilp"
+
+
 def load_env() -> None:
     """Load a dotenv file if one is configured, without overriding the environment.
 

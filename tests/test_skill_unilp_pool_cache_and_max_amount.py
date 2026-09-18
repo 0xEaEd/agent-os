@@ -308,3 +308,25 @@ def test_expired_permit2_is_still_an_approval_problem() -> None:
     assert problem is not None
     assert problem.kind == "approval"
     assert "expired" in problem.message
+
+
+# ---------------------------------------------------------------------------
+# Portability: the read path must import where fcntl does not exist
+# ---------------------------------------------------------------------------
+
+
+def test_read_path_imports_without_fcntl(monkeypatch) -> None:
+    """``lp_read`` (and so ``lp_write``) must load on Windows.
+
+    ``journal.py`` needs ``fcntl`` for the ratchet's lock file, which is fine for
+    ``ratchet.py`` but must not be dragged into the read path by the pool cache —
+    that is exactly what broke the Windows CI job.
+    """
+    for name in [m for m in sys.modules if m == "lp_read" or m.startswith("unilp")]:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setitem(sys.modules, "fcntl", None)  # ImportError on `import fcntl`
+
+    lp_read = _load("lp_read")
+
+    assert lp_read.pool_key_for_id is not None
+    assert "unilp.journal" not in sys.modules, "the read path must not import the ratchet journal"
