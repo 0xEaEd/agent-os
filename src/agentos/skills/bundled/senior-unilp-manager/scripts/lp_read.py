@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from unilp import poolcache  # noqa: E402
 from unilp.abi_defs import (  # noqa: E402
     ERC20_ABI,
     POSITION_MANAGER_ABI,
@@ -298,6 +299,19 @@ def pool_key_for_id(client, chain: dict, pool_id: str, args: dict | None = None)
             )
         return explicit
 
+    # A PoolKey this skill already confirmed on chain — usually the one `pools` printed
+    # a moment ago. Content-addressed, so it cannot be stale; and it spares `--token`.
+    cached = poolcache.lookup(chain, pool_id)
+    if cached:
+        return cached
+
+    key = _derive_pool_key(client, chain, pool_id, args)
+    if key:
+        poolcache.remember(chain, [{"poolId": pool_id, "poolKey": key}])
+    return key
+
+
+def _derive_pool_key(client, chain: dict, pool_id: str, args: dict) -> dict | None:
     if chain["logScan"].get("supportsFullRange") is not False:
         init = get_pool_init(client, chain, pool_id)
         return init["poolKey"] if init else None
@@ -542,6 +556,7 @@ def _confirm_candidates(client, chain: dict, candidates: list[dict]) -> list[dic
         if slot0["status"] != "success" or int(slot0["result"][0]) == 0:
             continue
         out.append({**candidate, "blockNumber": 0, "transactionHash": None})
+    poolcache.remember(chain, out)
     return out
 
 
@@ -615,6 +630,7 @@ def cmd_pools(client, chain: dict, args: dict) -> None:
                 sys.exit(2)
         else:
             inits = find_pools_for_token(client, chain, token)
+            poolcache.remember(chain, inits)
 
     if not inits:
         kind = "hook-less Uniswap v4 pools" if no_hook_only else "Uniswap v4 pools"
