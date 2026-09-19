@@ -13,6 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   empty) text for a mention, so `_should_skip_unmentioned` rejected every
   reaction in every guild channel/thread with no error or log. Reacting to
   a message the bot itself sent is now treated as an unambiguous mention.
+- Email channel: a `message/rfc822` attachment (an original email attached
+  as a file, e.g. Outlook/Apple Mail "Forward as Attachment") is no longer
+  silently dropped. `_extract_attachments` relied on
+  `part.get_payload(decode=True)`, which returns `None` for this content
+  type since the part's payload is the embedded message object, not encoded
+  bytes -- the attachment vanished with no warning logged. It's now
+  extracted by serializing the embedded message.
 
 ## [2026.9.18] - 2026-09-18
 
@@ -28,6 +35,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Discord: `send_file` sent the whole caption as the upload's `content`, and
+  Discord 400s a message past 2000 characters whether or not a file is
+  attached, so an artifact with long accompanying text was never delivered.
+  The first 2000 characters now ride with the file and the rest follow as
+  ordinary channel messages through `send()`; a follow-up that fails after
+  the file has gone is logged with the ids rather than reported as a failed
+  file delivery, which would have the caller upload it again. `send_file`
+  also resolves its target the way `send()` does: the channel component of a
+  `<channel_id>|<message_id>` composite, `default_channel_id` for an empty
+  id, and a clear `ValueError` before any request when neither is available
+  (#2779).
 - WebUI chat: "Move to project" and "Rename session" on a brand-new chat
   (Cmd+Shift+O / `/new`, before the first message) failed with "Session not
   found". The WebUI mints the session key client-side and the row only

@@ -721,7 +721,27 @@ class EmailChannel:
             mime = part.get_content_type()
             payload = part.get_payload(decode=True)
             if not isinstance(payload, bytes):
-                continue
+                # message/rfc822 (an original email attached as a file, e.g.
+                # Outlook/Apple Mail "Forward as Attachment") has no encoded
+                # body of its own -- get_payload(decode=True) returns None
+                # because the part's payload is the embedded Message object,
+                # not raw bytes. Serialize that embedded message instead of
+                # silently dropping the attachment.
+                sub_payload = part.get_payload()
+                if (
+                    isinstance(sub_payload, list)
+                    and sub_payload
+                    and isinstance(sub_payload[0], EmailMessage)
+                ):
+                    payload = sub_payload[0].as_bytes()
+                if not isinstance(payload, bytes):
+                    log.warning(
+                        "email.attachment_undecodable",
+                        name=self.config.name,
+                        attachment=name,
+                        content_type=mime,
+                    )
+                    continue
             try:
                 data = ensure_bytes_within_limit(
                     payload,

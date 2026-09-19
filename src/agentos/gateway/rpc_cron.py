@@ -123,6 +123,12 @@ def _job_to_wire(j: Any, config: Any = None) -> dict[str, Any]:
         "next_run": _iso(d.get("next_run_at")),
         "last_run": _iso(d.get("last_run_at")),
         "lastResult": d.get("last_error"),
+        "last_status": (
+            "error" if d.get("last_error") else ("ok" if d.get("last_run_at") else None)
+        ),
+        "lastStatus": (  # same value for camelCase consumers
+            "error" if d.get("last_error") else ("ok" if d.get("last_run_at") else None)
+        ),
         "run_count": d.get("run_count", 0),
         "error_count": d.get("error_count", 0),
         "created_at": _iso(d.get("created_at")),
@@ -440,6 +446,62 @@ def _build_failure_destination(raw: Any) -> FailureDestination | None:
         account_id=str(raw.get("accountId") or ""),
         thread_id=str(raw.get("threadId") or ""),
     )
+
+
+def _delivery_without_main_route(current: DeliveryConfig | None) -> DeliveryConfig | None:
+    """What an edit that moves or keeps a job on ``sessionTarget="main"`` must write.
+
+    Returns None when the stored delivery can stay as it is. An omitted
+    ``delivery`` block means *unchanged*: webhook delivery is valid for main
+    (see ``_ensure_delivery_supported``), and a job with no route has nothing
+    to clear. Only a channel/origin route cannot stay, because the heartbeat
+    pipeline routes main-session results; that route is dropped while the
+    failure destination -- also valid for main -- is kept.
+    """
+    if current is None or current.mode in (DeliveryMode.NONE, DeliveryMode.WEBHOOK):
+        return None
+    return DeliveryConfig(
+        ws_topic=current.ws_topic,
+        failure_destination=current.failure_destination,
+    )
+
+
+def _token_was_sent(raw: dict[str, Any]) -> bool:
+    return "webhookToken" in raw or "token" in raw
+
+
+def _keep_unsent_webhook_tokens(
+    new: DeliveryConfig, current: DeliveryConfig, delivery_raw: dict[str, Any]
+) -> None:
+    """Carry a stored webhook token the caller did not send, for the same URL.
+
+    ``_delivery_to_wire`` never returns a token, so a client that reads a job
+    and saves it back -- the WebUI edit form does this on every save -- cannot
+    echo one, and rebuilding the delivery from the request wiped it. A token
+    left out now means unchanged; an explicit ``""`` still clears it. It is
+    only carried to the URL it was stored for, never to a new endpoint.
+    """
+    if (
+        new.mode == DeliveryMode.WEBHOOK
+        and current.mode == DeliveryMode.WEBHOOK
+        and new.webhook_url == current.webhook_url
+        and not _token_was_sent(delivery_raw)
+    ):
+        new.webhook_token = current.webhook_token
+
+    fd_raw = delivery_raw.get("failureDestination")
+    new_fd = new.failure_destination
+    old_fd = current.failure_destination
+    if (
+        isinstance(fd_raw, dict)
+        and new_fd is not None
+        and old_fd is not None
+        and new_fd.mode == DeliveryMode.WEBHOOK
+        and old_fd.mode == DeliveryMode.WEBHOOK
+        and new_fd.webhook_url == old_fd.webhook_url
+        and not _token_was_sent(fd_raw)
+    ):
+        new_fd.webhook_token = old_fd.webhook_token
 
 
 def _build_webhook_delivery(delivery_raw: dict[str, Any]) -> DeliveryConfig:
@@ -1015,7 +1077,9 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
         patch["session_key"] = _resolve_target_session_key(merged_params, session_target)
         patch["origin_session_key"] = _resolve_origin_session_key(merged_params, session_target)
         if session_target == SessionTarget.MAIN and "delivery" not in params:
-            patch["delivery"] = DeliveryConfig()
+            cleared = _delivery_without_main_route(current_job.delivery)
+            if cleared is not None:
+                patch["delivery"] = cleared
 
     if "timeout" in params:
         patch["timeout_seconds"] = float(params["timeout"])
@@ -1074,6 +1138,9 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
                 best_effort=existing.best_effort,
                 failure_destination=_build_failure_destination(delivery_raw["failureDestination"]),
             )
+
+        if isinstance(patch.get("delivery"), DeliveryConfig) and isinstance(delivery_raw, dict):
+            _keep_unsent_webhook_tokens(patch["delivery"], current_delivery, delivery_raw)
 
     if "toolPolicy" in params or "tool_policy" in params:
         patch["tool_policy"] = _tool_policy_from_params(params)
