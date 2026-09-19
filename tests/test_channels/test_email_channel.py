@@ -332,6 +332,35 @@ def test_attachments_are_carried_through_and_oversized_ones_dropped() -> None:
     assert inbound.attachments[0].data == b"small"
 
 
+def test_forwarded_email_attachment_is_carried_through_not_silently_dropped() -> None:
+    """``message/rfc822`` attachments -- what Outlook/Apple Mail produce for
+    "Forward as Attachment" -- have no encoded body of their own, so
+    ``get_payload(decode=True)`` returns ``None`` rather than bytes. The
+    attachment must still be extracted (by serializing the embedded
+    message), not silently dropped."""
+    channel = EmailChannel(config=_config())
+
+    original = EmailMessage()
+    original["From"] = "third-party@example.com"
+    original["To"] = "owner@example.com"
+    original["Subject"] = "The original thread"
+    original.set_content("please escalate this")
+
+    message = EmailMessage()
+    message["From"] = "owner@example.com"
+    message["Subject"] = "Fwd: please look at this"
+    message["Message-ID"] = "<m10@example.com>"
+    message.set_content("see attached email")
+    message.add_attachment(original, filename="original.eml")
+    parsed = BytesParser(policy=email_policy).parsebytes(message.as_bytes())
+
+    inbound = channel._to_incoming(parsed)
+
+    assert inbound is not None
+    assert [a.name for a in inbound.attachments] == ["original.eml"]
+    assert b"please escalate this" in inbound.attachments[0].data
+
+
 def test_enqueue_dedupes_on_message_id() -> None:
     channel = EmailChannel(config=_config())
     first = channel._to_incoming(_raw())
