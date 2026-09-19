@@ -70,8 +70,7 @@ def _table_text(shape) -> list[str]:
             for cell in row.cells
             if not getattr(cell, "is_spanned", False)
         ]
-        cells = [c for c in cells if c]
-        if cells:
+        if any(cells):
             out.append(" | ".join(cells))
     return out
 
