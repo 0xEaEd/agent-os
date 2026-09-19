@@ -280,3 +280,18 @@ def test_form_fill_rejects_the_flag_skill_md_used_to_advertise(
     with pytest.raises(SystemExit) as exit_info:
         form_fill._parse_args()
     assert exit_info.value.code == 2
+
+
+def test_extract_reports_corrupted_file_with_exit_code_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    extract = _extract_module()
+    corrupt_pdf = tmp_path / "corrupt.pdf"
+    corrupt_pdf.write_bytes(b"not a valid pdf file content")
+
+    monkeypatch.setattr(sys, "argv", ["extract.py", str(corrupt_pdf)])
+    exit_code = extract.main()
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "error: failed to extract text from" in err
+

@@ -104,7 +104,11 @@ def main() -> int:
     if not args.path.is_file():
         print(f"error: {args.path} not found", file=sys.stderr)
         return 2
-    payload = extract(args.path, args.tables_strategy)
+    try:
+        payload = extract(args.path, args.tables_strategy)
+    except Exception as exc:
+        print(f"error: failed to extract text from {args.path}: {exc}", file=sys.stderr)
+        return 1
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
