@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Telegram: a Markdown table header or row label written as `*italic*` (or
+  `***bold italic***`) no longer leaks its asterisks into the rendered
+  `<b>…</b>`; the label path strips single-asterisk italics the way it already
+  stripped `_italic_` (#2964)
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.
