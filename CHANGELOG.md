@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `apply_patch`: an `*** Update File:` block with no `@@@ ` hunks — a
+  unified-diff `@@ -1,1 +1,1 @@` header, a note, or nothing at all — is refused
+  with the offending line named, instead of rewriting the file unchanged and
+  reporting `1 file(s) modified` (#2837)
 - Router task-type detection: a code-port request naming Go, C, Objective-C,
   F#, Visual Basic, VBA or Node.js is no longer read as a translation and
   capped to the cheapest tier. The guard already covered `golang`, `c++`,
