@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `weather` skill: a planner contract whose `DESTINATION:` field is present
+  but blank no longer silently forwards an unrelated field (e.g. `DATES:
+  next weekend`) to wttr.in as the city name. `_extract_location` now
+  treats a blank destination the same as no text at all and falls back to
+  `"London"`, instead of falling through to the contract's first line.
 
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
