@@ -526,7 +526,6 @@ class DiscordChannel:
             elif op == 11:  # Heartbeat ACK
                 self._state.last_heartbeat_ack = True
 
-
     async def _handle_dispatch(self, event_type: str | None, data: dict[str, Any]) -> None:
         if event_type == "READY":
             self._state.session_id = data["session_id"]
@@ -949,9 +948,7 @@ class DiscordChannel:
 
     def is_connected(self) -> bool:
         return (
-            self._connected
-            and self._dispatch_task is not None
-            and not self._dispatch_task.done()
+            self._connected and self._dispatch_task is not None and not self._dispatch_task.done()
         )
 
     async def health_check(self) -> ChannelHealth:
@@ -964,7 +961,6 @@ class DiscordChannel:
                 "sequence": self._state.sequence,
             },
         )
-
 
     # ------------------------------------------------------------------
     # Inbound
@@ -1425,6 +1421,15 @@ class DiscordChannel:
         """Uniform mention check for group gating. Delegates to is_mentioned."""
         if msg.metadata.get("interaction_type") == "slash_command":
             return True
+        if msg.metadata.get("event_type") == "MESSAGE_REACTION_ADD":
+            # A reaction carries no text to search for a mention in, so
+            # is_mentioned("") is always False -- every reaction in a guild
+            # channel/thread would otherwise be dropped by the mention gate,
+            # even one on a message the bot itself just sent. Reacting to
+            # the bot's own message is already an unambiguous, directed
+            # response to it, equivalent to being mentioned.
+            message_id = msg.metadata.get("native_message_id")
+            return bool(message_id) and message_id in self._sent_messages
         return self.is_mentioned(msg.content)
 
     # ------------------------------------------------------------------

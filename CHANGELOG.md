@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Discord channel: a reaction added to the bot's own message in a guild
+  channel or thread is no longer silently dropped by the group mention
+  gate. `is_group_mentioned` fell back to searching a reaction's (always
+  empty) text for a mention, so `_should_skip_unmentioned` rejected every
+  reaction in every guild channel/thread with no error or log. Reacting to
+  a message the bot itself sent is now treated as an unambiguous mention.
 - Email channel: a `message/rfc822` attachment (an original email attached
   as a file, e.g. Outlook/Apple Mail "Forward as Attachment") is no longer
   silently dropped. `_extract_attachments` relied on
