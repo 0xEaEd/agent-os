@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `exec_command`: an inline artifact marker naming a file the finished
+  process still holds, or one the agent cannot read, no longer fails the whole
+  command and withholds its output. `publish_inline_artifacts` reports an
+  `OSError` from the publish in place of the marker, as it already did for a
+  `ToolError` (#2892)
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.
