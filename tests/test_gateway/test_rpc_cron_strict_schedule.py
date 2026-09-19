@@ -10,6 +10,8 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from agentos.gateway.rpc import RpcContext
@@ -290,3 +292,59 @@ def test_job_to_wire_exposes_creator_session_as_display_metadata() -> None:
 
     assert wire["creatorSessionKey"] == "agent:main:telegram:chat-1"
     assert wire["createdFrom"] == "agent:main:telegram:chat-1"
+
+
+def test_job_to_wire_emits_last_status_error_when_last_error_set() -> None:
+    """Failed last run must surface last_status=error so Control UI health is truthful."""
+    ran_at = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    job = CronJob(
+        id="fail-wire",
+        name="fail-demo",
+        cron_expr="0 * * * *",
+        schedule_raw="0 * * * *",
+        schedule_kind=ScheduleKind.CRON,
+        handler_key="script_run",
+        last_run_at=ran_at,
+        last_error="boom\n",
+        error_count=1,
+    )
+    wire = _job_to_wire(job)
+    assert wire["last_run"] is not None
+    assert wire["lastResult"] == "boom\n"
+    assert wire["last_status"] == "error"
+    assert wire["lastStatus"] == "error"
+
+
+def test_job_to_wire_emits_last_status_ok_after_successful_run() -> None:
+    ran_at = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
+    job = CronJob(
+        id="ok-wire",
+        name="ok-demo",
+        cron_expr="0 * * * *",
+        schedule_raw="0 * * * *",
+        schedule_kind=ScheduleKind.CRON,
+        handler_key="script_run",
+        last_run_at=ran_at,
+        last_error=None,
+    )
+    wire = _job_to_wire(job)
+    assert wire["last_run"] is not None
+    assert wire["lastResult"] is None
+    assert wire["last_status"] == "ok"
+    assert wire["lastStatus"] == "ok"
+
+
+def test_job_to_wire_emits_last_status_none_when_never_run() -> None:
+    job = CronJob(
+        id="never-wire",
+        name="never-demo",
+        cron_expr="0 * * * *",
+        schedule_raw="0 * * * *",
+        schedule_kind=ScheduleKind.CRON,
+        handler_key="script_run",
+    )
+    wire = _job_to_wire(job)
+    assert wire["last_run"] is None
+    assert wire["lastResult"] is None
+    assert wire["last_status"] is None
+    assert wire["lastStatus"] is None
