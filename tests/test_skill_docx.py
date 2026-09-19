@@ -654,3 +654,59 @@ def test_create_docx_cli_reports_non_object_json_with_exit_code_2(
     assert create_docx.main() == 2
     assert 'must be a JSON object with a "body" array' in capsys.readouterr().err
     assert not out.exists()
+
+
+def test_edit_docx_cli_reports_invalid_json_with_exit_code_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edit_docx = _edit_docx_module()
+
+    src = tmp_path / "src.docx"
+    from docx import Document
+
+    Document().save(str(src))
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("{not valid json", encoding="utf-8")
+    out = tmp_path / "out.docx"
+    monkeypatch.setattr(sys, "argv", ["edit_docx.py", str(src), str(bad_json), "--out", str(out)])
+
+    assert edit_docx.main() == 2
+    assert "is not valid JSON" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_edit_docx_cli_reports_non_list_ops_with_exit_code_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edit_docx = _edit_docx_module()
+
+    src = tmp_path / "src.docx"
+    from docx import Document
+
+    Document().save(str(src))
+    dict_ops = tmp_path / "dict_ops.json"
+    dict_ops.write_text('{"op": "replace_text", "find": "a", "with": "b"}', encoding="utf-8")
+    out = tmp_path / "out.docx"
+    monkeypatch.setattr(sys, "argv", ["edit_docx.py", str(src), str(dict_ops), "--out", str(out)])
+
+    assert edit_docx.main() == 2
+    assert "must be a JSON list of operations" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_edit_docx_cli_reports_corrupted_input_file_with_exit_code_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edit_docx = _edit_docx_module()
+
+    corrupt = tmp_path / "corrupt.docx"
+    corrupt.write_bytes(b"not a valid docx")
+    ops = tmp_path / "ops.json"
+    ops.write_text("[]", encoding="utf-8")
+    out = tmp_path / "out.docx"
+    monkeypatch.setattr(sys, "argv", ["edit_docx.py", str(corrupt), str(ops), "--out", str(out)])
+
+    assert edit_docx.main() == 1
+    assert "error: failed to read" in capsys.readouterr().err
+    assert not out.exists()
+
