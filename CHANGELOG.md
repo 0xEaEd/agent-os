@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Gateway channel dispatch: the batch-fallback reply sent after a streaming
+  turn no longer leaves a stale markdown image reference (e.g.
+  `![chart](chart.png)`) in the text for an artifact the stream relay
+  already delivered as a native file. `_deliver_runtime_channel_reply`
+  stripped that artifact out of the list *before* stripping its inline
+  reference from the re-fetched transcript text, so
+  `_strip_delivered_artifact_image_references` never saw its name and left
+  the dead reference sitting right after the real attachment.
 
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
