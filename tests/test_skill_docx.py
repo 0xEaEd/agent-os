@@ -153,6 +153,15 @@ def _edit_docx_module() -> object:
     return edit_docx
 
 
+def _inspect_docx_module() -> object:
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import inspect_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+    return inspect_docx
+
+
 def _paragraph(runs: list[tuple[str, bool]]) -> object:
     """Build a one-paragraph document whose runs carry the given bold flags."""
     from docx import Document
@@ -654,3 +663,17 @@ def test_create_docx_cli_reports_non_object_json_with_exit_code_2(
     assert create_docx.main() == 2
     assert 'must be a JSON object with a "body" array' in capsys.readouterr().err
     assert not out.exists()
+
+
+def test_inspect_docx_cli_reports_corrupted_file_with_exit_code_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    inspect_docx = _inspect_docx_module()
+
+    corrupt = tmp_path / "corrupt.docx"
+    corrupt.write_bytes(b"not a valid docx file content")
+    monkeypatch.setattr(sys, "argv", ["inspect_docx.py", str(corrupt)])
+
+    assert inspect_docx.main() == 1
+    assert "error: failed to inspect" in capsys.readouterr().err
+
