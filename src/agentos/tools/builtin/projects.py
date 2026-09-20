@@ -18,7 +18,7 @@ import json
 import structlog
 
 from agentos.tools.registry import tool
-from agentos.tools.types import ToolError, current_tool_context
+from agentos.tools.types import SafeToolError, ToolError, current_tool_context
 
 _log = structlog.get_logger("agentos.tools.projects")
 
@@ -110,8 +110,13 @@ async def projects_create(
             knowledge=knowledge,
         )
         return json.dumps(project, ensure_ascii=False)
-    except (ToolError, ValueError):
+    except ToolError:
         raise
+    except ValueError as exc:
+        # Authored literals from the project manager ("Project name already
+        # exists: ..."); the envelope drops anything that is not a
+        # SafeToolUserMessage, so the reason never reached the model.
+        raise SafeToolError(str(exc)) from exc
     except (ImportError, AttributeError, NotImplementedError) as exc:
         raise _manager_unavailable(exc) from exc
 
@@ -204,8 +209,13 @@ async def projects_update(
             )
         project = await mgr.update_project(project_id.strip(), name=name, knowledge=knowledge)
         return json.dumps(project, ensure_ascii=False)
-    except (ToolError, ValueError):
+    except ToolError:
         raise
+    except ValueError as exc:
+        # Authored literals from the project manager ("Project name already
+        # exists: ..."); the envelope drops anything that is not a
+        # SafeToolUserMessage, so the reason never reached the model.
+        raise SafeToolError(str(exc)) from exc
     except KeyError as exc:
         raise ToolError(f"Project not found: {project_id}") from exc
     except (ImportError, AttributeError, NotImplementedError) as exc:

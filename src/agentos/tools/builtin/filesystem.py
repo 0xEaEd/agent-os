@@ -33,6 +33,7 @@ from agentos.tools.path_policy import reject_foreign_host_path
 from agentos.tools.registry import tool
 from agentos.tools.types import (
     EditMatchError,
+    RegexPatternError,
     ToolError,
     WorkspaceAccessError,
     current_tool_context,
@@ -331,8 +332,7 @@ def _workspace_strict_read_block(
             "workspace": str(roots[0]),
             "allowed_roots": [str(root) for root in roots],
             "message": (
-                f"{tool_name} blocked: {candidate} is outside active read roots "
-                f"({root_labels})."
+                f"{tool_name} blocked: {candidate} is outside active read roots ({root_labels})."
             ),
             "retryable": False,
         }
@@ -868,8 +868,7 @@ def _format_spreadsheet(
             parts.append(f"{idx}\t" + "\t".join(rows.get(idx, [])))
         if end < total_rows:
             parts.append(
-                f"(Showing rows {offset}-{end} of {total_rows}. "
-                f"Use offset={end + 1} to continue.)"
+                f"(Showing rows {offset}-{end} of {total_rows}. Use offset={end + 1} to continue.)"
             )
     return "\n".join(parts)
 
@@ -1248,7 +1247,7 @@ async def grep_search(
         try:
             regex = re.compile(pattern)
         except re.error as e:
-            raise ValueError(f"Invalid regex pattern: {e}") from e
+            raise RegexPatternError(f"Invalid regex pattern: {e}") from e
 
         results: list[str] = []
 

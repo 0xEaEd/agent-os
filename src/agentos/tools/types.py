@@ -159,9 +159,7 @@ CRON_AGENT_DENY: frozenset[str] = frozenset(
 # a block of shell, so a cron turn that is shown a skill and denied exec_command
 # can read the instructions and never carry them out. These three are what the
 # script skills need: run the script, and stage its inputs/outputs.
-CRON_ELEVATED_EXTRA_ALLOW: frozenset[str] = frozenset(
-    {"exec_command", "write_file", "edit_file"}
-)
+CRON_ELEVATED_EXTRA_ALLOW: frozenset[str] = frozenset({"exec_command", "write_file", "edit_file"})
 
 CRON_ELEVATED_ALLOW: frozenset[str] = CRON_AGENT_ALLOW | CRON_ELEVATED_EXTRA_ALLOW
 
@@ -247,13 +245,20 @@ class ProjectedToolArgumentsError(SafeToolUserMessage, ValueError):
 class UnsupportedSurfaceError(SafeToolError):
     """Raised when a tool needs an interactive surface that is unavailable."""
 
-    user_message = (
-        "This tool requires a live approval surface, but the current run is unattended."
-    )
+    user_message = "This tool requires a live approval surface, but the current run is unattended."
 
 
 class EditMatchError(SafeToolError, ValueError):
     """Raised when edit_file cannot locate unique text to replace."""
+
+
+class RegexPatternError(SafeToolError, ValueError):
+    """Raised when ``grep_search`` receives an invalid regular expression.
+
+    Subclasses ``ValueError`` so existing callers that catch that keep
+    working, and ``SafeToolError`` so the diagnostic survives the failure
+    envelope instead of being flattened to "invalid argument".
+    """
 
 
 class UnsupportedURLSchemeError(SafeToolUserMessage, ValueError):
