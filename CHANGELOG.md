@@ -28,6 +28,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
   dropped rather than mis-rendered
   ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- `deep-research` skill: the compiled report dropped every source's `relevance`
+  and never named the source count, two of the five output elements SKILL.md
+  enumerates. Relevance is the entire output of the five-axis rubric in
+  `references/sources.md`, whose bar calls anything below 0.40 a dead end and
+  which tells the host to record a paywalled page with `relevance: 0` -- so a
+  dead end was cited in the same shape, with the same weight, as a primary
+  source. `compile.py` now prints `[relevance N.NN]` on every reference line and
+  the recorded source count in the Methodology block (#3115).
+
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
   `_find_all` advanced its cursor past the whole needle, so the overlapping
