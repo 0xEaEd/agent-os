@@ -136,7 +136,14 @@ def provider_context_capabilities(
             state_portable_across_providers=False,
         )
 
-    if provider == "openai" and "api.openai.com" in base_l:
+    # An empty base_url is not "some unknown host" -- it is the OpenAI SDK's
+    # default, https://api.openai.com/v1, which caches automatically. The host
+    # check is here to withhold that claim from the OpenAI-compatible servers
+    # people point this provider at (vLLM, Ollama, LM Studio, a gateway), and
+    # those are configured by setting a base_url, never by omitting one. Every
+    # other provider above already decides on `provider` alone; openai was the
+    # one that required a base_url to recognise its own default endpoint.
+    if provider == "openai" and (not base_l or "api.openai.com" in base_l):
         return ProviderContextCapabilities(
             provider=provider,
             model=model,
