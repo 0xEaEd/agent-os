@@ -13,6 +13,7 @@ from typing import Any
 import structlog
 from starlette.routing import Route
 
+from agentos.channels.contract import channel_capability_profile
 from agentos.channels.registry import build_managed_channel
 from agentos.channels.types import ChannelHealth, DeliveryTargetResolution, ManagedChannel
 from agentos.gateway._debounce import _DefaultDebounceCoordinator
@@ -20,6 +21,10 @@ from agentos.gateway.channel_dispatch import run_channel_dispatch
 from agentos.session.keys import DmScope, build_direct_key, build_group_key, build_thread_key
 
 log = structlog.get_logger(__name__)
+
+#: Channel types that were allowed to thread before adapters published a
+#: capability profile. Only consulted when an adapter has no profile to ask.
+_THREAD_CAPABLE_WITHOUT_PROFILE = frozenset({"slack"})
 
 
 @dataclass
@@ -500,6 +505,26 @@ class ChannelManager:
             thread_id=thread,
         )
 
+    def _adapter_supports_threads(self, adapter_name: str, channel_type: str) -> bool:
+        """Whether this adapter can deliver into a thread.
+
+        The question used to be answered by a literal ``{"slack"}``, which
+        contradicted the adapters themselves: Discord and Email both declare
+        ``threads=True`` in their capability profile and implement threaded
+        replies, yet a cron job aimed at a Discord thread or an Email thread
+        was refused with ``unsupported_thread``. Ask the adapter, so the
+        answer cannot drift from what it can actually do.
+
+        An adapter that publishes no profile -- a bare test double, a
+        third-party adapter -- cannot answer, so it keeps the old type-based
+        answer rather than being newly refused a delivery that worked before.
+        """
+        adapter = self._channels.get(adapter_name)
+        profile = channel_capability_profile(adapter) if adapter is not None else None
+        if profile is not None:
+            return bool(profile.threads)
+        return channel_type in _THREAD_CAPABLE_WITHOUT_PROFILE
+
     def _build_delivery_resolution(
         self,
         *,
@@ -509,7 +534,7 @@ class ChannelManager:
         account_id: str,
         thread_id: str,
     ) -> DeliveryTargetResolution:
-        if thread_id and channel_type not in {"slack"}:
+        if thread_id and not self._adapter_supports_threads(adapter_name, channel_type):
             return DeliveryTargetResolution(ok=False, reason="unsupported_thread")
         return DeliveryTargetResolution(
             ok=True,

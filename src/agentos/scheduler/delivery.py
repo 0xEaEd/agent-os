@@ -488,10 +488,30 @@ class DeliveryChain:
                         metadata={"channel": channel_id, "thread_ts": None},
                     )
             elif channel_name == "email" and configured_recipient and channel_id:
+                # The email adapter reads the thread off ``reply_to`` -- it is
+                # the parent Message-ID -- while the recipient comes from
+                # ``metadata["to"]``, so the two do not compete.
                 msg = OutgoingMessage(
-                    content=text, reply_to=channel_id, metadata={"to": channel_id}
+                    content=text,
+                    reply_to=thread_id or channel_id,
+                    metadata={"to": channel_id},
                 )
+            elif channel_name == "discord" and thread_id:
+                # A Discord thread *is* a channel, so its id addresses it
+                # directly. Posting to the parent channel instead would put
+                # the job's report somewhere the user was not looking.
+                msg = OutgoingMessage(content=text, reply_to=thread_id)
             else:
+                if thread_id:
+                    # Resolution allowed the thread because the adapter says it
+                    # supports one, but this path has no spelling for it. Say
+                    # so rather than posting to the parent and calling it
+                    # delivered.
+                    log.warning(
+                        "delivery.thread_not_applied",
+                        job_id=job_id,
+                        channel=channel_name,
+                    )
                 msg = OutgoingMessage(content=text, reply_to=channel_id or None)
             await asyncio.wait_for(adapter.send(msg), timeout=30.0)
             log.info("delivery.channel_sent", job_id=job_id, channel=channel_name)
