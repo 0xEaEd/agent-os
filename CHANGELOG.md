@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `weather` skill script `weather_fetch.py` checked `"june"` as a raw substring
+  in `_seasonal_hint`, causing locations like Juneau to falsely trigger seasonal
+  date-window warnings; it now matches month names with word boundaries
+  (#2510).
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always
