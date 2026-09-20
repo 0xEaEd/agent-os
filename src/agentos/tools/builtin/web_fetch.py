@@ -404,25 +404,13 @@ async def web_fetch(
             continue
         break
 
-    # --- Non-HTML: return as-is ---
-    is_html = "html" in content_type.lower()
-    if not is_html:
-        result = {
-            "url": url,
-            "final_url": final_url,
-            "status": status,
-            "content_type": content_type,
-            "title": "",
-            "extract_mode": extract_mode,
-            "extractor": "raw",
-            "truncated": body_truncated,
-            "length": len(raw_html),
-            "text": _wrap_content(final_url, raw_html),
-        }
-        _cache[cache_key] = result
-        return json.dumps(_apply_max_chars(result, effective_max_chars), ensure_ascii=False)
-
     # --- Error HTTP status: return empty ---
+    # Checked before the content-type branch, not after. A non-HTML error
+    # response -- a JSON API's 404, a plain-text 502 -- used to be packaged
+    # as a successful `raw` extraction: no `error` hint for the model to act
+    # on, and cached for the full TTL even when the status was transient,
+    # which the HTML path deliberately refuses to do. The status is a
+    # property of the response, so it has to be decided before its body.
     if status >= 400:
         hint = (
             "rate-limited or blocked upstream; try a different URL from search results, "
@@ -446,6 +434,24 @@ async def web_fetch(
         if status not in _TRANSIENT_STATUSES:
             _cache[cache_key] = result
         return json.dumps(result, ensure_ascii=False)
+
+    # --- Non-HTML: return as-is ---
+    is_html = "html" in content_type.lower()
+    if not is_html:
+        result = {
+            "url": url,
+            "final_url": final_url,
+            "status": status,
+            "content_type": content_type,
+            "title": "",
+            "extract_mode": extract_mode,
+            "extractor": "raw",
+            "truncated": body_truncated,
+            "length": len(raw_html),
+            "text": _wrap_content(final_url, raw_html),
+        }
+        _cache[cache_key] = result
+        return json.dumps(_apply_max_chars(result, effective_max_chars), ensure_ascii=False)
 
     # --- Extraction pipeline ---
     # Try local extractors first (zero-cost, handles ~90% of mainstream pages),
