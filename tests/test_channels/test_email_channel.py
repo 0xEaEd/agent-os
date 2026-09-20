@@ -18,6 +18,7 @@ from agentos.channels.email import (
     EmailChannel,
     EmailChannelConfig,
     _merge_references,
+    _message_ids,
     _quote_imap_mailbox,
     html_to_text,
     is_automated,
@@ -110,6 +111,76 @@ def test_sender_allowlist_matches_addresses_and_domain_patterns(
 
 def test_empty_allowlist_admits_nobody() -> None:
     assert sender_allowed("owner@example.com", []) is False
+
+
+@pytest.mark.parametrize(
+    "sender",
+    ["team.example", "TEAM.EXAMPLE", "example.com", "Ops <team.example>"],
+)
+def test_allowlist_refuses_a_sender_that_carries_no_at_sign(sender: str) -> None:
+    """A value with no ``@`` has no domain, so no ``@domain`` entry may claim it.
+
+    ``str.rpartition`` returns the whole string as the tail when the separator
+    is absent, which handed a bare ``team.example`` back as its own domain.
+    """
+
+    assert sender_allowed(sender, ["owner@example.com", "*@team.example"]) is False
+    assert sender_allowed(sender, ["owner@example.com", "@team.example"]) is False
+
+
+def test_allowlist_still_admits_a_local_only_sender_by_exact_entry() -> None:
+    """Closing the domain branch must not close the exact-address branch.
+
+    A local-only address is ordinary on a local MTA, and an operator who wrote
+    it out in full is naming that sender, not a domain.
+    """
+
+    assert sender_allowed("root", ["root"]) is True
+    assert sender_allowed("root", ["@example.com"]) is False
+
+
+def test_to_incoming_drops_a_from_whose_addr_spec_is_a_bare_domain() -> None:
+    """The poll-time gate: the display name is free text, the addr-spec is not."""
+
+    channel = EmailChannel(config=_config())
+    parsed = _raw(
+        sender='"attacker@evil.invalid" <team.example>',
+        message_id="x1@evil.invalid",
+    )
+
+    assert channel._to_incoming(parsed) is None
+
+
+def test_to_incoming_still_admits_an_allowlisted_domain_sender() -> None:
+    """Guard for the opposite direction — passes either way by design."""
+
+    channel = EmailChannel(config=_config())
+    parsed = _raw(sender="Dev <dev@team.example>", message_id="ok1@team.example")
+
+    message = channel._to_incoming(parsed)
+
+    assert message is not None
+    assert message.sender_id == "dev@team.example"
+
+
+def test_evaluate_access_denies_a_bare_domain_sender_id() -> None:
+    """The second enforcement point must reach the same verdict as the first."""
+
+    channel = EmailChannel(config=_config())
+    inbound = IncomingMessage(sender_id="team.example", channel_id="t1", content="hi")
+
+    decision = channel.evaluate_access(inbound, is_group=False, mentioned=True)
+
+    assert decision.admit is False
+    assert decision.reason == "not_in_allowlist"
+
+
+def test_reply_target_refuses_a_reply_to_that_is_a_bare_domain() -> None:
+    """The third call site: an off-list ``Reply-To`` falls back to the sender."""
+
+    channel = EmailChannel(config=_config())
+
+    assert channel._reply_target("owner@example.com", "Ops <team.example>") == "owner@example.com"
 
 
 def test_evaluate_access_denies_unknown_sender_and_any_group() -> None:
@@ -259,6 +330,35 @@ def test_attachments_are_carried_through_and_oversized_ones_dropped() -> None:
     assert inbound is not None
     assert [a.name for a in inbound.attachments] == ["ok.txt"]
     assert inbound.attachments[0].data == b"small"
+
+
+def test_forwarded_email_attachment_is_carried_through_not_silently_dropped() -> None:
+    """``message/rfc822`` attachments -- what Outlook/Apple Mail produce for
+    "Forward as Attachment" -- have no encoded body of their own, so
+    ``get_payload(decode=True)`` returns ``None`` rather than bytes. The
+    attachment must still be extracted (by serializing the embedded
+    message), not silently dropped."""
+    channel = EmailChannel(config=_config())
+
+    original = EmailMessage()
+    original["From"] = "third-party@example.com"
+    original["To"] = "owner@example.com"
+    original["Subject"] = "The original thread"
+    original.set_content("please escalate this")
+
+    message = EmailMessage()
+    message["From"] = "owner@example.com"
+    message["Subject"] = "Fwd: please look at this"
+    message["Message-ID"] = "<m10@example.com>"
+    message.set_content("see attached email")
+    message.add_attachment(original, filename="original.eml")
+    parsed = BytesParser(policy=email_policy).parsebytes(message.as_bytes())
+
+    inbound = channel._to_incoming(parsed)
+
+    assert inbound is not None
+    assert [a.name for a in inbound.attachments] == ["original.eml"]
+    assert b"please escalate this" in inbound.attachments[0].data
 
 
 def test_enqueue_dedupes_on_message_id() -> None:
@@ -470,6 +570,105 @@ def test_merge_references_without_a_message_id() -> None:
     )
 
     assert _merge_references(parsed, "") == "<root-001@example.com>"
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("<root-001@example.com><m1@example.com>", ["root-001@example.com", "m1@example.com"]),
+        ("<root-001@example.com> <m1@example.com>", ["root-001@example.com", "m1@example.com"]),
+        ("root-001@example.com m1@example.com", ["root-001@example.com", "m1@example.com"]),
+        ("<root-001@example.com> m1@example.com", ["root-001@example.com", "m1@example.com"]),
+        ("<root-001@example.com>,<m1@example.com>", ["root-001@example.com", "m1@example.com"]),
+        (
+            "(from Outlook)<root-001@example.com><m1@example.com>",
+            ["root-001@example.com", "m1@example.com"],
+        ),
+        ("", []),
+    ],
+)
+def test_message_ids_reads_every_spelling_of_a_threading_header(
+    header: str, expected: list[str]
+) -> None:
+    """RFC 5322 3.6.4 makes the CFWS between two msg-ids optional."""
+
+    assert _message_ids(header) == expected
+
+
+def test_thread_key_is_the_root_when_references_omit_the_separating_space() -> None:
+    """``<a><b>`` must key the same session as ``<a> <b>``, or the thread splits."""
+
+    unspaced = _raw(
+        message_id="m3@example.com",
+        extra_headers={"References": "<root-001@example.com><m2@example.com>"},
+    )
+    spaced = _raw(
+        message_id="m3@example.com",
+        extra_headers={"References": "<root-001@example.com> <m2@example.com>"},
+    )
+
+    assert thread_key_for(unspaced) == "root-001@example.com"
+    assert thread_key_for(unspaced) == thread_key_for(spaced)
+
+
+def test_to_incoming_scopes_both_reference_spellings_to_one_thread() -> None:
+    """``native_thread_id`` is the ``:thread:`` suffix of the DM session key."""
+
+    channel = EmailChannel(config=_config())
+    unspaced = channel._to_incoming(
+        _raw(
+            message_id="m3@example.com",
+            extra_headers={"References": "<root-001@example.com><m2@example.com>"},
+        )
+    )
+    spaced = channel._to_incoming(
+        _raw(
+            message_id="m4@example.com",
+            extra_headers={"References": "<root-001@example.com> <m2@example.com>"},
+        )
+    )
+
+    assert unspaced is not None
+    assert spaced is not None
+    assert unspaced.metadata["native_thread_id"] == "root-001@example.com"
+    assert unspaced.metadata["native_thread_id"] == spaced.metadata["native_thread_id"]
+
+
+def test_merge_references_rebuilds_a_chain_that_omitted_the_separating_space() -> None:
+    """Every id is re-wrapped in ``<>``, so a mangled run goes back out malformed."""
+
+    parsed = _raw(
+        message_id="m3@example.com",
+        extra_headers={"References": "<root-001@example.com><m2@example.com>"},
+    )
+
+    merged = _merge_references(parsed, "m3@example.com")
+
+    assert merged == ("<root-001@example.com> <m2@example.com> <m3@example.com>")
+
+
+def test_merge_references_deduplicates_across_reference_spellings() -> None:
+    """The dedupe in ``_merge_references`` only works on ids that parsed apart."""
+
+    parsed = _raw(
+        message_id="m2@example.com",
+        extra_headers={"References": "<root-001@example.com><root-001@example.com>"},
+    )
+
+    assert _merge_references(parsed, "m2@example.com") == (
+        "<root-001@example.com> <m2@example.com>"
+    )
+
+
+def test_thread_key_reads_an_unspaced_in_reply_to() -> None:
+    """``In-Reply-To`` runs through the same parser as ``References``."""
+
+    parsed = _raw(
+        message_id="m3@example.com",
+        extra_headers={"In-Reply-To": "<root-001@example.com><m2@example.com>"},
+    )
+
+    assert thread_key_for(parsed) == "root-001@example.com"
 
 
 async def test_send_keeps_the_thread_root_when_inbound_has_no_references(

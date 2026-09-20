@@ -111,6 +111,13 @@ def _build_ollama_messages(messages: list[Message]) -> list[dict[str, Any]]:
     return result
 
 
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _normalize_tool_arguments(arguments: Any) -> dict[str, Any]:
     """Coerce a tool call's ``function.arguments`` into a dict.
 
@@ -166,6 +173,22 @@ def _format_error_body(body: bytes) -> str:
     if len(text) <= _OLLAMA_ERROR_BODY_LIMIT:
         return text
     return text[: _OLLAMA_ERROR_BODY_LIMIT - 1].rstrip() + "…"
+
+
+def _mid_stream_error_event(raw: Any) -> ErrorEvent:
+    """Translate a streamed ``{"error": ...}`` line into an ErrorEvent.
+
+    Ollama sends a plain string; keep the text verbatim so the existing
+    ``classify_provider_error`` markers ("model not found", "pull") still
+    match.
+    """
+    if isinstance(raw, dict):
+        message = raw.get("message") or raw.get("error") or json.dumps(raw)
+        code = raw.get("code") or raw.get("type") or "stream_error"
+    else:
+        message = str(raw)
+        code = "stream_error"
+    return ErrorEvent(message=str(message), code=str(code))
 
 
 def _stream_timeout(timeout: float) -> httpx.Timeout:
@@ -335,6 +358,16 @@ class OllamaProvider:
                         if not isinstance(chunk, dict):
                             continue
 
+                        # Ollama reports a failure after the 200 as an NDJSON
+                        # line ``{"error": "..."}`` and ends the stream with no
+                        # ``done`` chunk. It carried no ``message`` so it was
+                        # skipped and the loop fell through to a DoneEvent,
+                        # which the runtime recorded as a success (#2118).
+                        raw_error = chunk.get("error")
+                        if raw_error:
+                            yield _mid_stream_error_event(raw_error)
+                            return
+
                         raw_message = chunk.get("message", {})
                         msg_chunk = raw_message if isinstance(raw_message, dict) else {}
                         chunk_model = chunk.get("model")
@@ -373,8 +406,8 @@ class OllamaProvider:
 
                         # Final chunk carries usage stats
                         if chunk.get("done"):
-                            input_tokens = chunk.get("prompt_eval_count", 0)
-                            output_tokens = chunk.get("eval_count", 0)
+                            input_tokens = _coerce_int(chunk.get("prompt_eval_count"))
+                            output_tokens = _coerce_int(chunk.get("eval_count"))
                             raw_done_reason = chunk.get("done_reason")
                             if isinstance(raw_done_reason, str) and raw_done_reason:
                                 done_reason = raw_done_reason
