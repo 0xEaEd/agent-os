@@ -69,6 +69,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   per grid column it spans. Each `<w:tc>` is now visited exactly once, nested
   table text is included, and a corrupt file raises `ValueError` so the CLI
   exits 2 with a clean message instead of an unhandled traceback. (#2154)
+- `web_fetch` tool: error HTTP statuses (4xx/5xx) served as non-HTML content
+  (a JSON or plain-text API response) were returned as `extractor: "raw"`
+  success without the `error` hint and cached for 15 minutes, because the
+  non-HTML early return ran before the error-status handling that HTML
+  responses already used. The error-status check now runs first, so error
+  bodies take the same path regardless of content type and transient
+  statuses are not cached. (#3231)
 
 ## [2026.9.20] - 2026-09-20
 
