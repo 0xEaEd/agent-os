@@ -28,6 +28,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
   dropped rather than mis-rendered
   ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- `robinhood-chain-stocks` skill: a node-level JSON-RPC failure -- a public
+  endpoint's rate limit, an internal error, a response body that is not a usable
+  result -- was counted as "the contract answered", so `uiMultiplier()` failing
+  for that reason reported `isStockToken: false` about a genuine Robinhood Stock
+  Token, withheld its price as "contract failed the Stock Token check", and told
+  the agent the address was an impersonator. SKILL.md reserves `false` for a
+  confirmed revert and `null` for "unverified, not disproven"; `null` was
+  unreachable from any JSON-RPC-level fault. `RpcError` now records whether the
+  contract answered, and only an execution revert counts (#3253).
+
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
   `_find_all` advanced its cursor past the whole needle, so the overlapping
