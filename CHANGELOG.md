@@ -28,6 +28,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
   dropped rather than mis-rendered
   ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- Channels: a slash command separated from its argument by a tab or a newline
+  was matched as a command -- `match` and `channel_dispatch`'s intercept gate
+  both split on any whitespace -- but `dispatch` extracted the argument with a
+  literal `" "`, so the argument was dropped or cut short with no fallback to
+  the model. `/rename` then read the empty argument as "clear the custom name"
+  and `/plan off` read it as "turn plan mode on", both the opposite of what was
+  asked; `/use` pinned an empty model id. The argument is now split the same way
+  the command word is found (#3254).
+
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
   `_find_all` advanced its cursor past the whole needle, so the overlapping
