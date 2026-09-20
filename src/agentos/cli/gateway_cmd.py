@@ -8,6 +8,7 @@ import os
 import sys
 
 import typer
+from rich.markup import escape
 
 from agentos.cli.gateway_auth_prompt import (
     AuthProvisionOutcome,
@@ -29,6 +30,31 @@ from agentos.paths import default_agentos_home
 def _stdin_isatty() -> bool:
     """Seam for tests — CliRunner replaces sys.stdin, so patch this instead."""
     return sys.stdin.isatty()
+
+
+def _load_config_or_exit(config_path: str | None) -> GatewayConfig:
+    """Load the gateway config, or exit 2 with one line naming the bad setting.
+
+    A value that fails validation -- from the config file or from an
+    ``AGENTOS_GATEWAY_*`` override, which is what ``agentos config set``
+    prints for the operator to export -- used to surface as a pydantic
+    traceback through typer (#3100). Each error is reported as ``key: reason``
+    with the environment variable named when one is set for that key, since
+    that is the setting the operator has to fix or unset.
+    """
+    from pydantic import ValidationError
+
+    try:
+        return GatewayConfig.load(config_path or os.environ.get("AGENTOS_GATEWAY_CONFIG_PATH"))
+    except ValidationError as exc:
+        console.print("[red]AgentOS config error:[/red] the gateway configuration is invalid")
+        for error in exc.errors():
+            loc = ".".join(str(part) for part in error.get("loc", ()))
+            reason = str(error.get("msg") or "invalid value")
+            env_key = "AGENTOS_GATEWAY_" + loc.upper().replace(".", "__")
+            source = f" (set by {env_key})" if env_key in os.environ else ""
+            console.print(f"  {escape(loc)}: {escape(reason)}{escape(source)}")
+        raise typer.Exit(2) from exc
 
 
 def gateway_startup_guidance(host: str, port: int, scheme: str = "http") -> tuple[str, ...]:
@@ -63,7 +89,7 @@ def run_gateway(
     """
     # Load config FIRST so its ``host`` field can act as the final
     # fallback below ``AGENTOS_GATEWAY_HOST``.
-    config = GatewayConfig.load(config_path or os.environ.get("AGENTOS_GATEWAY_CONFIG_PATH"))
+    config = _load_config_or_exit(config_path)
     if config_path and not config.config_path:
         config.config_path = str(config_path)
     # Treat the CLI ``--bind`` default as "not explicitly supplied" so the
@@ -190,7 +216,7 @@ def _lifecycle_manager(
     health_timeout: float = 60.0,
     shutdown_timeout: float = 10.0,
 ) -> GatewayLifecycleManager:
-    config = GatewayConfig.load(config_path or os.environ.get("AGENTOS_GATEWAY_CONFIG_PATH"))
+    config = _load_config_or_exit(config_path)
     host = _resolve_lifecycle_host(bind=bind or "127.0.0.1", listen=listen)
     if not listen and (bind is None or bind == "127.0.0.1"):
         host = resolve_listen_address(None, default=config.host or "127.0.0.1")

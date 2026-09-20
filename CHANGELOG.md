@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- CLI: `agentos config set KEY VALUE` now validates the value before printing
+  the `export AGENTOS_GATEWAY_…` line, the way it already did with `--config`;
+  `agentos gateway run` / `start` report an invalid setting as one line per
+  error, naming the environment variable that supplies it, instead of a
+  pydantic traceback (#3100)
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.

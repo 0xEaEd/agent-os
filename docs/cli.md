@@ -495,6 +495,13 @@ agentos config get llm.provider
 agentos config set port 18791
 ```
 
+Without `--config`, `config set` prints the `export AGENTOS_GATEWAY_…` line
+that applies the setting; with `--config <path>` it writes the file. Both
+validate the value first, so a value the gateway would refuse (`tools.profile
+bogus`) is reported as `Invalid value for …` here rather than when the
+gateway starts. A gateway started with an invalid setting reports each bad
+key on one line, naming the environment variable when one supplies it.
+
 A long-lived gateway keeps per-session state in memory — stream replay
 buffers, usage scopes, plan-mode flags, approval elevations. Every one of
 those sits behind a shared bounded registry whose ceilings are config keys:
