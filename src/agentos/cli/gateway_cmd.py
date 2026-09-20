@@ -53,7 +53,8 @@ def _load_config_or_exit(config_path: str | None) -> GatewayConfig:
             reason = str(error.get("msg") or "invalid value")
             env_key = "AGENTOS_GATEWAY_" + loc.upper().replace(".", "__")
             source = f" (set by {env_key})" if env_key in os.environ else ""
-            console.print(f"  {escape(loc)}: {escape(reason)}{escape(source)}")
+            # soft_wrap keeps the variable name on one line so it stays copy-pasteable.
+            console.print(f"  {escape(loc)}: {escape(reason)}{escape(source)}", soft_wrap=True)
         raise typer.Exit(2) from exc
 
 

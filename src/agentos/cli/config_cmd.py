@@ -104,7 +104,10 @@ def _validated_config(data: dict[str, Any], key: str) -> Any:
     try:
         return GatewayConfig.model_validate(data)
     except Exception as exc:  # noqa: BLE001 - show config validation errors as CLI input errors.
-        console.print(f"[red]Invalid value for {escape(key)}:[/red] {escape(str(exc))}")
+        # soft_wrap keeps the key on one line so it stays copy-pasteable.
+        console.print(
+            f"[red]Invalid value for {escape(key)}:[/red] {escape(str(exc))}", soft_wrap=True
+        )
         raise typer.Exit(2) from exc
 
 
