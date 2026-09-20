@@ -104,6 +104,15 @@ def _build_tool_choice_payload(tool_choice: Any) -> dict[str, Any] | None:
     return None
 
 
+#: The Claude 3 SKUs that shipped before native ``document`` blocks existed.
+#: Deliberately the full dated names, not "claude-3": ``claude-3-5-sonnet``
+#: and ``claude-3-7-sonnet`` do support documents.
+_LEGACY_CLAUDE_3_WITHOUT_DOCUMENTS: tuple[str, ...] = (
+    "claude-3-opus",
+    "claude-3-sonnet",
+)
+
+
 def _supports_document_blocks(model: str) -> bool:
     """Return True if the SKU supports Anthropic's native ``document`` block.
 
@@ -115,7 +124,18 @@ def _supports_document_blocks(model: str) -> bool:
     m = model.lower()
     if "haiku" in m:
         return False
-    return True
+    # The docstring's second exclusion, which the code did not implement: the
+    # original Claude 3 Opus and Sonnet SKUs predate document blocks, so a PDF
+    # reached them as a `document` block and came back 400 instead of taking
+    # the text fallback a few lines below.
+    #
+    # Matched by the dated SKU names rather than by "claude-3", because 3.5 and
+    # 3.7 spell themselves `claude-3-5-sonnet` / `claude-3-7-sonnet` and do
+    # support documents -- excluding them would turn this into the opposite
+    # bug. Substring matching so a vendor-prefixed id
+    # (`anthropic.claude-3-sonnet-...`, `claude-3-sonnet@20240229`) is caught
+    # the same way.
+    return not any(legacy in m for legacy in _LEGACY_CLAUDE_3_WITHOUT_DOCUMENTS)
 
 
 def _increment_document_block_rejected(code: str) -> None:
