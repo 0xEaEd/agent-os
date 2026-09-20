@@ -30,3 +30,26 @@ def test_create_gateway_app_creates_default_diagnostics_state() -> None:
 
     assert isinstance(app.state.diagnostics_state, DiagnosticsState)
     assert app.state.diagnostics_state.snapshot().effective_enabled is True
+
+
+def test_root_endpoint_returns_json_status_when_control_ui_disabled() -> None:
+    config = GatewayConfig()
+    config.control_ui.enabled = False
+    app = create_gateway_app(config)
+    with TestClient(app, base_url="http://localhost") as client:
+        resp = client.get("/", follow_redirects=False)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["service"] == "agentos-gateway"
+        assert data["control_ui"] is False
+
+
+def test_root_endpoint_redirects_when_control_ui_enabled() -> None:
+    config = GatewayConfig()
+    config.control_ui.enabled = True
+    app = create_gateway_app(config)
+    with TestClient(app, base_url="http://localhost") as client:
+        resp = client.get("/", follow_redirects=False)
+        assert resp.status_code in (301, 302, 307)
+        assert resp.headers["location"] == "/control/"

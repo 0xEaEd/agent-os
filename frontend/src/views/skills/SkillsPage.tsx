@@ -28,6 +28,7 @@ import aeonSymbolUrl from '@/assets/aeon-symbol.png'
 import capminalSymbolUrl from '@/assets/capminal-symbol.svg'
 import gmgnSymbolUrl from '@/assets/gmgn-symbol.png'
 import robinhoodSymbolUrl from '@/assets/robinhood-symbol.png'
+import museSymbolUrl from '@/assets/muse-symbol.png'
 import {
   catLabel,
   REGISTRY_SEARCH_DEBOUNCE_MS,
@@ -82,14 +83,21 @@ const SHOW_BANKR = true
 const SHOW_CAPMINAL = true
 const SHOW_AEON = true
 
-type Tab = 'installed' | 'bankr' | 'capminal' | 'aeon' | 'robinhood' | 'community'
+type Tab = 'installed' | 'bankr' | 'capminal' | 'aeon' | 'robinhood' | 'muse' | 'community'
 type RegistryGroup = 'bankr' | 'capminal' | 'aeon' | 'community'
-type PartnerBrand = 'bankr' | 'capminal' | 'aeon' | 'robinhood'
+type PartnerBrand = 'bankr' | 'capminal' | 'aeon' | 'robinhood' | 'muse'
+/**
+ * Partners whose tab lists *installed* skills filtered by `publisher.id`, as
+ * opposed to a remote catalog. Their skills ship in the wheel, so the tab is
+ * populated from `skills.list` and never calls `skills.search`.
+ */
+type BundledPartner = 'robinhood' | 'muse'
 // Drives arrow-key focus movement, so it must stay in lockstep with the order
 // the buttons are rendered in below.
 const TAB_ORDER: Tab[] = [
   'installed',
   'robinhood',
+  'muse',
   ...(SHOW_BANKR ? ['bankr' as const] : []),
   ...(SHOW_AEON ? ['aeon' as const] : []),
   ...(SHOW_CAPMINAL ? ['capminal' as const] : []),
@@ -115,6 +123,7 @@ const PARTNER_BRANDS: Record<PartnerBrand, { label: string; asset: string }> = {
   capminal: { label: 'Capminal', asset: capminalSymbolUrl },
   aeon: { label: 'Aeon', asset: aeonSymbolUrl },
   robinhood: { label: 'Robinhood', asset: robinhoodSymbolUrl },
+  muse: { label: 'Muse', asset: museSymbolUrl },
 }
 
 /**
@@ -127,8 +136,9 @@ const PARTNER_BRANDS: Record<PartnerBrand, { label: string; asset: string }> = {
  * community". Adding the next partner should mean adding a row here, not
  * finding four more ternaries.
  *
- * Robinhood is absent: its tab lists installed skills, not a catalog, so it
- * renders its own intro (`ROBINHOOD_INTRO`) rather than going through
+ * The bundled partners (Robinhood, Muse) are absent: their tabs list
+ * installed skills, not a catalog, so they take their intro from
+ * `bundledPartnerIntro` and render through `BundledPartnerPanel` rather than
  * `RegistryPanel`.
  */
 function registryIntro(): Record<
@@ -155,22 +165,34 @@ function registryIntro(): Record<
 }
 
 /**
- * Header copy for the Robinhood tab. Kept beside `REGISTRY_INTRO` so partner
- * copy lives in one place, even though the panel that renders it lists
+ * Header copy for the bundled-partner tabs. Kept beside `registryIntro` so
+ * partner copy lives in one place, even though the panel that renders it lists
  * installed skills instead of a remote catalog.
  *
- * The notice is skill-specific rather than catalog-wide: only
+ * Each notice is skill-specific rather than catalog-wide. Only
  * `robinhood-agentic-trading` needs the dedicated Agentic account, which
  * Robinhood provisions through its own onboarding flow — the skill cannot
  * create it, so a user who installs and runs it first only finds out when the
- * first tool call fails.
+ * first tool call fails. Muse's warns that the skill writes to a public
+ * board: posts are permanent, and only the human may choose to be named.
  */
-function robinhoodIntro() {
+function bundledPartnerIntro(brand: BundledPartner): {
+  title: string
+  description: string
+  notice?: string
+} {
   return {
-    title: t('skills.robinhoodTitle'),
-    description: t('skills.robinhoodDesc'),
-    notice: t('skills.robinhoodNotice'),
-  }
+    robinhood: {
+      title: t('skills.robinhoodTitle'),
+      description: t('skills.robinhoodDesc'),
+      notice: t('skills.robinhoodNotice'),
+    },
+    muse: {
+      title: t('skills.museTitle'),
+      description: t('skills.museDesc'),
+      notice: t('skills.museNotice'),
+    },
+  }[brand]
 }
 
 /** The brand name for a catalog tab's search/loading copy ('community' has none). */
@@ -690,12 +712,14 @@ export function SkillsPage() {
   const [capminalQuery, setCapminalQuery] = useState('')
   const [aeonQuery, setAeonQuery] = useState('')
   const [robinhoodQuery, setRobinhoodQuery] = useState('')
+  const [museQuery, setMuseQuery] = useState('')
   const [communityText, setCommunityText] = useState('')
   const [communityQuery, setCommunityQuery] = useState('')
   const [bankrCat, setBankrCat] = useState('all')
   const [capminalCat, setCapminalCat] = useState('all')
   const [aeonCat, setAeonCat] = useState('all')
   const [robinhoodStatus, setRobinhoodStatus] = useState<StatusFilter>('all')
+  const [museStatus, setMuseStatus] = useState<StatusFilter>('all')
   const [communityCat, setCommunityCat] = useState('all')
   const [githubUrl, setGithubUrl] = useState('')
 
@@ -991,6 +1015,7 @@ export function SkillsPage() {
   const filtered = filterSkills(allSkills, filterText, statusFilter)
   const groups = groupSkills(filtered)
   const rhSkills = skillsByPublisher(allSkills, 'robinhood')
+  const mbSkills = skillsByPublisher(allSkills, 'muse')
 
   const runInstall = (item: RegistryItem, force: boolean) =>
     installMutation.mutate({
@@ -1124,8 +1149,16 @@ export function SkillsPage() {
             current={tab}
             tab="robinhood"
             label={PARTNER_BRANDS.robinhood.label}
-            description={t('skills.tabRobinhoodDesc')}
+            description={t('skills.tabBundledPartnerDesc')}
             icon={<PartnerLogo brand="robinhood" className="sk-tab__brand" decorative />}
+            onSelect={setTab}
+          />
+          <TabButton
+            current={tab}
+            tab="muse"
+            label={PARTNER_BRANDS.muse.label}
+            description={t('skills.tabBundledPartnerDesc')}
+            icon={<PartnerLogo brand="muse" className="sk-tab__brand" decorative />}
             onSelect={setTab}
           />
           {SHOW_BANKR ? (
@@ -1291,7 +1324,8 @@ export function SkillsPage() {
       ) : null}
 
       {tab === 'robinhood' ? (
-        <RobinhoodPanel
+        <BundledPartnerPanel
+          brand="robinhood"
           skills={rhSkills}
           loading={skillsQuery.isLoading}
           error={skillsQuery.isError ? String(skillsQuery.error) : ''}
@@ -1299,6 +1333,20 @@ export function SkillsPage() {
           onQuery={setRobinhoodQuery}
           statusFilter={robinhoodStatus}
           onStatusFilter={setRobinhoodStatus}
+          onOpen={(name) => setDialog({ kind: 'skill', name })}
+        />
+      ) : null}
+
+      {tab === 'muse' ? (
+        <BundledPartnerPanel
+          brand="muse"
+          skills={mbSkills}
+          loading={skillsQuery.isLoading}
+          error={skillsQuery.isError ? String(skillsQuery.error) : ''}
+          query={museQuery}
+          onQuery={setMuseQuery}
+          statusFilter={museStatus}
+          onStatusFilter={setMuseStatus}
           onOpen={(name) => setDialog({ kind: 'skill', name })}
         />
       ) : null}
@@ -1647,7 +1695,8 @@ function PartnerIntro({
   )
 }
 
-function RobinhoodPanel({
+function BundledPartnerPanel({
+  brand,
   skills,
   loading,
   error,
@@ -1657,6 +1706,7 @@ function RobinhoodPanel({
   onStatusFilter,
   onOpen,
 }: {
+  brand: BundledPartner
   skills: RawSkill[]
   loading: boolean
   error: string
@@ -1674,19 +1724,21 @@ function RobinhoodPanel({
     { key: 'needs-setup' as const, label: t('skills.metricNeedsSetup'), count: stats.needs },
     { key: 'disabled' as const, label: t('skills.metricDisabled'), count: stats.disabled },
   ].filter((item) => item.key === 'all' || item.count > 0 || item.key === statusFilter)
+  const label = PARTNER_BRANDS[brand].label
+  const intro = bundledPartnerIntro(brand)
 
   return (
     <div
-      id="sk-panel-robinhood"
+      id={`sk-panel-${brand}`}
       role="tabpanel"
-      aria-labelledby="sk-tab-robinhood"
+      aria-labelledby={`sk-tab-${brand}`}
       className="sk-panel sk-panel--source"
     >
       <PartnerIntro
-        brand="robinhood"
-        title={robinhoodIntro().title}
-        description={robinhoodIntro().description}
-        notice={robinhoodIntro().notice}
+        brand={brand}
+        title={intro.title}
+        description={intro.description}
+        notice={intro.notice}
         count={skills.length}
       />
       <div className="sk-browse__bar">
@@ -1695,12 +1747,8 @@ function RobinhoodPanel({
           <input
             type="search"
             className="sk-search-input sk-search-input--lg"
-            placeholder={t('skills.registrySearchPlaceholder', {
-              label: PARTNER_BRANDS.robinhood.label,
-            })}
-            aria-label={t('skills.registrySearchLabel', {
-              label: PARTNER_BRANDS.robinhood.label,
-            })}
+            placeholder={t('skills.registrySearchPlaceholder', { label })}
+            aria-label={t('skills.registrySearchLabel', { label })}
             autoComplete="off"
             value={query}
             onChange={(event) => onQuery(event.target.value)}
@@ -1708,13 +1756,13 @@ function RobinhoodPanel({
         </div>
       </div>
       {filters.length > 1 ? (
-        <div className="sk-chips" aria-label={t('skills.robinhoodStatusLandmark')}>
+        <div className="sk-chips" aria-label={t('skills.partnerStatusLandmark', { brand: label })}>
           {filters.map((filter) => (
             <button
               key={filter.key}
               type="button"
               className={`sk-chip-btn${statusFilter === filter.key ? ' is-active' : ''}`}
-              aria-label={t('skills.robinhoodFilterLabel', { label: filter.label })}
+              aria-label={t('skills.partnerFilterLabel', { brand: label, label: filter.label })}
               aria-pressed={statusFilter === filter.key}
               onClick={() => onStatusFilter(filter.key)}
             >
@@ -1728,21 +1776,19 @@ function RobinhoodPanel({
           <div className="sk-error">
             {t('skills.loadFailed', { error })}
             <br />
-            <span className="sk-dim">{t('skills.retryHintRobinhood')}</span>
+            <span className="sk-dim">{t('skills.retryHintPartner')}</span>
           </div>
         ) : loading ? (
-          <SkillsSkeleton label={t('skills.loadingRobinhood')} />
+          <SkillsSkeleton label={t('skills.loadingPartner', { brand: label })} />
         ) : filtered.length === 0 ? (
-          <div className="sk-registry__hint">
-            {partnerEmptyMessage(PARTNER_BRANDS.robinhood.label, query, statusFilter)}
-          </div>
+          <div className="sk-registry__hint">{partnerEmptyMessage(label, query, statusFilter)}</div>
         ) : (
           <div className="sk-grid sk-grid--registry">
             <AnimatePresence initial={false}>
               {filtered.map((skill) => (
                 <MotionListItem key={skill.name}>
                   <PartnerSkillCard
-                    brand="robinhood"
+                    brand={brand}
                     skill={skill}
                     onOpen={() => onOpen(skill.name!)}
                   />

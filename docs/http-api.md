@@ -122,6 +122,10 @@ overwriting the other writer's edit.
 `sessions.create` accepts an optional `projectId`, `sessions.patch` moves a
 session with `projectId` (explicit `null` detaches), and `sessions.list`
 accepts a `projectId` filter and emits `project_id`/`projectId` on every row.
+`sessions.patch` and `sessions.rename` on an ephemeral WebChat key
+(`agent:<id>:webchat:<suffix>`) that has no row yet create it first — the WebUI
+mints that key client-side and only sends it on the first message; every other
+key shape still fails with `NOT_FOUND`.
 Project CRUD broadcasts a `projects.changed` event to connected clients.
 
 ### Environment variables (`env.*`)

@@ -750,6 +750,7 @@ async def infer_delivery(
             channel_id=user_overrides.get("channel_id", ""),
             account_id=user_overrides.get("account_id", ""),
             thread_id=user_overrides.get("thread_id", ""),
+            best_effort=bool(user_overrides.get("best_effort", False)),
         )
 
     # Priority 2: Infer from session routing fields -> mode=ORIGIN

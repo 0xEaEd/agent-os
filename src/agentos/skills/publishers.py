@@ -55,6 +55,12 @@ RECOGNIZED_PUBLISHERS: dict[str, SkillPublisher] = {
         url="https://www.aeon.fun",
         logo="",
     ),
+    "muse": SkillPublisher(
+        id="muse",
+        name="Muse",
+        url="https://musebook.lol",
+        logo="",
+    ),
 }
 
 
