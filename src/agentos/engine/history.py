@@ -92,6 +92,30 @@ def _extract_tool_result_ids(content: Any) -> set[str]:
     return ids
 
 
+def _content_without_unpaired_tool_blocks(
+    content: Any,
+    *,
+    drop_uses: bool,
+    drop_results: bool,
+) -> list[Any]:
+    """The content blocks that survive removing the unpaired tool blocks.
+
+    Returns ``[]`` when nothing is left, which is the caller's signal to drop
+    the message after all: a tool-result message that carried only its results
+    has nothing to preserve.
+    """
+    if not isinstance(content, list):
+        return []
+    kept: list[Any] = []
+    for block in content:
+        is_use = hasattr(block, "id") and hasattr(block, "name") and hasattr(block, "input")
+        is_result = hasattr(block, "tool_use_id") and hasattr(block, "is_error")
+        if (drop_uses and is_use) or (drop_results and is_result):
+            continue
+        kept.append(block)
+    return kept
+
+
 def repair_tool_pairing(messages: list[Message]) -> list[Message]:
     """Remove messages with malformed tool_use/tool_result adjacency.
 
@@ -134,18 +158,34 @@ def repair_tool_pairing(messages: list[Message]) -> list[Message]:
             valid_tool_result_indices.update(result_indices)
 
     repaired: list[Message] = []
+    changed = False
     for index, message in enumerate(messages):
         use_ids = _extract_tool_use_ids(message.content)
         result_ids = _extract_tool_result_ids(message.content)
 
-        if use_ids and index not in valid_tool_call_indices:
-            continue
-        if result_ids and index not in valid_tool_result_indices:
+        drop_uses = bool(use_ids) and index not in valid_tool_call_indices
+        drop_results = bool(result_ids) and index not in valid_tool_result_indices
+        if not drop_uses and not drop_results:
+            repaired.append(message)
             continue
 
-        repaired.append(message)
+        # Only the unpaired blocks are the problem, and a message is not only
+        # its tool blocks. The engine appends the runtime-context block to the
+        # user message it lands on -- which on a tool turn is the one carrying
+        # the tool results -- and the image sanitiser appends its omission
+        # markers the same way. Dropping the whole message to remove an
+        # orphaned result took that text with it, silently, so the model
+        # answered without instructions the caller had given it.
+        changed = True
+        kept = _content_without_unpaired_tool_blocks(
+            message.content,
+            drop_uses=drop_uses,
+            drop_results=drop_results,
+        )
+        if kept:
+            repaired.append(message.model_copy(update={"content": kept}))
 
-    return messages if len(repaired) == len(messages) else repaired
+    return messages if not changed else repaired
 
 
 def _coerce_tool_input(raw: Any) -> dict[str, Any]:
