@@ -5,6 +5,7 @@ import pytest
 from agentos.session.compaction import (
     CompactionConfig,
     CompactionRequest,
+    _find_turn_boundary_cut,
     call_compaction_llm,
     compact_context,
     estimate_entry_replay_tokens,
@@ -179,6 +180,55 @@ async def test_compaction_keeps_recent_entries():
     if result.kept_entries:
         last_kept = result.kept_entries[-1]
         assert last_kept in entries[-len(result.kept_entries) :]
+
+
+def test_find_turn_boundary_cut_does_not_orphan_second_parallel_tool_result():
+    # A single assistant turn with two parallel tool calls. The naive
+    # token-budget cut lands between the two tool results.
+    entries = [
+        {"role": "user", "content": "analyze files"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "function": {"name": "read_file"}},
+                {"id": "call_2", "function": {"name": "read_file"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "file 1 data " * 50},
+        {"role": "tool", "tool_call_id": "call_2", "content": "file 2 data"},
+        {"role": "assistant", "content": "Analysis complete."},
+    ]
+
+    cut = _find_turn_boundary_cut(entries, keep_budget=30)
+
+    first_kept = entries[cut] if cut < len(entries) else None
+    assert first_kept is None or first_kept.get("role") != "tool"
+
+
+def test_find_turn_boundary_cut_falls_back_before_the_whole_parallel_turn():
+    # Same shape, but the only budget-driven cut lands on the first of the
+    # two tool results — the cut must still skip back past the assistant
+    # message that issued both calls, not just past the immediate pair.
+    entries = [
+        {"role": "user", "content": "analyze files"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "function": {"name": "read_file"}},
+                {"id": "call_2", "function": {"name": "read_file"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "x"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "file 2 data " * 50},
+        {"role": "assistant", "content": "Analysis complete."},
+    ]
+
+    cut = _find_turn_boundary_cut(entries, keep_budget=30)
+
+    first_kept = entries[cut] if cut < len(entries) else None
+    assert first_kept is None or first_kept.get("role") != "tool"
 
 
 @pytest.mark.asyncio
