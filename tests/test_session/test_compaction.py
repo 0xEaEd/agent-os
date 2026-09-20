@@ -231,6 +231,32 @@ def test_find_turn_boundary_cut_falls_back_before_the_whole_parallel_turn():
     assert first_kept is None or first_kept.get("role") != "tool"
 
 
+def test_find_turn_boundary_cut_does_not_walk_back_past_a_tool_call_with_no_result_yet():
+    # An assistant tool call that never got a result recorded (the turn was
+    # cut short) followed by later, unrelated turns. Cutting right after the
+    # pending call orphans nothing -- there is no tool result anywhere in the
+    # kept set for it to leave stranded -- so this is already a clean
+    # boundary and must not be walked back past. A fix that also checks
+    # "was the last removed entry an assistant tool call" (in addition to
+    # "is the first kept entry a tool result") re-triggers here even though
+    # nothing is at risk, discarding an extra turn it didn't need to.
+    entries = [
+        {"role": "user", "content": "long earlier context " * 20},
+        {"role": "assistant", "content": "ok"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call_1", "function": {"name": "read_file"}}],
+        },
+        {"role": "user", "content": "unrelated later turn"},
+        {"role": "assistant", "content": "unrelated reply"},
+    ]
+
+    cut = _find_turn_boundary_cut(entries, keep_budget=8)
+
+    assert entries[cut]["content"] == "unrelated later turn"
+
+
 @pytest.mark.asyncio
 async def test_empty_entries():
     result = await compact_context(
