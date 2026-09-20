@@ -28,6 +28,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
   dropped rather than mis-rendered
   ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- Observability: the log retention sweeper's family list named `agentos.log*`, a
+  filename nothing in AgentOS writes, and matched no pattern against the gateway
+  daemon's own `~/.agentos/logs/gateway.log` -- opened append-only by
+  `agentos gateway start` and rotated by nothing. The one unbounded log was
+  therefore never aged out, never counted against
+  `observability.log_retention_max_total_mb`, and never tripped the sweep's
+  `capped` flag. The stale pattern is replaced with `gateway.log*`, and that
+  family is reclaimed by truncating in place rather than `unlink`, so the
+  running daemon's inherited descriptor is not left appending into an orphaned
+  inode (#3116).
+
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
   `_find_all` advanced its cursor past the whole needle, so the overlapping
