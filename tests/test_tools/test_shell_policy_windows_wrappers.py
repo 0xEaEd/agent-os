@@ -227,6 +227,14 @@ def test_the_opening_quote_is_only_allowed_after_a_wrapper() -> None:
         "cmd /c " * 500 + "x",
         'powershell -c "' + " " * 5000 + "x",
         'powershell -c "' + "& { " * 1000 + "x",
+        # A flag value that is itself the next wrapper's name: every hop used
+        # to parse two ways and the wrapper `*` multiplied them -- 20 hops took
+        # seconds, 25 never returned (review on #2690).
+        "pwsh -c " * 40 + "x",
+        "powershell -c " * 40 + "x",
+        "pwsh -ep bypass -c " * 40 + "x",
+        "pwsh -c pwsh.exe -c " * 30 + "x",
+        "pwsh -c " * 200 + "x",
     ],
 )
 def test_nested_quantifiers_do_not_backtrack_catastrophically(command: str) -> None:
@@ -239,6 +247,36 @@ def test_nested_quantifiers_do_not_backtrack_catastrophically(command: str) -> N
     pattern.search(command)
 
     assert time.perf_counter() - started < 0.5
+
+
+def test_a_chain_of_wrappers_is_classified_promptly_by_the_real_policy(
+    windows_policy: SafeBinPolicy,
+) -> None:
+    """``check`` runs synchronously inside ``exec_command``: a ~300-character
+    agent-supplied command must not stall the gateway's event loop."""
+    started = time.perf_counter()
+    windows_policy.check("pwsh -c " * 40 + "x")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.5, f"took {elapsed:.2f}s"
+
+
+def test_a_wrapper_name_is_not_a_flag_value(windows_policy: SafeBinPolicy) -> None:
+    """The parse that makes the chain cheap is also the right one: ``pwsh``
+    after ``-c`` is the next wrapper, so the payload at the end is still found."""
+    assert windows_policy.check(r"pwsh -c pwsh -c rm C:\x").allowed is False
+    assert windows_policy.check("pwsh -c " * 40 + r"rm C:\x").allowed is False
+    assert windows_policy.check(r"cmd /c powershell -c pwsh.exe -c rm C:\x").allowed is False
+
+
+def test_a_value_that_merely_starts_with_a_wrapper_name_is_still_a_value(
+    windows_policy: SafeBinPolicy,
+) -> None:
+    """``pwsh.ps1`` and ``cmd-tool`` are values, not wrappers: the guard ends
+    at a word boundary, so ``-File pwsh.ps1`` keeps its script."""
+    assert windows_policy.check("powershell -File pwsh.ps1").allowed is True
+    assert windows_policy.check("powershell -File cmd-tool.ps1").allowed is True
+    assert windows_policy.check(r"powershell -File pwsh.ps1 -c rm C:\x").allowed is False
 
 
 # ── the other lists are untouched ───────────────────────────────────────────

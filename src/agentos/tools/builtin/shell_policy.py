@@ -36,9 +36,17 @@ DEFAULT_DENYLIST: list[str] = [
 # backslash before one, because a payload nested in a payload arrives with
 # its quote doubled (`cmd /c "pwsh -c ""rm C:\x"""`) or escaped
 # (`-c \"rm C:\x\"`). The payload may also open with whitespace.
+#
+# A value is also never a wrapper name. Without that, `pwsh -c pwsh -c pwsh`
+# parses two ways at every hop -- `pwsh` as `-c`'s value, or as the next
+# wrapper -- and the `*` on the wrapper multiplies them: 20 hops took
+# seconds, 25 never returned, inside the synchronous check every exec_command
+# runs (review on #2690). Refusing the name as a value leaves one parse.
+_WIN_WRAPPER_NAME: str = r"(?:cmd|powershell|pwsh)(?:\.exe)?(?![\w.\-])"
 _WIN_WRAPPER: str = (
     r"(?:cmd(?:\.exe)?\s+/[ck]"
-    r"|(?:powershell|pwsh)(?:\.exe)?(?:\s+-[a-zA-Z]+(?:(?::|\s+)(?!-)[^\s\"';&|]+)?)*)"
+    r"|(?:powershell|pwsh)(?:\.exe)?"
+    r"(?:\s+-[a-zA-Z]+(?:(?::|\s+)(?!-)(?!" + _WIN_WRAPPER_NAME + r")[^\s\"';&|]+)?)*)"
     r"\s+(?:\\?[\"'])*\s*"
 )
 
