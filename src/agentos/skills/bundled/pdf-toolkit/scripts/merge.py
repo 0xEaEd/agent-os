@@ -90,16 +90,23 @@ def _range_bounds(token: str, spec: str) -> tuple[int, int]:
     return _page_number(lo_s, spec), _page_number(hi_s, spec)
 
 
-def requested_pages(spec: str | None, total: int) -> list[int]:
-    """Every page number *spec* asks for, in order, without clamping to *total*.
+#: How many out-of-range pages one entry lists one by one. Beyond this the rest
+#: are counted rather than enumerated, so a runaway span cannot turn the summary
+#: into a hundred-million-entry list.
+MAX_REPORTED_SKIPPED = 1000
 
-    ``parse_ranges`` drops what the document does not have; a caller that has to
-    report the difference needs the unclamped list to subtract from. A *spec*
-    that cannot be parsed raises :class:`PageSpecError`.
+
+def page_spans(spec: str | None, total: int) -> list[tuple[int, int]]:
+    """Parse ``'1-3,5,7-9'`` into inclusive ``(lo, hi)`` spans, without expanding them.
+
+    An absent *spec* means the whole document. A span is two numbers; the pages
+    it covers are only ever materialised after clamping to the document, so a
+    spec naming more pages than exist costs nothing to parse. A *spec* that
+    cannot be parsed raises :class:`PageSpecError`.
     """
     if not spec:
-        return list(range(1, total + 1))
-    pages: list[int] = []
+        return [(1, total)]
+    spans: list[tuple[int, int]] = []
     for token in spec.split(","):
         token = token.strip()
         if not token:
@@ -108,14 +115,59 @@ def requested_pages(spec: str | None, total: int) -> list[int]:
             lo, hi = _range_bounds(token, spec)
             if lo > hi:
                 lo, hi = hi, lo
-            pages.extend(range(lo, hi + 1))
         else:
-            pages.append(_page_number(token, spec))
-    return pages
+            lo = hi = _page_number(token, spec)
+        spans.append((lo, hi))
+    return spans
+
+
+def requested_pages(spec: str | None, total: int) -> list[int]:
+    """Every page number *spec* asks for, in order, without clamping to *total*.
+
+    Unbounded, and no longer used by :func:`merge`: expanding a span before the
+    document's length was known let ``"1-20000000"`` allocate twenty million
+    ints to merge a ten-page file (#3179). Kept for callers outside this script;
+    new code wants :func:`page_spans`.
+    """
+    return [page for lo, hi in page_spans(spec, total) for page in range(lo, hi + 1)]
 
 
 def parse_ranges(spec: str | None, total: int) -> list[int]:
-    return [p for p in requested_pages(spec, total) if 1 <= p <= total]
+    """The pages *spec* names that the document actually has, in order.
+
+    Bounded by *total*: each span is clamped to ``1..total`` before it is
+    expanded, so the result can never be longer than the document, whatever the
+    spec asks for.
+    """
+    pages: list[int] = []
+    for lo, hi in page_spans(spec, total):
+        low, high = max(lo, 1), min(hi, total)
+        if low <= high:
+            pages.extend(range(low, high + 1))
+    return pages
+
+
+def skipped_pages(
+    spec: str | None, total: int, limit: int = MAX_REPORTED_SKIPPED
+) -> tuple[list[int], int]:
+    """The pages *spec* asked for that the document does not have.
+
+    Returns the first *limit* of them and a count of how many more there were,
+    so a span running far past the end is reported without being enumerated.
+    """
+    listed: list[int] = []
+    omitted = 0
+    for lo, hi in page_spans(spec, total):
+        # The two parts of a span that fall outside the document: before page 1,
+        # and past the last page.
+        for low, high in ((lo, min(hi, 0)), (max(lo, total + 1), hi)):
+            if low > high:
+                continue
+            room = max(0, limit - len(listed))
+            stop = min(high, low + room - 1) if room else low - 1
+            listed.extend(range(low, stop + 1))
+            omitted += high - stop
+    return listed, omitted
 
 
 class ManifestError(ValueError):
@@ -169,6 +221,8 @@ class MergeResult:
     pages_written: int = 0
     skipped: list[tuple[str, list[int]]] = field(default_factory=list)
     missing_files: list[str] = field(default_factory=list)
+    #: Per entry, how many further out-of-range pages ``skipped`` did not list.
+    skipped_omitted: list[tuple[str, int]] = field(default_factory=list)
 
 
 def merge(items: Iterable[dict[str, str]], out: Path) -> MergeResult:
@@ -197,9 +251,11 @@ def merge(items: Iterable[dict[str, str]], out: Path) -> MergeResult:
             continue
         reader = PdfReader(str(path))
         total = len(reader.pages)
-        skipped = [p for p in requested_pages(item.get("pages"), total) if not 1 <= p <= total]
+        skipped, omitted = skipped_pages(item.get("pages"), total)
         if skipped:
             result.skipped.append((str(path), skipped))
+        if omitted:
+            result.skipped_omitted.append((str(path), omitted))
         for page_num in parse_ranges(item.get("pages"), total):
             writer.add_page(reader.pages[page_num - 1])
             result.pages_written += 1
@@ -250,16 +306,30 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    omitted_by_file = dict(result.skipped_omitted)
     for file_name, pages in result.skipped:
         dropped = ", ".join(str(p) for p in pages)
-        print(f"warn: {file_name} has no page {dropped}", file=sys.stderr)
+        more = omitted_by_file.get(file_name, 0)
+        tail = f" (and {more:,} more)" if more else ""
+        print(f"warn: {file_name} has no page {dropped}{tail}", file=sys.stderr)
     _write_stdout(
         json.dumps(
             {
                 "pages_written": result.pages_written,
                 "out": str(args.out),
                 "skipped_pages": [
-                    {"file": file_name, "pages": pages} for file_name, pages in result.skipped
+                    {
+                        "file": file_name,
+                        "pages": pages,
+                        # Only present when the list was capped, so an ordinary
+                        # summary keeps exactly the shape it had before.
+                        **(
+                            {"omitted": omitted_by_file[file_name]}
+                            if omitted_by_file.get(file_name)
+                            else {}
+                        ),
+                    }
+                    for file_name, pages in result.skipped
                 ],
                 "missing_files": result.missing_files,
             },
