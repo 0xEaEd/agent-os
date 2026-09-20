@@ -118,16 +118,16 @@ def test_windows_path_handling_is_unchanged() -> None:
     escaped -- the quote fix must not disturb either."""
     burn = _burn_module()
 
-    escaped = burn._escape_subtitle_path("C:\\Users\\me\\cues.srt")
+    escaped = burn._escape_subtitle_path("C:\\Videos\\Clips\\cues.srt")
 
-    assert escaped == "C\\:/Users/me/cues.srt"
+    assert escaped == "C\\:/Videos/Clips/cues.srt"
 
 
 def test_a_windows_path_containing_a_quote_gets_both_treatments() -> None:
     burn = _burn_module()
 
-    escaped = burn._escape_subtitle_path("C:\\Users\\me\\a'b\\cues.srt")
+    escaped = burn._escape_subtitle_path("C:\\Videos\\Clips\\a'b\\cues.srt")
 
-    assert escaped.startswith("C\\:/Users/me/")
+    assert escaped.startswith("C\\:/Videos/Clips/")
     assert "'\\''" in escaped
     assert "\\" in escaped  # the drive colon escape survived
