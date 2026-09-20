@@ -195,7 +195,12 @@ def _render_think_line(line: str) -> str:
 # This is the one intentional exception to the write-once contract, and it
 # is the same trade-off every streaming terminal markdown renderer makes.
 
-_TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
+# GFM's delimiter cell is *one or more* hyphens with an optional leading
+# and/or trailing colon, so `-`, `--`, `:-`, `-:` and `:-:` are all valid.
+# Demanding three eliminated the compact spellings, and a table written that
+# way was not recognised as a table at all: the raw pipes and dashes were
+# printed to the terminal as prose.
+_TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-+:?$")
 _TABLE_MIN_COL_WIDTH = 5
 _TABLE_PAD = 1  # spaces on each side of a cell
 
@@ -211,8 +216,12 @@ def _split_table_row(line: str) -> list[str]:
 
 
 def _is_table_separator_row(line: str) -> bool:
+    # ``fullmatch`` states the intent the trailing ``$`` was carrying. Same
+    # result for every cell reaching here (they are stripped, so the one case
+    # ``$`` is laxer about -- a trailing newline -- cannot occur), but it keeps
+    # the check correct if the anchor is ever dropped from the pattern.
     cells = _split_table_row(line)
-    return bool(cells) and all(_TABLE_SEPARATOR_CELL_RE.match(c) for c in cells)
+    return bool(cells) and all(_TABLE_SEPARATOR_CELL_RE.fullmatch(c) for c in cells)
 
 
 def _parse_table_alignment(line: str, ncols: int) -> list[str]:

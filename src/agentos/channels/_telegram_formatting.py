@@ -5,7 +5,12 @@ from __future__ import annotations
 import html
 import re
 
-_TABLE_DELIMITER_RE = re.compile(r"^:?-{3,}:?$")
+# GFM's delimiter cell is *one or more* hyphens with an optional leading
+# and/or trailing colon, so `-`, `--`, `:-`, `-:` and `:-:` are all valid.
+# Demanding three eliminated the compact spellings, and a table written that
+# way was not recognised as a table at all: the raw pipes and dashes were
+# delivered to the reader as prose.
+_TABLE_DELIMITER_RE = re.compile(r"^:?-+:?$")
 # A fence opens with three or more backticks or tildes followed by an info
 # string, which CommonMark takes to be the rest of the line: its first word is
 # the language, anything after it is attributes this renderer has no use for.
