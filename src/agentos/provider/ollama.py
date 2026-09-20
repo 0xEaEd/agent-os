@@ -106,6 +106,24 @@ def _build_ollama_messages(messages: list[Message]) -> list[dict[str, Any]]:
                     if tool_name:
                         tool_result["tool_name"] = tool_name
                     result.append(tool_result)
+                # A tool-result message is not always only tool results. The
+                # engine appends runtime context to the user message it lands
+                # on, and that is the tool-result message on a tool turn; the
+                # image sanitiser appends its "[historical image omitted]"
+                # markers the same way. `continue` alone dropped every one of
+                # those blocks on the floor, silently.
+                #
+                # Ollama pairs a tool message with the assistant turn before
+                # it, so the carried text follows the tool messages as its own
+                # message rather than preceding them.
+                remainder = [block for block in message.content if block.type != "tool_result"]
+                if remainder:
+                    carried = _build_ollama_message(
+                        Message(role=message.role, content=remainder),  # type: ignore[arg-type]
+                        tool_names_by_id,
+                    )
+                    if str(carried.get("content", "")).strip() or carried.get("tool_calls"):
+                        result.append(carried)
                 continue
         result.append(_build_ollama_message(message, tool_names_by_id))
     return result
