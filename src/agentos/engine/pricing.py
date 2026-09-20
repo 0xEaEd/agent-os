@@ -73,10 +73,16 @@ class PricingCache:
     async def refresh(self) -> None:
         """Fetch model list from OpenRouter and update cache."""
         url = f"{self._base_url}/models"
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        # Only when there is a key. `Authorization: Bearer ` with nothing after
+        # it is not the same as sending no header: OpenRouter reads it as a
+        # credential, fails to find it, and answers 401 -- on an endpoint whose
+        # model list is public and would have answered. So every deployment
+        # without an OpenRouter key (a local Ollama setup, direct provider
+        # keys) lost pricing entirely, and the log said "unauthorized" rather
+        # than "no key configured".
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         headers.update(openrouter_app_headers(self._base_url))
         try:
             async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, trust_env=_trust_env()) as client:
