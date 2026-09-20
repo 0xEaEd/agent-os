@@ -29,7 +29,7 @@ available without `uv tool list` or `pip show`.
 | `agentos agent` | Run a single automation-friendly agent turn. |
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
-| `agentos skills` | List, search, view, install, update, publish, and inspect skills. |
+| `agentos skills` | List, search, view, install, update, publish, inspect, and tap skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
 | `agentos providers` | Configure and inspect LLM providers. |
@@ -595,6 +595,11 @@ agentos skills install <skill-url> --source bankr
 agentos skills install <skill-url> --source aeon
 agentos skills update --all
 agentos skills uninstall <skill-name>
+agentos skills publish <path-to-skill>
+agentos skills publish <path-to-skill> --repo <owner/repo>
+agentos skills tap list
+agentos skills tap add <owner/repo>
+agentos skills tap remove <owner/repo>
 ```
 
 `agentos skills init <name>` initializes a new custom skill template.
@@ -603,6 +608,15 @@ agentos skills uninstall <skill-name>
 - `--target-dir` / `-p` specifies the target parent directory. If omitted, the tool resolves to the highest precedence existing layer directory in the workspace/personal layers list.
 - `--with-script` scaffolds an executable script `scripts/run.py` template and entrypoint command configuration.
 - `--force` / `-f` forces overwrite of generated files without purging the parent folder.
+
+`agentos skills publish <path-to-skill>` validates the skill directory and
+publishes it. `--repo` / `-r <owner/repo>` targets the repository the PR
+goes to; a failed publish prints `Failed:` and exits 1.
+
+`agentos skills tap` manages custom skill source repositories (taps) for
+teams that keep their own skill catalog: `tap list` shows the registered
+taps, `tap add <owner/repo>` registers one, `tap remove <owner/repo>`
+removes it. See [`features/skills.md`](features/skills.md#manage-skill-sources).
 
 The `skills list` table is unchanged: name, layer, eligible, description.
 `--json` carries more, and now reports the same facts the Web UI shows for the
