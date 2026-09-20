@@ -137,11 +137,48 @@ def summarize_error_body(
         message = payload.get("message")
         if isinstance(message, str) and message.strip():
             return _clip(message.strip(), max_chars)
+        detail = _detail_text(payload.get("detail"))
+        if detail:
+            return _clip(detail, max_chars)
 
     if _looks_like_html(text):
         return _clip(_summarize_html(text), max_chars)
 
     return _clip(text, max_chars)
+
+
+def _detail_text(detail: Any) -> str:
+    """The readable part of a ``detail`` field, or ``""``.
+
+    ``{"detail": ...}`` is what a FastAPI/Starlette app returns by default,
+    which covers vLLM, Ollama's proxy and most self-hosted inference servers
+    sitting in front of a model. It comes in two shapes: a plain string for an
+    ``HTTPException``, and a list of validation errors for a 422, each with a
+    ``msg`` and the field it came from. Without this the whole JSON document
+    reached the model as raw text -- the one thing this module exists to
+    prevent.
+    """
+
+    if isinstance(detail, str):
+        return detail.strip()
+    if isinstance(detail, list):
+        messages: list[str] = []
+        for entry in detail:
+            if isinstance(entry, str) and entry.strip():
+                messages.append(entry.strip())
+            elif isinstance(entry, dict):
+                msg = entry.get("msg")
+                if isinstance(msg, str) and msg.strip():
+                    # ``loc`` names the field that failed; without it a list of
+                    # "field required" lines says nothing actionable.
+                    location = entry.get("loc")
+                    if isinstance(location, list) and location:
+                        where = ".".join(str(part) for part in location)
+                        messages.append(f"{where}: {msg.strip()}")
+                    else:
+                        messages.append(msg.strip())
+        return "; ".join(messages)
+    return ""
 
 
 def _clip(text: str, max_chars: int) -> str:
