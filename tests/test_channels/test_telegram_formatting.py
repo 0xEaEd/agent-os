@@ -371,10 +371,17 @@ def test_single_underscore_renders_italic(markdown: str, expected: str) -> None:
 )
 def test_single_underscore_leaves_identifiers_alone(markdown: str) -> None:
     """Intraword underscores are not emphasis (CommonMark), so identifiers
-    with several underscores must not sprout <i> tags."""
+    with several underscores must not sprout <i> tags.
+
+    Every case now round-trips unchanged. The ``__init__`` one used to need a
+    ``.replace("__init__", "<b>init</b>")`` here, which was this test working
+    around the ``__bold__`` pass eating the dunder rather than asserting that
+    it should — the stated contract was always the ``<i>`` check above. #2076
+    made the identifier survive whole, so the concession is gone.
+    """
     rendered = render_telegram_html(markdown)
     assert "<i>" not in rendered
-    assert rendered == markdown.replace("__init__", "<b>init</b>")
+    assert rendered == markdown
 
 
 def test_single_underscore_does_not_touch_a_parked_link_or_code_span() -> None:
@@ -524,3 +531,71 @@ def test_fence_info_string_with_a_backtick_does_not_open_a_block() -> None:
 
     assert "<pre>" not in rendered
     assert "<code>x</code>" in rendered
+
+
+# Issue #2022: a `~~~` fence is CommonMark too. Unrecognised, its body fell
+# through to the inline passes and a code block was rendered as prose.
+
+_FENCE_BODY = "**not bold** and [not a link](https://x.test) and <not html>"
+
+
+def test_tilde_fence_renders_the_same_block_as_a_backtick_fence() -> None:
+    tilde = render_telegram_html("~~~\n" + _FENCE_BODY + "\n~~~")
+    backtick = render_telegram_html("```\n" + _FENCE_BODY + "\n```")
+
+    assert tilde == backtick
+    assert tilde == "<pre>**not bold** and [not a link](https://x.test) and &lt;not html&gt;</pre>"
+
+
+def test_tilde_fence_carries_an_info_string() -> None:
+    rendered = render_telegram_html("~~~python\nx = 1\n~~~")
+
+    assert rendered == '<pre><code class="language-python">x = 1</code></pre>'
+
+
+def test_tilde_fence_info_string_may_contain_backticks() -> None:
+    """Unlike a backtick fence, a tilde fence's info string is unrestricted."""
+    rendered = render_telegram_html("~~~py `x`\ncode\n~~~")
+
+    assert rendered == '<pre><code class="language-py">code</code></pre>'
+
+
+def test_tilde_fence_does_not_close_on_backticks() -> None:
+    rendered = render_telegram_html("~~~python\nx\n```\ny\n~~~\n\nafter")
+
+    assert rendered == '<pre><code class="language-python">x\n```\ny</code></pre>\n\nafter'
+
+
+def test_backtick_fence_does_not_close_on_tildes() -> None:
+    rendered = render_telegram_html("```\nx\n~~~\ny\n```\n\nafter")
+
+    assert rendered == "<pre>x\n~~~\ny</pre>\n\nafter"
+
+
+def test_tilde_fence_can_wrap_a_backtick_block_verbatim() -> None:
+    rendered = render_telegram_html("~~~\n```\ninner\n```\n~~~")
+
+    assert rendered == "<pre>```\ninner\n```</pre>"
+
+
+def test_longer_tilde_fence_can_wrap_a_shorter_one() -> None:
+    rendered = render_telegram_html("~~~~\n~~~\ninner\n~~~\n~~~~\n\nafter")
+
+    assert rendered == "<pre>~~~\ninner\n~~~</pre>\n\nafter"
+
+
+def test_unterminated_tilde_fence_runs_to_the_end() -> None:
+    rendered = render_telegram_html("~~~\nx\ny")
+
+    assert rendered == "<pre>x\ny</pre>"
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("~~gone~~", "<s>gone</s>"),
+        ("a ~~b~~ c", "a <s>b</s> c"),
+    ],
+)
+def test_two_tildes_are_still_strikethrough(markdown: str, expected: str) -> None:
+    assert render_telegram_html(markdown) == expected

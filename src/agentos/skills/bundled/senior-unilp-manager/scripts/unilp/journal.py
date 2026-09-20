@@ -28,7 +28,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from .chains import load_env
+from .chains import load_env, state_root  # noqa: F401 — re-exported for existing callers
 from .hexutil import to_hex
 from .keccak import keccak256
 
@@ -42,16 +42,8 @@ CLAIM_TTL_SECS = 900
 MANDATE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
-def state_root() -> Path:
-    """Where mandates live. Mirrors ``chains.load_env``'s resolution order."""
-    load_env()
-    configured = os.environ.get("UNILP_STATE_DIR")
-    if configured:
-        return Path(configured).expanduser()
-    home = os.environ.get("AGENTOS_HOME")
-    if home:
-        return Path(home).expanduser() / "state" / "unilp"
-    return Path.home() / ".agentos" / "state" / "unilp"
+# ``state_root`` moved to ``chains.py`` so the read path (poolcache) can share it
+# without importing this module, which needs ``fcntl`` and so does not load on Windows.
 
 
 def canonical_json(payload) -> str:

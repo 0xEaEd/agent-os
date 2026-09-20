@@ -14,6 +14,33 @@ from typing import Any
 from docx import Document
 
 
+def _write_stdout(text: str) -> None:
+    """Write *text* to stdout as UTF-8, surviving a non-UTF-8 stdout encoding.
+
+    ``print`` encodes through ``sys.stdout.encoding``, which on Windows is the
+    console code page (cp1252, cp936, cp932) and not UTF-8, so a character
+    outside that page raises ``UnicodeEncodeError`` before a byte is written —
+    the document decides whether the skill runs. The binary buffer is therefore
+    the primary path, matching the ``--out`` branch, which already passes
+    ``encoding="utf-8"``. A stream without a usable ``buffer`` — a wrapper, or a
+    captured stdout — still gets the text, escaped rather than lost.
+    """
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        try:
+            buffer.write(text.encode("utf-8"))
+            buffer.flush()
+            return
+        except (AttributeError, OSError, ValueError):
+            # Buffer closed or not writable — fall through to the text layer.
+            pass
+
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    # Lossless: unencodable chars become \\uXXXX escapes, not "?".
+    sys.stdout.write(text.encode(encoding, errors="backslashreplace").decode(encoding))
+    sys.stdout.flush()
+
+
 def inspect(path: Path) -> dict[str, Any]:
     doc = Document(str(path))
 
@@ -66,7 +93,7 @@ def main() -> int:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text, encoding="utf-8")
     else:
-        print(text)
+        _write_stdout(text + "\n")
     return 0
 
 

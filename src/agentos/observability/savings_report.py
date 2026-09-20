@@ -40,7 +40,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agentos.observability.decision_log import DecisionEntry, load_entries
+from agentos.observability.decision_log import DecisionEntry, SavingsTelemetry, load_entries
 
 #: Monetary aggregates are rounded to this many decimals. Per-turn savings run
 #: to fractions of a cent, so summing raw floats leaves visible drift.
@@ -108,6 +108,26 @@ class SavingsReport:
         """Return the report as plain JSON-serialisable data."""
 
         return asdict(self)
+
+
+def _actual_turn_cost_usd(telemetry: SavingsTelemetry) -> float:
+    """Resolve the authoritative dollar cost of one turn.
+
+    Prefers the provider's billed figure over the engine's own estimate --
+    the same precedence ``session/cost_rollup.py``'s
+    ``normalize_event_cost_source`` encodes for these same two fields.
+    A naive ``cost_usd or billed_cost_usd or 0.0`` gets this backwards: it
+    picks the estimate over the provider-authoritative billed figure
+    whenever the estimate happens to be nonzero (the common case once
+    billing telemetry is available), and it also collapses a genuinely
+    correct ``cost_usd == 0.0`` into "missing", falling through to a
+    stale/unrelated ``billed_cost_usd`` instead of reporting zero.
+    """
+    if telemetry.billed_cost_usd is not None and telemetry.billed_cost_usd > 0.0:
+        return telemetry.billed_cost_usd
+    if telemetry.cost_usd is not None and telemetry.cost_usd > 0.0:
+        return telemetry.cost_usd
+    return 0.0
 
 
 def _entry_date(entry: DecisionEntry) -> str:
@@ -183,7 +203,7 @@ def build_savings_report(
 
         routed += 1
         savings_usd += delta
-        actual_cost += telemetry.cost_usd or telemetry.billed_cost_usd or 0.0
+        actual_cost += _actual_turn_cost_usd(telemetry)
         tokens_input += entry.tokens_input
         tokens_output += entry.tokens_output
 
@@ -208,7 +228,7 @@ def build_savings_report(
         day = _entry_date(entry)
         day_turns[day] += 1
         day_savings[day] += delta
-        day_cost[day] += telemetry.cost_usd or telemetry.billed_cost_usd or 0.0
+        day_cost[day] += _actual_turn_cost_usd(telemetry)
 
     by_route = sorted(
         (

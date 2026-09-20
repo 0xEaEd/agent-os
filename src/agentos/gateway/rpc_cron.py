@@ -123,6 +123,12 @@ def _job_to_wire(j: Any, config: Any = None) -> dict[str, Any]:
         "next_run": _iso(d.get("next_run_at")),
         "last_run": _iso(d.get("last_run_at")),
         "lastResult": d.get("last_error"),
+        "last_status": (
+            "error" if d.get("last_error") else ("ok" if d.get("last_run_at") else None)
+        ),
+        "lastStatus": (  # same value for camelCase consumers
+            "error" if d.get("last_error") else ("ok" if d.get("last_run_at") else None)
+        ),
         "run_count": d.get("run_count", 0),
         "error_count": d.get("error_count", 0),
         "created_at": _iso(d.get("created_at")),
@@ -442,13 +448,69 @@ def _build_failure_destination(raw: Any) -> FailureDestination | None:
     )
 
 
+def _delivery_without_main_route(current: DeliveryConfig | None) -> DeliveryConfig | None:
+    """What an edit that moves or keeps a job on ``sessionTarget="main"`` must write.
+
+    Returns None when the stored delivery can stay as it is. An omitted
+    ``delivery`` block means *unchanged*: webhook delivery is valid for main
+    (see ``_ensure_delivery_supported``), and a job with no route has nothing
+    to clear. Only a channel/origin route cannot stay, because the heartbeat
+    pipeline routes main-session results; that route is dropped while the
+    failure destination -- also valid for main -- is kept.
+    """
+    if current is None or current.mode in (DeliveryMode.NONE, DeliveryMode.WEBHOOK):
+        return None
+    return DeliveryConfig(
+        ws_topic=current.ws_topic,
+        failure_destination=current.failure_destination,
+    )
+
+
+def _token_was_sent(raw: dict[str, Any]) -> bool:
+    return "webhookToken" in raw or "token" in raw
+
+
+def _keep_unsent_webhook_tokens(
+    new: DeliveryConfig, current: DeliveryConfig, delivery_raw: dict[str, Any]
+) -> None:
+    """Carry a stored webhook token the caller did not send, for the same URL.
+
+    ``_delivery_to_wire`` never returns a token, so a client that reads a job
+    and saves it back -- the WebUI edit form does this on every save -- cannot
+    echo one, and rebuilding the delivery from the request wiped it. A token
+    left out now means unchanged; an explicit ``""`` still clears it. It is
+    only carried to the URL it was stored for, never to a new endpoint.
+    """
+    if (
+        new.mode == DeliveryMode.WEBHOOK
+        and current.mode == DeliveryMode.WEBHOOK
+        and new.webhook_url == current.webhook_url
+        and not _token_was_sent(delivery_raw)
+    ):
+        new.webhook_token = current.webhook_token
+
+    fd_raw = delivery_raw.get("failureDestination")
+    new_fd = new.failure_destination
+    old_fd = current.failure_destination
+    if (
+        isinstance(fd_raw, dict)
+        and new_fd is not None
+        and old_fd is not None
+        and new_fd.mode == DeliveryMode.WEBHOOK
+        and old_fd.mode == DeliveryMode.WEBHOOK
+        and new_fd.webhook_url == old_fd.webhook_url
+        and not _token_was_sent(fd_raw)
+    ):
+        new_fd.webhook_token = old_fd.webhook_token
+
+
 def _build_webhook_delivery(delivery_raw: dict[str, Any]) -> DeliveryConfig:
     """Construct a webhook DeliveryConfig from an RPC delivery payload."""
     from agentos.scheduler.delivery import validate_webhook_url
 
     url = delivery_raw.get("webhookUrl") or delivery_raw.get("to") or ""
     token = delivery_raw.get("webhookToken") or delivery_raw.get("token") or ""
-    best_effort = bool(delivery_raw.get("bestEffort", False))
+    best_effort = _delivery_best_effort(delivery_raw)
     validate_webhook_url(str(url))
     failure_destination = _build_failure_destination(
         delivery_raw.get("failureDestination")
@@ -462,14 +524,34 @@ def _build_webhook_delivery(delivery_raw: dict[str, Any]) -> DeliveryConfig:
     )
 
 
-def _parse_delivery_overrides(delivery_raw: Any) -> dict[str, str] | None:
-    if not isinstance(delivery_raw, dict) or not delivery_raw.get("channelName"):
+# A delivery block reaches here from the RPC (camelCase), the CLI (``to`` for
+# the recipient, as in the failure-destination block) and tool callers
+# (snake_case). Every reader accepts all three spellings so a recipient or
+# flag is never dropped by the one path that only knew one of them.
+def _delivery_channel_name(delivery_raw: dict[str, Any]) -> str:
+    return str(delivery_raw.get("channelName") or delivery_raw.get("channel") or "")
+
+
+def _delivery_channel_id(delivery_raw: dict[str, Any]) -> str:
+    return str(delivery_raw.get("channelId") or delivery_raw.get("to") or "")
+
+
+def _delivery_best_effort(delivery_raw: dict[str, Any]) -> bool:
+    return bool(delivery_raw.get("bestEffort", delivery_raw.get("best_effort", False)))
+
+
+def _parse_delivery_overrides(delivery_raw: Any) -> dict[str, Any] | None:
+    if not isinstance(delivery_raw, dict):
+        return None
+    channel_name = _delivery_channel_name(delivery_raw)
+    if not channel_name:
         return None
     return {
-        "channel_name": delivery_raw["channelName"],
-        "channel_id": delivery_raw.get("channelId", ""),
-        "account_id": delivery_raw.get("accountId", ""),
-        "thread_id": delivery_raw.get("threadId", ""),
+        "channel_name": channel_name,
+        "channel_id": _delivery_channel_id(delivery_raw),
+        "account_id": str(delivery_raw.get("accountId") or ""),
+        "thread_id": str(delivery_raw.get("threadId") or ""),
+        "best_effort": _delivery_best_effort(delivery_raw),
     }
 
 
@@ -743,6 +825,7 @@ async def _handle_cron_add(params: dict | None, ctx: RpcContext) -> dict[str, An
             channel_id=user_overrides["channel_id"],
             account_id=user_overrides["account_id"],
             thread_id=user_overrides["thread_id"],
+            best_effort=user_overrides["best_effort"],
         )
     elif (
         session_target != SessionTarget.MAIN
@@ -758,6 +841,17 @@ async def _handle_cron_add(params: dict | None, ctx: RpcContext) -> dict[str, An
         delivery.failure_destination = _build_failure_destination(
             delivery_raw["failureDestination"]
         )
+
+    # best_effort is a property of the delivery attempt, not of the
+    # destination, so it applies to whichever config the branches above
+    # settled on — including one inferred from the session when the block
+    # names no channel (the CLI's `--best-effort-deliver` alone).
+    if (
+        isinstance(delivery_raw, dict)
+        and delivery is not None
+        and _delivery_best_effort(delivery_raw)
+    ):
+        delivery.best_effort = True
 
     return await _finalize_cron_add(
         scheduler=scheduler,
@@ -983,7 +1077,9 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
         patch["session_key"] = _resolve_target_session_key(merged_params, session_target)
         patch["origin_session_key"] = _resolve_origin_session_key(merged_params, session_target)
         if session_target == SessionTarget.MAIN and "delivery" not in params:
-            patch["delivery"] = DeliveryConfig()
+            cleared = _delivery_without_main_route(current_job.delivery)
+            if cleared is not None:
+                patch["delivery"] = cleared
 
     if "timeout" in params:
         patch["timeout_seconds"] = float(params["timeout"])
@@ -999,21 +1095,28 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
         effective_target = patch.get("session_target", current_job.session_target)
         _ensure_delivery_supported(session_target=effective_target, delivery_raw=delivery_raw)
         await _ensure_delivery_targets_valid(ctx, delivery_raw)
+        # A job hydrated outside the store may carry no delivery at all;
+        # patching it must not crash reading the fields to preserve.
+        current_delivery = current_job.delivery or DeliveryConfig()
+        current_ws_topic = current_delivery.ws_topic
         if isinstance(delivery_raw, dict) and delivery_raw.get("mode") == "none":
             patch["delivery"] = DeliveryConfig()
         elif _is_webhook_delivery(delivery_raw):
             new_delivery = _build_webhook_delivery(delivery_raw)
-            new_delivery.ws_topic = current_job.delivery.ws_topic
+            new_delivery.ws_topic = current_ws_topic
             patch["delivery"] = new_delivery
-        elif isinstance(delivery_raw, dict) and delivery_raw.get("channelName"):
+        elif (
+            isinstance(delivery_raw, dict)
+            and (overrides := _parse_delivery_overrides(delivery_raw)) is not None
+        ):
             patch["delivery"] = DeliveryConfig(
                 mode=DeliveryMode.CHANNEL,
-                channel_name=delivery_raw["channelName"],
-                channel_id=delivery_raw.get("channelId") or delivery_raw.get("to", ""),
-                account_id=delivery_raw.get("accountId", ""),
-                thread_id=delivery_raw.get("threadId", ""),
-                ws_topic=current_job.delivery.ws_topic,
-                best_effort=bool(delivery_raw.get("bestEffort", False)),
+                channel_name=overrides["channel_name"],
+                channel_id=overrides["channel_id"],
+                account_id=overrides["account_id"],
+                thread_id=overrides["thread_id"],
+                ws_topic=current_ws_topic,
+                best_effort=overrides["best_effort"],
                 failure_destination=_build_failure_destination(
                     delivery_raw.get("failureDestination")
                 ),
@@ -1021,7 +1124,7 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
         elif isinstance(delivery_raw, dict) and delivery_raw.get("failureDestination") is not None:
             # Standalone FD patch: keep the existing primary delivery target,
             # only update the failure_destination side.
-            existing = current_job.delivery
+            existing = current_delivery
             patch["delivery"] = DeliveryConfig(
                 mode=existing.mode,
                 channel_name=existing.channel_name,
@@ -1035,6 +1138,9 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
                 best_effort=existing.best_effort,
                 failure_destination=_build_failure_destination(delivery_raw["failureDestination"]),
             )
+
+        if isinstance(patch.get("delivery"), DeliveryConfig) and isinstance(delivery_raw, dict):
+            _keep_unsent_webhook_tokens(patch["delivery"], current_delivery, delivery_raw)
 
     if "toolPolicy" in params or "tool_policy" in params:
         patch["tool_policy"] = _tool_policy_from_params(params)

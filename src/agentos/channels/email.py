@@ -136,6 +136,10 @@ _HTML_BREAK_RE = re.compile(r"(?i)<\s*(?:br\s*/?|/p|/div|/tr|/li)\s*>")
 _HTML_DROP_RE = re.compile(r"(?is)<\s*(script|style)\b.*?<\s*/\s*\1\s*>")
 _HTML_TAG_RE = re.compile(r"(?s)<[^>]+>")
 _HEADER_COMMENT_RE = re.compile(r"\([^()]*\)")
+#: One msg-id: either a ``<...>`` span, or -- for clients that drop the angle
+#: brackets -- a bare run with the id separators excluded so a stray ``,`` or
+#: ``;`` between ids cannot become an id of its own.
+_MESSAGE_ID_RE = re.compile(r"<([^<>]*)>|([^\s<>,;]+)")
 _DEFAULT_OUTBOUND_SUBJECT = "Message from AgentOS"
 
 
@@ -197,7 +201,15 @@ def sender_allowed(sender: str, allowlist: list[str] | tuple[str, ...]) -> bool:
     address = normalize_address(sender) or (sender or "").strip().lower()
     if not address:
         return False
-    domain = address.rpartition("@")[2]
+    # ``rpartition`` hands back the whole value as the tail when there is no
+    # separator, so a ``From`` carrying no ``@`` -- ``<example.com>`` -- came
+    # back as its own domain and cleared an ``@example.com`` entry. A value
+    # with no local part and no ``@`` is not an address and has no domain for a
+    # domain pattern to claim; exact entries still match it, so a local-only
+    # ``root`` on a local MTA keeps working.
+    local, at_sign, domain = address.rpartition("@")
+    if not (at_sign and local):
+        domain = ""
     for raw in allowlist:
         pattern = (raw or "").strip().lower()
         if not pattern:
@@ -709,7 +721,27 @@ class EmailChannel:
             mime = part.get_content_type()
             payload = part.get_payload(decode=True)
             if not isinstance(payload, bytes):
-                continue
+                # message/rfc822 (an original email attached as a file, e.g.
+                # Outlook/Apple Mail "Forward as Attachment") has no encoded
+                # body of its own -- get_payload(decode=True) returns None
+                # because the part's payload is the embedded Message object,
+                # not raw bytes. Serialize that embedded message instead of
+                # silently dropping the attachment.
+                sub_payload = part.get_payload()
+                if (
+                    isinstance(sub_payload, list)
+                    and sub_payload
+                    and isinstance(sub_payload[0], EmailMessage)
+                ):
+                    payload = sub_payload[0].as_bytes()
+                if not isinstance(payload, bytes):
+                    log.warning(
+                        "email.attachment_undecodable",
+                        name=self.config.name,
+                        attachment=name,
+                        content_type=mime,
+                    )
+                    continue
             try:
                 data = ensure_bytes_within_limit(
                     payload,
@@ -964,11 +996,22 @@ def _message_ids(raw: Any) -> list[str]:
     """Return the bare message ids in a threading header value, in order.
 
     Clients decorate these headers with comments and drop the angle brackets, so
-    a plain ``split()`` yields tokens that are not ids at all.
+    a plain ``split()`` yields tokens that are not ids at all. RFC 5322 3.6.4
+    also makes the CFWS *between* two ids optional, so ``<a@x><b@x>`` is one
+    well-formed header that whitespace splitting collapsed into a single bogus
+    id -- taking the thread key and the outbound chain with it. Read the
+    bracketed spans first and fall back to bare tokens for the clients that drop
+    the brackets entirely.
     """
 
     text = _HEADER_COMMENT_RE.sub(" ", str(raw or ""))
-    return [token for token in (raw_id.strip().strip("<>") for raw_id in text.split()) if token]
+    return [
+        token
+        for token in (
+            (bracketed or bare).strip() for bracketed, bare in _MESSAGE_ID_RE.findall(text)
+        )
+        if token
+    ]
 
 
 def _first_literal(data: Any) -> bytes | None:

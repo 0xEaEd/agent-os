@@ -164,3 +164,37 @@ def test_bootstrap_ws_url_uses_client_reachable_wildcard_host(dist_dir: Path) ->
 
     assert response.status_code == 200
     assert response.json()["ws_url"] == "ws://127.0.0.1:20002/ws"
+
+
+def test_bootstrap_ws_url_respects_x_forwarded_host_and_proto(dist_dir: Path) -> None:
+    config = GatewayConfig()
+    config.host = "127.0.0.1"
+    config.port = 18791
+
+    response = _client(config).get(
+        "/control/api/bootstrap",
+        headers={
+            "x-forwarded-host": "console.example.com",
+            "x-forwarded-proto": "https",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ws_url"] == "wss://console.example.com/ws"
+
+
+def test_bootstrap_ws_url_handles_multi_value_forwarded_proto_and_case(dist_dir: Path) -> None:
+    config = GatewayConfig()
+    config.host = "127.0.0.1"
+    config.port = 18791
+
+    response = _client(config).get(
+        "/control/api/bootstrap",
+        headers={
+            "x-forwarded-host": "gateway.internal, proxy.edge",
+            "x-forwarded-proto": "HTTPS, http",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ws_url"] == "wss://gateway.internal/ws"

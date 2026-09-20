@@ -27,11 +27,16 @@ from agentos.tools.types import ToolError, current_tool_context
 # shell warnlist hits. Catches the "agent pivots from `rm` to `os.remove()`"
 # bypass. We scan using shallow regex (fast-path) plus AST analysis to catch
 # dynamic evasion (getattr, __import__, importlib, exec/eval, and wildcard imports).
+# `cmd /c` and `powershell -c` hand their payload over as one command string,
+# and that string is commonly quoted (`pwsh -NoProfile -Command "del C:\x"`),
+# so a single opening quote may follow them -- as shell_policy's
+# `_WIN_CMD_PREFIX` allows. In raw source the quote is often escaped (`\"`).
+_SHELL_WRAPPER_PATTERN: str = (
+    r"(?:cmd(?:\.exe)?\s+/[ck]|(?:powershell|pwsh)(?:\.exe)?(?:\s+-[a-zA-Z0-9]+)*)"
+)
 _PREFIX_CMD_PATTERN: str = (
     r"(?:"
-    r"cmd(?:\.exe)?\s+/[ck]"
-    r"|(?:powershell|pwsh)(?:\.exe)?(?:\s+-[a-zA-Z0-9]+)*"
-    r"|sudo(?:\s+-[a-zA-Z0-9]+(?:\s+\S+)?)*"
+    r"sudo(?:\s+-[a-zA-Z0-9]+(?:\s+\S+)?)*"
     r"|doas(?:\s+-[a-zA-Z0-9]+(?:\s+\S+)?)*"
     r"|env(?:\s+-[a-zA-Z0-9]+)*(?:\s+[a-zA-Z_][a-zA-Z0-9_]*=\S*)*"
     r"|nice(?:\s+-[a-zA-Z0-9]+(?:\s+\S+)?)*"
@@ -41,7 +46,17 @@ _PREFIX_CMD_PATTERN: str = (
     r"|nohup"
     r")"
 )
-_IN_QUOTE_CMD_PREFIX: str = r"(?:" + _PREFIX_CMD_PATTERN + r"\s+)*"
+_IN_QUOTE_CMD_PREFIX: str = (
+    r"(?:" + _SHELL_WRAPPER_PATTERN + r"\s+\\?[\"']?|" + _PREFIX_CMD_PATTERN + r"\s+)*"
+)
+
+# Every shell spelling of "delete", in one place. shell_policy's Windows
+# denylist blocks each of these as a command (`rm` and `ri` being PowerShell's
+# other built-in Remove-Item aliases); the patterns below, the argv check and
+# `_SHELL_DELETE_RE` are all built from this tuple so they cannot drift apart
+# again -- `ri` was missing from all four copies of the alternation.
+_SHELL_DELETE_NAMES: tuple[str, ...] = ("rm", "rmdir", "del", "erase", "rd", "Remove-Item", "ri")
+_SHELL_DELETE_ALT: str = r"(?:" + "|".join(_SHELL_DELETE_NAMES) + r")\b"
 _COMMAND_PREFIX: str = r"(?:^|[;&|])\s*" + _IN_QUOTE_CMD_PREFIX
 
 _DESTRUCTIVE_PY_PATTERNS: list[tuple[str, str]] = [
@@ -53,21 +68,17 @@ _DESTRUCTIVE_PY_PATTERNS: list[tuple[str, str]] = [
     (r"\.unlink\s*\(", "Path.unlink()"),
     (r"\.rmdir\s*\(", "Path.rmdir()"),
     (
-        r"(?i)\bos\.system\s*\(\s*['\"]"
-        + _IN_QUOTE_CMD_PREFIX
-        + r"(?:rm|rmdir|del|erase|rd|Remove-Item)\b",
+        r"(?i)\bos\.system\s*\(\s*['\"]" + _IN_QUOTE_CMD_PREFIX + _SHELL_DELETE_ALT,
         "os.system with delete command",
     ),
     (
-        r"(?i)\bos\.popen\s*\(\s*['\"]"
-        + _IN_QUOTE_CMD_PREFIX
-        + r"(?:rm|rmdir|del|erase|rd|Remove-Item)\b",
+        r"(?i)\bos\.popen\s*\(\s*['\"]" + _IN_QUOTE_CMD_PREFIX + _SHELL_DELETE_ALT,
         "os.popen with delete command",
     ),
     (
         r"(?i)\bsubprocess\.(?:run|call|Popen|check_output|check_call)\s*\(\s*(?:[\[\(]\s*['\"]|['\"])"
         + _IN_QUOTE_CMD_PREFIX
-        + r"(?:rm|rmdir|del|erase|rd|Remove-Item)\b",
+        + _SHELL_DELETE_ALT,
         "subprocess invoking delete command",
     ),
 ]
@@ -81,7 +92,7 @@ _ALL_DESTRUCTIVE_NAMES: frozenset[str] = frozenset(
 _SUBPROCESS_CALL_NAMES: frozenset[str] = frozenset(
     {"run", "call", "Popen", "check_output", "check_call"}
 )
-_SHELL_DELETE_CMDS: frozenset[str] = frozenset({"rm", "rmdir", "del", "erase", "rd", "remove-item"})
+_SHELL_DELETE_CMDS: frozenset[str] = frozenset(name.lower() for name in _SHELL_DELETE_NAMES)
 _PREFIX_COMMANDS: frozenset[str] = frozenset(
     {
         "sudo",
@@ -138,9 +149,7 @@ _PREFIX_FLAGS_WITH_ARG: dict[str, frozenset[str]] = {
     "timeout": frozenset({"-k", "-s", "--kill-after", "--signal"}),
     "xargs": frozenset({"-I", "-n", "-L", "-P", "-s", "-d", "-a", "-E"}),
 }
-_SHELL_DELETE_RE: re.Pattern[str] = re.compile(
-    _COMMAND_PREFIX + r"(?:rm|rmdir|del|erase|rd|Remove-Item)\b", re.IGNORECASE
-)
+_SHELL_DELETE_RE: re.Pattern[str] = re.compile(_COMMAND_PREFIX + _SHELL_DELETE_ALT, re.IGNORECASE)
 
 
 def _eval_const_str(node: ast.AST, compile_aliases: frozenset[str] | None = None) -> str | None:
