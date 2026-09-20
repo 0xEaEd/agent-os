@@ -20,6 +20,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   in `_seasonal_hint`, causing locations like Juneau to falsely trigger seasonal
   date-window warnings; it now matches month names with word boundaries
   (#2510).
+- MCP stdio transport: an MCP server configured with `npx`, `npm`, `uvx` or
+  `pipx` — which is nearly every published config — now starts on Windows.
+  `create_subprocess_exec` reaches `CreateProcessW`, which appends `.exe` to
+  an extensionless name and never walks `PATHEXT`, so the `.cmd` wrappers
+  those commands ship as failed with `WinError 2` before any MCP traffic. The
+  command is resolved with `shutil.which` against the `PATH` the child will
+  get, and a command that resolves to nothing now fails with an error naming
+  the server and the command instead of a bare `WinError 2`. POSIX is
+  unchanged: `exec` already searches `PATH`.
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always
