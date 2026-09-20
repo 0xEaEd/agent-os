@@ -114,7 +114,13 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    data = {str(k): str(v) for k, v in raw.items()}
+    # JSON ``null`` is how a caller says "this optional field has no value" --
+    # an absent middle name, an apartment number there isn't one of. ``str``
+    # turned each of those into the literal word "None", which the form then
+    # carried as if it were the answer. An empty string is what "no value"
+    # renders as; every other type keeps its ``str``, so 0 and false still
+    # print as themselves rather than disappearing.
+    data = {str(k): ("" if v is None else str(v)) for k, v in raw.items()}
     pages = fill(args.input, data, args.out)
     _write_stdout(
         json.dumps({"pages_processed": pages, "fields": len(data)}, ensure_ascii=False) + "\n"
