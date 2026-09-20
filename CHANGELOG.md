@@ -6,7 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.20] - 2026-09-20
+
 ### Fixed
+
 - Gateway/Sessions: `sessions_history` and spawned-subagent result reporting
   (`_read_child_result`) read a session's transcript through
   `SessionStorage.get_transcript`'s `limit`, which windows from the
@@ -41,6 +44,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   block and its now-unused `_reset_response` helper; the reachable branch
   above it already covers the same case
   (#2509).
+- Discord: `send_file` sent the whole caption as the upload's `content`, and
+  Discord 400s a message past 2000 characters whether or not a file is
+  attached, so an artifact with long accompanying text was never delivered.
+  The first 2000 characters now ride with the file and the rest follow as
+  ordinary channel messages through `send()`; a follow-up that fails after
+  the file has gone is logged with the ids rather than reported as a failed
+  file delivery, which would have the caller upload it again. `send_file`
+  also resolves its target the way `send()` does: the channel component of a
+  `<channel_id>|<message_id>` composite, `default_channel_id` for an empty
+  id, and a clear `ValueError` before any request when neither is available
+  (#2779).
+- Discord channel: a reaction added to the bot's own message in a guild
+  channel or thread is no longer silently dropped by the group mention
+  gate (#2790).
+- Control UI: the gateway root path returns the status payload when the
+  Control UI is disabled instead of a 404 (#2761), and the Control UI
+  bootstrap honours `X-Forwarded-Host` and a multi-value
+  `X-Forwarded-Proto` behind a reverse proxy (#2759).
+- Cron: `cron.update` keeps a job's delivery unless the caller changes it
+  (#2794); the gateway emits `last_status` so Control UI health reflects a
+  failed run (#2773); cron Python scripts run with UTF-8 stdout (#2580).
+- Tools: `apply_patch` applies an indented patch block and refuses one with
+  no operations (#2799); an inline artifact marker resolves against the
+  command's cwd (#2578); `web_fetch` decodes a page with the charset its
+  `<meta>` declares (#2557); the `message` tool addresses a target by
+  channel type, not channel name (#2566), and the platform render hint is
+  looked up the same way (#2568); quoted shell write targets containing
+  spaces are captured (#1230); `code_exec` flags every delete command
+  `shell_policy` blocks, quoted or not (#2776).
+- Sandbox/intent: an unexpandable `~` no longer crashes the sensitive-path
+  scan (#1503); destructive-intent extraction recognises `rmdir`, `rd`,
+  `del`, `erase`, `unlink` and `Remove-Item` (#1015).
+- Gateway: a debounced batch that fails to start replies on the channel
+  instead of going silent (#1206); websocket pong replies are serialised
+  through the writer queue; the tool result store is scanned at most once
+  per write (#2126).
+- Memory: a lowercase `memory.md` is exempt from retention pruning (#2522);
+  `memory_search` centres its evidence window for a non-ASCII query (#2517).
+- Telegram: `render_telegram_html` preserves bare URLs (#2560). Slack:
+  `send_streaming` `_edit` verifies the `ok` response.
+- Skills: `video-merger` escapes paths written to its concat manifest
+  (#2122) and handles missing duration metadata and silent inputs;
+  `dubbing_generate` accepts video containers; the pdf skill reports a
+  malformed `--pages` spec instead of raising `ValueError` (#2128).
+- Docs: `agentos sandbox` subcommands that were missing from `docs/cli.md`
+  are documented (#2550).
 
 ## [2026.9.18] - 2026-09-18
 
@@ -56,17 +105,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- Discord: `send_file` sent the whole caption as the upload's `content`, and
-  Discord 400s a message past 2000 characters whether or not a file is
-  attached, so an artifact with long accompanying text was never delivered.
-  The first 2000 characters now ride with the file and the rest follow as
-  ordinary channel messages through `send()`; a follow-up that fails after
-  the file has gone is logged with the ids rather than reported as a failed
-  file delivery, which would have the caller upload it again. `send_file`
-  also resolves its target the way `send()` does: the channel component of a
-  `<channel_id>|<message_id>` composite, `default_channel_id` for an empty
-  id, and a clear `ValueError` before any request when neither is available
-  (#2779).
 - WebUI chat: "Move to project" and "Rename session" on a brand-new chat
   (Cmd+Shift+O / `/new`, before the first message) failed with "Session not
   found". The WebUI mints the session key client-side and the row only
