@@ -28,6 +28,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
   dropped rather than mis-rendered
   ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- `deep-research` skill: a sub-question's coverage counted the same URL once per
+  time it was recorded, so re-submitting a source across rounds -- the normal
+  shape of the documented loop, since `--print-fetches` reports how many sources
+  are missing but never which URLs are already in hand -- reported the
+  sub-question as fully covered, dropped it from the fetch list and from the
+  report's "What this report does not cover" section, and cited the one source
+  once per copy. `iterate.py --record` now counts one source per URL per
+  sub-question and reports a `duplicates` count alongside `added` (#3114).
+
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
   `_find_all` advanced its cursor past the whole needle, so the overlapping
