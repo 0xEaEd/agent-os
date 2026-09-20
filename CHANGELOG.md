@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Memory notes containing ZWJ emoji sequences, ZWNJ-shaped Persian/Hindi text or a leading BOM are no longer refused on write or silently replaced with a `[BLOCKED: ...]` placeholder on load; `memory_tools` now takes its invisible-character verdict from `injection_guard` (which already exempts the joiners) instead of a private list that had drifted (#2966).
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.

@@ -40,6 +40,7 @@ from agentos.memory.types import (
     normalize_memory_search_min_score,
     normalize_memory_source_filter,
 )
+from agentos.safety.injection_guard import classify_injection
 from agentos.tools.registry import tool
 from agentos.tools.types import ToolError, current_tool_context
 
@@ -98,11 +99,6 @@ _MEMORY_THREAT_PATTERNS: tuple[re.Pattern[str], ...] = (
     # into every prompt is worth the occasional false positive.
     re.compile(r"(?:api[_-]?key|token|secret|password)\s*[=:]\s*[\"'][A-Za-z0-9+/=_-]{20,}", re.I),
 )
-
-# Invisible / bidirectional unicode used to hide injected text from a human
-# reviewing the file. Includes directional isolates (U+2066-U+2069) and
-# invisible math operators (U+2062-U+2064), both real attack tools.
-_INVISIBLE_CHARS = re.compile(r"[\u200b\u200c\u200d\ufeff\u202a-\u202e\u2062-\u2064\u2066-\u2069]")
 
 # Actions that mirror to an external memory provider. Read-only or unknown
 # actions never reach a provider \u2014 ported from hermes-agent's
@@ -175,8 +171,17 @@ def _scan_memory_content(content: str) -> str | None:
     """Lightweight check for injection/exfiltration in memory content.
 
     Returns an error message if blocked, None if clean.
+
+    The invisible-character verdict is ``injection_guard``'s ``invisible_char``
+    class rather than a list kept here. This module used to keep its own, and
+    it never got #2610's fix: ZWJ (every compound emoji), ZWNJ (Persian,
+    Arabic and Indic words) and a leading BOM (every file that has been
+    through Excel or Notepad) were still refused on write and silently
+    dropped from the system prompt on every load (#2966). One list, one
+    verdict. ``_MEMORY_THREAT_PATTERNS`` stays this module's own: it is the
+    broader, strict-scope list curated entries are held to.
     """
-    if _INVISIBLE_CHARS.search(content):
+    if "invisible_char" in classify_injection(content):
         return "Blocked: content contains invisible Unicode control characters."
     for pattern in _MEMORY_THREAT_PATTERNS:
         if pattern.search(content):
