@@ -134,8 +134,13 @@ def _escape_subtitle_path(path: str) -> str:
     rest = normalised[3:] if len(normalised) >= 3 else ""
     if ":" in rest:
         normalised = normalised[:3] + rest.replace(":", r"\:")
-    # Escape single quotes inside the path (rare on Windows but possible).
-    normalised = normalised.replace("'", r"\'")
+    # A single quote cannot be backslash-escaped inside a single-quoted
+    # ffmpeg token: the quote ends the token whatever precedes it, so `\'`
+    # left the rest of the path outside the quotes and ffmpeg reported
+    # "No option name near ''s_cues.srt...". Write it the way ffmpeg's own
+    # parser expects -- close the quote, escape the quote, reopen -- which is
+    # what the concat writer in video-merger already does.
+    normalised = normalised.replace("'", "'\\''")
     return normalised
 
 
