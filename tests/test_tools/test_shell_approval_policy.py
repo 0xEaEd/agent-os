@@ -100,6 +100,57 @@ async def test_sandbox_off_forces_prompt_over_cached_intent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cached_intent_from_another_session_does_not_skip_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The short-circuit returns before the queue is ever asked.
+
+    So an approval leaking across sessions is not merely a stale cache entry —
+    it is a delete that runs with no prompt shown anywhere.
+    """
+    monkeypatch.setattr(shell, "_sandbox_effectively_off", lambda: False)
+    get_intent_cache().record("rm target.txt", session_key="agent:main:somebody-else")
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        "rm target.txt",
+        None,
+        "command requires approval",
+        None,
+        True,
+    )
+
+    assert result is not None
+    assert result["status"] == "approval_required"
+    assert shell._elevate_current_call.get() is False
+    assert len(get_approval_queue().list_pending("exec")) == 1
+
+
+@pytest.mark.asyncio
+async def test_cached_intent_from_this_session_still_skips_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The paraphrase short-circuit the cache exists for must keep working."""
+    monkeypatch.setattr(shell, "_sandbox_effectively_off", lambda: False)
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    get_intent_cache().record("rm -rf target.txt", session_key=ctx.session_key)
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        'shutil.rmtree("target.txt")',
+        None,
+        "command requires approval",
+        None,
+        True,
+    )
+
+    assert result is None
+    assert shell._elevate_current_call.get() is True
+    assert get_approval_queue().list_pending("exec") == []
+
+
+@pytest.mark.asyncio
 async def test_elevated_full_remains_explicit_override_when_sandbox_off() -> None:
     ctx = current_tool_context.get()
     assert ctx is not None
@@ -670,12 +721,19 @@ def test_shell_write_targets_leaves_unquoted_targets_unchanged(
         "echo hi | tee /dev/null",
         "echo hi | tee -a /dev/null",
         "make build >/dev/null; make test >/dev/null",
+        "dir > nul",
+        "dir >> nul",
+        "dir >nul",
+        "python app.py 2> NUL",
+        "python app.py 2>nul",
+        "cmd 2>&1 > nul",
+        "echo hi | tee nul",
     ],
 )
 def test_shell_write_targets_ignores_the_null_sink(command: str) -> None:
-    """Discarding output is not a write. ``/dev/null`` is not under any lockdown
-    root, so counting it as a write target refused a large share of ordinary
-    commands under workspace lockdown."""
+    """Discarding output is not a write. ``/dev/null`` and Windows ``nul`` are
+    not under any lockdown root, so counting them as write targets refused a large
+    share of ordinary commands under workspace lockdown."""
     assert shell._shell_write_targets(command) == []
 
 
@@ -706,6 +764,8 @@ def test_shell_write_targets_keeps_real_targets_beside_a_null_sink(
         "pip install requests &>/dev/null",
         "pip install requests > /dev/null 2>&1",
         "echo hi | tee /dev/null",
+        "pip install requests > nul",
+        "pip install requests 2> NUL",
     ],
 )
 async def test_workspace_lockdown_allows_null_sink_redirections(
