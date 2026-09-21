@@ -7,18 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
-- `read_spreadsheet`: a phonetic guide (furigana) stored alongside an xlsx
-  cell's text is no longer appended to the value. The shared-string reader took
-  every `<t>` descendant, including the ones inside `<rPh>`, so a Japanese
-  workbook read back with each reading glued onto the word it annotates
-  ([#2053](https://github.com/use-agent-os/agent-os/issues/2053)).
-  workbook read back with each reading glued onto the word it annotates.
+
 - Telegram: a reply containing `***bold italic***` (or `___both___`) is
   delivered again. The `**` pass consumed two of the three markers and the `*`
   pass then paired the leftover one across the closing tag, producing
   `<b><i>x</b></i>`; Telegram rejects improperly nested entities and the
   adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
-  dropped rather than mis-rendered.
+  dropped rather than mis-rendered
+  ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
   `_find_all` advanced its cursor past the whole needle, so the overlapping
