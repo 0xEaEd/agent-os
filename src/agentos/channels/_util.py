@@ -466,6 +466,17 @@ def _rebalance_open_fence(
     within *limit* and the tail strictly shorter than *segment*, so the
     caller can fall back to a plain, unbalanced cut rather than loop forever
     chasing a balance that cannot fit.
+
+    The search result is then nudged back to a line or word boundary, the
+    same way :func:`split_text_for_limit` nudges its own — a fenced block is
+    the one place a mid-word cut is *most* visible, since code is rendered
+    verbatim and the seam puts a synthetic closing marker between the two
+    halves, so ``line_17 = compute(17)`` arrived as ``line_17 `` and
+    ``= compute(17)`` on separate lines of two separate messages. The nudge
+    cannot reintroduce the loop above: it only ever moves the cut *forward*
+    of the opening marker, it is required to keep at least half the span the
+    binary search found, and a nudged cut that would fail either guard below
+    is discarded in favour of the raw one rather than returning ``None``.
     """
     closer = f"\n{marker}"
     opening_end = fence_start + len(marker)
@@ -479,18 +490,38 @@ def _rebalance_open_fence(
             high = mid - 1
     if length(segment[:cut] + closer) > limit:
         return None
-    # The reopener carries the fence's info string (its language tag, e.g.
-    # ```python) only when that string's own line actually ends before the
-    # cut -- otherwise the next newline in the segment could be arbitrarily
-    # far away (a bare fence with no early line break of its own) and
-    # everything up to it would be mistaken for the info string.
-    line_end = segment.find("\n", fence_start)
-    reopen = f"{segment[fence_start:line_end]}\n" if 0 <= line_end < cut else f"{marker}\n"
-    head = segment[:cut] + closer
-    tail = reopen + segment[cut:].lstrip("\n")
-    if not tail or len(tail) >= len(segment):
-        return None
-    return head, tail
+
+    def _build(at: int) -> tuple[str, str] | None:
+        # The reopener carries the fence's info string (its language tag, e.g.
+        # ```python) only when that string's own line actually ends before the
+        # cut -- otherwise the next newline in the segment could be arbitrarily
+        # far away (a bare fence with no early line break of its own) and
+        # everything up to it would be mistaken for the info string.
+        line_end = segment.find("\n", fence_start)
+        reopen = f"{segment[fence_start:line_end]}\n" if 0 <= line_end < at else f"{marker}\n"
+        # The closing marker needs its own line, but a head that already ends
+        # on a newline must not gain a blank one -- that blank renders inside
+        # the delivered code block. Dropping the "\n" only shortens the head,
+        # so the limit the binary search cleared above still holds.
+        head = segment[:at] + (closer if not segment[:at].endswith("\n") else marker)
+        tail = reopen + segment[at:].lstrip("\n")
+        if not tail or len(tail) >= len(segment) or length(head) > limit:
+            return None
+        return head, tail
+
+    for boundary in ("\n", " "):
+        found = segment.rfind(boundary, opening_end, cut)
+        # Halfway through the span the search actually won, mirroring the
+        # ``found >= best // 2`` floor the caller applies to its own nudge:
+        # a boundary further back than that costs more of the message than
+        # the tidier seam is worth.
+        if found >= opening_end + (cut - opening_end) // 2:
+            nudged = _build(found + 1)
+            if nudged is not None:
+                return nudged
+            break
+
+    return _build(cut)
 
 
 def split_text_for_limit(
