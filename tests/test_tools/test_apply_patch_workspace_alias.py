@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from agentos.tools.builtin.patch import _validate_path, apply_patch
-from agentos.tools.types import ToolContext, current_tool_context
+from agentos.tools.types import ToolContext, ToolError, current_tool_context
 
 
 def test_validate_path_resolves_workspace_alias_to_the_patch_root(tmp_path: Path) -> None:
@@ -26,7 +26,9 @@ def test_validate_path_keeps_relative_and_in_root_absolute_paths(tmp_path: Path)
 def test_validate_path_still_rejects_traversal_through_the_alias(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Path traversal"):
         _validate_path("/workspace/../../etc/passwd", tmp_path.resolve())
-    with pytest.raises(ValueError, match="Path traversal"):
+    # On Windows a POSIX ``/etc/...`` path is refused earlier, by the foreign-host-path
+    # check, which raises ToolError rather than ValueError.
+    with pytest.raises((ValueError, ToolError)):
         _validate_path("/etc/passwd", tmp_path.resolve())
 
 
