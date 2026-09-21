@@ -383,6 +383,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   workbook read back with each reading glued onto the word it annotates
   ([#2053](https://github.com/use-agent-os/agent-os/issues/2053)).
   workbook read back with each reading glued onto the word it annotates.
+- `create_pdf_report`: Japanese kana are no longer deleted from a report built
+  on a host with no CJK-capable TTF. `_is_cjk` named only the ideograph blocks,
+  so every hiragana and katakana fell through to the drop that handles
+  characters the base font cannot render — the kanji and the `、。` survived and
+  the syllables joining them did not, leaving a plausible-looking PDF with the
+  grammar removed. Kana now take the same CJK-font fallback that CJK
+  punctuation has taken since #1739.
 - Memory search: a query written in Hangul, Cyrillic, Greek, Arabic, Hebrew,
   Thai, Devanagari or accented Latin returns results again. `_build_fts_query`
   tokenized with a class naming only ASCII, the CJK ideographs and the two kana
