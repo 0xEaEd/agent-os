@@ -22,6 +22,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   explicitly are not rewritten.
 
 ### Fixed
+- Slack: `send_streaming` had no message-length rollover. `send()` splits a
+  long reply at `_SLACK_MESSAGE_TEXT_LIMIT`, but a streamed reply passed the
+  whole accumulated text to every `chat.update`, so past Slack's 40000-character
+  cap the update was rejected with `msg_too_long` and the reply failed part
+  way through. The open message is now edited up to the largest prefix that
+  fits, frozen there, and the rest opens a new message in the same thread --
+  the rollover Telegram, Discord and Teams already do. The final flush is also
+  skipped when nothing arrived after the last edit, as in those adapters, so a
+  short stream no longer ends with a `chat.update` that repeats the previous
+  one verbatim (#3068).
 
 - Pricing: the live OpenRouter price for a model now comes from the owner's
   standard endpoint rather than whichever of its service tiers is listed

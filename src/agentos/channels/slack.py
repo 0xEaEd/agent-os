@@ -611,6 +611,17 @@ class SlackChannel:
         Uses ``StreamThrottle`` so a fast producer cannot fire two
         concurrent ``chat.update`` calls and a single network failure
         does not lose accumulated text.
+
+        A stream longer than ``_SLACK_MESSAGE_TEXT_LIMIT`` is delivered as
+        several messages, the way ``send()`` already splits a long reply and
+        the way Telegram's and Discord's ``send_streaming`` roll over: the
+        open message is edited up to the largest prefix that fits, frozen
+        there, and the rest opens a new message (in the same thread). Before
+        this, every ``chat.update`` carried the whole accumulated text, which
+        Slack rejects past 40000 characters (``msg_too_long``), so a long
+        streamed reply failed part way through (#3068). Safe because the
+        chunks are append-only deltas -- see ``DiscordChannel.send_streaming``.
+        Returns the ``ts`` of the last message opened.
         """
         client = self._get_client()
         target = channel or self.slack_channel_id
@@ -619,9 +630,10 @@ class SlackChannel:
             raise RuntimeError("Slack stream has no target channel")
         throttle = StreamThrottle(interval_s=update_interval_ms / 1000.0)
         message_ts: str | None = None
+        segment_start = 0
+        delivered = 0
 
-        async def _post(text: str) -> None:
-            nonlocal message_ts
+        async def _stream_post(text: str) -> str:
             payload: dict[str, Any] = {
                 "channel": target,
                 "text": text,
@@ -633,10 +645,11 @@ class SlackChannel:
             data = resp.json()
             if not data.get("ok"):
                 raise RuntimeError(f"Slack API error: {data.get('error')}")
-            message_ts = data["ts"]
-            log.debug("slack.stream_start", ts=message_ts)
+            ts = str(data["ts"])
+            log.debug("slack.stream_start", ts=ts)
+            return ts
 
-        async def _edit(text: str) -> None:
+        async def _stream_edit(text: str) -> None:
             resp = await retry_request(
                 client.post,
                 "/chat.update",
@@ -656,11 +669,44 @@ class SlackChannel:
                 )
                 raise RuntimeError(f"Slack API error: {data.get('error')}")
 
+        async def _post_segments(remaining: str) -> None:
+            """Post *remaining* as one or more new messages, splitting at the cap.
+
+            ``delivered`` advances after each successful post, so a failure
+            part way through never resends text that is already visible.
+            """
+            nonlocal message_ts, segment_start, delivered
+            while True:
+                head, tail = split_text_for_limit(remaining, _SLACK_MESSAGE_TEXT_LIMIT)
+                message_ts = await _stream_post(head)
+                delivered = segment_start + len(head)
+                if not tail:
+                    return
+                segment_start = delivered
+                remaining = tail
+
+        async def _post(text: str) -> None:
+            await _post_segments(text[segment_start:])
+
+        async def _edit(text: str) -> None:
+            nonlocal segment_start, delivered
+            head, tail = split_text_for_limit(text[segment_start:], _SLACK_MESSAGE_TEXT_LIMIT)
+            await _stream_edit(head)
+            delivered = segment_start + len(head)
+            if tail:
+                # This message is full: freeze it and roll over into a new one.
+                segment_start = delivered
+                await _post_segments(tail)
+
         async for chunk in chunks:
             throttle.add(chunk)
             await throttle.maybe_flush(post=_post, edit=_edit)
 
-        await throttle.force_flush(post=_post, edit=_edit)
+        # ``delivered < len(text)`` mirrors the Telegram and Discord adapters:
+        # skip a final flush that would repeat the last one verbatim when
+        # nothing arrived after the last successful post or edit.
+        if delivered < len(throttle.text):
+            await throttle.force_flush(post=_post, edit=_edit)
         if message_ts is not None:
             log.debug("slack.stream_end", ts=message_ts, length=len(throttle.text))
 
