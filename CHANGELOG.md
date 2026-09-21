@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Migration: `agentos migrate openclaw` writes the provider's own model id into
+  `llm.model`. An OpenClaw reference such as `anthropic/claude-sonnet-4-5` was
+  stored verbatim next to `llm.provider = "anthropic"`, so the Anthropic API was
+  asked for a model with that literal name; only the `openrouter/` and `zai/`
+  prefixes were being stripped. The `anthropic/`, `openai/`, `deepseek/` and
+  `minimax/` prefixes, the ones `_provider_from_model` already reads the
+  provider from, are now stripped the same way. The migration report's
+  `skipped_model` shows the native id too.
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.
