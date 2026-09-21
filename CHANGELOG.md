@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- CLI/TUI: terminal markdown table renderer `_split_table_row` parsed cells by
+  splitting on raw pipe characters, which split code spans containing pipes
+  (``` `a | b` ```) and escaped pipes (`\|`) into extraneous columns and silently
+  dropped subsequent column content when normalized against header width; it
+  now parses rows with state-aware scanning that preserves backtick code spans
+  and escaped pipes (#3257).
+
 - Channels: a slash command separated from its argument by a tab or a newline
   was matched as a command -- `match` and `channel_dispatch`'s intercept gate
   both split on any whitespace -- but `dispatch` extracted the argument with a

@@ -229,8 +229,49 @@ def _is_table_line(line: str) -> bool:
 
 def _split_table_row(line: str) -> list[str]:
     """Split a ``| a | b |`` row into trimmed cell strings."""
-    cells = line.strip().strip("|").split("|")
-    return [c.strip() for c in cells]
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|") and not (stripped.endswith(r"\|") and not stripped.endswith(r"\\\|")):
+        stripped = stripped[:-1]
+
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    code_marker_length = 0
+    cursor = 0
+    while cursor < len(stripped):
+        char = stripped[cursor]
+        if escaped:
+            current.append(char)
+            escaped = False
+            cursor += 1
+            continue
+        if char == "\\":
+            escaped = True
+            current.append(char)
+            cursor += 1
+            continue
+        if char == "`":
+            marker_end = cursor
+            while marker_end < len(stripped) and stripped[marker_end] == "`":
+                marker_end += 1
+            marker_length = marker_end - cursor
+            if code_marker_length == 0:
+                code_marker_length = marker_length
+            elif code_marker_length == marker_length:
+                code_marker_length = 0
+            current.append(stripped[cursor:marker_end])
+            cursor = marker_end
+            continue
+        if char == "|" and code_marker_length == 0:
+            cells.append("".join(current).strip().replace(r"\|", "|"))
+            current = []
+        else:
+            current.append(char)
+        cursor += 1
+    cells.append("".join(current).strip().replace(r"\|", "|"))
+    return cells
 
 
 def _is_table_separator_row(line: str) -> bool:
@@ -380,10 +421,7 @@ def _allocate_table_widths(
     """
     ncols = len(aligns)
     widths = [
-        max(
-            [_TABLE_MIN_COL_WIDTH]
-            + [_cell_width(r[i]) for r in rows if i < len(r)]
-        )
+        max([_TABLE_MIN_COL_WIDTH] + [_cell_width(r[i]) for r in rows if i < len(r)])
         for i in range(ncols)
     ]
 
@@ -413,11 +451,7 @@ def _render_table_block(table_lines: list[str]) -> str:
     header = _split_table_row(table_lines[0])
     ncols = len(header)
     aligns = _parse_table_alignment(table_lines[1], ncols)
-    body = [
-        _split_table_row(ln)
-        for ln in table_lines[2:]
-        if not _is_table_separator_row(ln)
-    ]
+    body = [_split_table_row(ln) for ln in table_lines[2:] if not _is_table_separator_row(ln)]
     all_rows = [header, *body]
 
     # Budget: console width, minus a small safety margin so the table never
@@ -467,9 +501,7 @@ def _render_table_block(table_lines: list[str]) -> str:
     lines: list[str] = []
     lines.extend(_render_row(header, is_header=True))
     # Separator: dashes fill each column (padding included), dimmed.
-    sep_parts = [
-        _styled("─" * (widths[i] + 2 * _TABLE_PAD), _RULE_STYLE) for i in range(ncols)
-    ]
+    sep_parts = [_styled("─" * (widths[i] + 2 * _TABLE_PAD), _RULE_STYLE) for i in range(ncols)]
     lines.append(pipe + pipe.join(sep_parts) + pipe)
     for row in body:
         lines.extend(_render_row(row, is_header=False))
