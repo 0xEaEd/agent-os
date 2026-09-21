@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- In `robinhood-chain-stocks`, `chain_stocks.py` dropped genuine Stock Tokens
+  whose 60-character-capped CoinGecko name had its `Robinhood Token` suffix
+  truncated (such as IBM and SPYD), causing them to fail resolution; it now
+  recognizes bullet-prefixed truncated suffixes and strips them in `_clean_name`.
 - Sandbox: `read_file` on `~/.docker/config.json` no longer returns Docker
   registry credentials. The denylist entry read `~/.docker/config`, and the
   prefix match is anchored at a path segment boundary, so it matched only a
