@@ -80,6 +80,36 @@ def test_create_then_inspect_round_trip(tmp_path: Path) -> None:
     assert inspected["has_tracked_changes"] is False
 
 
+def test_create_treats_json_null_as_empty_not_the_word_none() -> None:
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import create_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+
+    doc = create_docx.build(
+        {
+            "metadata": {"title": None, "author": None},
+            "body": [
+                {"kind": "heading", "level": 1, "text": None},
+                {"kind": "paragraph", "text": None},
+                {
+                    "kind": "table",
+                    "rows": [["Header", "Notes"], ["Item 1", None], [None, 42], None],
+                },
+            ],
+        }
+    )
+
+    assert doc.core_properties.title == ""
+    assert doc.core_properties.author != "None"
+    assert [p.text for p in doc.paragraphs] == ["", ""]
+    table = doc.tables[0]
+    assert len(table.rows) == 3  # the null row is skipped
+    assert [c.text for c in table.rows[1].cells] == ["Item 1", ""]
+    assert [c.text for c in table.rows[2].cells] == ["", "42"]
+
+
 def test_edit_replace_text(tmp_path: Path) -> None:
     sys.path.insert(0, str(SCRIPTS))
     try:
