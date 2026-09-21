@@ -26,6 +26,7 @@ from agentos.gateway.config import (
     GatewayConfig,
     MCPServerEntry,
 )
+from agentos.migration._dotenv import parse_env_value
 from agentos.onboarding.config_store import load_config, persist_config
 from agentos.paths import default_agentos_home
 
@@ -282,7 +283,7 @@ def _load_env_file(path: Path) -> dict[str, str]:
         if line.startswith("export "):
             line = line[len("export ") :].lstrip()
         key, value = line.split("=", 1)
-        values[key.strip().lstrip("\ufeff")] = value.strip().strip('"').strip("'")
+        values[key.strip().lstrip("\ufeff")] = parse_env_value(value)
     return values
 
 
