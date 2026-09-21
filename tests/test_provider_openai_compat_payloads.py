@@ -1550,6 +1550,50 @@ def test_stream_tool_use_id_stays_stable_when_id_arrives_after_start(
     assert streamed == ["call_123", "call_123"]
 
 
+def test_stream_tool_use_id_stays_stable_when_an_argument_fragment_precedes_the_id(
+    monkeypatch: Any,
+) -> None:
+    events = _tool_stream_events(
+        monkeypatch,
+        [
+            {
+                "choices": [
+                    {
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"q":'}}]},
+                        "finish_reason": None,
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_123",
+                                    "function": {"name": "lookup", "arguments": '"hi"}'},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            },
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ],
+    )
+
+    ids = [
+        e.tool_use_id
+        for e in events
+        if isinstance(e, ToolUseStartEvent | ToolUseDeltaEvent | ToolUseEndEvent)
+    ]
+    assert len(ids) == 4
+    assert len(set(ids)) == 1
+    assert [e.arguments for e in events if isinstance(e, ToolUseEndEvent)] == [{"q": "hi"}]
+
+
 def test_stream_tool_use_synthetic_id_is_consistent_when_no_id_ever_arrives(
     monkeypatch: Any,
 ) -> None:

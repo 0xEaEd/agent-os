@@ -1182,8 +1182,10 @@ class OpenAIProvider:
                                         "started": False,
                                     }
                                 else:
-                                    # id/name may arrive in later chunks
-                                    if tc.get("id"):
+                                    # id/name may arrive in later chunks. Once the start
+                                    # event has published an id it is kept: the later
+                                    # delta/end events must name that same id.
+                                    if tc.get("id") and not pending_calls[idx]["started"]:
                                         pending_calls[idx]["id"] = tc["id"]
                                     fname = function.get("name") or ""
                                     if fname:
