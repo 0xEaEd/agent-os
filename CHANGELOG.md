@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Tools: an inline artifact marker whose file could not be published raised
+  `OSError`/`PermissionError` out of the shell tool, losing the command's real
+  output with it. `publish_inline_artifacts` now reports such a failure as a
+  note beside the marker, the way it already did for `ToolError` (#2892).
+
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed
