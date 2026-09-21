@@ -145,8 +145,9 @@ class CacheBreakReport:
 
 @dataclass(frozen=True)
 class _CacheBaseline:
-    snapshot: PromptStateSnapshot
+    snapshot: PromptStateSnapshot | None
     cache_read_tokens: int
+    reset_pending: bool = False
 
 
 class CacheBreakMonitor:
@@ -157,7 +158,6 @@ class CacheBreakMonitor:
             name="CacheBreakMonitor._baselines",
             session_of=lambda key, _value: key,
         )
-        self._reset_pending: set[str] = set()
         self._min_drop_tokens = max(0, int(min_drop_tokens))
         self._min_drop_ratio = max(0.0, float(min_drop_ratio))
 
@@ -199,26 +199,31 @@ class CacheBreakMonitor:
     ) -> CacheBreakReport:
         current_tokens = max(0, int(cache_read_tokens or 0))
         previous = self._baselines.get(session_key)
-        reset_pending = session_key in self._reset_pending
-        self._baselines[session_key] = _CacheBaseline(snapshot, current_tokens)
+        reset_pending = getattr(previous, "reset_pending", False)
+        self._baselines[session_key] = _CacheBaseline(
+            snapshot=snapshot,
+            cache_read_tokens=current_tokens,
+            reset_pending=False,
+        )
         if reset_pending:
-            self._reset_pending.discard(session_key)
             return CacheBreakReport(
                 break_detected=False,
                 reason="baseline_reset_after_compaction",
                 current_cache_read_tokens=current_tokens,
                 baseline_reset=True,
             )
-        if previous is None:
+        previous_snapshot = getattr(previous, "snapshot", None)
+        if previous is None or previous_snapshot is None:
             return CacheBreakReport(
                 break_detected=False,
                 reason="baseline_initialized",
                 current_cache_read_tokens=current_tokens,
             )
 
-        drop_tokens = max(0, previous.cache_read_tokens - current_tokens)
-        drop_ratio = drop_tokens / previous.cache_read_tokens if previous.cache_read_tokens else 0.0
-        changed_fields = snapshot.changed_fields(previous.snapshot)
+        previous_tokens = getattr(previous, "cache_read_tokens", 0)
+        drop_tokens = max(0, previous_tokens - current_tokens)
+        drop_ratio = drop_tokens / previous_tokens if previous_tokens else 0.0
+        changed_fields = snapshot.changed_fields(previous_snapshot)
         break_detected = (
             bool(changed_fields)
             and drop_tokens >= self._min_drop_tokens
@@ -228,21 +233,27 @@ class CacheBreakMonitor:
             break_detected=break_detected,
             reason="cache_read_drop" if break_detected else "cache_read_stable",
             changed_fields=changed_fields,
-            previous_cache_read_tokens=previous.cache_read_tokens,
+            previous_cache_read_tokens=previous_tokens,
             current_cache_read_tokens=current_tokens,
             drop_tokens=drop_tokens,
             drop_ratio=round(drop_ratio, 4),
-            previous_snapshot=previous.snapshot if break_detected else None,
+            previous_snapshot=previous_snapshot if break_detected else None,
             current_snapshot=snapshot if break_detected else None,
         )
 
     def notify_compaction(self, session_key: str) -> None:
         """Treat the next provider response for this session as a new baseline."""
-        self._reset_pending.add(session_key)
+        previous = self._baselines.get(session_key)
+        snapshot = getattr(previous, "snapshot", None)
+        tokens = getattr(previous, "cache_read_tokens", 0)
+        self._baselines[session_key] = _CacheBaseline(
+            snapshot=snapshot,
+            cache_read_tokens=tokens,
+            reset_pending=True,
+        )
 
     def clear(self) -> None:
         self._baselines.clear()
-        self._reset_pending.clear()
 
 
 default_cache_break_monitor = CacheBreakMonitor()
