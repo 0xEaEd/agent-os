@@ -29,7 +29,7 @@ available without `uv tool list` or `pip show`.
 | `agentos agent` | Run a single automation-friendly agent turn. |
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
-| `agentos skills` | List, search, view, install, update, publish, and inspect skills. |
+| `agentos skills` | List, search, view, install, update, publish, inspect, and tap skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
 | `agentos providers` | Configure and inspect LLM providers. |
@@ -609,6 +609,11 @@ agentos skills install <skill-url> --source bankr
 agentos skills install <skill-url> --source aeon
 agentos skills update --all
 agentos skills uninstall <skill-name>
+agentos skills publish <path-to-skill>
+agentos skills publish <path-to-skill> --repo <owner/repo>
+agentos skills tap list
+agentos skills tap add <owner/repo>
+agentos skills tap remove <owner/repo>
 ```
 
 `agentos skills init <name>` initializes a new custom skill template.
@@ -617,6 +622,15 @@ agentos skills uninstall <skill-name>
 - `--target-dir` / `-p` specifies the target parent directory. If omitted, the tool resolves to the highest precedence existing layer directory in the workspace/personal layers list.
 - `--with-script` scaffolds an executable script `scripts/run.py` template and entrypoint command configuration.
 - `--force` / `-f` forces overwrite of generated files without purging the parent folder.
+
+`agentos skills publish <path-to-skill>` validates the skill directory and
+publishes it. `--repo` / `-r <owner/repo>` targets the repository the PR
+goes to; a failed publish prints `Failed:` and exits 1.
+
+`agentos skills tap` manages custom skill source repositories (taps) for
+teams that keep their own skill catalog: `tap list` shows the registered
+taps, `tap add <owner/repo>` registers one, `tap remove <owner/repo>`
+removes it. See [`features/skills.md`](features/skills.md#manage-skill-sources).
 
 The `skills list` table is unchanged: name, layer, eligible, description.
 `--json` carries more, and now reports the same facts the Web UI shows for the
@@ -890,6 +904,28 @@ Read:
 - [`scheduling.md`](scheduling.md)
 - [`approvals-and-permissions.md`](approvals-and-permissions.md)
 
+## Sandbox Posture Controls
+
+```sh
+agentos sandbox status
+agentos sandbox status --json
+agentos sandbox bypass
+agentos sandbox full
+agentos sandbox on
+agentos sandbox reset
+```
+
+`agentos sandbox status` shows the current sandbox posture (`on`, `bypass`, `full`), whether runtime sandboxing and security grading are active, and default permissions.
+
+- `agentos sandbox on`: Restores the default sandboxed posture (`sandbox = true`, `security_grading = true`, `permissions.default_mode = "off"`).
+- `agentos sandbox bypass`: Disables runtime sandboxing and auto-grants approvals except for sensitive paths (`permissions.default_mode = "bypass"`).
+- `agentos sandbox full`: Disables runtime sandboxing and skips approval and sensitive-path gates (`permissions.default_mode = "full"`).
+- `agentos sandbox reset`: Resets sandbox posture to AgentOS defaults (`bypass`).
+
+Pass `--config <path>` to target an explicit configuration file. Changes require a gateway restart (`agentos gateway restart`) to apply to running processes.
+
+Read: [`tools-and-sandbox.md`](tools-and-sandbox.md)
+
 ## Cost, Diagnostics, and Replay
 
 ```sh
@@ -989,6 +1025,27 @@ agentos mcp-server run --gateway ws://localhost:18792/ws
 ```
 
 Read: [`mcp-server.md`](mcp-server.md)
+
+## Install Inventory
+
+`agentos dist` emits `workspace-state.json` — a reproducible, versioned
+inventory of the install for support, release QA, or environment
+comparison:
+
+```sh
+agentos dist
+agentos dist --output workspace-state.json
+```
+
+With no flags the payload prints to stdout. `--output` (`-o`) writes it to
+the given file instead (creating parent directories) and prints the
+resolved path. The payload (`schema_version`, `agentos_version`,
+`python_requires`, `bundled_channels`, `bundled_tools`,
+`gateway_defaults`) is derived only from installed package metadata plus
+hard-coded constants — byte-identical per install, with no environment
+values, paths, or secrets.
+
+Read: [`operations.md`](operations.md#install-inventory)
 
 ---
 

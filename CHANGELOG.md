@@ -8,7 +8,415 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- `channels/slack`: support composite `<channel_id>|<thread_ts>` targets, default channel fallback, and file size validation in `SlackChannel.send_file`.
+- Slack channel: `send_file` passed a composite `<channel_id>|<thread_ts>`
+  target straight through as `channel_id`, so a thread upload failed with
+  `channel_not_found`. It now splits the target the way `send` does, threads
+  the upload, falls back to `slack_channel_id` when the channel part is
+  omitted, and checks file existence and size against a 1 GB `MAX_FILE_BYTES`
+  ceiling before any network call, like the other adapters (#2662).
+
+- MSTeams channel: the conversation-reference cache was written only from
+  `stop()`, so a crash, OOM kill or redeploy lost every conversation learned
+  since the previous clean stop -- and the last-activity order the
+  `reply_to=None` fallback relies on -- and proactive sends to those users
+  failed until they messaged again. The cache is now saved on every inbound
+  turn, atomically (temp file + rename), and a failed save is logged rather
+  than dropping the turn (#2658).
+
+- Email channel: attachments sent through `send_file`, or through `send` with
+  an `Attachment` whose `mime_type` was unset, were all labelled
+  `application/octet-stream`, so images and PDFs arrived as opaque downloads
+  instead of previewing inline. The type is now inferred from the filename with
+  `mimetypes.guess_type`, and `application/octet-stream` is only the fallback
+  for an unknown extension (#2656).
+
+- CLI/TUI: terminal markdown table renderer `_split_table_row` parsed cells by
+  splitting on raw pipe characters, which split code spans containing pipes
+  (``` `a | b` ```) and escaped pipes (`\|`) into extraneous columns and silently
+  dropped subsequent column content when normalized against header width; it
+  now parses rows with state-aware scanning that preserves backtick code spans
+  and escaped pipes (#3257).
+
+- Channels: a slash command separated from its argument by a tab or a newline
+  was matched as a command -- `match` and `channel_dispatch`'s intercept gate
+  both split on any whitespace -- but `dispatch` extracted the argument with a
+  literal `" "`, so the argument was dropped or cut short with no fallback to
+  the model. `/rename` then read the empty argument as "clear the custom name"
+  and `/plan off` read it as "turn plan mode on", both the opposite of what was
+  asked; `/use` pinned an empty model id. The argument is now split the same way
+  the command word is found (#3254).
+
+- `robinhood-chain-stocks` skill: a node-level JSON-RPC failure -- a public
+  endpoint's rate limit, an internal error, a response body that is not a usable
+  result -- was counted as "the contract answered", so `uiMultiplier()` failing
+  for that reason reported `isStockToken: false` about a genuine Robinhood Stock
+  Token, withheld its price as "contract failed the Stock Token check", and told
+  the agent the address was an impersonator. SKILL.md reserves `false` for a
+  confirmed revert and `null` for "unverified, not disproven"; `null` was
+  unreachable from any JSON-RPC-level fault. `RpcError` now records whether the
+  contract answered, and only an execution revert counts (#3253).
+
+- In `robinhood-chain-stocks`, `chain_stocks.py` dropped genuine Stock Tokens
+  whose 60-character-capped CoinGecko name had its `Robinhood Token` suffix
+  truncated (such as IBM and SPYD), causing them to fail resolution; it now
+  recognizes bullet-prefixed truncated suffixes and strips them in `_clean_name`.
+- Telegram: `is_group_mentioned`'s plain-text check matched the bot's
+  username as a substring, so `@helper` was found inside another bot's
+  `@helperbot2` and inside `someone@helperdesk.com`, and the bot replied in
+  groups to messages that never addressed it. That check runs after every
+  entity has been examined and none was us -- not only when a message has no
+  entities -- so a `mention` entity naming a different bot reached it too.
+  The username must now sit on a word boundary at both ends: a word
+  character after it is a longer username, and one before the `@` is an
+  address (#2464).
+- Sandbox: `read_file` on `~/.docker/config.json` no longer returns Docker
+  registry credentials. The denylist entry read `~/.docker/config`, and the
+  prefix match is anchored at a path segment boundary, so it matched only a
+  file literally named `config` — a path Docker never writes. The entry is
+  now the `~/.docker` directory, matching the neighbouring `~/.aws` and
+  `~/.kube` entries and the `.docker` the redaction layer already carried (#2623).
+- Surplus provider: `claude-haiku-4.5` no longer silently loses reasoning
+  support when the Surplus catalog fetch fails at boot. The offline fallback
+  prefix table (`_SURPLUS_REASONING_PREFIXES`) listed `claude-opus-` and
+  `claude-sonnet-` but not `claude-haiku-4.5`, even though the sibling vision
+  table right next to it does list `claude-haiku-4.5` — so a boot with no
+  live catalog answered `supports_reasoning=False` for a model that genuinely
+  supports extended thinking, silently turning a configured `thinking_level`
+  into a no-op (#2615).
+- Shell policy (Windows): the denylist prefix that anchors `rm` / `ri` / `rd`
+  / `erase` through a `powershell -c` wrapper only understood flags with no
+  value, so `powershell -ExecutionPolicy Bypass -Command "rm C:\x"` (and
+  `-ep Bypass`, `-WindowStyle Hidden`, `-ep:Bypass`) came back
+  `allowed=True`. The wrapper is now modelled as a repeatable unit whose flags
+  may carry a value, so a wrapper nested in a wrapper
+  (`cmd /c powershell -ep bypass -c "rm C:\x"`), PowerShell's call operator
+  and script block (`-Command "& {rm C:\x}"`), doubled or escaped payload
+  quotes, and whitespace after the opening quote are all seen through as well
+  (#2485).
+- `web_fetch` with `extract_mode="text"` passed extracted markdown straight to
+  `html2text` (an HTML parser), which collapsed multiline paragraphs into one
+  run-on line and left markdown syntax and angle brackets unparsed; it now
+  walks a real CommonMark token stream to strip markdown formatting while
+  preserving paragraph and list structure
+  ([#2482](https://github.com/use-agent-os/agent-os/issues/2482)).
+- Tools: `write_file` reported `len(content)` -- Unicode code points -- as
+  "bytes", so every multibyte character was under-counted (ten emoji came
+  back as "Written 10 bytes" for a 40-byte file) and callers comparing the
+  figure against disk limits or byte budgets reasoned from the wrong number.
+  The content is now encoded once and written as bytes, and the report is
+  the length of what reached the disk (#2478).
+- `rwa_lookup.py` in the `robinhood-rwa-addresses` bundled skill failed to
+  write card artifacts when target output paths specified non-existent parent
+  directories; it now creates parent directories recursively before writing.
+- Skills (hub scanner): `_strip_fenced_code_blocks` only recognized exactly-
+  three-backtick fences, so a `~~~`-fenced example (CommonMark-valid) was
+  scanned as plain text and scored `severity="dangerous"` -- the same
+  outcome a real exfiltration attempt produces. Confirmed
+  `scan_result.verdict == "dangerous"` hard-blocks a hub install unless the
+  caller passes `force=True`, so a legitimately-written community skill
+  using the `~~~` convention would fail to install with no indication it's
+  a false positive. Tilde and backtick fences are now matched by a single
+  ordered pattern so a fence of one marker type can no longer be closed by
+  an unrelated later occurrence of the other marker -- the previous
+  two-independent-patterns approach let a backtick run inside a `~~~`
+  block pair with an unrelated backtick run further down the document,
+  silently exempting the prose in between from every check (#2324).
+- Telegram: a reply containing `***bold italic***` (or `___both___`) is
+  delivered again. The `**` pass consumed two of the three markers and the `*`
+  pass then paired the leftover one across the closing tag, producing
+  `<b><i>x</b></i>`; Telegram rejects improperly nested entities and the
+  adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
+  dropped rather than mis-rendered
+  ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- Scheduler/heartbeat: `active_hours` is read in the host's local time, as the
+  heartbeat module docstring has always defined it ("in 24-hour local time").
+  Both window checks took `.hour` straight off the `datetime.now(UTC)` their
+  callers pass — `HeartbeatRunner.poll`, `HeartbeatLoop._tick` and the cron
+  `wakeMode="now"` path `HeartbeatLoop.run_once_now` — so on any host outside
+  UTC the configured window was silently shifted by the host's offset, with
+  nothing in the logs to say why. On a UTC+9 host, `active_hours: [9, 21]`
+  went quiet through the working day and fired at night. The two duplicated
+  checks are now one shared helper that converts to local time first.
+  **Behaviour-changing:** an operator who set `active_hours` to compensate for
+  the old UTC reading will see their window move by their offset on upgrade,
+  and should set it back to the local hours they actually want
+  (#2603).
+
+- `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
+  now reported as ambiguous instead of silently editing the first occurrence.
+  `_find_all` advanced its cursor past the whole needle, so the overlapping
+  second match was never counted and the same duplication with a separator line
+  in between behaved differently (#2290).
+- Telegram: a background result or a subagent completion announcement for a
+  turn that arrived in a forum topic reaches the group again. Both out-of-turn
+  builders carried `metadata["channel"]` only for Slack, so the topic id alone
+  landed in `reply_to` and `TelegramChannel` used it as the chat id — the
+  answer went to an unrelated chat or failed with `chat not found`, and both
+  call sites swallowed the error. They now use the same `thread_id and
+  channel_id` rule as the in-turn reply path. (#2390)
+- `docx` `edit_docx.py`: `replace_text` now walks the paragraphs inside text
+  boxes as well as the body, tables and headers/footers. Word keeps text-box
+  content in a `<w:txbxContent>` nested inside a run, which no paragraph walk
+  reached, so a placeholder or a name that also appeared in a pull quote,
+  callout or letterhead banner was left in the output while the op reported the
+  replacements it did make.
+
+- Bundled `poolsdotfun` skill: pass `encoding="utf-8"` when `selftest.py` reads
+  source files so Tier 7 capability-separation checks do not crash with
+  `UnicodeDecodeError` on CJK code pages (#2335).
+- Approvals: an approved destructive intent was cached by `(kind, target)`
+  alone, so a "rm -rf …" the operator approved in one session silently
+  answered every other session's prompt — and because `shell`'s exec gate
+  short-circuits on a cached intent before `ApprovalQueue.request()` is ever
+  called, the second delete ran with no prompt raised on any surface. The
+  elevated mode carried by the same approval was already filed under its
+  `sessionKey`; the intent it grants now is too. The cache key becomes
+  `(session, kind, target)`, and the registry declares `session_of` so
+  `drop_session_state` reaps a finished session's grants instead of leaving a
+  year-long "always" entry behind. `sessions.send` clears only its own
+  session's "once" grants, and the operator-facing `forget()` stays
+  process-wide (#2191).
+- `docx` skill: `inspect_docx.py` no longer walks tables through
+  `row.cells`. That API resolves vertically merged cells against the row
+  above, raising `ValueError: table has an irregular grid` on layouts
+  non-Word generators produce, and repeats a horizontally merged cell once
+  per grid column it spans. Each `<w:tc>` is now visited exactly once, nested
+  table text is included, and a corrupt file raises `ValueError` so the CLI
+  exits 2 with a clean message instead of an unhandled traceback. (#2154)
+- `web_fetch` tool: error HTTP statuses (4xx/5xx) served as non-HTML content
+  (a JSON or plain-text API response) were returned as `extractor: "raw"`
+  success without the `error` hint and cached for 15 minutes, because the
+  non-HTML early return ran before the error-status handling that HTML
+  responses already used. The error-status check now runs first, so error
+  bodies take the same path regardless of content type and transient
+  statuses are not cached. (#3231)
+
+## [2026.9.20] - 2026-09-20
+
+### Fixed
+
+- Gateway/Sessions: `sessions_history` and spawned-subagent result reporting
+  (`_read_child_result`) read a session's transcript through
+  `SessionStorage.get_transcript`'s `limit`, which windows from the
+  *oldest* end -- any session whose transcript outgrew the limit (20 for
+  `sessions_history`, 50 for subagent results) got the start of the
+  conversation instead of its current tail, or a stale/empty subagent
+  result instead of its real final answer. Both now read through the
+  existing newest-first `get_recent_transcript` query instead
+  (#2521).
+- `weather` skill script `weather_fetch.py` checked `"june"` as a raw substring
+  in `_seasonal_hint`, causing locations like Juneau to falsely trigger seasonal
+  date-window warnings; it now matches month names with word boundaries
+  (#2510).
+- Discord channel: a reaction added to the bot's own message in a guild
+  channel or thread is no longer silently dropped by the group mention
+  gate. `is_group_mentioned` fell back to searching a reaction's (always
+  empty) text for a mention, so `_should_skip_unmentioned` rejected every
+  reaction in every guild channel/thread with no error or log. Reacting to
+  a message the bot itself sent is now treated as an unambiguous mention.
+- Email channel: a `message/rfc822` attachment (an original email attached
+  as a file, e.g. Outlook/Apple Mail "Forward as Attachment") is no longer
+  silently dropped. `_extract_attachments` relied on
+  `part.get_payload(decode=True)`, which returns `None` for this content
+  type since the part's payload is the embedded message object, not encoded
+  bytes -- the attachment vanished with no warning logged. It's now
+  extracted by serializing the embedded message.
+- Gateway: `_handle_sessions_reset` carried a dead, unreachable duplicate
+  of its own final reset branch (a leftover from a past merge conflict) --
+  an unconditional `return` was immediately followed by an `if not
+  transcript:` block computing and returning the same thing a different
+  way, which `mypy --warn-unreachable` flags directly. Removed the dead
+  block and its now-unused `_reset_response` helper; the reachable branch
+  above it already covers the same case
+  (#2509).
+- Discord: `send_file` sent the whole caption as the upload's `content`, and
+  Discord 400s a message past 2000 characters whether or not a file is
+  attached, so an artifact with long accompanying text was never delivered.
+  The first 2000 characters now ride with the file and the rest follow as
+  ordinary channel messages through `send()`; a follow-up that fails after
+  the file has gone is logged with the ids rather than reported as a failed
+  file delivery, which would have the caller upload it again. `send_file`
+  also resolves its target the way `send()` does: the channel component of a
+  `<channel_id>|<message_id>` composite, `default_channel_id` for an empty
+  id, and a clear `ValueError` before any request when neither is available
+  (#2779).
+- Discord channel: a reaction added to the bot's own message in a guild
+  channel or thread is no longer silently dropped by the group mention
+  gate (#2790).
+- Control UI: the gateway root path returns the status payload when the
+  Control UI is disabled instead of a 404 (#2761), and the Control UI
+  bootstrap honours `X-Forwarded-Host` and a multi-value
+  `X-Forwarded-Proto` behind a reverse proxy (#2759).
+- Cron: `cron.update` keeps a job's delivery unless the caller changes it
+  (#2794); the gateway emits `last_status` so Control UI health reflects a
+  failed run (#2773); cron Python scripts run with UTF-8 stdout (#2580).
+- Tools: `apply_patch` applies an indented patch block and refuses one with
+  no operations (#2799); an inline artifact marker resolves against the
+  command's cwd (#2578); `web_fetch` decodes a page with the charset its
+  `<meta>` declares (#2557); the `message` tool addresses a target by
+  channel type, not channel name (#2566), and the platform render hint is
+  looked up the same way (#2568); quoted shell write targets containing
+  spaces are captured (#1230); `code_exec` flags every delete command
+  `shell_policy` blocks, quoted or not (#2776).
+- Sandbox/intent: an unexpandable `~` no longer crashes the sensitive-path
+  scan (#1503); destructive-intent extraction recognises `rmdir`, `rd`,
+  `del`, `erase`, `unlink` and `Remove-Item` (#1015).
+- Gateway: a debounced batch that fails to start replies on the channel
+  instead of going silent (#1206); websocket pong replies are serialised
+  through the writer queue; the tool result store is scanned at most once
+  per write (#2126).
+- Memory: a lowercase `memory.md` is exempt from retention pruning (#2522);
+  `memory_search` centres its evidence window for a non-ASCII query (#2517).
+- Telegram: `render_telegram_html` preserves bare URLs (#2560). Slack:
+  `send_streaming` `_edit` verifies the `ok` response.
+- Skills: `video-merger` escapes paths written to its concat manifest
+  (#2122) and handles missing duration metadata and silent inputs;
+  `dubbing_generate` accepts video containers; the pdf skill reports a
+  malformed `--pages` spec instead of raising `ValueError` (#2128).
+- Docs: `agentos sandbox` subcommands that were missing from `docs/cli.md`
+  are documented (#2550).
+
+## [2026.9.18] - 2026-09-18
+
+### Added
+
+- `senior-unilp-manager`: `mint --amount0/--amount1 max` sizes a position from
+  the signer's ERC-20 balance and caps the slippage buffer at that balance, so
+  "deposit all of it" no longer needs a hand-written `balanceOf` call or a
+  second run with `--slippage-bps 0`. Every pool the skill confirms on chain is
+  remembered in `state/unilp/pools/<chain>.json`, so `ticks --pool`, `pool
+  --id` and `mint --pool` resolve a PoolKey by id alone on chains whose RPC
+  cannot serve the `Initialize` log — no more `--token` on every call.
+
+### Fixed
+
+- WebUI chat: "Move to project" and "Rename session" on a brand-new chat
+  (Cmd+Shift+O / `/new`, before the first message) failed with "Session not
+  found". The WebUI mints the session key client-side and the row only
+  appeared on the first send; `sessions.patch` and `sessions.rename` now
+  materialize that draft row for ephemeral webchat keys (any other key shape
+  still gets the strict not-found), and the chat drops its `new_chat` intent
+  once the move or rename succeeded so the first send is not rejected as a
+  `session_key conflict`.
+
+- `senior-unilp-manager`: a mint the wallet could cover, but not with the
+  +100 bps buffer, was reported as "blocked on approvals — run approve". The
+  gate now separates a balance shortfall from an approval problem and only
+  points at `approve` for the latter.
+
+- `senior-unilp-manager` on Robinhood Chain: the drpc endpoint now caps
+  `eth_getLogs` at 100k blocks, so `pools --token`, `positions` and the default
+  `--mode logs` reserve read died with a bare `eth_getLogs: HTTP 500` after
+  three retries, and the agent had no way to find the AGENTOS pool. The chain
+  entry now declares the cap and defaults to the tick-bitmap walk; `pools` and
+  `pool --id --token` derive the pool from the Doppler hook the launcher table
+  already labels and confirm it with one `getSlot0` (2 s instead of a failed
+  scan); `positions` refuses up front with the same options Base gets; and the
+  RPC client surfaces the JSON-RPC error carried in a 5xx body instead of
+  `HTTP 500`, retrying only when it names a transient condition.
+
+- Channels: `artifact_delivery_key` consulted `sha256` first, and `sha256`
+  is a first-class artifact field, so two artifacts with matching bytes and
+  different names (two empty CSVs, a template rendered once per region)
+  collapsed to one key and `dedupe_artifacts_for_channel_delivery` silently
+  dropped the second — before the delivery log lines and outside the
+  `undelivered` list, so the reply could name a file the user never got.
+  Delivery identity is now `(content, name)`
+  ([#2133](https://github.com/use-agent-os/agent-os/issues/2133)).
+  `split_text_for_limit` (the shared chunking primitive behind Discord's and
+  Telegram's message-length caps) left a half-open code fence in the first
+  chunk when the fence opened the segment itself — the "back up to before the
+  fence" guard only fired when the backup point was greater than zero. The
+  fence is now closed on that chunk and reopened (with its original language
+  tag) on the next, computed via a fresh, independent cut rather than reusing
+  the caller's word/line-boundary cut, which could send the next call right
+  back to the same input — an infinite loop in every caller that splits
+  until the tail is empty
+  ([#2127](https://github.com/use-agent-os/agent-os/issues/2127)).
+- Microsoft Teams: `send()` handed the whole reply to `send_activity` as one
+  Activity, so a reply over the 40 KB payload cap failed with `413
+  MessageSizeTooBig` and delivered nothing. It now splits through the shared
+  `split_text_for_limit` at a 32 KB text budget measured the way the service
+  counts it (UTF-16 bytes of the JSON-encoded string, so CJK and emoji are not
+  undercounted), sends the pieces on one continued turn, and remembers every
+  chunk's activity id for `edit()`/`delete()`
+  ([#2114](https://github.com/use-agent-os/agent-os/issues/2114)).
+- Providers: a stream that fails after the HTTP 200 — Anthropic's
+  `event: error` (`overloaded_error`, `api_error`), an OpenAI-compatible
+  chunk carrying `error` (OpenRouter's `{"error": {"code": 502}}`), an Ollama
+  NDJSON `{"error": …}` line — was not recognised by any of the three stream
+  loops. Anthropic's ended with neither an `ErrorEvent` nor a `DoneEvent`, so
+  the turn truncated silently and the circuit breaker never learned the
+  provider was overloaded; OpenAI-compat and Ollama fell through to
+  `DoneEvent` and recorded a success for a failed turn. Each loop now yields
+  one `ErrorEvent` whose `code` carries the upstream error type
+  ([#2118](https://github.com/use-agent-os/agent-os/issues/2118),
+  [#2214](https://github.com/use-agent-os/agent-os/issues/2214)).
+- Gateway pid lock: `release()` unlinked `gateway.pid.lock`, and both
+  platform locks (`fcntl.flock`, `msvcrt.locking`) key on the open inode, not
+  the path, so during a supervisor restart a waiter holding the orphaned
+  inode and a newcomer opening a fresh one could both win and run two
+  gateways against one `STATE_DIR`. The anchor now stays on disk and
+  `release()` removes only `gateway.pid`. `acquire()` also probed liveness and
+  unlinked `gateway.pid` *before* taking the lock, so a false-negative probe
+  deleted a live gateway's pid file and then reported `pid=unknown`; it now
+  locks first and treats a pid file found under a freshly won lock as stale
+  by construction (logged as `gateway.pidlock.stale_overwritten`). The
+  SIGTERM/SIGINT handlers it installed were overwritten by uvicorn and would
+  have hard-killed the process had they run; they are gone
+  ([#2119](https://github.com/use-agent-os/agent-os/issues/2119),
+  [#2134](https://github.com/use-agent-os/agent-os/issues/2134),
+  [#2136](https://github.com/use-agent-os/agent-os/issues/2136)).
+- Injection guard: the `invisible_char` threat class fired on ZWJ (U+200D,
+  every compound emoji), ZWNJ (U+200C, Persian, Arabic and Indic word
+  shaping) and a leading BOM (every UTF-8 file that has been through Excel or
+  Notepad), and in enforce mode one such codepoint replaced the whole payload
+  with `[BLOCKED: …]`. The threat class now leaves out the two joiners and
+  strips one leading BOM before it looks; the normalization set is unchanged,
+  so `ignore<ZWJ>all prior instructions` is still caught as `prompt_override`
+  ([#2120](https://github.com/use-agent-os/agent-os/issues/2120)).
+- `CacheBreakMonitor._reset_pending` was a plain `set[str]` on the line after
+  the `BoundedRegistry` that #1131 gave `_baselines`, with no eviction: a
+  session compacted and then closed left its key behind on the module-level
+  singleton forever, and a reused session key inherited the stale flag and had
+  its first genuine cache-break report suppressed. The flag now lives on the
+  `_CacheBaseline` entry and is evicted with it
+  ([#2135](https://github.com/use-agent-os/agent-os/issues/2135)).
+- `cron-watchers`: `watch_http_json.py` dropped every item lacking
+  `--id-field` with a bare `continue`, so a typo'd field name produced exit 0
+  with nothing on stdout or stderr — indistinguishable from a feed with
+  nothing new, even under `--first-run-reports`. When items were fetched and
+  none carries the field it now names the field and the item count on stderr
+  and exits 1 before any watermark is written
+  ([#2106](https://github.com/use-agent-os/agent-os/issues/2106)).
+- `docx` and `xlsx` skills: `create_docx.py` and `create_xlsx.py` called
+  `spec.get(...)` on whatever JSON arrived, so a non-object spec crashed with
+  `AttributeError`, a scalar table row crashed `len()` (or, in xlsx, silently
+  fragmented into one cell per character), a heading `level` outside 0–9
+  raised straight out of `python-docx`, and a JSON syntax error reached the
+  caller as a raw traceback. Both now validate the spec shape and report
+  `error: …` with exit 2, the convention `edit_docx.py` and
+  `inspect_docx.py` already follow
+  ([#2018](https://github.com/use-agent-os/agent-os/issues/2018),
+  [#2056](https://github.com/use-agent-os/agent-os/issues/2056)).
+- Tests: `test_iteration_timeout_caps_tool_execution` bounded its run with a
+  0.25 s `wait_for` guard that sat below the 0.5 s tool it drives, so under
+  contention (Windows CI, three runs in a row) a working implementation
+  failed with a bare `TimeoutError`; the guard is now a 5 s hang guard rather
+  than a race with the behaviour under test
+  ([#2166](https://github.com/use-agent-os/agent-os/issues/2166)).
+
+### Changed
+
+- Web UI keyboard shortcuts: `g p` now jumps to Projects (it used to be `g j`,
+  which had no mnemonic). Approvals, which previously owned `g p`, moves to
+  `g v`. The `?` shortcut overlay reflects both.
+
+- Control UI: the Sessions and Projects views now ask `sessions.list` for 500
+  rows instead of 200, so a gateway with more than 200 sessions no longer
+  silently hides the oldest ones. Both views share one query cache, so the
+  page size now lives in a single `SESSIONS_LIST_LIMIT` constant.
 
 ## [2026.9.17] - 2026-09-17
 
@@ -129,7 +537,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   every `<t>` descendant, including the ones inside `<rPh>`, so a Japanese
   workbook read back with each reading glued onto the word it annotates
   ([#2053](https://github.com/use-agent-os/agent-os/issues/2053)).
-
+  workbook read back with each reading glued onto the word it annotates.
+- `create_pdf_report`: Japanese kana are no longer deleted from a report built
+  on a host with no CJK-capable TTF. `_is_cjk` named only the ideograph blocks,
+  so every hiragana and katakana fell through to the drop that handles
+  characters the base font cannot render — the kanji and the `、。` survived and
+  the syllables joining them did not, leaving a plausible-looking PDF with the
+  grammar removed. Kana now take the same CJK-font fallback that CJK
+  punctuation has taken since #1739.
+- Memory search: a query written in Hangul, Cyrillic, Greek, Arabic, Hebrew,
+  Thai, Devanagari or accented Latin returns results again. `_build_fts_query`
+  tokenized with a class naming only ASCII, the CJK ideographs and the two kana
+  blocks, so those queries produced no token at all and the search
+  short-circuited to an empty list — over text the `unicode61` index had
+  already stored.
 ## [2026.9.16] - 2026-09-16
 
 ### Fixed

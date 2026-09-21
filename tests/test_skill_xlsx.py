@@ -395,7 +395,6 @@ def test_the_apostrophe_escape_is_not_consumed_without_as_text(tmp_path: Path) -
     assert sheet.cell(row=2, column=1).value == "'=hello"
 
 
-
 def _import_scripts() -> tuple[Any, Any, Any]:
     sys.path.insert(0, str(SCRIPTS))
     try:
@@ -571,3 +570,286 @@ def test_clearing_a_cell_keeps_its_style(
     cell = load_workbook(str(out))["S"].cell(row=1, column=1)
     assert cell.value is None
     assert cell.number_format == "0.00%"
+
+
+@pytest.mark.parametrize("spec", [None, [], "not-a-dict", 42, ("also", "not-a-dict")])
+def test_build_returns_a_base_workbook_for_a_non_dict_spec(spec: object) -> None:
+    """A non-dict spec must not crash `.get()` -- it never had a `sheets` key to read."""
+    create_xlsx, _, _ = _import_scripts()
+
+    wb = create_xlsx.build(spec)
+
+    assert wb.sheetnames == ["Sheet"]
+
+
+@pytest.mark.parametrize(
+    "raw_sheets",
+    [
+        pytest.param("not-a-list", id="string"),
+        pytest.param(None, id="null"),
+        pytest.param([1, "x", None], id="list-of-non-dicts"),
+    ],
+)
+def test_build_returns_a_base_workbook_for_malformed_sheets(raw_sheets: object) -> None:
+    create_xlsx, _, _ = _import_scripts()
+
+    wb = create_xlsx.build({"sheets": raw_sheets})
+
+    assert wb.sheetnames == ["Sheet"]
+
+
+def test_build_accepts_a_tuple_of_sheets_and_rows() -> None:
+    """`sheets`/`rows` are consumed as any sequence, not specifically `list`."""
+    create_xlsx, _, _ = _import_scripts()
+
+    wb = create_xlsx.build({"sheets": ({"name": "S", "rows": (["a", "b"], ["c", "d"])},)})
+
+    ws = wb["S"]
+    assert ws.max_row == 2
+    assert [ws.cell(row=r, column=c).value for r in (1, 2) for c in (1, 2)] == [
+        "a",
+        "b",
+        "c",
+        "d",
+    ]
+
+
+def test_build_normalizes_scalar_rows_into_single_cell_rows() -> None:
+    """A scalar row becomes one cell, not an iteration over its characters/digits."""
+    create_xlsx, _, _ = _import_scripts()
+
+    wb = create_xlsx.build({"sheets": [{"name": "S", "rows": ["header", 42, None, ["a", "b"]]}]})
+
+    ws = wb["S"]
+    assert ws.max_row == 4
+    assert ws.cell(row=1, column=1).value == "header"
+    assert ws.cell(row=1, column=2).value is None  # not fragmented into 'h','e','a',...
+    assert ws.cell(row=2, column=1).value == 42
+    assert ws.cell(row=3, column=1).value is None
+    assert ws.cell(row=4, column=1).value == "a"
+    assert ws.cell(row=4, column=2).value == "b"
+
+
+def test_build_skips_merge_entries_with_a_non_string_range() -> None:
+    """A `range` of the wrong type is skipped rather than reaching `merge_cells`."""
+    create_xlsx, _, _ = _import_scripts()
+
+    wb = create_xlsx.build({"sheets": [{"merged": [{"range": 123}, {"range": ["A1:B1"]}]}]})
+
+    assert list(wb["Sheet1"].merged_cells.ranges) == []
+
+
+def test_create_xlsx_cli_reports_invalid_json_with_exit_code_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    create_xlsx, _, _ = _import_scripts()
+
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("{not valid json", encoding="utf-8")
+    out = tmp_path / "out.xlsx"
+    monkeypatch.setattr(sys, "argv", ["create_xlsx.py", str(bad_json), "--out", str(out)])
+
+    assert create_xlsx.main() == 2
+    assert "invalid JSON spec" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_create_xlsx_cli_reports_non_object_json_with_exit_code_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    create_xlsx, _, _ = _import_scripts()
+
+    array_spec = tmp_path / "spec.json"
+    array_spec.write_text("[1, 2, 3]", encoding="utf-8")
+    out = tmp_path / "out.xlsx"
+    monkeypatch.setattr(sys, "argv", ["create_xlsx.py", str(array_spec), "--out", str(out)])
+
+    assert create_xlsx.main() == 2
+    assert "JSON spec must be an object" in capsys.readouterr().err
+    assert not out.exists()
+
+
+# ── unusable ops files are reported, not swallowed (#2145, #2146) ────────────
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("not json at all", "is not valid JSON"),
+        (
+            '{"op": "set_cell", "sheet": "S", "row": 1, "col": 1, "value": "x"}',
+            "must be a JSON array",
+        ),
+        ('["set_cell"]', "op 0 must be an object"),
+        (
+            '[{"op": "set-cell", "sheet": "S", "row": 1, "col": 1, "value": "x"}]',
+            "unknown kind 'set-cell'",
+        ),
+        ('[{"sheet": "S", "row": 1, "col": 1, "value": "x"}]', "unknown kind None"),
+        (
+            '[{"op": "rename_sheet", "old": "S", "new": "T"}, {"op": "merge-cells"}]',
+            "op 1 has unknown kind 'merge-cells'",
+        ),
+    ],
+)
+def test_edit_xlsx_reports_an_unusable_ops_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    body: str,
+    expected: str,
+) -> None:
+    """`json.loads` was unguarded and `ops = raw if isinstance(raw, list) else []`
+    turned a wrong-shaped file into zero ops, writing an unchanged copy at exit 0."""
+    create_xlsx, edit_xlsx, _inspect = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["keep me"]]}]}).save(str(src))
+    ops = tmp_path / "ops.json"
+    ops.write_text(body, encoding="utf-8")
+    out = tmp_path / "out.xlsx"
+    monkeypatch.setattr(sys, "argv", ["edit_xlsx.py", str(src), str(ops), "--out", str(out)])
+
+    assert edit_xlsx.main() == 2
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert "Traceback" not in captured.err
+    assert expected in captured.err
+    if "unknown kind" in expected:
+        assert "expected one of set_cell, rename_sheet, merge_cells" in captured.err
+    assert captured.out == ""
+    assert not out.exists()
+
+
+def test_edit_xlsx_reports_an_ops_file_that_is_not_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    create_xlsx, edit_xlsx, _inspect = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["x"]]}]}).save(str(src))
+    ops = tmp_path / "ops.json"
+    ops.write_bytes(b"\xff\xfe[]")
+    out = tmp_path / "out.xlsx"
+    monkeypatch.setattr(sys, "argv", ["edit_xlsx.py", str(src), str(ops), "--out", str(out)])
+
+    assert edit_xlsx.main() == 2
+    assert "is not valid JSON" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_edit_xlsx_leaves_an_existing_output_alone_when_the_ops_are_unusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    create_xlsx, edit_xlsx, _inspect = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["source"]]}]}).save(str(src))
+    out = tmp_path / "out.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["PREVIOUS WORK"]]}]}).save(str(out))
+    before = out.read_bytes()
+    ops = tmp_path / "ops.json"
+    ops.write_text('[{"op": "set-cell", "sheet": "S", "row": 1, "col": 1}]', encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["edit_xlsx.py", str(src), str(ops), "--out", str(out)])
+
+    assert edit_xlsx.main() == 2
+    assert out.read_bytes() == before
+
+
+def test_edit_xlsx_validates_the_ops_before_opening_the_workbook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bad ops file is named even when the input is not a workbook openpyxl
+    can open: the ops are checked first."""
+    _create, edit_xlsx, _inspect = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    src.write_bytes(b"this is not a workbook")
+    ops = tmp_path / "ops.json"
+    ops.write_text('[{"op": "set-cell"}]', encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv", ["edit_xlsx.py", str(src), str(ops), "--out", str(tmp_path / "o.xlsx")]
+    )
+
+    assert edit_xlsx.main() == 2
+
+
+def test_edit_xlsx_load_ops_returns_the_ops_unchanged(tmp_path: Path) -> None:
+    _create, edit_xlsx, _inspect = _import_scripts()
+    ops = [{"op": "set_cell", "sheet": "S", "row": 1, "col": 1, "value": "x", "as_text": True}]
+    path = tmp_path / "ops.json"
+    path.write_text(json.dumps(ops), encoding="utf-8")
+
+    assert edit_xlsx.load_ops(path) == ops
+
+
+def test_edit_xlsx_op_kinds_match_what_apply_ops_handles(tmp_path: Path) -> None:
+    """Every advertised kind is applied; the allow-list and the dispatcher
+    cannot drift apart without this failing."""
+    create_xlsx, edit_xlsx, _inspect = _import_scripts()
+    wb = create_xlsx.build({"sheets": [{"name": "S", "rows": [["a", "b"]]}]})
+    ops = [
+        {"op": "set_cell", "sheet": "S", "row": 2, "col": 1, "value": "c"},
+        {"op": "merge_cells", "sheet": "S", "range": "A1:B1"},
+        {"op": "rename_sheet", "old": "S", "new": "T"},
+    ]
+    assert {op["op"] for op in ops} == set(edit_xlsx.OP_KINDS)
+
+    assert edit_xlsx.apply_ops(wb, ops) == 3
+
+
+def test_edit_xlsx_an_empty_ops_array_is_still_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``[]`` is a valid list of zero ops: the workbook is copied, applied is 0."""
+    create_xlsx, edit_xlsx, _inspect = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["x"]]}]}).save(str(src))
+    out = tmp_path / "out.xlsx"
+
+    report = _run_cli(edit_xlsx, monkeypatch, capsys, src, out, [], tmp_path)
+
+    assert report == {"applied": 0}
+    assert _cell(out, 1, 1) == "x"
+
+
+def test_edit_xlsx_a_skipped_valid_op_still_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Validation is about the file's shape, not whether an op lands: a known
+    op that names a missing sheet is still skipped, not rejected."""
+    create_xlsx, edit_xlsx, _inspect = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["x"]]}]}).save(str(src))
+    out = tmp_path / "out.xlsx"
+
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [{"op": "set_cell", "sheet": "NOPE", "row": 1, "col": 1, "value": "y"}],
+        tmp_path,
+    )
+
+    assert report == {"applied": 0}
+    assert out.is_file()
+
+
+def test_edit_xlsx_still_applies_a_valid_ops_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    create_xlsx, edit_xlsx, _inspect = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["before"]]}]}).save(str(src))
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [{"op": "set_cell", "sheet": "S", "row": 1, "col": 1, "value": "after"}],
+        tmp_path,
+    )
+
+    assert report == {"applied": 1}
+    assert _cell(out, 1, 1) == "after"

@@ -408,6 +408,28 @@ def _resolve_tool_call_index(
     return max(pending_calls.keys(), default=-1) + 1
 
 
+def _mid_stream_error_event(raw: Any) -> ErrorEvent:
+    """Translate a streamed ``{"error": ...}`` chunk into an ErrorEvent.
+
+    ``code`` prefers the upstream ``code`` then ``type`` so that
+    ``classify_provider_error`` sees the same tokens it would from the
+    pre-stream HTTP-status branch (``502`` -> PROVIDER_OVERLOADED,
+    ``rate_limit_exceeded`` -> RATE_LIMITED, ...).
+    """
+    if isinstance(raw, dict):
+        code = raw.get("code")
+        if code in (None, ""):
+            code = raw.get("type")
+        message = raw.get("message")
+        if not isinstance(message, str) or not message:
+            message = json.dumps(raw, ensure_ascii=False)
+    else:
+        code = None
+        message = str(raw)
+    code_text = str(code) if code not in (None, "") else "stream_error"
+    return ErrorEvent(message=f"{code_text}: {message}", code=code_text)
+
+
 def _stream_timeout(timeout: float) -> httpx.Timeout:
     connect = _coerce_float(os.environ.get("AGENTOS_LLM_STREAM_CONNECT_TIMEOUT_SECONDS"))
     if connect <= 0:
@@ -1067,6 +1089,21 @@ class OpenAIProvider:
                         except json.JSONDecodeError:
                             continue
 
+                        if not isinstance(chunk, dict):
+                            continue
+
+                        # OpenAI-compatible gateways report a failure that
+                        # happens after the 200 as a chunk carrying ``error``
+                        # (OpenRouter: ``{"error": {"code": 502, ...}}``)
+                        # and then close the stream, usually without
+                        # ``[DONE]``. That chunk has no ``choices`` so it
+                        # used to fall straight through to the DoneEvent
+                        # below, which the runtime counted as a success
+                        # against the circuit breaker (#2118, #2214).
+                        if chunk.get("error"):
+                            yield _mid_stream_error_event(chunk["error"])
+                            return
+
                         chunk_model = chunk.get("model")
                         if chunk_model:
                             actual_model = chunk_model
@@ -1138,19 +1175,17 @@ class OpenAIProvider:
                                 thought_sig = _extract_thought_signature(tc)
                                 if idx not in pending_calls:
                                     pending_calls[idx] = {
-                                        "id": tc.get("id") or f"call_{uuid4().hex[:12]}",
+                                        "id": tc.get("id") or "",
                                         "name": function.get("name") or "",
                                         "parts": [],
                                         "thought_signature": thought_sig,
+                                        "started": False,
                                     }
-                                    emitted_stream_event = True
-                                    yield ToolUseStartEvent(
-                                        tool_use_id=pending_calls[idx]["id"],
-                                        tool_name=pending_calls[idx]["name"],
-                                    )
                                 else:
-                                    # id/name may arrive in later chunks
-                                    if tc.get("id"):
+                                    # id/name may arrive in later chunks. Once the start
+                                    # event has published an id it is kept: the later
+                                    # delta/end events must name that same id.
+                                    if tc.get("id") and not pending_calls[idx]["started"]:
                                         pending_calls[idx]["id"] = tc["id"]
                                     fname = function.get("name") or ""
                                     if fname:
@@ -1161,6 +1196,18 @@ class OpenAIProvider:
                                         pending_calls[idx]["thought_signature"] = thought_sig
 
                                 fragment = function.get("arguments") or ""
+                                # ToolUseStartEvent publishes the id, so it waits for the
+                                # real one; a synthetic id is minted only once an argument
+                                # fragment (or the end of the stream) forces the start.
+                                call = pending_calls[idx]
+                                if not call["started"] and (call["id"] or fragment):
+                                    call["id"] = call["id"] or f"call_{uuid4().hex[:12]}"
+                                    call["started"] = True
+                                    emitted_stream_event = True
+                                    yield ToolUseStartEvent(
+                                        tool_use_id=call["id"],
+                                        tool_name=call["name"],
+                                    )
                                 if fragment:
                                     pending_calls[idx]["parts"].append(fragment)
                                     emitted_stream_event = True
@@ -1182,6 +1229,10 @@ class OpenAIProvider:
 
                     # Emit ToolUseEnd for each completed call
                     for call in pending_calls.values():
+                        if not call["started"]:
+                            call["id"] = call["id"] or f"call_{uuid4().hex[:12]}"
+                            call["started"] = True
+                            yield ToolUseStartEvent(tool_use_id=call["id"], tool_name=call["name"])
                         full_json = "".join(call["parts"])
                         try:
                             args = json.loads(full_json) if full_json else {}
