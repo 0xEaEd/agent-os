@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Approvals: an approved destructive intent was cached by `(kind, target)`
+  alone, so a "rm -rf …" the operator approved in one session silently
+  answered every other session's prompt — and because `shell`'s exec gate
+  short-circuits on a cached intent before `ApprovalQueue.request()` is ever
+  called, the second delete ran with no prompt raised on any surface. The
+  elevated mode carried by the same approval was already filed under its
+  `sessionKey`; the intent it grants now is too. The cache key becomes
+  `(session, kind, target)`, and the registry declares `session_of` so
+  `drop_session_state` reaps a finished session's grants instead of leaving a
+  year-long "always" entry behind. `sessions.send` clears only its own
+  session's "once" grants, and the operator-facing `forget()` stays
+  process-wide (#2191).
 - `docx` skill: `inspect_docx.py` no longer walks tables through
   `row.cells`. That API resolves vertically merged cells against the row
   above, raising `ValueError: table has an irregular grid` on layouts
