@@ -166,6 +166,27 @@ def test_rss_reads_atom_entries(state_dir, base_url):
     assert "Atom one" in result.stdout
 
 
+def test_rss_prioritizes_atom_alternate_link_over_self(state_dir, base_url):
+    atom_multi_link = """<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:multi</id>
+    <title>Post with self and alternate</title>
+    <link rel="self" href="https://example.com/feed.atom"/>
+    <link rel="alternate" type="text/html" href="https://example.com/post-permalink"/>
+  </entry>
+</feed>"""
+    url = _feed(state_dir, base_url, "multi.xml", atom_multi_link)
+
+    result = _run(
+        "watch_rss.py", "--url", url, "--name", "m", "--first-run-reports", env_home=state_dir
+    )
+
+    assert result.returncode == 0
+    assert "https://example.com/post-permalink" in result.stdout
+    assert "https://example.com/feed.atom" not in result.stdout
+
+
 def test_rss_fails_loudly_on_a_broken_feed(state_dir, base_url):
     url = _feed(state_dir, base_url, "broken.xml", "not xml at all")
 
@@ -260,6 +281,112 @@ def test_json_fails_when_the_path_holds_no_list(state_dir, base_url):
 
     assert result.returncode == 1
     assert "Expected a list" in result.stderr
+
+
+def test_json_fails_loudly_when_no_item_carries_the_id_field(state_dir, base_url):
+    # Issue #2106: a typo'd --id-field used to drop every item with a bare
+    # ``continue`` -- exit 0, empty stdout, empty stderr -- which is exactly
+    # what a quiet feed looks like, even with --first-run-reports.
+    url = _events(
+        state_dir,
+        base_url,
+        [{"event_id": "a1", "title": "Deploy finished"}, {"event_id": "a2", "title": "Alert"}],
+    )
+    args = ("--url", url, "--name", "typo", "--items-path", "data.events", "--id-field", "evnet_id")
+
+    first = _run("watch_http_json.py", *args, "--first-run-reports", env_home=state_dir)
+    second = _run("watch_http_json.py", *args, env_home=state_dir)
+
+    for result in (first, second):
+        assert result.returncode == 1
+        assert result.stdout == ""
+        assert "evnet_id" in result.stderr
+        assert "2 item" in result.stderr
+
+
+def test_json_misconfigured_id_field_does_not_write_a_watermark(state_dir, base_url):
+    # Fixing the flag afterwards must behave like a first run: the watcher
+    # never "saw" anything, so it must not have adopted an empty feed.
+    url = _events(state_dir, base_url, [{"event_id": "a1", "title": "Deploy finished"}])
+    _run(
+        "watch_http_json.py",
+        "--url",
+        url,
+        "--name",
+        "typo",
+        "--items-path",
+        "data.events",
+        "--id-field",
+        "evnet_id",
+        env_home=state_dir,
+    )
+
+    result = _run(
+        "watch_http_json.py",
+        "--url",
+        url,
+        "--name",
+        "typo",
+        "--items-path",
+        "data.events",
+        "--id-field",
+        "event_id",
+        "--first-run-reports",
+        env_home=state_dir,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "- Deploy finished"
+
+
+def test_json_an_empty_feed_is_still_a_quiet_success(state_dir, base_url):
+    # Nothing fetched is not a configuration error; only "items without the
+    # field" is.
+    url = _events(state_dir, base_url, [])
+
+    result = _run(
+        "watch_http_json.py",
+        "--url",
+        url,
+        "--name",
+        "e",
+        "--items-path",
+        "data.events",
+        "--id-field",
+        "event_id",
+        env_home=state_dir,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+def test_json_items_that_merely_lack_the_field_are_still_skipped(state_dir, base_url):
+    # A feed where *some* items carry the id is a feed, not a typo.
+    url = _events(
+        state_dir,
+        base_url,
+        [{"event_id": "a1", "title": "Deploy finished"}, {"title": "no id on this one"}],
+    )
+
+    result = _run(
+        "watch_http_json.py",
+        "--url",
+        url,
+        "--name",
+        "p",
+        "--items-path",
+        "data.events",
+        "--id-field",
+        "event_id",
+        "--first-run-reports",
+        env_home=state_dir,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "- Deploy finished"
+    assert result.stderr == ""
 
 
 # ── URL scheme guard (Issue #1065) ──────────────────────────────────────────

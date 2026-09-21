@@ -16,7 +16,7 @@ import { useRpc } from '@/app/providers'
 import { t, tPlural } from '@/i18n'
 import '@/i18n/en/projects'
 import type { AgentEntry, RawSession } from '@/views/sessions/logic'
-import { relTimeLabel, sessionName } from '@/views/sessions/logic'
+import { relTimeLabel, sessionName, SESSIONS_LIST_LIMIT } from '@/views/sessions/logic'
 import {
   groupProjectSessionsByAgent,
   knowledgeExcerpt,
@@ -231,12 +231,13 @@ export function ProjectsPage() {
     refetchOnWindowFocus: false,
   })
 
-  // Shared cache key with SessionsPage: both views read the same list.
+  // Shared cache key with SessionsPage: both views read the same list, so
+  // the page size must match or the cache flips between two truncations.
   const sessionsQuery = useQuery<RawSession[]>({
     queryKey: ['sessions'],
     queryFn: async () => {
       await rpc.waitForConnection()
-      const data = await rpc.call<SessionsList>('sessions.list', { limit: 200 })
+      const data = await rpc.call<SessionsList>('sessions.list', { limit: SESSIONS_LIST_LIMIT })
       return data.sessions ?? []
     },
     refetchOnWindowFocus: false,

@@ -266,6 +266,13 @@ _MEMORY_SEARCH_STOP_WORDS: Final[frozenset[str]] = frozenset(
     }
 )
 _YAML_FRONTMATTER_RE = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|$)", re.S)
+# Unicode letters and digits; underscore is excluded so it still splits words.
+_MEMORY_SEARCH_WORD_RE = re.compile(r"[^\W_]+")
+# CJK ideographs and kana carry no spaces, so they are matched one char at a time,
+# and in runs: a bigram is only meaningful inside one unbroken run (see
+# ``_memory_search_query_terms``).
+_MEMORY_SEARCH_CJK_RE = re.compile(r"[一-鿿぀-ヿ]")
+_MEMORY_SEARCH_CJK_RUN_RE = re.compile(f"{_MEMORY_SEARCH_CJK_RE.pattern}+")
 
 
 def _memory_search_limit(value: object) -> int:
@@ -300,11 +307,52 @@ def _clean_memory_search_evidence(text: str) -> str:
     return cleaned or raw
 
 
+def _min_term_chars(term: str) -> int:
+    """Shortest useful term, by script.
+
+    The floor of three keeps English particles and sub-word fragments from
+    steering the excerpt, and that is the length it was tuned at. Hangul and
+    other dense scripts write a whole word in two characters, so holding them to
+    the ASCII floor drops the only term a query has.
+    """
+    return 3 if term.isascii() else 2
+
+
 def _memory_search_query_terms(query: str) -> tuple[str, ...]:
+    """Terms used to centre the evidence excerpt on the part that matched.
+
+    ``[^\\W_]+`` is ``[A-Za-z0-9]+`` widened to every Unicode letter and digit,
+    with underscore left out so an ASCII query still tokenizes exactly as it did
+    before. The old ASCII class yielded no terms at all for a Cyrillic, Greek,
+    Hangul, Arabic or Devanagari query, and mangled an accented one, so the
+    excerpt silently fell back to the head of the file instead of the line the
+    query actually hit.
+
+    CJK carries no spaces, so a run of ideographs or kana is additionally
+    expanded into unigrams and bigrams -- the shape
+    ``agentos.memory.retrieval._jaccard_similarity`` already tokenizes with.
+    A bigram is only formed inside one unbroken run: two characters separated by
+    a space, punctuation or Latin text are not adjacent, and pairing them
+    produced a term the query never contained.
+    """
     terms: list[str] = []
     seen: set[str] = set()
-    for term in re.findall(r"[A-Za-z0-9]+", query.lower()):
-        if len(term) < 3 or term in _MEMORY_SEARCH_STOP_WORDS or term in seen:
+    lowered = query.lower()
+
+    candidates = [
+        term
+        for term in _MEMORY_SEARCH_WORD_RE.findall(lowered)
+        if len(term) >= _min_term_chars(term)
+    ]
+    # Per run, not across the whole query: pairing the flat list of every CJK
+    # character in the query glued the tail of one word to the head of the next
+    # (#3180), inventing a term that appears nowhere in it.
+    for run in _MEMORY_SEARCH_CJK_RUN_RE.findall(lowered):
+        candidates.extend(run)
+        candidates.extend(run[index : index + 2] for index in range(len(run) - 1))
+
+    for term in candidates:
+        if term in _MEMORY_SEARCH_STOP_WORDS or term in seen:
             continue
         terms.append(term)
         seen.add(term)
@@ -1072,6 +1120,17 @@ def create_memory_tools(
                 old_text=None,
                 operations=operations,
             )
+            # Same contract as memory_save/memory_delete: the frozen per-session
+            # snapshot only rebuilds through this callback, so without it a
+            # committed write here keeps being invisible to the model -- the
+            # prompt keeps injecting the pre-write memory_md -- until the
+            # session ends. Gated the same way _mirror_memory_write already is,
+            # so a staged-for-approval or failed batch does not trigger a
+            # refresh for a write that never actually landed.
+            if on_memory_write is not None and _memory_write_committed(result):
+                ctx = current_tool_context.get()
+                _aid = (ctx.agent_id if ctx else None) or "main"
+                on_memory_write(_aid)
             return json.dumps(result, ensure_ascii=False)
 
         # --- Single-op path --------------------------------------------------
@@ -1114,6 +1173,12 @@ def create_memory_tools(
             old_text=old_text,
             operations=None,
         )
+        # See the batch path above: without this, a committed add/replace/
+        # remove here is invisible to the model for the rest of the session.
+        if on_memory_write is not None and _memory_write_committed(result):
+            ctx = current_tool_context.get()
+            _aid = (ctx.agent_id if ctx else None) or "main"
+            on_memory_write(_aid)
         return json.dumps(result, ensure_ascii=False)
 
     @tool(

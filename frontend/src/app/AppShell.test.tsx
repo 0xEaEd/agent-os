@@ -108,6 +108,17 @@ describe('routes', () => {
       expect(views.some((view) => view.path === shortcut.path)).toBe(true)
     }
   })
+
+  it('binds g p to Projects and gives Approvals its own distinct chord', () => {
+    const byPath = new Map(NAV_SHORTCUTS.map((ns) => [ns.path, ns.combo]))
+    expect(byPath.get('projects')).toBe('g p')
+    expect(byPath.get('approvals')).toBe('g v')
+  })
+
+  it('never assigns the same chord to two navigation shortcuts', () => {
+    const combos = NAV_SHORTCUTS.map((ns) => ns.combo)
+    expect(new Set(combos).size).toBe(combos.length)
+  })
 })
 
 // M3 — parity: router.js:29-66 — the index route renders the DEFAULT view in

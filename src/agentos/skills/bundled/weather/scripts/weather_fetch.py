@@ -27,13 +27,15 @@ def _extract_location(raw: str) -> str:
 
 def _seasonal_hint(query: str, location: str) -> str:
     lowered = f"{query} {location}".lower()
-    if "tokyo" in lowered and ("june" in lowered or "late june" in lowered):
+    has_june = bool(re.search(r"\bjune\b", lowered))
+    has_tokyo = bool(re.search(r"\btokyo\b", lowered))
+    if has_tokyo and has_june:
         return (
             "Tokyo in late June is usually tsuyu rainy season: humid, warm, "
             "frequent showers, and occasional heavy rain. Treat outdoor plans "
             "as weather-dependent and keep indoor backups."
         )
-    if "june" in lowered:
+    if has_june:
         return (
             "Requested dates appear outside the reliable short forecast window; "
             "use current forecast only as near-term context and verify seasonal "
@@ -46,7 +48,11 @@ def _seasonal_hint(query: str, location: str) -> str:
 
 
 def _fetch_wttr_json(location: str, timeout: float) -> dict[str, Any]:
-    encoded = urllib.parse.quote(location)
+    # safe="" rather than the default "/": the location is one path segment,
+    # and the entrypoint defaults it to the user's own message, so an ordinary
+    # "Dallas/Fort Worth" or a "15/09" date would otherwise split the path and
+    # address somewhere else entirely.
+    encoded = urllib.parse.quote(location, safe="")
     url = f"https://wttr.in/{encoded}?format=j1"
     req = urllib.request.Request(  # noqa: S310 - fixed trusted weather endpoint
         url,
