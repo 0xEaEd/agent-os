@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `robinhood-chain-stocks` skill: a node-level JSON-RPC failure -- a public
+  endpoint's rate limit, an internal error, a response body that is not a usable
+  result -- was counted as "the contract answered", so `uiMultiplier()` failing
+  for that reason reported `isStockToken: false` about a genuine Robinhood Stock
+  Token, withheld its price as "contract failed the Stock Token check", and told
+  the agent the address was an impersonator. SKILL.md reserves `false` for a
+  confirmed revert and `null` for "unverified, not disproven"; `null` was
+  unreachable from any JSON-RPC-level fault. `RpcError` now records whether the
+  contract answered, and only an execution revert counts (#3253).
+
 - In `robinhood-chain-stocks`, `chain_stocks.py` dropped genuine Stock Tokens
   whose 60-character-capped CoinGecko name had its `Robinhood Token` suffix
   truncated (such as IBM and SPYD), causing them to fail resolution; it now
