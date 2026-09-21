@@ -1278,12 +1278,13 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
         try:
             _mark_started()
             # A new user turn invalidates any "once" intent approvals from the
-            # previous turn. "always" entries survive per IntentApprovalCache
-            # scope semantics.
+            # previous turn *of this session*. "always" entries survive per
+            # IntentApprovalCache scope semantics, and a concurrent session's
+            # in-flight grants are none of this turn's business.
             try:
                 from agentos.sandbox.intent_cache import get_intent_cache
 
-                get_intent_cache().clear_scope("once")
+                get_intent_cache().clear_scope("once", session_key=key)
             except Exception:  # pragma: no cover — never block turn start
                 pass
             if ctx.turn_runner is None:
@@ -1520,6 +1521,37 @@ async def _handle_sessions_abort(params: dict | None, ctx: RpcContext) -> dict:
     return {"aborted": cancelled, "key": key}
 
 
+async def _create_unsent_webchat_draft(
+    ctx: RpcContext, storage: Any, key: str, params: dict[str, Any]
+) -> Any:
+    """Materialize the row for a WebUI draft session, or raise ``KeyError``.
+
+    The WebUI mints a fresh ``agent:<id>:webchat:<suffix>`` key client-side
+    (Cmd+Shift+O / ``/new``) and the row only appears on the first
+    ``chat.send``. The chip still offers "Move to project" on that draft, so
+    the patch must create the row the send would have — same agent, no
+    display name — instead of rejecting a session the user can see. Any other
+    key shape keeps the strict not-found so a typo never mints a phantom row.
+    """
+    if not _is_ephemeral_webchat_session_key(key):
+        raise KeyError(f"Session not found: {key}")
+    # Validate the target project first: a bad move must leave no row behind.
+    target = params.get("projectId", params.get("project_id"))
+    if isinstance(target, str):
+        get_project = getattr(storage, "get_project", None)
+        if get_project is not None and await get_project(target) is None:
+            raise RpcHandlerError(
+                "project.not_found",
+                f"Project '{target}' does not exist",
+                details={"projectId": target},
+            )
+    get_or_create = getattr(ctx.session_manager, "get_or_create", None)
+    if get_or_create is None:
+        raise KeyError(f"Session not found: {key}")
+    session, _created = await get_or_create(key, agent_id=parse_agent_id(key))
+    return session
+
+
 @_d.method("sessions.patch")
 async def _handle_sessions_patch(params: dict | None, ctx: RpcContext) -> dict:
     key = _require_key(params)
@@ -1531,12 +1563,12 @@ async def _handle_sessions_patch(params: dict | None, ctx: RpcContext) -> dict:
     if storage is None:
         raise RpcUnavailableError("No session storage available")
 
+    params = require_params_dict(params)
     session = await storage.get_session(key)
     if session is None:
-        raise KeyError(f"Session not found: {key}")
+        session = await _create_unsent_webchat_draft(ctx, storage, key, params)
 
     update_values: dict[str, Any] = {}
-    params = require_params_dict(params)
     field_map = {
         "displayName": "display_name",
         "model": "model",
@@ -1628,7 +1660,14 @@ async def _handle_sessions_rename(params: dict | None, ctx: RpcContext) -> dict:
     if storage is None:
         raise RpcUnavailableError("No session storage available")
 
-    session = await _resolve_session_node(storage, key)
+    session = await storage.get_session(key)
+    if session is None:
+        if _is_ephemeral_webchat_session_key(key):
+            # An unsent WebUI draft (see ``sessions.patch``): the chip offers
+            # rename before the first send has created the row.
+            session = await _create_unsent_webchat_draft(ctx, storage, key, params)
+        else:
+            session = await _resolve_session_node(storage, key)
     resolved_key = str(getattr(session, "session_key", "") or key)
     previous = getattr(session, "display_name", None)
 
@@ -1878,25 +1917,6 @@ async def _handle_sessions_reset(params: dict | None, ctx: RpcContext) -> dict[s
             "epoch": new_epoch,
         }
 
-        if not transcript:
-            updated, rotated = await ctx.session_manager.apply_intent(
-                key, SessionIntent.RESET_SAME_KEY
-            )
-            new_epoch = await _increment_and_emit_epoch(ctx, storage, key)
-            await _notify_provider_session_boundary(
-                ctx,
-                agent_id=agent_id,
-                transcript=transcript,
-                new_session_id=updated.session_id,
-            )
-            return _reset_response(
-                key,
-                rotated,
-                previous_session_id,
-                updated.session_id,
-                new_epoch,
-            )
-
     if lock is None:
         return await _run_locked()
     async with lock:
@@ -1944,23 +1964,6 @@ async def _increment_and_emit_epoch(
             new_epoch=new_epoch,
         )
     return new_epoch
-
-
-def _reset_response(
-    key: str,
-    rotated: bool,
-    previous_session_id: str,
-    session_id: str,
-    epoch: int = 0,
-) -> dict[str, Any]:
-    return {
-        "key": key,
-        "reset": True,
-        "rotated": rotated,
-        "previous_session_id": previous_session_id,
-        "session_id": session_id,
-        "epoch": epoch,
-    }
 
 
 @_d.method("sessions.delete")

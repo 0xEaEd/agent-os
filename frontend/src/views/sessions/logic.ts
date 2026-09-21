@@ -52,6 +52,13 @@ export interface AgentEntry {
 /** --tone token names used across the console design system. */
 export type Tone = 'ok' | 'warn' | 'danger' | 'info' | 'dim'
 
+/** Page size the WebUI asks sessions.list for. Larger than the CLI default
+ *  (50) because the Sessions and Projects views render, filter and count the
+ *  whole list client-side and share the ['sessions'] query cache, so both
+ *  callers must request the same window or the cache flips between two
+ *  different truncations depending on which view loaded first. */
+export const SESSIONS_LIST_LIMIT = 500
+
 // ── Key parsing ──────────────────────────────────────────────────────────────
 
 /** sessions.js:720-724 — pull the agent id from a key like

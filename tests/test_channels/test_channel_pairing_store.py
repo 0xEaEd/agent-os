@@ -148,3 +148,107 @@ def test_pairing_files_do_not_log_codes_in_control_state(tmp_path) -> None:
     control = json.loads((root / "_rate_limits.json").read_text(encoding="utf-8"))
 
     assert request.code not in json.dumps(control)
+
+
+def _last_requests(root, channel: str = "tg") -> dict[str, float]:
+    """Read the persisted rate-limit map straight off disk."""
+    control = json.loads((root / "_rate_limits.json").read_text(encoding="utf-8"))
+    scope = ChannelPairingStore._scope_key(channel)
+    return control["channels"][scope]["last_requests"]
+
+
+def test_rate_limit_stamps_expire_instead_of_accumulating_per_sender(tmp_path) -> None:
+    clock = Clock()
+    root = tmp_path / "pairing"
+    store = ChannelPairingStore(root, now=clock)
+
+    for index in range(40):
+        store.request("tg", f"stranger-{index}", profile=_profile(str(index)))
+        clock.advance(PAIRING_REQUEST_RATE_LIMIT_S * 2)
+
+    persisted = _last_requests(root)
+    assert list(persisted) == ["stranger-39"]
+    assert ChannelPairingStore(root, now=clock).snapshot("tg")["pending"] != []
+
+
+def test_rate_limit_sweep_keeps_another_sender_still_inside_the_window(tmp_path) -> None:
+    clock = Clock()
+    root = tmp_path / "pairing"
+    store = ChannelPairingStore(root, now=clock)
+    store.request("tg", "early", profile=_profile("early"))
+    store.deny("tg", "early")
+
+    # A different sender creates a request, which runs the sweep. "early" is
+    # still inside its window and must survive it -- and must still be limited.
+    clock.advance(PAIRING_REQUEST_RATE_LIMIT_S - 1)
+    assert store.request("tg", "other", profile=_profile("other")).status == "created"
+
+    assert "early" in _last_requests(root)
+    assert store.request("tg", "early", profile=_profile("early")).status == "rate_limited"
+
+
+def test_rate_limit_stamp_is_dropped_exactly_when_it_stops_limiting(tmp_path) -> None:
+    clock = Clock()
+    root = tmp_path / "pairing"
+    store = ChannelPairingStore(root, now=clock)
+    store.request("tg", "42", profile=_profile("42"))
+    store.deny("tg", "42")
+
+    clock.advance(PAIRING_REQUEST_RATE_LIMIT_S - 1)
+    store.request("tg", "sweeper-a", profile=_profile("a"))
+    assert "42" in _last_requests(root)
+
+    clock.advance(1)
+    store.request("tg", "sweeper-b", profile=_profile("b"))
+    assert "42" not in _last_requests(root)
+    # The boundary the sweep uses is the boundary the decision uses.
+    assert store.request("tg", "42", profile=_profile("42")).status == "created"
+
+
+def test_rate_limit_sweep_is_scoped_to_one_channel(tmp_path) -> None:
+    clock = Clock()
+    root = tmp_path / "pairing"
+    store = ChannelPairingStore(root, now=clock)
+    store.request("other-channel", "42", profile=_profile("42"))
+    store.deny("other-channel", "42")
+
+    clock.advance(PAIRING_REQUEST_RATE_LIMIT_S * 2)
+    store.request("tg", "unrelated", profile=_profile("unrelated"))
+
+    assert "42" in _last_requests(root, "other-channel")
+    assert store.request("other-channel", "42", profile=_profile("42")).status == "created"
+
+
+def test_rate_limit_sweep_survives_a_hand_edited_stamp(tmp_path) -> None:
+    clock = Clock()
+    root = tmp_path / "pairing"
+    store = ChannelPairingStore(root, now=clock)
+    store.request("tg", "42", profile=_profile("42"))
+
+    control_path = root / "_rate_limits.json"
+    control = json.loads(control_path.read_text(encoding="utf-8"))
+    scope = ChannelPairingStore._scope_key("tg")
+    control["channels"][scope]["last_requests"]["hand-edited"] = "not-a-timestamp"
+    control_path.write_text(json.dumps(control), encoding="utf-8")
+
+    clock.advance(PAIRING_REQUEST_RATE_LIMIT_S * 2)
+    assert store.request("tg", "99", profile=_profile("99")).status == "created"
+
+    persisted = _last_requests(root)
+    assert "hand-edited" not in persisted
+    assert list(persisted) == ["99"]
+
+
+def test_pending_limit_and_rate_limited_requests_add_no_rate_limit_stamp(tmp_path) -> None:
+    clock = Clock()
+    root = tmp_path / "pairing"
+    store = ChannelPairingStore(root, now=clock)
+    for index in range(PAIRING_MAX_PENDING):
+        store.request("tg", f"holder-{index}", profile=_profile(str(index)))
+
+    assert store.request("tg", "overflow", profile=_profile("overflow")).status == "pending_limit"
+    assert store.request("tg", "holder-0", profile=_profile("0")).status == "pending"
+
+    persisted = _last_requests(root)
+    assert "overflow" not in persisted
+    assert len(persisted) == PAIRING_MAX_PENDING

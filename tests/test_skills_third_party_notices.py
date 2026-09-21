@@ -21,6 +21,7 @@ ORIGINALS = {
     "http-fetch",
     "memory",
     "multi-search-engine",
+    "musebook",
     "music-and-singing-studio",
     "nano-pdf",
     "pdf-toolkit",
