@@ -17,6 +17,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `--signer-env` / `--rpc`), so pasting it back reproduces the same
   `PLAN_HASH` instead of being refused by `--confirm`.
 
+- `pptx` skill: `extract_text.py` read `slide.notes_slide` on slides without
+  notes, which makes python-pptx create and attach an empty notes part during a
+  read-only extraction; it now checks `has_notes_slide` first. Continuation
+  cells of merged table cells (`is_spanned`) are skipped so a merged header is
+  emitted once (#2666).
+
+- Slack channel: `send_file` passed a composite `<channel_id>|<thread_ts>`
+  target straight through as `channel_id`, so a thread upload failed with
+  `channel_not_found`. It now splits the target the way `send` does, threads
+  the upload, falls back to `slack_channel_id` when the channel part is
+  omitted, and checks file existence and size against a 1 GB `MAX_FILE_BYTES`
+  ceiling before any network call, like the other adapters (#2662).
+
+- MSTeams channel: the conversation-reference cache was written only from
+  `stop()`, so a crash, OOM kill or redeploy lost every conversation learned
+  since the previous clean stop -- and the last-activity order the
+  `reply_to=None` fallback relies on -- and proactive sends to those users
+  failed until they messaged again. The cache is now saved on every inbound
+  turn, atomically (temp file + rename), and a failed save is logged rather
+  than dropping the turn (#2658).
+
+- Email channel: attachments sent through `send_file`, or through `send` with
+  an `Attachment` whose `mime_type` was unset, were all labelled
+  `application/octet-stream`, so images and PDFs arrived as opaque downloads
+  instead of previewing inline. The type is now inferred from the filename with
+  `mimetypes.guess_type`, and `application/octet-stream` is only the fallback
+  for an unknown extension (#2656).
+
 - CLI/TUI: terminal markdown table renderer `_split_table_row` parsed cells by
   splitting on raw pipe characters, which split code spans containing pipes
   (``` `a | b` ```) and escaped pipes (`\|`) into extraneous columns and silently
@@ -278,6 +306,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- musebook skill: `save_identity` writes the identity file (the muse's private
+  key) through a `0600` temp file in the same directory, flushed and renamed
+  over the target, inside a `0700` state directory; a truncated or corrupt
+  identity file is an error instead of being silently overwritten without its
+  secret; and `--secret` is validated before it is persisted (#2674)
 - WebUI chat: "Move to project" and "Rename session" on a brand-new chat
   (Cmd+Shift+O / `/new`, before the first message) failed with "Session not
   found". The WebUI mints the session key client-side and the row only
