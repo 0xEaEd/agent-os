@@ -237,3 +237,34 @@ async def test_an_exact_name_wins_over_session_key_prefix_matches(dispatcher, ma
     other = await manager.get_session("agent:main:cli:other")
     assert other is not None
     assert other.display_name is None
+
+
+@pytest.mark.asyncio
+async def test_rename_creates_an_unsent_webchat_draft(dispatcher, manager):
+    # Cmd+Shift+O mints the key client-side and the row only appears on the
+    # first send; renaming that draft must create the row (in the key's agent)
+    # instead of failing "Session not found".
+    ctx = make_ctx(manager)
+    key = "agent:ops:webchat:draft0001"
+    assert await manager.get_session(key) is None
+
+    result = await _rename(dispatcher, ctx, key, "Speeding ticket report")
+
+    assert result["key"] == key
+    assert result["previousName"] is None
+    stored = await manager.get_session(key)
+    assert stored is not None
+    assert stored.agent_id == "ops"
+    assert stored.display_name == "Speeding ticket report"
+
+
+@pytest.mark.asyncio
+async def test_rename_still_rejects_an_unknown_non_webchat_key(dispatcher, manager):
+    # Lazy creation is only for the WebUI's ephemeral webchat keys.
+    ctx = make_ctx(manager)
+    res = await _dispatch(
+        dispatcher, ctx, "sessions.rename", {"key": "agent:main:telegram:direct:1", "name": "x"}
+    )
+    assert res.ok is False
+    assert res.error.code == "NOT_FOUND"
+    assert await manager.get_session("agent:main:telegram:direct:1") is None
