@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Memory search: MMR diversity re-ranking no longer collapses results written
+  in a non-Latin, non-CJK script. `_jaccard_similarity` tokenized snippets with
+  `[a-zA-Z0-9]+` plus a CJK pass, so a Cyrillic, Greek, Hangul, Arabic, Hebrew,
+  Devanagari or Thai snippet yielded no tokens at all and any two of them
+  scored a perfect 1.0 -- the penalty reserved for an exact duplicate, which
+  pushed genuinely different results out of the top-k with nothing logged. The
+  word class is now `[^\W_]+`, the same widening
+  `memory_tools._memory_search_query_terms` already applies. ASCII and CJK
+  tokenize exactly as before.
 
 - Tools: `grep_search` and `apply_patch` counted lines with `str.splitlines()`,
   which breaks on eleven characters rather than the newline alone. A file
