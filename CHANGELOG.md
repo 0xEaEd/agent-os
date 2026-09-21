@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Skills (`poolsdotfun-token-launcher`): `pools_write.py approve --amount 0`
+  now revokes the allowance instead of granting an unlimited one. `--amount`
+  was read for truthiness, and `parse_units("0", 18)` is `0`, so the standard
+  ERC20 revoke collapsed into `2**256 - 1` and was announced as `new
+  allowance: unlimited`. The flag's presence is now what selects the default.
+  The printed "to execute" command also carries `--amount` (and
+  `--signer-env` / `--rpc`), so pasting it back reproduces the same
+  `PLAN_HASH` instead of being refused by `--confirm`.
+
 - `pptx` skill: `extract_text.py` read `slide.notes_slide` on slides without
   notes, which makes python-pptx create and attach an empty notes part during a
   read-only extraction; it now checks `has_notes_slide` first. Continuation
