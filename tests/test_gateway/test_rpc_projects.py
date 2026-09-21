@@ -234,6 +234,72 @@ class TestSessionsProjectIntegration:
         assert node.project_id is None
 
     @pytest.mark.asyncio
+    async def test_sessions_patch_creates_unsent_webchat_draft(self, dispatcher, ctx, manager):
+        # Cmd+Shift+O mints the key client-side; no row exists until the first
+        # send. Moving that draft must create the row (in the key's agent) and
+        # attach it, not reject it as "Session not found".
+        project = await _create_project(dispatcher, ctx)
+        key = "agent:ops:webchat:draft0001"
+        assert await manager.get_session(key) is None
+
+        res = await dispatcher.dispatch(
+            "r1", "sessions.patch", {"key": key, "projectId": project["project_id"]}, ctx
+        )
+        assert res.ok is True, res.error
+        assert res.payload["updated"] == ["projectId"]
+        node = await manager.get_session(key)
+        assert node is not None
+        assert node.agent_id == "ops"
+        assert node.project_id == project["project_id"]
+
+    @pytest.mark.asyncio
+    async def test_moved_draft_survives_the_first_send(self, dispatcher, ctx, manager):
+        # The first send after the move runs as a plain continue (the WebUI
+        # drops its `new_chat` intent once the move succeeded); that path must
+        # keep the project. A `new_chat` intent against the now-existing key is
+        # the conflict the WebUI has to avoid.
+        from agentos.session.models import SessionIntent
+
+        project = await _create_project(dispatcher, ctx)
+        key = "agent:main:webchat:draft0003"
+        res = await dispatcher.dispatch(
+            "r1", "sessions.patch", {"key": key, "projectId": project["project_id"]}, ctx
+        )
+        assert res.ok is True, res.error
+
+        node, created = await manager.apply_intent(key, SessionIntent.CONTINUE, agent_id="main")
+        assert created is False
+        assert node.project_id == project["project_id"]
+        with pytest.raises(ValueError, match="session_key conflict"):
+            await manager.apply_intent(key, SessionIntent.NEW_CHAT, agent_id="main")
+
+    @pytest.mark.asyncio
+    async def test_sessions_patch_still_rejects_unknown_non_webchat_key(self, dispatcher, ctx):
+        # Lazy creation is only for the WebUI's ephemeral webchat keys; a typo
+        # on any other key shape must not mint a phantom session.
+        project = await _create_project(dispatcher, ctx)
+        res = await dispatcher.dispatch(
+            "r1",
+            "sessions.patch",
+            {"key": "agent:main:telegram:direct:123", "projectId": project["project_id"]},
+            ctx,
+        )
+        assert res.ok is False
+        assert res.error.code == "NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_sessions_patch_unknown_project_on_draft_leaves_no_row(
+        self, dispatcher, ctx, manager
+    ):
+        key = "agent:main:webchat:draft0002"
+        res = await dispatcher.dispatch(
+            "r1", "sessions.patch", {"key": key, "projectId": "missing"}, ctx
+        )
+        assert res.ok is False
+        assert res.error.code == "project.not_found"
+        assert await manager.get_session(key) is None
+
+    @pytest.mark.asyncio
     async def test_sessions_patch_moves_across_agents(self, dispatcher, ctx, manager):
         # Projects are cross-agent: any agent's session may join any project.
         other = await manager.create_project("other", "OtherProj")
