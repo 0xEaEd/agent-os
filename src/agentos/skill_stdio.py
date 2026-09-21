@@ -17,6 +17,12 @@ each batch copying the same helper into each file. #2804 asked for the sweep
 to be finished in one pass with the helper in a shared place; this is that
 place.
 
+It sits directly under ``agentos`` rather than in ``agentos.skills`` on
+purpose: importing anything from that package runs ``skills/__init__``, which
+pulls in the loader and injector and with them rich, pygments, yaml and
+structlog -- some 300 modules -- and every one of the fifty scripts would pay
+that on every invocation for a helper that needs only ``sys``.
+
 Two shapes, both from #2358's convention:
 
 * :func:`write_stdout` -- for a script that emits one result payload at the

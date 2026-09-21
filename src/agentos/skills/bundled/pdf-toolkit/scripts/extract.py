@@ -16,7 +16,7 @@ from pypdf import PdfReader
 _SRC_ROOT = str(Path(__file__).resolve().parents[5])
 if _SRC_ROOT not in sys.path:
     sys.path.insert(0, _SRC_ROOT)
-from agentos.skills.stdio import write_stdout as _write_stdout  # noqa: E402
+from agentos.skill_stdio import write_stdout as _write_stdout  # noqa: E402
 
 # pdfplumber's third mode, ``explicit``, needs ``explicit_vertical_lines`` /
 # ``explicit_horizontal_lines`` that this script has no way to supply, so it

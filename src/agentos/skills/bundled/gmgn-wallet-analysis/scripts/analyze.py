@@ -33,7 +33,7 @@ import time
 _SRC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[".."] * 5))
 if _SRC_ROOT not in sys.path:
     sys.path.insert(0, _SRC_ROOT)
-from agentos.skills.stdio import configure_utf8_stdio  # noqa: E402
+from agentos.skill_stdio import configure_utf8_stdio  # noqa: E402
 
 # ─────────────────────────── plumbing ───────────────────────────
 

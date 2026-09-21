@@ -29,7 +29,7 @@ from typing import Any
 _SRC_ROOT = str(Path(__file__).resolve().parents[5])
 if _SRC_ROOT not in sys.path:
     sys.path.insert(0, _SRC_ROOT)
-from agentos.skills.stdio import configure_utf8_stdio  # noqa: E402
+from agentos.skill_stdio import configure_utf8_stdio  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
 

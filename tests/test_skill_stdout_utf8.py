@@ -327,7 +327,7 @@ def test_rwa_lookup_result_echoes_the_query_as_utf8(monkeypatch: pytest.MonkeyPa
 
 # ── #2804: the sweep, and the guard that keeps it swept ─────────────────────
 #
-# The helper now lives in ``agentos.skills.stdio``. Every bundled script that
+# The helper now lives in ``agentos.skill_stdio``. Every bundled script that
 # touches stdout or stdin goes through it, or through one of the two inline
 # forms earlier batches established. The test below is parametrised over the
 # bundled tree at collection time, so a script added without the convention
@@ -336,7 +336,7 @@ def test_rwa_lookup_result_echoes_the_query_as_utf8(monkeypatch: pytest.MonkeyPa
 import ast  # noqa: E402
 
 SCRIPTS = sorted(BUNDLED.glob("*/scripts/*.py"))
-STDIO_IMPORT = re.compile(r"^from agentos\.skills\.stdio import ", re.M)
+STDIO_IMPORT = re.compile(r"^from agentos\.skill_stdio import ", re.M)
 INLINE_FORMS = (
     "reconfigure(encoding",  # earlier batches: reconfigure in place
     "stdout.buffer",  # earlier batches: buffer write in place
@@ -422,7 +422,7 @@ def test_the_guard_actually_sees_every_script() -> None:
 
 
 def test_the_shared_helper_is_not_copied_anywhere() -> None:
-    """#2804: one copy, in ``agentos.skills.stdio``."""
+    """#2804: one copy, in ``agentos.skill_stdio``."""
     copies = [_rel(s) for s in SCRIPTS if "def _write_stdout(" in s.read_text(encoding="utf-8")]
 
     assert copies == []
@@ -446,9 +446,9 @@ def test_the_gmgn_cli_calls_named_in_the_issue_decode_as_utf8() -> None:
         "gmgn-wallet-analysis/scripts/analyze.py",
     ):
         source = (BUNDLED / rel).read_text(encoding="utf-8")
-        assert "text=True" not in source, rel
-        # The formatter may split the call across lines; the pair is what matters.
-        assert re.search(r'encoding="utf-8",\s+errors="replace"', source), rel
+        calls = _subprocess_text_calls(source)
+        assert calls, f"{rel}: no subprocess call decodes text"
+        assert all(names_encoding for _line, names_encoding in calls), rel
 
 
 # ── behaviour, on a simulated code page, for the newly covered scripts ─────

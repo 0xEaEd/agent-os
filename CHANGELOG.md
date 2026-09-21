@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `chain_cards`, `rwa_cards`) decoded their piped payload through it too, and
   the three gmgn scripts read `gmgn-cli` output through the locale via
   `subprocess.run(text=True)`. The `_write_stdout` helper earlier batches had
-  copied into nine files now lives once in `agentos.skills.stdio`, beside a
+  copied into nine files now lives once in `agentos.skill_stdio`, beside a
   `configure_utf8_stdio()` for scripts that print progressively and a
   `SUBPROCESS_UTF8` for child output; every script imports it, and
   `tests/test_skill_stdout_utf8.py` is parametrised over the bundled tree so

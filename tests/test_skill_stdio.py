@@ -1,4 +1,4 @@
-"""``agentos.skills.stdio`` -- the shared UTF-8 stdio helpers bundled scripts use.
+"""``agentos.skill_stdio`` -- the shared UTF-8 stdio helpers bundled scripts use.
 
 Issue #2804: the same ``_write_stdout`` had been copied into nine scripts by
 four PRs, and 38 more scripts still had nothing. The helper now lives here,
@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from agentos.skills.stdio import SUBPROCESS_UTF8, configure_utf8_stdio, write_stdout
+from agentos.skill_stdio import SUBPROCESS_UTF8, configure_utf8_stdio, write_stdout
 
 NON_ASCII = "日本語のテキスト cổ phiếu — 🚀"
 
@@ -285,3 +285,23 @@ def test_subprocess_utf8_composes_with_text_true(monkeypatch: pytest.MonkeyPatch
     subprocess.run(["x"], text=True, **SUBPROCESS_UTF8)
 
     assert seen[0]["encoding"] == "utf-8"
+
+
+# ── where the module lives matters ─────────────────────────────────────────
+
+
+def test_importing_the_helper_does_not_load_the_skills_package() -> None:
+    """Every bundled script imports this on every invocation. Under
+    ``agentos.skills`` it dragged in the loader, injector, rich, pygments,
+    yaml and structlog -- some 300 modules, ~80 ms -- for a helper that needs
+    only ``sys`` (review on #2826). Measured in a fresh interpreter so this
+    process's own imports cannot mask a regression."""
+    probe = "import sys; import agentos.skill_stdio; print(' '.join(sorted(sys.modules)))"
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, encoding="utf-8", check=True
+    )
+    loaded = set(result.stdout.split())
+
+    assert "agentos.skills" not in loaded, sorted(loaded)
+    assert not any(name.startswith("agentos.skills.") for name in loaded), sorted(loaded)
+    assert not any(name in loaded for name in ("rich", "pygments", "yaml", "structlog"))

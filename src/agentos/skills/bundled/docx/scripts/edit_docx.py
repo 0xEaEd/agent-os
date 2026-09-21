@@ -35,7 +35,7 @@ from docx.text.paragraph import Paragraph
 _SRC_ROOT = str(Path(__file__).resolve().parents[5])
 if _SRC_ROOT not in sys.path:
     sys.path.insert(0, _SRC_ROOT)
-from agentos.skills.stdio import write_stdout as _write_stdout  # noqa: E402
+from agentos.skill_stdio import write_stdout as _write_stdout  # noqa: E402
 
 
 def _replace_run(para: Paragraph, run_idx: int, text: str) -> bool:
