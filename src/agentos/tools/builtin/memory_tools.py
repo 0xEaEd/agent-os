@@ -268,8 +268,11 @@ _MEMORY_SEARCH_STOP_WORDS: Final[frozenset[str]] = frozenset(
 _YAML_FRONTMATTER_RE = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|$)", re.S)
 # Unicode letters and digits; underscore is excluded so it still splits words.
 _MEMORY_SEARCH_WORD_RE = re.compile(r"[^\W_]+")
-# CJK ideographs and kana carry no spaces, so they are matched one char at a time.
+# CJK ideographs and kana carry no spaces, so they are matched one char at a time,
+# and in runs: a bigram is only meaningful inside one unbroken run (see
+# ``_memory_search_query_terms``).
 _MEMORY_SEARCH_CJK_RE = re.compile(r"[一-鿿぀-ヿ]")
+_MEMORY_SEARCH_CJK_RUN_RE = re.compile(f"{_MEMORY_SEARCH_CJK_RE.pattern}+")
 
 
 def _memory_search_limit(value: object) -> int:
@@ -328,6 +331,9 @@ def _memory_search_query_terms(query: str) -> tuple[str, ...]:
     CJK carries no spaces, so a run of ideographs or kana is additionally
     expanded into unigrams and bigrams -- the shape
     ``agentos.memory.retrieval._jaccard_similarity`` already tokenizes with.
+    A bigram is only formed inside one unbroken run: two characters separated by
+    a space, punctuation or Latin text are not adjacent, and pairing them
+    produced a term the query never contained.
     """
     terms: list[str] = []
     seen: set[str] = set()
@@ -338,9 +344,12 @@ def _memory_search_query_terms(query: str) -> tuple[str, ...]:
         for term in _MEMORY_SEARCH_WORD_RE.findall(lowered)
         if len(term) >= _min_term_chars(term)
     ]
-    cjk = _MEMORY_SEARCH_CJK_RE.findall(lowered)
-    candidates.extend(cjk)
-    candidates.extend(cjk[index] + cjk[index + 1] for index in range(len(cjk) - 1))
+    # Per run, not across the whole query: pairing the flat list of every CJK
+    # character in the query glued the tail of one word to the head of the next
+    # (#3180), inventing a term that appears nowhere in it.
+    for run in _MEMORY_SEARCH_CJK_RUN_RE.findall(lowered):
+        candidates.extend(run)
+        candidates.extend(run[index : index + 2] for index in range(len(run) - 1))
 
     for term in candidates:
         if term in _MEMORY_SEARCH_STOP_WORDS or term in seen:
@@ -1111,6 +1120,17 @@ def create_memory_tools(
                 old_text=None,
                 operations=operations,
             )
+            # Same contract as memory_save/memory_delete: the frozen per-session
+            # snapshot only rebuilds through this callback, so without it a
+            # committed write here keeps being invisible to the model -- the
+            # prompt keeps injecting the pre-write memory_md -- until the
+            # session ends. Gated the same way _mirror_memory_write already is,
+            # so a staged-for-approval or failed batch does not trigger a
+            # refresh for a write that never actually landed.
+            if on_memory_write is not None and _memory_write_committed(result):
+                ctx = current_tool_context.get()
+                _aid = (ctx.agent_id if ctx else None) or "main"
+                on_memory_write(_aid)
             return json.dumps(result, ensure_ascii=False)
 
         # --- Single-op path --------------------------------------------------
@@ -1153,6 +1173,12 @@ def create_memory_tools(
             old_text=old_text,
             operations=None,
         )
+        # See the batch path above: without this, a committed add/replace/
+        # remove here is invisible to the model for the rest of the session.
+        if on_memory_write is not None and _memory_write_committed(result):
+            ctx = current_tool_context.get()
+            _aid = (ctx.agent_id if ctx else None) or "main"
+            on_memory_write(_aid)
         return json.dumps(result, ensure_ascii=False)
 
     @tool(

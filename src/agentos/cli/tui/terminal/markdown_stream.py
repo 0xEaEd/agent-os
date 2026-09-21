@@ -73,7 +73,13 @@ _THINK_TEXT_STYLE = "dim italic"
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _QUOTE_RE = re.compile(r"^>\s?(.*)$")
 _RULE_RE = re.compile(r"^(?:\*\s*){3,}$|^(?:-\s*){3,}$|^(?:_\s*){3,}$")
-_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+# The whole opening run is captured, because what closes a fenced block is
+# the opener's own marker: CommonMark requires the closing fence to use the
+# same character and be at least as long. A bare toggle over "any fence
+# line" let a ``~~~`` inside a ```` ``` ```` block end it, after which the
+# real closing fence opened a *new* block -- prose rendered as code and code
+# as prose, for the rest of the turn.
+_FENCE_RE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})")
 _LIST_RE = re.compile(r"^(\s*)([-*+]|\d+\.)\s+(.*)$")
 
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
@@ -167,6 +173,18 @@ def _render_inline(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _closes_fence(marker: str, line: str) -> bool:
+    """Whether *line* is the closing fence for a block opened with *marker*.
+
+    CommonMark: the closing fence uses the same character as the opener, is
+    at least as long, and carries no info string -- which is what lets a
+    ```` ``` ```` block quote a ``~~~`` one, and a ````` ```` ````` block
+    quote a ```` ``` ```` one.
+    """
+    stripped = line.strip()
+    return len(stripped) >= len(marker) and stripped == marker[0] * len(stripped)
+
+
 def _render_code_line(line: str) -> str:
     """A line inside a fenced code block: uniform code style, escaped."""
     return _styled(_rich_escape(line) or " ", _CODE_STYLE)
@@ -195,7 +213,12 @@ def _render_think_line(line: str) -> str:
 # This is the one intentional exception to the write-once contract, and it
 # is the same trade-off every streaming terminal markdown renderer makes.
 
-_TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-{3,}:?$")
+# GFM's delimiter cell is *one or more* hyphens with an optional leading
+# and/or trailing colon, so `-`, `--`, `:-`, `-:` and `:-:` are all valid.
+# Demanding three eliminated the compact spellings, and a table written that
+# way was not recognised as a table at all: the raw pipes and dashes were
+# printed to the terminal as prose.
+_TABLE_SEPARATOR_CELL_RE = re.compile(r"^:?-+:?$")
 _TABLE_MIN_COL_WIDTH = 5
 _TABLE_PAD = 1  # spaces on each side of a cell
 
@@ -252,8 +275,12 @@ def _split_table_row(line: str) -> list[str]:
 
 
 def _is_table_separator_row(line: str) -> bool:
+    # ``fullmatch`` states the intent the trailing ``$`` was carrying. Same
+    # result for every cell reaching here (they are stripped, so the one case
+    # ``$`` is laxer about -- a trailing newline -- cannot occur), but it keeps
+    # the check correct if the anchor is ever dropped from the pattern.
     cells = _split_table_row(line)
-    return bool(cells) and all(_TABLE_SEPARATOR_CELL_RE.match(c) for c in cells)
+    return bool(cells) and all(_TABLE_SEPARATOR_CELL_RE.fullmatch(c) for c in cells)
 
 
 def _parse_table_alignment(line: str, ncols: int) -> list[str]:
@@ -540,6 +567,9 @@ class MarkdownStreamRenderer:
         self._enabled = enabled
         self._pending = ""
         self._in_fence = False
+        # The open block's own fence run, so the closing fence can be matched
+        # against it rather than against "any fence line".
+        self._fence_marker = ""
         # Inside a ``<think>`` block (reasoning models). Body lines render
         # dim-italic with a near-gray bar until the closing tag.
         self._in_think = False
@@ -676,14 +706,22 @@ class MarkdownStreamRenderer:
         return rendered
 
     def _render_line_inner(self, line: str) -> str | None:
-        # Fence open/close toggles state; the fence line itself is hidden
-        # so the block reads as one continuous region.
-        if _FENCE_RE.match(line):
-            self._in_fence = not self._in_fence
+        # Fence open/close; the fence line itself is hidden so the block
+        # reads as one continuous region. What closes the block is the
+        # opener's own marker, not any fence line -- see _closes_fence.
+        fence = _FENCE_RE.match(line)
+        if self._in_fence:
+            if fence is not None and _closes_fence(self._fence_marker, line):
+                self._in_fence = False
+                self._fence_marker = ""
+                return ""
+            # A fence of the other character, or a shorter run: body text.
+            return _render_code_line(line)
+        if fence is not None:
+            self._in_fence = True
+            self._fence_marker = fence.group("fence")
             table_out = self._flush_table()
             return (table_out + "\n") if table_out else ""
-        if self._in_fence:
-            return _render_code_line(line)
         # Stray think-tag artifacts (a bare ``<>`` / ``</>`` line) are
         # hidden in every state; inside a think block they also close it.
         # Checked after fences so code stays literal, and anchored to the

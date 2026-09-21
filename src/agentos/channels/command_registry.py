@@ -76,7 +76,14 @@ class CommandRegistry:
         # Everything after the command word. Most factories ignore it; the ones
         # that take an argument (`/use <model-id>`) would otherwise have no way
         # to see what the user typed.
-        _head, _sep, args = message_content.strip().partition(" ")
+        #
+        # Split on any whitespace, exactly as ``match`` found the command word:
+        # a literal `" "` disagreed with it for a tab or a newline, so a message
+        # the gate had already accepted as a command ran with its argument
+        # dropped or cut short -- and an empty argument is a real instruction to
+        # `/rename` (clear the name) and to `/plan` (turn plan mode on).
+        parts = message_content.strip().split(maxsplit=1)
+        args = parts[1] if len(parts) > 1 else ""
         params = params_factory(envelope, args.strip())
         if method == "chat.history":
             params = {**params, "limit": 10}
