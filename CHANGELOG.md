@@ -12,6 +12,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   whose 60-character-capped CoinGecko name had its `Robinhood Token` suffix
   truncated (such as IBM and SPYD), causing them to fail resolution; it now
   recognizes bullet-prefixed truncated suffixes and strips them in `_clean_name`.
+- Telegram: `is_group_mentioned`'s plain-text check matched the bot's
+  username as a substring, so `@helper` was found inside another bot's
+  `@helperbot2` and inside `someone@helperdesk.com`, and the bot replied in
+  groups to messages that never addressed it. That check runs after every
+  entity has been examined and none was us -- not only when a message has no
+  entities -- so a `mention` entity naming a different bot reached it too.
+  The username must now sit on a word boundary at both ends: a word
+  character after it is a longer username, and one before the `@` is an
+  address (#2464).
 - Sandbox: `read_file` on `~/.docker/config.json` no longer returns Docker
   registry credentials. The denylist entry read `~/.docker/config`, and the
   prefix match is anchored at a path segment boundary, so it matched only a
