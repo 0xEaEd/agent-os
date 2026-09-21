@@ -127,6 +127,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   in `_seasonal_hint`, causing locations like Juneau to falsely trigger seasonal
   date-window warnings; it now matches month names with word boundaries
   (#2510).
+- Sandbox: `read_file` on `~/.docker/config.json` no longer returns Docker
+  registry credentials. The denylist entry read `~/.docker/config`, and the
+  prefix match is anchored at a path segment boundary, so it matched only a
+  file literally named `config` — a path Docker never writes. The entry is
+  now the `~/.docker` directory, matching the neighbouring `~/.aws` and
+  `~/.kube` entries and the `.docker` the redaction layer already carried.
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always
