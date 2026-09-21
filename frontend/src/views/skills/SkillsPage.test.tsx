@@ -7,6 +7,7 @@ import { SkillsPage } from './SkillsPage'
 import bankrSymbolUrl from '@/assets/bankr-symbol.svg'
 import capminalSymbolUrl from '@/assets/capminal-symbol.svg'
 import robinhoodSymbolUrl from '@/assets/robinhood-symbol.png'
+import museSymbolUrl from '@/assets/muse-symbol.png'
 
 vi.mock('sonner', () => ({
   toast: {
@@ -279,6 +280,17 @@ const ROBINHOOD_NEEDS = {
   missing_bins: ['rh'],
 }
 
+// The second bundled partner. Nothing about the name says "musebook" to the
+// client; the tab is populated from `publisher.id` alone.
+const MUSEBOOK_READY = {
+  name: 'musebook',
+  description: 'Join and take part in the muse boards.',
+  layer: 'bundled',
+  acquisition: { kind: 'shipped' },
+  publisher: { id: 'muse', name: 'Muse', url: 'https://musebook.lol', logo: '' },
+  status: 'ready',
+}
+
 // A catalog row the empty-query browse does NOT return — the case where the
 // installed row used to vanish the moment the search was cleared.
 const SEARCH_ONLY_ITEM = {
@@ -425,6 +437,7 @@ describe('SkillsPage', () => {
     expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual([
       'Installed',
       'Robinhood',
+      'Muse',
       'Bankr',
       'Aeon',
       'Capminal',
@@ -896,6 +909,49 @@ describe('SkillsPage', () => {
       await screen.findByRole('status', { name: 'Loading Robinhood skills' }),
     ).toBeInTheDocument()
     expect(screen.queryByText(/Robinhood skills are on the way/i)).not.toBeInTheDocument()
+  })
+
+  // ── Muse: the second bundled-partner tab ────────────────────────────
+  // Same panel as Robinhood, keyed by `publisher.id`. These pin the parts that
+  // are per-brand — the tab artwork, the intro copy, the notice, and that the
+  // skill lands here and not under Robinhood.
+  it('the Muse tab wears its own mark and shows the empty state', async () => {
+    wireRpc()
+    renderPage()
+    await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
+    expect(
+      within(screen.getByRole('tab', { name: 'Muse' }))
+        .getByRole('presentation')
+        .getAttribute('src'),
+    ).toBe(museSymbolUrl)
+
+    fireEvent.click(screen.getByRole('tab', { name: /Muse/i }))
+    expect(await screen.findByText(/Muse skills are on the way/i)).toBeInTheDocument()
+    expect(screen.getByLabelText('Search Muse skills')).toBeInTheDocument()
+    expect(screen.queryByText(/Robinhood skills are on the way/i)).not.toBeInTheDocument()
+  })
+
+  it('the Muse tab lists only musebook-published skills and warns that boards are public', async () => {
+    wireRpc({ skills: [MUSEBOOK_READY, ROBINHOOD_READY] })
+    renderPage()
+    fireEvent.click(screen.getByRole('tab', { name: /Muse/i }))
+
+    expect(await screen.findByRole('heading', { name: 'Muse skills' })).toBeInTheDocument()
+    expect(screen.getByText(/musebook\.lol, the text board/i)).toBeInTheDocument()
+    const note = screen.getByRole('note')
+    expect(note).toHaveTextContent('IMPORTANT:')
+    expect(note).toHaveTextContent(/Posts are permanent/i)
+    expect(note).toHaveTextContent(/never links on its own/i)
+
+    const card = await screen.findByLabelText('Muse skill musebook')
+    expect(card).toHaveClass('sk-rcard', 'sk-rcard--partner')
+    expect(within(card).getByRole('presentation')).toHaveAttribute('src', museSymbolUrl)
+    expect(within(card).getByText('Muse')).toBeInTheDocument()
+    expect(within(card).getByText('Ready')).toBeInTheDocument()
+    expect(
+      screen.queryByLabelText('Robinhood skill robinhood-rwa-addresses'),
+    ).not.toBeInTheDocument()
+    expect(callsFor('skills.search')).toHaveLength(0)
   })
 
   it('shows the skills load failure inside the Robinhood source panel', async () => {

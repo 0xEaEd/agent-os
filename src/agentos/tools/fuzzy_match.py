@@ -241,7 +241,14 @@ def _map_collapsed_whitespace(text: str) -> tuple[str, list[int], list[int]]:
 
 
 def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
-    """Every non-overlapping occurrence of *needle*, as (start, end) spans."""
+    """Every occurrence of *needle*, as (start, end) spans, overlaps included.
+
+    Advancing the cursor past the whole needle would hide an occurrence that
+    starts inside the previous one, and hiding it turns a genuinely ambiguous
+    edit into a silent one: three identical adjacent lines contain a two-line
+    pattern twice, and the caller has to be told so. ``_drop_overlaps`` keeps
+    the replacement pass non-overlapping; counting is what needs the truth.
+    """
 
     if not needle:
         return []
@@ -252,7 +259,7 @@ def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
         if found < 0:
             return spans
         spans.append((found, found + len(needle)))
-        cursor = found + len(needle)
+        cursor = found + 1
 
 
 def _project_spans(
@@ -372,7 +379,48 @@ def _strategy_trimmed_boundary(content: str, pattern: str) -> list[tuple[int, in
     trimmed = pattern.strip()
     if not trimmed or trimmed == pattern:
         return []
-    return _find_all(content, trimmed)
+    # ``trimmed`` starts and ends on non-whitespace, so a raw hit begins after
+    # the line's indentation and stops before its newline. This strategy is
+    # indent-blind, and ``_resolve_replacement`` reads the landing indent off
+    # the span's first line: a mid-line span reads as indent "" and every line
+    # of new_text after the first was dedented out of its body, while
+    # new_text's own trailing newline became a net insertion. Grow each span
+    # back over the whitespace ``strip()`` removed so it is line-aligned like
+    # every other indent-blind strategy's.
+    leading = pattern[: len(pattern) - len(pattern.lstrip())]
+    trailing = pattern[len(pattern.rstrip()) :]
+    spans: list[tuple[int, int]] = []
+    for start, end in _find_all(content, trimmed):
+        if leading:
+            start = _grow_to_line_start(content, start)
+        if "\n" in trailing:
+            end = _grow_over_line_end(content, end)
+        spans.append((start, end))
+    return spans
+
+
+def _grow_to_line_start(content: str, offset: int) -> int:
+    """Move *offset* back to the start of its line if only whitespace precedes it."""
+
+    cursor = offset
+    while cursor > 0 and content[cursor - 1] in " \t":
+        cursor -= 1
+    if cursor == 0 or content[cursor - 1] == "\n":
+        return cursor
+    return offset
+
+
+def _grow_over_line_end(content: str, offset: int) -> int:
+    """Move *offset* past the line's newline if only whitespace follows it."""
+
+    cursor = offset
+    while cursor < len(content) and content[cursor] in " \t":
+        cursor += 1
+    if content.startswith("\r\n", cursor):
+        return cursor + 2
+    if cursor < len(content) and content[cursor] == "\n":
+        return cursor + 1
+    return offset
 
 
 def _strategy_indent_agnostic(content: str, pattern: str) -> list[tuple[int, int]]:
@@ -613,17 +661,22 @@ def fuzzy_find_and_replace(
         matcher = _STRATEGY_FUNCTIONS.get(strategy)
         if matcher is None:
             continue
-        spans = _drop_overlaps(matcher(content, old_text))
+        # Ambiguity is decided on every occurrence the strategy found;
+        # ``_drop_overlaps`` only exists to keep the replacement pass from
+        # splicing two regions that share bytes. Deciding on the trimmed list
+        # let two overlapping occurrences read as one certain match.
+        found = matcher(content, old_text)
+        spans = _drop_overlaps(found)
         if not spans:
             continue
 
-        if len(spans) > 1 and not replace_all:
+        if len(found) > 1 and not replace_all:
             raise AmbiguousMatchError(
-                f"old_text matches {len(spans)} locations (strategy: {strategy});"
+                f"old_text matches {len(found)} locations (strategy: {strategy});"
                 " be more specific",
                 strategy=strategy,
-                match_count=len(spans),
-                lines=[_line_number(content, start) for start, _ in spans],
+                match_count=len(found),
+                lines=[_line_number(content, start) for start, _ in found],
             )
 
         # Right to left, so each replacement leaves earlier offsets valid.

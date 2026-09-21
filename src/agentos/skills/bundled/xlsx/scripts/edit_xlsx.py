@@ -34,6 +34,33 @@ from openpyxl import load_workbook
 _MISSING = object()
 
 
+def _write_stdout(text: str) -> None:
+    """Write *text* to stdout as UTF-8, surviving a non-UTF-8 stdout encoding.
+
+    ``print`` encodes through ``sys.stdout.encoding``, which on Windows is the
+    console code page (cp1252, cp936, cp932) and not UTF-8, so a character
+    outside that page raises ``UnicodeEncodeError`` before a byte is written —
+    the document decides whether the skill runs. The binary buffer is therefore
+    the primary path, matching the ``--out`` branch, which already passes
+    ``encoding="utf-8"``. A stream without a usable ``buffer`` — a wrapper, or a
+    captured stdout — still gets the text, escaped rather than lost.
+    """
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        try:
+            buffer.write(text.encode("utf-8"))
+            buffer.flush()
+            return
+        except (AttributeError, OSError, ValueError):
+            # Buffer closed or not writable — fall through to the text layer.
+            pass
+
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    # Lossless: unencodable chars become \\uXXXX escapes, not "?".
+    sys.stdout.write(text.encode(encoding, errors="backslashreplace").decode(encoding))
+    sys.stdout.flush()
+
+
 def _coerce(value: Any, as_text: bool) -> Any:
     """Return the value to assign, honouring an explicit ``as_text`` request.
 
@@ -62,6 +89,40 @@ def _coerce(value: Any, as_text: bool) -> Any:
         except ValueError:
             return value
     return value
+
+
+#: Every op kind ``apply_ops`` knows. An op outside this set is a caller
+#: mistake, not a no-op: the ops file is written by the agent one step before
+#: the call, so ``set-cell`` for ``set_cell`` is a routine slip.
+OP_KINDS = ("set_cell", "rename_sheet", "merge_cells")
+
+
+class OpsError(ValueError):
+    """An ops file that cannot be used. Reported as ``error:`` / exit 2, never
+    as a traceback: the caller passed bad input, the script did not break."""
+
+
+def load_ops(path: Path) -> list[dict[str, Any]]:
+    """Read and validate the ops file, or raise :class:`OpsError`.
+
+    Validation happens before the workbook is opened, so an unusable ops file
+    cannot leave a half-applied workbook behind, and ``--out`` is never touched.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OpsError(f"ops {path} is not valid JSON: {exc}") from exc
+    if not isinstance(raw, list):
+        raise OpsError(f"ops {path} must be a JSON array of operations, got {type(raw).__name__}")
+    for index, op in enumerate(raw):
+        if not isinstance(op, dict):
+            raise OpsError(f"op {index} must be an object, got {type(op).__name__}")
+        kind = op.get("op")
+        if kind not in OP_KINDS:
+            raise OpsError(
+                f"op {index} has unknown kind {kind!r}; expected one of {', '.join(OP_KINDS)}"
+            )
+    return raw
 
 
 def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
@@ -130,13 +191,16 @@ def main() -> int:
     if not args.ops.is_file():
         print(f"error: ops {args.ops} not found", file=sys.stderr)
         return 2
-    raw = json.loads(args.ops.read_text(encoding="utf-8"))
-    ops = raw if isinstance(raw, list) else []
+    try:
+        ops = load_ops(args.ops)
+    except OpsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     wb = load_workbook(filename=str(args.input))
     applied = apply_ops(wb, ops)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(args.out))
-    print(json.dumps({"applied": applied}, ensure_ascii=False))
+    _write_stdout(json.dumps({"applied": applied}, ensure_ascii=False) + "\n")
     return 0
 
 

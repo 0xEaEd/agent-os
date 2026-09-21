@@ -138,7 +138,16 @@ def create_gateway_app(
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
-    async def root(request: Request) -> RedirectResponse:
+    async def root(request: Request) -> Response:
+        if not config.control_ui.enabled:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "service": "agentos-gateway",
+                    "version": __version__,
+                    "control_ui": False,
+                }
+            )
         return RedirectResponse(url=f"{config.control_ui.base_path}/")
 
     async def ready(request: Request) -> JSONResponse:

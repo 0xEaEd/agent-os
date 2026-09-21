@@ -346,8 +346,8 @@ agentos configure router --router disabled
 agentos configure search --search-provider brave --api-key-env BRAVE_SEARCH_API_KEY
 agentos configure x-search --api-key-env XAI_API_KEY
 agentos configure channels
-agentos configure image-generation
-agentos configure memory-embedding
+agentos configure image --image-provider openai --primary openai/gpt-image-1 --api-key-env OPENAI_API_KEY
+agentos configure memory --memory-provider local --onnx-dir ~/.agentos/models/embeddings/google-embeddinggemma-300m
 ```
 
 Supported sections:
