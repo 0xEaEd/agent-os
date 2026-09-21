@@ -233,6 +233,13 @@ def classify_provider_error(
             return ProviderFailureKind.INSUFFICIENT_CREDITS
         if status_code == 429 or "rate_limit_error" in text:
             return ProviderFailureKind.RATE_LIMITED
+        # Anthropic answers an unknown model with 404 / not_found_error. The
+        # OpenAI-compat branch above already routes that to the fallback chain
+        # (#1359); this branch had no 404 check at all, so the same failure fell
+        # through to UNKNOWN -> SURFACE and halted the turn instead of trying
+        # the next configured model.
+        if status_code == 404 or "not_found_error" in text:
+            return ProviderFailureKind.MODEL_NOT_FOUND
         if status_code in _GATEWAY_TRANSIENT_STATUS_CODES or "overloaded_error" in text:
             return ProviderFailureKind.PROVIDER_OVERLOADED
         if "invalid_request_error" in text:

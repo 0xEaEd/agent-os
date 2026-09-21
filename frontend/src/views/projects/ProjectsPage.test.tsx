@@ -126,6 +126,12 @@ describe('ProjectsPage', () => {
     expect(screen.getByText(/1 session ·/)).toBeInTheDocument()
   })
 
+  it('loads sessions with the same page size as SessionsPage (shared cache key)', async () => {
+    wireRpc()
+    renderPage()
+    await waitFor(() => expect(mockRpc.call).toHaveBeenCalledWith('sessions.list', { limit: 500 }))
+  })
+
   it('shows the empty state when there are no projects', async () => {
     wireRpc({ projects: [] })
     renderPage()

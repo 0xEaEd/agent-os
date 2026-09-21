@@ -146,6 +146,15 @@ _STRONG_NAME_SEGMENTS: frozenset[str] = frozenset(
         "secret",
         "password",
         "passwd",
+        # A passphrase is a password that happens to be a sentence, and it is
+        # the one credential no shape rule can ever catch: `_is_secret_literal_value`
+        # requires a single opaque run with no whitespace, so
+        # ``correct horse battery staple`` is invisible to the value pass. The
+        # name is the only thing standing between it and the model. The word
+        # sits alongside ``password`` and ``passwd`` rather than being treated
+        # more conservatively than they are — ``password_required`` and
+        # ``passwd_hint`` are already recognized today.
+        "passphrase",
         "apikey",
         "credential",
         "credentials",
@@ -168,6 +177,12 @@ _QUALIFIED_NAME_PAIRS: frozenset[tuple[str, str]] = frozenset(
         ("auth", "token"),
         ("auth", "key"),
         ("bearer", "token"),
+        # ``token`` is qualified by what issues it. ``bot`` was missing, so
+        # ``SLACK_BOT_TOKEN`` / ``DISCORD_BOT_TOKEN`` / ``TELEGRAM_BOT_TOKEN``
+        # were not credential names at all — and for Discord and Telegram the
+        # value pass does not cover them either, so a correctly-shaped bot
+        # token reached the model verbatim.
+        ("bot", "token"),
         ("client", "secret"),
         ("private", "key"),
         ("secret", "key"),
@@ -183,14 +198,23 @@ _QUALIFIED_NAME_PAIRS: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
-_NAME_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
+_NAME_SPLIT_RE = re.compile(
+    # Separators, then the two camel-case boundaries. The second one is what
+    # makes an all-caps acronym split from a Capitalised word after it:
+    # `APISecret` has no lower-to-upper transition, so without it the whole
+    # name stays one segment and matches nothing, while `apiSecret`,
+    # `ApiSecret`, `API_SECRET` and `api-secret` all match. Same credential,
+    # four spellings, one of them leaked.
+    r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
+)
 
 
 def _name_segments(name: str) -> list[str]:
     """Split an identifier into lower-cased word segments.
 
-    Handles the three casings a credential name arrives in: ``CAP_API_KEY``,
-    ``x-cap-api-key`` and ``capApiKey`` all reduce to the same segments.
+    Handles the casings a credential name arrives in: ``CAP_API_KEY``,
+    ``x-cap-api-key``, ``capApiKey`` and ``APISecret`` all reduce to the same
+    segments.
     """
     return [segment.lower() for segment in _NAME_SPLIT_RE.split(name) if segment]
 

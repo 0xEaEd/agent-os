@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 
 from agentos.engine.fallback import FallbackPolicy, ProviderErrorKind
-from agentos.provider.failures import ProviderFailureKind, classify_provider_error
+from agentos.provider.failures import (
+    ProviderFailureKind,
+    ProviderRecoveryAction,
+    classify_provider_error,
+    decide_recovery_action,
+)
 
 
 @pytest.mark.parametrize(
@@ -425,4 +430,93 @@ def test_policy_markers_do_not_capture_unrelated_failures(
     assert (
         classify_provider_error(provider, status_code, raw_code=raw_code, message=message)
         is expected
+    )
+
+
+_ANTHROPIC_FAMILY = ["anthropic", "minimax", "minimax_cn", "minimax_global"]
+
+
+@pytest.mark.parametrize("provider", _ANTHROPIC_FAMILY)
+def test_anthropic_family_404_is_a_missing_model_not_unknown(provider: str) -> None:
+    """A 404 from an Anthropic-shaped provider means the model is not there."""
+    assert (
+        classify_provider_error(
+            provider,
+            404,
+            raw_code="not_found_error",
+            message="model: claude-3-5-sonnet-fake not found",
+        )
+        is ProviderFailureKind.MODEL_NOT_FOUND
+    )
+
+
+@pytest.mark.parametrize("provider", _ANTHROPIC_FAMILY)
+def test_anthropic_family_not_found_error_without_a_status_code(provider: str) -> None:
+    """Transports that surface the error code but no status still classify."""
+    assert (
+        classify_provider_error(provider, None, raw_code="not_found_error")
+        is ProviderFailureKind.MODEL_NOT_FOUND
+    )
+
+
+@pytest.mark.parametrize("provider", _ANTHROPIC_FAMILY)
+def test_anthropic_family_bare_404_classifies_without_a_body(provider: str) -> None:
+    """A 404 with an empty body is still a model-or-base-url problem."""
+    assert classify_provider_error(provider, 404, message="") is ProviderFailureKind.MODEL_NOT_FOUND
+
+
+def test_anthropic_missing_model_reaches_the_fallback_chain() -> None:
+    """The point of the classification: SURFACE would halt the session."""
+    kind = classify_provider_error("anthropic", 404, raw_code="not_found_error")
+
+    assert decide_recovery_action(kind) is ProviderRecoveryAction.FALLBACK_PROVIDER
+
+
+@pytest.mark.parametrize(
+    ("status_code", "raw_code", "expected"),
+    [
+        (401, "authentication_error", ProviderFailureKind.AUTH_INVALID),
+        (403, "authentication_error", ProviderFailureKind.AUTH_INVALID),
+        (402, "billing_error", ProviderFailureKind.INSUFFICIENT_CREDITS),
+        (429, "rate_limit_error", ProviderFailureKind.RATE_LIMITED),
+        (529, "overloaded_error", ProviderFailureKind.PROVIDER_OVERLOADED),
+        (400, "invalid_request_error", ProviderFailureKind.BAD_REQUEST),
+    ],
+)
+def test_anthropic_other_failure_kinds_keep_their_classification(
+    status_code: int, raw_code: str, expected: ProviderFailureKind
+) -> None:
+    """The new 404 arm sits between rate limiting and the transient set.
+
+    Inserting a branch into an ordered if-chain can shadow the arms after it;
+    these lock every neighbour that was already classified.
+    """
+    assert classify_provider_error("anthropic", status_code, raw_code=raw_code) is expected
+
+
+def test_anthropic_404_does_not_outrank_an_exhausted_credit_balance() -> None:
+    """Credit exhaustion is checked before the provider branches and stays first.
+
+    A depleted account needs FAIL-style visibility, not a silent hop to the
+    next provider that will bill the same card.
+    """
+    assert (
+        classify_provider_error(
+            "anthropic", 404, raw_code="billing_error", message="credit balance is too low"
+        )
+        is ProviderFailureKind.INSUFFICIENT_CREDITS
+    )
+
+
+@pytest.mark.parametrize("provider", ["ollama", "some_unregistered_provider"])
+def test_not_found_error_stays_unknown_outside_the_anthropic_branch(provider: str) -> None:
+    """The 404 arm is scoped to Anthropic-shaped providers, not global.
+
+    A global 404 rule would reclassify every provider that answers an ordinary
+    missing resource with 404 and send the turn to a second provider that
+    cannot serve it either.
+    """
+    assert (
+        classify_provider_error(provider, 404, raw_code="not_found_error")
+        is ProviderFailureKind.UNKNOWN
     )

@@ -333,11 +333,21 @@ class TaskRuntime:
         # gateway-dispatched turns. These guard short transcript/session state
         # mutations only.
         # Bounded: a lock that is currently held is never evicted, so the
-        # ceiling can only reclaim sessions that are genuinely idle.
+        # ceiling can only reclaim sessions that are genuinely idle. "Held" is
+        # not enough on its own. A turn only *holds* its write lock for an
+        # instant but relies on the object's identity for its whole run (the
+        # bypass contextvars record ``id(write_lock)``), and a queued turn's
+        # execution lock reads as unlocked between the previous turn's
+        # ``release()`` and the woken waiter re-locking it. So every turn in
+        # ``_execute`` also pins both of its locks here, by id, until it is
+        # done. An evicted-and-replaced lock would let the turn's own writes
+        # bypass a lock no concurrent RPC writer was taking, or let two turns
+        # for one session run at once (#1965).
+        self._pinned_locks: dict[int, int] = {}
         self._session_locks: BoundedRegistry[str, asyncio.Lock] = BoundedRegistry(
             name="TaskRuntime._session_locks",
             session_of=lambda key, _value: key,
-            evictable=lambda lock: not lock.locked(),
+            evictable=self._lock_is_evictable,
         )
         # Per-session execution locks serialize whole turn lifecycles without
         # blocking transcript writes, browser queue acknowledgements, or approval
@@ -345,7 +355,7 @@ class TaskRuntime:
         self._session_execution_locks: BoundedRegistry[str, asyncio.Lock] = BoundedRegistry(
             name="TaskRuntime._session_execution_locks",
             session_of=lambda key, _value: key,
-            evictable=lambda lock: not lock.locked(),
+            evictable=self._lock_is_evictable,
         )
         self._tasks: dict[str, _RuntimeTask] = {}
         self._pending_by_session: dict[str, list[_RuntimeTask]] = {}
@@ -814,10 +824,48 @@ class TaskRuntime:
             status=AgentTaskStatus.QUEUED,
         )
 
+    def _lock_is_evictable(self, lock: asyncio.Lock) -> bool:
+        return not lock.locked() and id(lock) not in self._pinned_locks
+
+    def _pin_lock(
+        self, registry: BoundedRegistry[str, asyncio.Lock], session_key: str
+    ) -> asyncio.Lock:
+        """Fetch *session_key*'s lock from *registry* and pin it against eviction.
+
+        Pinned by ``id`` with a count rather than by key: several queued turns
+        for one session fetch the lock before any of them runs, and the entry
+        must survive until the last one has finished. No await separates the
+        fetch from the pin, so the registry cannot churn in between.
+        """
+        lock = registry.setdefault(session_key, asyncio.Lock())
+        key = id(lock)
+        self._pinned_locks[key] = self._pinned_locks.get(key, 0) + 1
+        return lock
+
+    def _unpin_lock(self, lock: asyncio.Lock) -> None:
+        key = id(lock)
+        remaining = self._pinned_locks.get(key, 0) - 1
+        if remaining > 0:
+            self._pinned_locks[key] = remaining
+        else:
+            self._pinned_locks.pop(key, None)
+
     async def _execute(self, task: _RuntimeTask) -> None:
         session_key = task.envelope.session_key
-        write_lock = self._session_locks.setdefault(session_key, asyncio.Lock())
-        execution_lock = self._session_execution_locks.setdefault(session_key, asyncio.Lock())
+        write_lock = self._pin_lock(self._session_locks, session_key)
+        execution_lock = self._pin_lock(self._session_execution_locks, session_key)
+        try:
+            await self._execute_pinned(task, write_lock, execution_lock)
+        finally:
+            self._unpin_lock(execution_lock)
+            self._unpin_lock(write_lock)
+
+    async def _execute_pinned(
+        self,
+        task: _RuntimeTask,
+        write_lock: asyncio.Lock,
+        execution_lock: asyncio.Lock,
+    ) -> None:
         try:
             async with execution_lock:
                 if task.cancel_requested:
@@ -838,11 +886,18 @@ class TaskRuntime:
                     )
                     return
                 await self._wait_for_subagent_slot(task)
-                acquired = False
+                # ``task.acquired_slot`` is the flag ``_release_slot`` itself
+                # consults, so the release paths below track it rather than a
+                # local mirror. The mirror was set only after
+                # ``_acquire_fair_slot`` returned, but the slot is claimed part
+                # way through it -- the counters go up under the condition
+                # lock and ``_mark_running`` then writes to storage and emits
+                # outside it. A failure or a cancellation in that tail left the
+                # slot claimed with the mirror still False, so no release ran
+                # and ``_global_in_flight`` never came back down.
                 heartbeat_task: asyncio.Task[None] | None = None
                 try:
                     await self._acquire_fair_slot(task)
-                    acquired = True
                     async with write_lock:
                         pass
                     heartbeat_task = self._start_running_heartbeat(task)
@@ -867,9 +922,8 @@ class TaskRuntime:
                     if heartbeat_task is not None:
                         await self._stop_running_heartbeat(heartbeat_task)
                         heartbeat_task = None
-                    if acquired:
+                    if task.acquired_slot:
                         await self._release_slot(task)
-                        acquired = False
                     await self._mark_terminal(
                         task,
                         AgentTaskStatus.SUCCEEDED,
@@ -878,7 +932,7 @@ class TaskRuntime:
                 finally:
                     if heartbeat_task is not None:
                         await self._stop_running_heartbeat(heartbeat_task)
-                    if acquired:
+                    if task.acquired_slot:
                         await self._release_slot(task)
         except asyncio.CancelledError:
             reason = "overflow_drop" if task.overflow_dropped else "interrupt"

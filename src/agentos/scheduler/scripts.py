@@ -181,12 +181,24 @@ def validate_script_path(script: str | None) -> str | None:
 
 
 def _resolve_workdir(workdir: str, fallback: Path) -> str:
+    """Return the directory a job's script runs in.
+
+    *fallback* is the script's own directory — the documented default. A
+    relative *workdir* is joined onto it, the same rule
+    :func:`resolve_script_path` applies to the script itself; tested as
+    written it would name a path under the gateway process's CWD, which is
+    wherever the operator happened to start the service. Absolute paths are
+    used as given, and a workdir that does not exist falls back with a warning
+    that names where it looked.
+    """
     candidate = (workdir or "").strip()
     if not candidate:
         return str(fallback)
     expanded = Path(candidate).expanduser()
+    if not expanded.is_absolute():
+        expanded = fallback / expanded
     if not expanded.is_dir():
-        log.warning("cron.script.workdir_missing", workdir=candidate)
+        log.warning("cron.script.workdir_missing", workdir=candidate, resolved=str(expanded))
         return str(fallback)
     return str(expanded)
 
@@ -266,6 +278,11 @@ def _interpreter(path: Path) -> tuple[list[str], dict[str, str], str | None]:
             )
         return [bash, str(path)], {}, None
     python_exe, env_overlay = _python_invocation(sys.executable)
+    # run_job_script decodes the captured output as UTF-8, so the child must
+    # encode it that way. A piped stdout otherwise uses the locale code page
+    # (cp1252/cp936 on Windows): anything outside it raises UnicodeEncodeError
+    # and fails the run, and anything inside it arrives as U+FFFD.
+    env_overlay = {**env_overlay, "PYTHONIOENCODING": "utf-8"}
     return [python_exe, str(path)], env_overlay, None
 
 
@@ -281,6 +298,34 @@ def _redact(text: str) -> str:
     except Exception:
         log.warning("cron.script.redaction_failed", exc_info=True)
         return "[REDACTED — redaction failed]"
+
+
+#: How long the reap after a kill waits for the child's pipes to close.
+#: ``communicate()`` resolves on pipe EOF, not on the child's exit, and a
+#: grandchild that inherited stdout/stderr keeps them open after the direct
+#: child is dead. A killed child normally drains in milliseconds; past this
+#: the orphan is not ours to wait for, and neither the job deadline nor
+#: scheduler shutdown may hang on it.
+_REAP_GRACE_S = 1.0
+
+
+async def _kill_and_reap(proc: asyncio.subprocess.Process) -> None:
+    """Kill *proc* and wait briefly for it, tolerating a child that already exited.
+
+    Reaping matters even after a kill: an unreaped child leaves the event
+    loop warning about a pending transport on the next GC pass. ``kill`` on a
+    process that exited between the deadline and the cleanup raises
+    ``ProcessLookupError``; the outcome the caller reports is the deadline,
+    not that race, so it is swallowed here.
+    """
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    try:
+        await asyncio.wait_for(proc.communicate(), timeout=_REAP_GRACE_S)
+    except Exception:
+        pass
 
 
 async def run_job_script(
@@ -336,14 +381,16 @@ async def run_job_script(
     try:
         raw_stdout, raw_stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
-        proc.kill()
-        # Reap the killed child so the event loop does not warn about a
-        # pending transport on the next GC pass.
-        try:
-            await proc.communicate()
-        except Exception:
-            pass
+        await _kill_and_reap(proc)
         return False, f"Script timed out after {timeout:g}s: {path.name}"
+    except asyncio.CancelledError:
+        # The scheduler's outer ``execute_with_timeout`` deadline (or a
+        # shutdown) cancels this coroutine rather than raising the inner
+        # TimeoutError. The child is ours either way: kill and reap it before
+        # the cancellation propagates, so a run recorded as failed cannot keep
+        # writing behind the scheduler's back.
+        await _kill_and_reap(proc)
+        raise
     except Exception as exc:
         return False, f"Script execution failed: {exc}"
 

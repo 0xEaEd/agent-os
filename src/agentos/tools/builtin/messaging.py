@@ -24,6 +24,23 @@ def unregister_channel(name: str) -> None:
     _channels.pop(name, None)
 
 
+def _channel_type(name: str, adapter: object) -> str:
+    """The platform ``adapter`` speaks for, e.g. ``telegram``.
+
+    The tool is called with the configured channel name, which is free-form
+    (``agentos channels add telegram --name personal``), so it cannot decide
+    how a target is addressed. The adapter's capability profile names the
+    platform, the same place ``channel_dispatch._channel_kind`` reads it from.
+    A duck-typed adapter without one keeps being addressed by its registered
+    name.
+    """
+    profile = getattr(adapter, "capability_profile", None)
+    channel_type = getattr(profile, "channel_type", None)
+    if isinstance(channel_type, str) and channel_type:
+        return channel_type.lower()
+    return name
+
+
 def _outgoing_metadata(channel: str, target: str, thread_id: str | None) -> dict[str, str]:
     """Build adapter-recognized target metadata for the public message tool."""
     if channel == "telegram":
@@ -32,7 +49,16 @@ def _outgoing_metadata(channel: str, target: str, thread_id: str | None) -> dict
             metadata["thread_id"] = thread_id
         return metadata
     if channel == "slack":
-        return {"thread_ts": thread_id} if thread_id else {}
+        # ``SlackChannel.send`` resolves its destination from
+        # ``metadata['channel']`` first, then from a ``C``/``G``/``D``-prefixed
+        # ``reply_to``, then from the statically configured channel id. Passing
+        # only ``thread_ts`` left the tool's ``target`` with no way through, so
+        # every send landed in the configured channel whatever the caller asked
+        # for -- and the tool still reported the requested target back.
+        metadata = {"channel": target} if target else {}
+        if thread_id:
+            metadata["thread_ts"] = thread_id
+        return metadata
 
     metadata = {"recipient": target}
     if thread_id:
@@ -132,6 +158,7 @@ async def message(
             raise ToolError("No channels configured")
         raise ToolError(f"Unknown channel: {channel}. Available: {', '.join(_channels)}")
     channel_adapter = cast(Any, adapter)
+    channel_type = _channel_type(channel, adapter)
 
     # Dispatch action via OutgoingMessage protocol
     try:
@@ -140,8 +167,8 @@ async def message(
         if action == "send":
             msg = OutgoingMessage(
                 content=text or "",
-                metadata=_outgoing_metadata(channel, target, thread_id),
-                reply_to=_reply_to_target(channel, target, thread_id),
+                metadata=_outgoing_metadata(channel_type, target, thread_id),
+                reply_to=_reply_to_target(channel_type, target, thread_id),
             )
             await channel_adapter.send(msg)
             return json.dumps(
@@ -167,7 +194,9 @@ async def message(
             )
         else:  # delete
             if hasattr(channel_adapter, "delete"):
-                await channel_adapter.delete(_delete_message_id(channel, target, message_id or ""))
+                await channel_adapter.delete(
+                    _delete_message_id(channel_type, target, message_id or "")
+                )
             else:
                 raise ToolError(f"Channel '{channel}' does not support delete")
             return json.dumps(

@@ -674,13 +674,13 @@ After fetching `token security` and `token info`, apply this scoring card to giv
 
 ## Workflow: Full Token Due Diligence
 
-When the user asks for a full token research / due diligence, follow the steps in [`docs/workflow-token-research.md`](../../docs/workflow-token-research.md).
+When the user asks for a full token research / due diligence, follow the full token research steps:
 
 Steps: `token info` → `token security` → `token pool` → market heat check → `token holders/traders` (smart money signals) → Decision Framework.
 
-**For a more comprehensive report** (user asks for a "deep report", "full analysis", "is this worth a large position"), use the extended workflow: [`docs/workflow-project-deep-report.md`](../../docs/workflow-project-deep-report.md). This adds a scored multi-dimension analysis (fundamentals + security + liquidity + smart money conviction + price action) and produces a full written report.
+**For a more comprehensive report** (user asks for a "deep report", "full analysis", "is this worth a large position"), use the extended project deep report workflow. This adds a scored multi-dimension analysis (fundamentals + security + liquidity + smart money conviction + price action) and produces a full written report.
 
-**For active risk monitoring** on a held position (user asks "any risk warnings", "are whales dumping", "is liquidity still healthy"), follow: [`docs/workflow-risk-warning.md`](../../docs/workflow-risk-warning.md). Uses `token security` + `token pool` + `token holders` to flag whale exits, liquidity drain, and developer dumps.
+**For active risk monitoring** on a held position (user asks "any risk warnings", "are whales dumping", "is liquidity still healthy"), follow the active risk warning workflow. Uses `token security` + `token pool` + `token holders` to flag whale exits, liquidity drain, and developer dumps.
 
 ## Price Chart During Research
 

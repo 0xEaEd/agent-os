@@ -428,7 +428,7 @@ cross-check — and the CLI remains the only supported way to read wallet data.)
 | [gmgn-wallet-score](../gmgn-wallet-score/SKILL.md) | 0–100 scores and an explicit latency/slippage/gas backtest |
 | [gmgn-holder-analysis](../gmgn-holder-analysis/SKILL.md) | Chip structure of the tokens this wallet just bought |
 | [gmgn-token](../gmgn-token/SKILL.md) | Contract safety on those tokens |
-| [gmgn-kline-pattern](../gmgn-kline-pattern/SKILL.md) | The chart shape of a token it just bought |
+| gmgn-kline-pattern | The chart shape of a token it just bought |
 | [gmgn-portfolio](../gmgn-portfolio/SKILL.md) | The underlying commands and their full field reference |
 | [gmgn-track](../gmgn-track/SKILL.md) | Finding candidate wallets to run this on |
 | [gmgn-swap](../gmgn-swap/SKILL.md) | Executing on a 🟢 verdict |

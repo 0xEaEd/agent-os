@@ -217,3 +217,169 @@ async def test_rpc_memory_curated_and_knowledge_base(tmp_path: Path):
 
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+async def test_rpc_knowledge_base_path_ingest_persists(tmp_path: Path):
+    """Path ingest must copy into knowledge_base/ so list/show survive force sync."""
+    dispatcher = get_dispatcher()
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    memory_dir = workspace / "memory"
+    memory_dir.mkdir()
+    db_path = tmp_path / "memory.db"
+
+    store = LongTermMemoryStore(db_path)
+    await store.initialize()
+
+    sync_manager = MemorySyncManager(store=store, workspace_dir=workspace, memory_dir=memory_dir)
+    retriever = MemoryRetriever(store)
+    turn_capture = TurnCaptureService(workspace_dir=workspace, turns_dir=tmp_path / "turns")
+
+    manager = MemoryManager(
+        agent_id="main",
+        db_path=db_path,
+        store=store,
+        sync_manager=sync_manager,
+        retriever=retriever,
+        turn_capture=turn_capture,
+        workspace_dir=workspace,
+        memory_dir=memory_dir,
+    )
+
+    ctx = RpcContext(conn_id="test")
+    ctx.memory_managers = {"main": manager}
+
+    marker = "MARKER-TOKEN-KB-INGEST path ingest check"
+    note = workspace / "note.txt"
+    note.write_text(marker, encoding="utf-8")
+
+    try:
+        # Path ingest from outside knowledge_base/ must persist a durable copy.
+        ingest_res = await dispatcher.dispatch(
+            "p1",
+            "memory.knowledge_base.ingest",
+            {"agentId": "main", "path": "note.txt"},
+            ctx,
+        )
+        assert ingest_res.ok
+        assert ingest_res.payload["results"][0]["status"] == "indexed"
+        assert ingest_res.payload["results"][0]["path"] == "knowledge_base/note.txt"
+
+        durable = workspace / "knowledge_base" / "note.txt"
+        assert durable.is_file()
+        assert durable.read_text(encoding="utf-8") == marker
+
+        kb_list = await dispatcher.dispatch(
+            "p2", "memory.knowledge_base.list", {"agentId": "main"}, ctx
+        )
+        assert kb_list.ok
+        assert kb_list.payload["count"] >= 1
+        assert any(d["path"] == "knowledge_base/note.txt" for d in kb_list.payload["documents"])
+
+        show_res = await dispatcher.dispatch(
+            "p3",
+            "memory.show",
+            {"agentId": "main", "path": "knowledge_base/note.txt"},
+            ctx,
+        )
+        assert show_res.ok
+        assert marker in show_res.payload["content"]
+
+        await sync_manager.sync("test-force", force=True)
+
+        show_after = await dispatcher.dispatch(
+            "p4",
+            "memory.show",
+            {"agentId": "main", "path": "knowledge_base/note.txt"},
+            ctx,
+        )
+        assert show_after.ok
+        assert marker in show_after.payload["content"]
+
+        # File already under knowledge_base/ still works (no-op copy).
+        already = workspace / "knowledge_base" / "already.txt"
+        already.write_text("Already under KB content", encoding="utf-8")
+        ingest_kb = await dispatcher.dispatch(
+            "p5",
+            "memory.knowledge_base.ingest",
+            {"agentId": "main", "path": "knowledge_base/already.txt"},
+            ctx,
+        )
+        assert ingest_kb.ok
+        assert ingest_kb.payload["results"][0]["status"] == "indexed"
+        assert ingest_kb.payload["results"][0]["path"] == "knowledge_base/already.txt"
+        assert already.is_file()
+
+        show_already = await dispatcher.dispatch(
+            "p6",
+            "memory.show",
+            {"agentId": "main", "path": "knowledge_base/already.txt"},
+            ctx,
+        )
+        assert show_already.ok
+        assert "Already under KB content" in show_already.payload["content"]
+
+        kb_list2 = await dispatcher.dispatch(
+            "p7", "memory.knowledge_base.list", {"agentId": "main"}, ctx
+        )
+        assert kb_list2.ok
+        assert kb_list2.payload["count"] >= 2
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_rpc_knowledge_base_root_ingest_rejected(tmp_path: Path):
+    """Workspace-root ingest must not copytree into knowledge_base/ (nesting)."""
+    dispatcher = get_dispatcher()
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    memory_dir = workspace / "memory"
+    memory_dir.mkdir()
+    (memory_dir / "MEMORY.md").write_text("curated root", encoding="utf-8")
+    db_path = tmp_path / "memory.db"
+
+    store = LongTermMemoryStore(db_path)
+    await store.initialize()
+
+    sync_manager = MemorySyncManager(store=store, workspace_dir=workspace, memory_dir=memory_dir)
+    retriever = MemoryRetriever(store)
+    turn_capture = TurnCaptureService(workspace_dir=workspace, turns_dir=tmp_path / "turns")
+
+    manager = MemoryManager(
+        agent_id="main",
+        db_path=db_path,
+        store=store,
+        sync_manager=sync_manager,
+        retriever=retriever,
+        turn_capture=turn_capture,
+        workspace_dir=workspace,
+        memory_dir=memory_dir,
+    )
+
+    ctx = RpcContext(conn_id="test")
+    ctx.memory_managers = {"main": manager}
+
+    try:
+        # CLI reaches this via `agentos memory ingest .` (workspace root).
+        root_ingest = await dispatcher.dispatch(
+            "r1",
+            "memory.knowledge_base.ingest",
+            {"agentId": "main", "path": "."},
+            ctx,
+        )
+        assert not root_ingest.ok
+        assert "knowledge_base" in str(root_ingest.error).lower()
+
+        # Must not leave nested copy junk under knowledge_base/.
+        kb = workspace / "knowledge_base"
+        if kb.exists():
+            nested = list(kb.rglob("MEMORY.md"))
+            assert nested == [], nested
+            # Also no knowledge_base/workspace/... nesting
+            assert not (kb / "workspace").exists()
+    finally:
+        await store.close()

@@ -410,6 +410,20 @@ agentos configure x-search --no-x-search-enabled
 The `x_search` tool stays hidden from the agent until an xAI credential is
 reachable. See [`x-search.md`](x-search.md).
 
+Image generation:
+
+```sh
+agentos configure image --image-provider openai --primary openai/gpt-image-1 --api-key-env OPENAI_API_KEY
+agentos configure image --no-image-enabled
+```
+
+Memory embedding:
+
+```sh
+agentos configure memory --memory-provider local --onnx-dir ~/.agentos/models/embeddings/google-embeddinggemma-300m
+agentos configure memory --memory-provider openai --model text-embedding-3-small --api-key-env OPENAI_API_KEY
+```
+
 Channels:
 
 Built-in channel types are `discord`, `email`, `slack`, and `telegram`; `agentos
@@ -659,6 +673,7 @@ Read:
 ```sh
 agentos sessions list
 agentos sessions list --search api-refactor    # match name, key, subject or model
+agentos sessions list --agent main --status done   # also --channel, --since
 agentos sessions show <session-key>
 agentos sessions rename <session-key> "api-refactor"
 agentos sessions rename <session-key> --clear  # drop the custom name
@@ -667,6 +682,10 @@ agentos sessions abort <session-key>
 agentos sessions export <session-key>
 agentos sessions delete <session-key>
 ```
+
+Every filter on `sessions list` runs client-side over the recent history rather
+than over the page `--limit` would show, so `--limit` bounds how many matches
+are printed, not how far back the filter looks.
 
 Sessions are auto-named. `rename` gives one a human-readable label that shows
 up in `sessions list`, in the chat toolbar, and in the Web UI session list, and
@@ -717,9 +736,12 @@ agentos memory list --source all
 agentos memory ingest /path/to/docs
 agentos memory curated get --target memory
 agentos memory curated add "Important project convention"
+agentos memory curated remove "Important project convention"
 agentos memory search "preference"
 agentos memory show <path>
+agentos memory embedding-download
 agentos memory raw-fallbacks list
+agentos memory raw-fallbacks show <path>
 ```
 
 Read: [`features/memory.md`](features/memory.md)
@@ -757,7 +779,9 @@ agentos cron add --every 15m --script watch_rss.py --name hn \
 symlink out of that directory. Subdirectories are allowed, and `{job_id}`
 anywhere in the path is replaced with the created job's own id, so a job can own
 a directory named after itself in one `add`. `.sh`/`.bash` run under bash,
-anything else under python. `--script-arg` (repeatable) passes argv straight to
+anything else under python. `--workdir` sets the script's working directory; a
+relative value resolves against the script's own directory, which is also the
+default. `--script-arg` (repeatable) passes argv straight to
 the script — never through a shell. Non-empty stdout is delivered verbatim, empty stdout is a silent
 run, and a non-zero exit or `--timeout` delivers the error and fails the job.
 Secrets are masked in the output, and the gateway token is withheld from the
@@ -865,6 +889,28 @@ Read:
 - [`agents.md`](agents.md)
 - [`scheduling.md`](scheduling.md)
 - [`approvals-and-permissions.md`](approvals-and-permissions.md)
+
+## Sandbox Posture Controls
+
+```sh
+agentos sandbox status
+agentos sandbox status --json
+agentos sandbox bypass
+agentos sandbox full
+agentos sandbox on
+agentos sandbox reset
+```
+
+`agentos sandbox status` shows the current sandbox posture (`on`, `bypass`, `full`), whether runtime sandboxing and security grading are active, and default permissions.
+
+- `agentos sandbox on`: Restores the default sandboxed posture (`sandbox = true`, `security_grading = true`, `permissions.default_mode = "off"`).
+- `agentos sandbox bypass`: Disables runtime sandboxing and auto-grants approvals except for sensitive paths (`permissions.default_mode = "bypass"`).
+- `agentos sandbox full`: Disables runtime sandboxing and skips approval and sensitive-path gates (`permissions.default_mode = "full"`).
+- `agentos sandbox reset`: Resets sandbox posture to AgentOS defaults (`bypass`).
+
+Pass `--config <path>` to target an explicit configuration file. Changes require a gateway restart (`agentos gateway restart`) to apply to running processes.
+
+Read: [`tools-and-sandbox.md`](tools-and-sandbox.md)
 
 ## Cost, Diagnostics, and Replay
 

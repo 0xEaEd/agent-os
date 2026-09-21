@@ -73,10 +73,19 @@ _TEMPLATE_VERSION_SUFFIX = str(int(time.time()))
 
 def _request_ws_url(request: Request, config: GatewayConfig) -> str:
     """Build the browser-facing websocket URL from the current request."""
-    host = request.headers.get("host") or f"{config.host}:{config.port}"
-    if config.host in {"0.0.0.0", "::"} and host == "testserver":
-        host = f"127.0.0.1:{config.port}"
-    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    forwarded_host = request.headers.get("x-forwarded-host")
+    if forwarded_host:
+        host = forwarded_host.split(",")[0].strip()
+    else:
+        host = request.headers.get("host") or f"{config.host}:{config.port}"
+        if config.host in {"0.0.0.0", "::"} and host == "testserver":
+            host = f"127.0.0.1:{config.port}"
+
+    proto = request.headers.get("x-forwarded-proto")
+    if proto:
+        scheme = proto.split(",")[0].strip().lower()
+    else:
+        scheme = request.url.scheme.lower()
     ws_scheme = "wss" if scheme == "https" else "ws"
     return f"{ws_scheme}://{host}/ws"
 

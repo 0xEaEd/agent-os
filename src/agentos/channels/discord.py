@@ -50,6 +50,7 @@ from agentos.channels.types import (
 )
 from agentos.engine.native_commands import discord_application_commands
 from agentos.env import trust_env as _trust_env
+from agentos.util.bounded_registry import BoundedRegistry
 
 log = structlog.get_logger(__name__)
 
@@ -60,6 +61,11 @@ _DISCORD_THREAD_CHANNEL_TYPES = {10, 11, 12}
 _DISCORD_APPLICATION_COMMAND_INTERACTION_TYPE = 2
 _DISCORD_DEFERRED_CHANNEL_MESSAGE_RESPONSE_TYPE = 5
 _DISCORD_MESSAGE_TEXT_LIMIT = 2000
+#: Ceiling on the channel-type / thread-parent caches fed by gateway events. A
+#: busy guild emits these for every channel and thread it ever creates, so the
+#: caches evict least-recently-used entries instead of growing for the life
+#: of the connection. Sized for channels, not sessions, hence the override.
+_MAX_CACHED_CHANNEL_CONTEXTS = 10_000
 
 # Gateway intents bitmask
 GATEWAY_INTENTS = (
@@ -192,8 +198,22 @@ class DiscordChannel:
     )
     _rate_limiter: RateLimiter = field(default_factory=RateLimiter, init=False, repr=False)
     _sent_messages: dict[str, str] = field(default_factory=dict, init=False, repr=False)
-    _channel_types: dict[str, int] = field(default_factory=dict, init=False, repr=False)
-    _thread_parent_channels: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _channel_types: BoundedRegistry[str, int] = field(
+        default_factory=lambda: BoundedRegistry(
+            name="DiscordChannel._channel_types",
+            max_entries=_MAX_CACHED_CHANNEL_CONTEXTS,
+        ),
+        init=False,
+        repr=False,
+    )
+    _thread_parent_channels: BoundedRegistry[str, str] = field(
+        default_factory=lambda: BoundedRegistry(
+            name="DiscordChannel._thread_parent_channels",
+            max_entries=_MAX_CACHED_CHANNEL_CONTEXTS,
+        ),
+        init=False,
+        repr=False,
+    )
 
     @property
     def capability_profile(self) -> ChannelCapabilityProfile:
@@ -506,7 +526,6 @@ class DiscordChannel:
             elif op == 11:  # Heartbeat ACK
                 self._state.last_heartbeat_ack = True
 
-
     async def _handle_dispatch(self, event_type: str | None, data: dict[str, Any]) -> None:
         if event_type == "READY":
             self._state.session_id = data["session_id"]
@@ -571,13 +590,16 @@ class DiscordChannel:
         if not isinstance(channel_id, str) or not channel_id:
             return data
         enriched = dict(data)
-        if "channel_type" not in enriched and channel_id in self._channel_types:
-            enriched["channel_type"] = self._channel_types[channel_id]
-        if (
-            "thread_parent_channel_id" not in enriched
-            and channel_id in self._thread_parent_channels
-        ):
-            enriched["thread_parent_channel_id"] = self._thread_parent_channels[channel_id]
+        # ``get`` marks the entry recently used, so a channel that is still
+        # active is not the one evicted when new channels arrive.
+        if "channel_type" not in enriched:
+            channel_type = self._channel_types.get(channel_id)
+            if channel_type is not None:
+                enriched["channel_type"] = channel_type
+        if "thread_parent_channel_id" not in enriched:
+            parent_id = self._thread_parent_channels.get(channel_id)
+            if parent_id is not None:
+                enriched["thread_parent_channel_id"] = parent_id
         return enriched
 
     @staticmethod
@@ -926,9 +948,7 @@ class DiscordChannel:
 
     def is_connected(self) -> bool:
         return (
-            self._connected
-            and self._dispatch_task is not None
-            and not self._dispatch_task.done()
+            self._connected and self._dispatch_task is not None and not self._dispatch_task.done()
         )
 
     async def health_check(self) -> ChannelHealth:
@@ -941,7 +961,6 @@ class DiscordChannel:
                 "sequence": self._state.sequence,
             },
         )
-
 
     # ------------------------------------------------------------------
     # Inbound
@@ -1209,13 +1228,40 @@ class DiscordChannel:
 
     MAX_FILE_BYTES: ClassVar[int] = 10 * 1024 * 1024
 
+    def _resolve_file_target(self, channel_id: str) -> str:
+        """The channel a file goes to, from what ``send_file`` was handed.
+
+        Callers pass a bare channel id, the ``<channel_id>|<message_id>``
+        composite that message routing and thread references produce, or
+        nothing at all. Only the channel component can form a URL; the
+        message component is discarded, ``""`` falls back to
+        ``default_channel_id`` the way :meth:`send` does, and with neither
+        there is no ``/channels/<id>/messages`` to build, so refuse rather
+        than request ``/channels//messages`` or ``/channels/123|456/messages``.
+        """
+        head, sep, _message_id = channel_id.partition("|")
+        target = (head if sep else channel_id) or self.config.default_channel_id
+        if not target:
+            raise ValueError(
+                "discord.send_file requires a channel_id when default_channel_id is not configured"
+            )
+        return target
+
     async def send_file(
         self,
         channel_id: str,
         file_path: str,
         content: str = "",
     ) -> ChannelSendResult:
+        target_channel = self._resolve_file_target(channel_id)
         check_channel_file_size(file_path, self.MAX_FILE_BYTES, "Discord")
+        # Discord caps a message's content at 2000 characters whether or not
+        # a file is attached, and 400s the whole upload past it. The first
+        # chunk rides with the file as its caption; the rest follows as
+        # ordinary channel messages, which send() already splits and orders.
+        caption, overflow = "", ""
+        if content:
+            caption, overflow = split_text_for_limit(content, _DISCORD_MESSAGE_TEXT_LIMIT)
         await self._rate_limiter.acquire()
         client = self._get_client()
         path = Path(file_path)
@@ -1226,8 +1272,8 @@ class DiscordChannel:
             # first attempt would upload an empty body on the second.
             with path.open("rb") as f:
                 return await client.post(
-                    f"/channels/{channel_id}/messages",
-                    data={"content": content} if content else {},
+                    f"/channels/{target_channel}/messages",
+                    data={"content": caption} if caption else {},
                     files={"file": (path.name, f)},
                     headers=self._auth_headers(),
                 )
@@ -1237,10 +1283,25 @@ class DiscordChannel:
         data = resp.json()
         message_id = str(data.get("id", ""))
         if message_id:
-            self._sent_messages[message_id] = channel_id
+            self._sent_messages[message_id] = target_channel
+        if overflow:
+            # The file is in the channel by now. A failure here must not be
+            # reported as a failed file delivery -- the caller would retry and
+            # upload it again -- so it is logged with the ids and the file's
+            # own result stands.
+            try:
+                await self.send(OutgoingMessage(content=overflow, reply_to=target_channel))
+            except httpx.HTTPError as exc:
+                log.warning(
+                    "discord.send_file_caption_overflow_failed",
+                    channel_id=target_channel,
+                    message_id=message_id,
+                    overflow_chars=len(overflow),
+                    error=str(exc),
+                )
         return ChannelSendResult.sent(
             capability=ChannelCapabilities.NATIVE_FILE_UPLOAD,
-            target_id=channel_id,
+            target_id=target_channel,
             provider_message_id=message_id,
         )
 
@@ -1360,6 +1421,15 @@ class DiscordChannel:
         """Uniform mention check for group gating. Delegates to is_mentioned."""
         if msg.metadata.get("interaction_type") == "slash_command":
             return True
+        if msg.metadata.get("event_type") == "MESSAGE_REACTION_ADD":
+            # A reaction carries no text to search for a mention in, so
+            # is_mentioned("") is always False -- every reaction in a guild
+            # channel/thread would otherwise be dropped by the mention gate,
+            # even one on a message the bot itself just sent. Reacting to
+            # the bot's own message is already an unambiguous, directed
+            # response to it, equivalent to being mentioned.
+            message_id = msg.metadata.get("native_message_id")
+            return bool(message_id) and message_id in self._sent_messages
         return self.is_mentioned(msg.content)
 
     # ------------------------------------------------------------------
@@ -1400,62 +1470,111 @@ class DiscordChannel:
     ) -> str | None:
         """Stream a message: post first chunk, PATCH edits for subsequent.
 
-        Returns the message ID or None if iterator was empty.
+        Returns the id of the last message written -- editing ``@original``
+        for an interaction response returns its real message id, the same
+        as a regular channel message -- or ``None`` if the iterator was
+        empty.
 
         Uses ``StreamThrottle`` so two PATCH calls cannot race and a
-        single transient failure does not lose accumulated text.
+        single transient failure does not lose accumulated text. Discord
+        caps message content at 2000 characters (``_DISCORD_MESSAGE_TEXT_LIMIT``);
+        once an edit's accumulated text would exceed that, the open message
+        is frozen at the largest prefix that fits and the remainder rolls
+        over into a new message via ``_post_segments`` -- the same shape as
+        ``TelegramChannel.send_streaming``'s ``_post_segments``. This is
+        safe only because the chunks this method receives are append-only
+        deltas (``engine.types.TextDeltaEvent``, fed through
+        ``gateway/channel_dispatch.py`` -- verified no caller ever revises
+        already-yielded text or reads the id this method returns), so a
+        message frozen mid-stream never needs to be un-frozen. For an
+        interaction response, Discord's original-response slot holds
+        exactly one message: only the first segment is delivered as an edit
+        of the already-deferred ``@original``; everything past a rollover
+        is a regular channel message, the same overflow handling
+        ``send()`` already uses (see the comment there).
         """
         target = channel_id or self.config.default_channel_id
         client = self._get_client()
         throttle = StreamThrottle(interval_s=update_interval_ms / 1000.0)
         message_id: str | None = None
-        interaction_path: str | None = None
+        segment_start = 0
+        delivered = 0
+        original_path: str | None = None
+        used_original = False
         if interaction_token:
             application_id = interaction_application_id or self.config.application_id
             if not application_id:
                 raise ValueError("missing Discord application id for interaction response")
-            interaction_path = f"/webhooks/{application_id}/{interaction_token}/messages/@original"
+            original_path = f"/webhooks/{application_id}/{interaction_token}/messages/@original"
 
-        async def _post(text: str) -> None:
-            nonlocal message_id
+        async def _stream_send(text: str) -> str | None:
             await self._rate_limiter.acquire()
-            if interaction_path is not None:
-                resp = await retry_request(
-                    client.patch,
-                    interaction_path,
-                    json={"content": text},
-                )
+            resp = await retry_request(
+                client.post,
+                f"/channels/{target}/messages",
+                json={"content": text},
+                headers=self._auth_headers(),
+            )
+            resp.raise_for_status()
+            new_id = resp.json().get("id")
+            return str(new_id) if new_id else None
+
+        async def _stream_edit(current_id: str | None, text: str) -> str | None:
+            await self._rate_limiter.acquire()
+            if original_path is not None and current_id is None:
+                resp = await retry_request(client.patch, original_path, json={"content": text})
             else:
                 resp = await retry_request(
-                    client.post,
-                    f"/channels/{target}/messages",
+                    client.patch,
+                    f"/channels/{target}/messages/{current_id}",
                     json={"content": text},
                     headers=self._auth_headers(),
                 )
             resp.raise_for_status()
-            message_id = resp.json().get("id")
+            # Editing @original is the only way to learn its real message id
+            # (there is no separate create call for it); a regular channel
+            # edit echoes back the same id it was called with.
+            new_id = resp.json().get("id")
+            return str(new_id) if new_id else current_id
+
+        async def _post_segments(remaining: str) -> None:
+            """Deliver *remaining* as one or more messages, splitting at the cap."""
+            nonlocal message_id, segment_start, delivered, used_original
+            while True:
+                head, tail = split_text_for_limit(remaining, _DISCORD_MESSAGE_TEXT_LIMIT)
+                if original_path is not None and not used_original:
+                    message_id = await _stream_edit(None, head)
+                    used_original = True
+                else:
+                    message_id = await _stream_send(head)
+                delivered = segment_start + len(head)
+                if not tail:
+                    return
+                segment_start = delivered
+                remaining = tail
+
+        async def _post(text: str) -> None:
+            await _post_segments(text[segment_start:])
 
         async def _edit(text: str) -> None:
-            await self._rate_limiter.acquire()
-            if interaction_path is not None:
-                await retry_request(
-                    client.patch,
-                    interaction_path,
-                    json={"content": text},
-                )
-            else:
-                await retry_request(
-                    client.patch,
-                    f"/channels/{target}/messages/{message_id}",
-                    json={"content": text},
-                    headers=self._auth_headers(),
-                )
+            nonlocal segment_start, delivered, message_id
+            head, tail = split_text_for_limit(text[segment_start:], _DISCORD_MESSAGE_TEXT_LIMIT)
+            message_id = await _stream_edit(message_id, head)
+            delivered = segment_start + len(head)
+            if tail:
+                # This message is full: freeze it and roll over into a new one.
+                segment_start = delivered
+                await _post_segments(tail)
 
         async for chunk in chunks:
             throttle.add(chunk)
             await throttle.maybe_flush(post=_post, edit=_edit)
 
-        await throttle.force_flush(post=_post, edit=_edit)
+        # delivered < len(text) mirrors TelegramChannel.send_streaming: skip a
+        # final flush that would repeat the last one verbatim when nothing
+        # arrived after the last successful post/edit.
+        if delivered < len(throttle.text):
+            await throttle.force_flush(post=_post, edit=_edit)
         return message_id
 
     # ------------------------------------------------------------------

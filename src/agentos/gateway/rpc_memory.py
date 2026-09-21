@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -806,22 +807,58 @@ async def _handle_knowledge_base_ingest(params: dict | None, ctx: RpcContext) ->
     if not target_path.exists():
         raise FileNotFoundError(f"Path does not exist: {raw_path}")
 
+    kb_root = (workspace / "knowledge_base").resolve()
+    try:
+        target_path.relative_to(kb_root)
+        under_kb = True
+    except ValueError:
+        under_kb = False
+
     if target_path.is_dir():
-        rel_prefix = rel_to_ws.as_posix()
-        if not rel_prefix or rel_prefix == ".":
-            rel_prefix = "knowledge_base"
-        elif not rel_prefix.startswith("knowledge_base"):
-            rel_prefix = f"knowledge_base/{rel_prefix}"
+        if under_kb:
+            rel_prefix = rel_to_ws.as_posix()
+            if not rel_prefix or rel_prefix == ".":
+                rel_prefix = "knowledge_base"
+            ingest_root = target_path
+        else:
+            # Reject dirs that contain knowledge_base/ (e.g. workspace root).
+            # copytree into knowledge_base/<name> would nest kb into itself.
+            try:
+                kb_root.relative_to(target_path)
+            except ValueError:
+                pass
+            else:
+                raise ValueError(
+                    "cannot ingest a directory that contains knowledge_base/; "
+                    "ingest a subdirectory or individual files instead"
+                )
+            dirname = target_path.name
+            if not dirname or dirname in (".", ".."):
+                dirname = "imported"
+            dest_dir = (kb_root / dirname).resolve()
+            kb_root.mkdir(parents=True, exist_ok=True)
+            if dest_dir != target_path:
+                shutil.copytree(target_path, dest_dir, dirs_exist_ok=True)
+            rel_prefix = f"knowledge_base/{dirname}"
+            ingest_root = dest_dir
         results = await ingest_directory(
-            store, target_path, base_rel_prefix=rel_prefix, recursive=recursive
+            store, ingest_root, base_rel_prefix=rel_prefix, recursive=recursive
         )
         return {"agentId": agent_id, "results": [r.as_dict() for r in results]}
-    else:
+
+    if under_kb:
         rel_path = rel_to_ws.as_posix()
-        if not rel_path.startswith("knowledge_base/") and rel_path != "knowledge_base":
-            rel_path = f"knowledge_base/{rel_path}"
-        res = await ingest_document(store, target_path, rel_path=rel_path, title=target_path.name)
-        return {"agentId": agent_id, "results": [res.as_dict()]}
+        ingest_path = target_path
+    else:
+        name = target_path.name
+        dest = (kb_root / name).resolve()
+        kb_root.mkdir(parents=True, exist_ok=True)
+        if dest != target_path:
+            shutil.copy2(target_path, dest)
+        rel_path = f"knowledge_base/{name}"
+        ingest_path = dest
+    res = await ingest_document(store, ingest_path, rel_path=rel_path, title=ingest_path.name)
+    return {"agentId": agent_id, "results": [res.as_dict()]}
 
 
 @_d.method("memory.knowledge_base.list")

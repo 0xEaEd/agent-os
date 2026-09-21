@@ -110,7 +110,13 @@ Or merge specific page ranges with the manifest form:
 ```
 
 Page ranges are 1-based, comma-separated, hyphen for ranges. Omit `pages` to
-include the whole file. Splits use the same syntax in reverse:
+include the whole file. The JSON summary reports `pages_written` together with
+any requested page the input does not have under `skipped_pages` (one entry per
+file) and any input that was not found under `missing_files` — check both before
+reporting the merge as done. A merge in which no requested page exists exits 2
+and writes no file, rather than leaving a zero-page PDF behind.
+
+Splits use the same syntax in reverse:
 
 ```bash
 {python} {baseDir}/scripts/split.py input.pdf --pages "1-3,7,10-12" --out output_dir/
@@ -145,7 +151,10 @@ file is written:
 The script discovers fields via `pypdf.PdfReader.get_fields()` and updates
 them with `update_page_form_field_values()`. Fields not present in the JSON
 are left untouched. Run with `--list-fields` to enumerate the form's fields
-without filling.
+without filling. If `form.pdf` has no AcroForm at all (a generated report, a
+scan, anything that is not a form), the fill is refused with exit 2 and no
+output file is written or overwritten — `--list-fields` is the way to check
+first, and correctly returns `{}` for these.
 
 Caveats:
 
@@ -153,8 +162,11 @@ Caveats:
   rather than `true` — inspect with `--list-fields` to discover.
 - AcroForm fills only. XFA forms (used by some legal templates) require
   Adobe-specific tooling and are out of scope.
-- Some signed PDFs invalidate the signature when fields change. Strip
-  signatures explicitly with `--clear-signatures` if that is intended.
+- Filling a signed PDF invalidates its digital signature: `pypdf` rewrites
+  the document, and the signature covers the bytes it replaces. `form_fill.py`
+  has no flag to strip signatures first — signature operations are out of
+  scope (see Boundaries) — so fill an unsigned copy when the signature has to
+  survive.
 
 ---
 
@@ -201,6 +213,7 @@ switch back.
 | Extracted text is empty | Scanned PDF, no text layer | OCR is out of scope; use a separate OCR skill |
 | Garbled characters in extract | PDF uses a custom font encoding | Try `pdfplumber.open(path, laparams={...})` with `char_margin` adjustments |
 | Merged PDF is huge | Underlying PDFs include large embedded fonts | Subset fonts via `pypdf` `compress_content_streams()` |
+| `merge.py` exits 2 with `error: manifest entry N ...` | The manifest is not an array of `{"file": ..., "pages": ...}` objects — a bare `["a.pdf"]` list of paths is the usual cause | Wrap each path: `[{"file": "a.pdf"}]`. `pages` is optional but must be a string when present (`"1-3"`, not `3`) |
 | Form fill silently no-ops | Field name in JSON does not match PDF field name | Run with `--list-fields` first to see exact names |
 | Pages out of order after split | Range overlap collapsed unexpectedly | Use disjoint ranges, e.g. `1-3,4-6` not `1-5,3-6` |
 
