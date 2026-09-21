@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Sandbox: `read_file` on `~/.docker/config.json` no longer returns Docker
+  registry credentials. The denylist entry read `~/.docker/config`, and the
+  prefix match is anchored at a path segment boundary, so it matched only a
+  file literally named `config` — a path Docker never writes. The entry is
+  now the `~/.docker` directory, matching the neighbouring `~/.aws` and
+  `~/.kube` entries and the `.docker` the redaction layer already carried (#2623).
+- Surplus provider: `claude-haiku-4.5` no longer silently loses reasoning
+  support when the Surplus catalog fetch fails at boot. The offline fallback
+  prefix table (`_SURPLUS_REASONING_PREFIXES`) listed `claude-opus-` and
+  `claude-sonnet-` but not `claude-haiku-4.5`, even though the sibling vision
+  table right next to it does list `claude-haiku-4.5` — so a boot with no
+  live catalog answered `supports_reasoning=False` for a model that genuinely
+  supports extended thinking, silently turning a configured `thinking_level`
+  into a no-op (#2615).
 - Shell policy (Windows): the denylist prefix that anchors `rm` / `ri` / `rd`
   / `erase` through a `powershell -c` wrapper only understood flags with no
   value, so `powershell -ExecutionPolicy Bypass -Command "rm C:\x"` (and
@@ -127,12 +141,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   in `_seasonal_hint`, causing locations like Juneau to falsely trigger seasonal
   date-window warnings; it now matches month names with word boundaries
   (#2510).
-- Sandbox: `read_file` on `~/.docker/config.json` no longer returns Docker
-  registry credentials. The denylist entry read `~/.docker/config`, and the
-  prefix match is anchored at a path segment boundary, so it matched only a
-  file literally named `config` — a path Docker never writes. The entry is
-  now the `~/.docker` directory, matching the neighbouring `~/.aws` and
-  `~/.kube` entries and the `.docker` the redaction layer already carried.
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always
@@ -456,14 +464,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `srt-from-script` truncated a fractional `DURATION_S` to an integer, so
   every cue after a `3.5`-second shot drifted earlier
   ([#2070](https://github.com/use-agent-os/agent-os/issues/2070)).
-- Surplus provider: `claude-haiku-4.5` no longer silently loses reasoning
-  support when the Surplus catalog fetch fails at boot. The offline fallback
-  prefix table (`_SURPLUS_REASONING_PREFIXES`) listed `claude-opus-` and
-  `claude-sonnet-` but not `claude-haiku-4.5`, even though the sibling vision
-  table right next to it does list `claude-haiku-4.5` — so a boot with no
-  live catalog answered `supports_reasoning=False` for a model that genuinely
-  supports extended thinking, silently turning a configured `thinking_level`
-  into a no-op.
 - `read_spreadsheet`: a phonetic guide (furigana) stored alongside an xlsx
   cell's text is no longer appended to the value. The shared-string reader took
   every `<t>` descendant, including the ones inside `<rPh>`, so a Japanese
