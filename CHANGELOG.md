@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- CLI/TUI: terminal markdown table renderer `_split_table_row` parsed cells by
+  splitting on raw pipe characters, which split code spans containing pipes
+  (``` `a | b` ```) and escaped pipes (`\|`) into extraneous columns and silently
+  dropped subsequent column content when normalized against header width; it
+  now parses rows with state-aware scanning that preserves backtick code spans
+  and escaped pipes.
+
 ## [2026.9.20] - 2026-09-20
 
 ### Fixed
