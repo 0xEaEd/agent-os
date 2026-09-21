@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `pptx` skill: `extract_text.py` read `slide.notes_slide` on slides without
+  notes, which makes python-pptx create and attach an empty notes part during a
+  read-only extraction; it now checks `has_notes_slide` first. Continuation
+  cells of merged table cells (`is_spanned`) are skipped so a merged header is
+  emitted once (#2666).
+
 - Slack channel: `send_file` passed a composite `<channel_id>|<thread_ts>`
   target straight through as `channel_id`, so a thread upload failed with
   `channel_not_found`. It now splits the target the way `send` does, threads
