@@ -495,25 +495,10 @@ async def web_fetch(
             continue
         break
 
-    # --- Non-HTML: return as-is ---
-    is_html = "html" in content_type.lower()
-    if not is_html:
-        result = {
-            "url": url,
-            "final_url": final_url,
-            "status": status,
-            "content_type": content_type,
-            "title": "",
-            "extract_mode": extract_mode,
-            "extractor": "raw",
-            "truncated": body_truncated,
-            "length": len(raw_html),
-            "text": _wrap_content(final_url, raw_html),
-        }
-        _cache[cache_key] = result
-        return json.dumps(_apply_max_chars(result, effective_max_chars), ensure_ascii=False)
-
     # --- Error HTTP status: return empty ---
+    # Checked before the non-HTML early return: an error response is an error
+    # regardless of content type, so a 4xx/5xx JSON/text body must take this
+    # path instead of being returned and cached as raw success (#3231).
     if status >= 400:
         hint = (
             "rate-limited or blocked upstream; try a different URL from search results, "
@@ -537,6 +522,24 @@ async def web_fetch(
         if status not in _TRANSIENT_STATUSES:
             _cache[cache_key] = result
         return json.dumps(result, ensure_ascii=False)
+
+    # --- Non-HTML: return as-is ---
+    is_html = "html" in content_type.lower()
+    if not is_html:
+        result = {
+            "url": url,
+            "final_url": final_url,
+            "status": status,
+            "content_type": content_type,
+            "title": "",
+            "extract_mode": extract_mode,
+            "extractor": "raw",
+            "truncated": body_truncated,
+            "length": len(raw_html),
+            "text": _wrap_content(final_url, raw_html),
+        }
+        _cache[cache_key] = result
+        return json.dumps(_apply_max_chars(result, effective_max_chars), ensure_ascii=False)
 
     # --- Extraction pipeline ---
     # Try local extractors first (zero-cost, handles ~90% of mainstream pages),
