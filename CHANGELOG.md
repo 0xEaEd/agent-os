@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `poolsdotfun` skill: a boolean flag before the subcommand (`--json pools`)
+  consumed the subcommand as its value, so the command ran without one. Flags
+  that take no argument no longer swallow the positional (#2863).
+
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed
