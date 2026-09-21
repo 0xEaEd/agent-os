@@ -17,6 +17,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   The username must now sit on a word boundary at both ends: a word
   character after it is a longer username, and one before the `@` is an
   address (#2464).
+- Shell policy (Windows): the denylist prefix that anchors `rm` / `ri` / `rd`
+  / `erase` through a `powershell -c` wrapper only understood flags with no
+  value, so `powershell -ExecutionPolicy Bypass -Command "rm C:\x"` (and
+  `-ep Bypass`, `-WindowStyle Hidden`, `-ep:Bypass`) came back
+  `allowed=True`. The wrapper is now modelled as a repeatable unit whose flags
+  may carry a value, so a wrapper nested in a wrapper
+  (`cmd /c powershell -ep bypass -c "rm C:\x"`), PowerShell's call operator
+  and script block (`-Command "& {rm C:\x}"`), doubled or escaped payload
+  quotes, and whitespace after the opening quote are all seen through as well
+  (#2485).
+- `web_fetch` with `extract_mode="text"` passed extracted markdown straight to
+  `html2text` (an HTML parser), which collapsed multiline paragraphs into one
+  run-on line and left markdown syntax and angle brackets unparsed; it now
+  walks a real CommonMark token stream to strip markdown formatting while
+  preserving paragraph and list structure
+  ([#2482](https://github.com/use-agent-os/agent-os/issues/2482)).
+- Tools: `write_file` reported `len(content)` -- Unicode code points -- as
+  "bytes", so every multibyte character was under-counted (ten emoji came
+  back as "Written 10 bytes" for a 40-byte file) and callers comparing the
+  figure against disk limits or byte budgets reasoned from the wrong number.
+  The content is now encoded once and written as bytes, and the report is
+  the length of what reached the disk (#2478).
+- `rwa_lookup.py` in the `robinhood-rwa-addresses` bundled skill failed to
+  write card artifacts when target output paths specified non-existent parent
+  directories; it now creates parent directories recursively before writing.
 - Skills (hub scanner): `_strip_fenced_code_blocks` only recognized exactly-
   three-backtick fences, so a `~~~`-fenced example (CommonMark-valid) was
   scanned as plain text and scored `severity="dangerous"` -- the same
@@ -37,6 +62,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
   dropped rather than mis-rendered
   ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- Scheduler/heartbeat: `active_hours` is read in the host's local time, as the
+  heartbeat module docstring has always defined it ("in 24-hour local time").
+  Both window checks took `.hour` straight off the `datetime.now(UTC)` their
+  callers pass — `HeartbeatRunner.poll`, `HeartbeatLoop._tick` and the cron
+  `wakeMode="now"` path `HeartbeatLoop.run_once_now` — so on any host outside
+  UTC the configured window was silently shifted by the host's offset, with
+  nothing in the logs to say why. On a UTC+9 host, `active_hours: [9, 21]`
+  went quiet through the working day and fired at night. The two duplicated
+  checks are now one shared helper that converts to local time first.
+  **Behaviour-changing:** an operator who set `active_hours` to compensate for
+  the old UTC reading will see their window move by their offset on upgrade,
+  and should set it back to the local hours they actually want
+  (#2603).
+
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
   `_find_all` advanced its cursor past the whole needle, so the overlapping
