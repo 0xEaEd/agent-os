@@ -151,7 +151,10 @@ file is written:
 The script discovers fields via `pypdf.PdfReader.get_fields()` and updates
 them with `update_page_form_field_values()`. Fields not present in the JSON
 are left untouched. Run with `--list-fields` to enumerate the form's fields
-without filling.
+without filling. If `form.pdf` has no AcroForm at all (a generated report, a
+scan, anything that is not a form), the fill is refused with exit 2 and no
+output file is written or overwritten — `--list-fields` is the way to check
+first, and correctly returns `{}` for these.
 
 Caveats:
 
@@ -159,8 +162,11 @@ Caveats:
   rather than `true` — inspect with `--list-fields` to discover.
 - AcroForm fills only. XFA forms (used by some legal templates) require
   Adobe-specific tooling and are out of scope.
-- Some signed PDFs invalidate the signature when fields change. Strip
-  signatures explicitly with `--clear-signatures` if that is intended.
+- Filling a signed PDF invalidates its digital signature: `pypdf` rewrites
+  the document, and the signature covers the bytes it replaces. `form_fill.py`
+  has no flag to strip signatures first — signature operations are out of
+  scope (see Boundaries) — so fill an unsigned copy when the signature has to
+  survive.
 
 ---
 

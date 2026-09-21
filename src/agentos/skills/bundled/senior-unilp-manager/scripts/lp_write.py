@@ -114,8 +114,10 @@ senior-unilp-manager — Uniswap V4 LP writes (DRY RUN unless --broadcast --conf
            (--tick <t> | --price <currency1 per currency0>) [--allow-odd-tier]
            hook-less pools only; the starting price can never be changed afterwards
   mint     --pool <poolId> (--tick-lower <t> --tick-upper <t>)
-           (--amount0 <n> | --amount1 <n> | --liquidity <raw>)
+           (--amount0 <n|max> | --amount1 <n|max> | --liquidity <raw>)
            [--slippage-bps 100] [--recipient <addr>] [--allow-hooked]
+           "max" deposits the signer's whole ERC-20 balance and caps the slippage
+           buffer at it. --pool alone is enough for any pool this skill has read before.
   increase --token-id <id> (--amount0 <n> | --amount1 <n> | --liquidity <raw>)
            [--slippage-bps 100] [--recipient <addr>]   recipient = native SWEEP refund
   decrease --token-id <id> (--pct <0-100> | --liquidity <raw>) [--slippage-bps 100]
@@ -384,18 +386,110 @@ def check_allowances(client, chain: dict, owner: str, currencies: list[str]) -> 
     return rows
 
 
-def allowance_problem(row: dict, needed: int, now_secs: int) -> str | None:
+class Problem(str):
+    """A reason the mint cannot settle, tagged with what would fix it.
+
+    ``kind`` is ``"balance"`` (the wallet is short — a sizing problem) or
+    ``"approval"`` (Permit2 / ERC-20 legs — run ``approve``). The two used to share one
+    message that always ended in "run approve", which sent an agent whose only fault was
+    a +100 bps buffer larger than its balance off to refresh approvals it already had.
+    """
+
+    kind: str
+
+    def __new__(cls, kind: str, message: str) -> Problem:
+        self = super().__new__(cls, message)
+        self.kind = kind
+        return self
+
+    @property
+    def message(self) -> str:
+        return str(self)
+
+
+def allowance_problem(row: dict, needed: int, now_secs: int, *,
+                      required: int | None = None) -> Problem | None:
+    """Why ``needed`` base units of this currency cannot be pulled, or None.
+
+    ``needed`` is the slippage-padded maximum the transaction may take; ``required`` is
+    the exact amount the position needs at today's price. When the balance covers
+    ``required`` but not ``needed``, the shortfall is the buffer, and the message says
+    so — that is fixed by ``--amount<n> max`` or a smaller ``--slippage-bps``, not by
+    an approval.
+    """
     if row["native"]:
         return None
     if row["balance"] < needed:
-        return f"balance {row['balance']} < required {needed}"
+        if required is not None and row["balance"] >= required:
+            return Problem(
+                "balance",
+                f"balance {row['balance']} covers the {required} required but not the "
+                f"slippage buffer ({needed}) — pass --amount0/--amount1 max to size from "
+                "the wallet and cap the buffer at the balance, or lower --slippage-bps",
+            )
+        return Problem("balance", f"balance {row['balance']} < required {needed}")
     if row["erc20ToPermit2"] < needed:
-        return f"ERC20 approval to Permit2 is {row['erc20ToPermit2']}, need {needed}"
+        return Problem("approval",
+                       f"ERC20 approval to Permit2 is {row['erc20ToPermit2']}, need {needed}")
     if row["permit2ToPosm"] < needed:
-        return f"Permit2 approval to PositionManager is {row['permit2ToPosm']}, need {needed}"
+        return Problem("approval", f"Permit2 approval to PositionManager is "
+                                   f"{row['permit2ToPosm']}, need {needed}")
     if row["permit2Expiration"] != 0 and row["permit2Expiration"] < now_secs:
-        return f"Permit2 approval expired at {_iso(row['permit2Expiration'])}"
+        return Problem("approval",
+                       f"Permit2 approval expired at {_iso(row['permit2Expiration'])}")
     return None
+
+
+_MAX_WORDS = {"max", "all"}
+
+
+def resolve_max_amounts(client, chain: dict, owner: str, args: dict,
+                        pool_key: dict) -> dict[str, int]:
+    """Turn ``--amount0/--amount1 max`` into the wallet's balance, in place.
+
+    "Deposit all of it" is the common single-sided request, and until now it meant a
+    hand-written ``balanceOf`` call and a second round trip when the slippage buffer
+    pushed the maximum past the balance. Each maxed side is rewritten as raw base units
+    (``<n>w``) so :func:`size_liquidity` needs no change, and the returned map tells
+    :func:`cmd_mint` which sides to cap at the balance. Native currency is refused:
+    "all the ETH" would leave nothing for gas.
+    """
+    maxed: dict[str, int] = {}
+    wanted = []
+    for side, currency in (("amount0", pool_key["currency0"]),
+                           ("amount1", pool_key["currency1"])):
+        raw = opt_str(args, side)
+        if raw is None or str(raw).strip().lower() not in _MAX_WORDS:
+            continue
+        if is_native_currency(currency):
+            raise RuntimeError(
+                f"--{side} max is not allowed for the native currency — it would leave "
+                "nothing for gas. Give an explicit amount."
+            )
+        wanted.append((side, checksum_address(currency)))
+    if not wanted:
+        return maxed
+    balances = client.multicall([
+        {"address": currency, "abi": ERC20_ABI, "functionName": "balanceOf", "args": [owner]}
+        for _side, currency in wanted
+    ], allow_failure=False)
+    for (side, _currency), row in zip(wanted, balances):
+        balance = int(row["result"])
+        args[side] = f"{balance}w"
+        maxed[side] = balance
+    return maxed
+
+
+def cap_at_balance(amount_max: int, balance: int) -> tuple[int, str]:
+    """Clamp a slippage-padded maximum to what the wallet holds.
+
+    Only meaningful when the amount itself came from the balance: the padding exists
+    to absorb price drift, and a wallet cannot supply more than it has. Returns the
+    (possibly lowered) maximum and a note for the plan table.
+    """
+    if amount_max > balance:
+        return balance, "capped at balance"
+    return amount_max, ""
 
 
 # ---------------------------------------------------------------------------
@@ -866,6 +960,7 @@ def cmd_mint(client, chain: dict, args: dict, signer: dict, *,
         raise RuntimeError("--tick-lower must be below --tick-upper after snapping to "
                            "tickSpacing")
 
+    maxed = resolve_max_amounts(client, chain, signer["address"], args, pool_key)
     sqrt_lower = get_sqrt_ratio_at_tick(tick_lower)
     sqrt_upper = get_sqrt_ratio_at_tick(tick_upper)
     liquidity = size_liquidity(pool["sqrtPriceX96"], sqrt_lower, sqrt_upper, args, info0, info1)
@@ -879,6 +974,12 @@ def cmd_mint(client, chain: dict, args: dict, signer: dict, *,
     bps = opt_int(args, "slippage-bps", DEFAULT_SLIPPAGE_BPS)
     amount0_max = 0 if required["amount0"] == 0 else with_slippage_up(required["amount0"], bps)
     amount1_max = 0 if required["amount1"] == 0 else with_slippage_up(required["amount1"], bps)
+    # A side sized from the wallet cannot be padded past the wallet.
+    cap0 = cap1 = ""
+    if "amount0" in maxed:
+        amount0_max, cap0 = cap_at_balance(amount0_max, maxed["amount0"])
+    if "amount1" in maxed:
+        amount1_max, cap1 = cap_at_balance(amount1_max, maxed["amount1"])
 
     recipient = opt_str(args, "recipient")
     recipient = checksum_address(recipient) if recipient else signer["address"]
@@ -889,8 +990,10 @@ def cmd_mint(client, chain: dict, args: dict, signer: dict, *,
     now_secs = int(client.get_block()["timestamp"], 16)
     allowances = check_allowances(client, chain, signer["address"],
                                   [pool_key["currency0"], pool_key["currency1"]])
-    problems = [p for p in (allowance_problem(allowances[0], amount0_max, now_secs),
-                            allowance_problem(allowances[1], amount1_max, now_secs)) if p]
+    problems = [p for p in (
+        allowance_problem(allowances[0], amount0_max, now_secs, required=required["amount0"]),
+        allowance_problem(allowances[1], amount1_max, now_secs, required=required["amount1"]),
+    ) if p]
 
     rows = [
         ["signer", signer["address"] + ("  (simulate-only, --from)"
@@ -907,9 +1010,9 @@ def cmd_mint(client, chain: dict, args: dict, signer: dict, *,
         ["requires", f"{fmt_units(required['amount0'], info0['decimals'])} {info0['symbol']} + "
                      f"{fmt_units(required['amount1'], info1['decimals'])} {info1['symbol']}"],
         ["amount0Max", f"{fmt_units(amount0_max, info0['decimals'])} {info0['symbol']}  "
-                       f"(+{bps} bps)"],
+                       f"(+{bps} bps{', ' + cap0 if cap0 else ''})"],
         ["amount1Max", f"{fmt_units(amount1_max, info1['decimals'])} {info1['symbol']}  "
-                       f"(+{bps} bps)"],
+                       f"(+{bps} bps{', ' + cap1 if cap1 else ''})"],
         ["recipient", recipient],
         ["max tick drift", f"{max_drift}  (re-checked against the pool just before sending)"],
         ["actions", describe_actions(plan["actions"])],
@@ -919,10 +1022,16 @@ def cmd_mint(client, chain: dict, args: dict, signer: dict, *,
     ]
 
     if problems and not signer["simulateOnly"]:
-        print(heading("mint — blocked on approvals"))
+        needs_approval = any(p.kind == "approval" for p in problems)
+        print(heading("mint — blocked on approvals" if needs_approval
+                      else "mint — blocked: the wallet cannot cover the amounts"))
         print(render_kv(rows))
-        print("\n  Run this first:\n    python3 scripts/lp_write.py approve --token <address> "
-              "--broadcast --confirm <hash>")
+        if needs_approval:
+            print("\n  Run this first:\n    python3 scripts/lp_write.py approve --token <address> "
+                  "--broadcast --confirm <hash>")
+        else:
+            print("\n  Approvals are fine. Re-size the position: --amount0/--amount1 max "
+                  "deposits the whole balance,\n  or lower the amount / --slippage-bps.")
         sys.exit(2)
     if problems:
         # --from is a planning mode: keep going so the simulation still reports what the

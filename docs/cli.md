@@ -410,6 +410,20 @@ agentos configure x-search --no-x-search-enabled
 The `x_search` tool stays hidden from the agent until an xAI credential is
 reachable. See [`x-search.md`](x-search.md).
 
+Image generation:
+
+```sh
+agentos configure image --image-provider openai --primary openai/gpt-image-1 --api-key-env OPENAI_API_KEY
+agentos configure image --no-image-enabled
+```
+
+Memory embedding:
+
+```sh
+agentos configure memory --memory-provider local --onnx-dir ~/.agentos/models/embeddings/google-embeddinggemma-300m
+agentos configure memory --memory-provider openai --model text-embedding-3-small --api-key-env OPENAI_API_KEY
+```
+
 Channels:
 
 Built-in channel types are `discord`, `email`, `slack`, and `telegram`; `agentos
@@ -875,6 +889,28 @@ Read:
 - [`agents.md`](agents.md)
 - [`scheduling.md`](scheduling.md)
 - [`approvals-and-permissions.md`](approvals-and-permissions.md)
+
+## Sandbox Posture Controls
+
+```sh
+agentos sandbox status
+agentos sandbox status --json
+agentos sandbox bypass
+agentos sandbox full
+agentos sandbox on
+agentos sandbox reset
+```
+
+`agentos sandbox status` shows the current sandbox posture (`on`, `bypass`, `full`), whether runtime sandboxing and security grading are active, and default permissions.
+
+- `agentos sandbox on`: Restores the default sandboxed posture (`sandbox = true`, `security_grading = true`, `permissions.default_mode = "off"`).
+- `agentos sandbox bypass`: Disables runtime sandboxing and auto-grants approvals except for sensitive paths (`permissions.default_mode = "bypass"`).
+- `agentos sandbox full`: Disables runtime sandboxing and skips approval and sensitive-path gates (`permissions.default_mode = "full"`).
+- `agentos sandbox reset`: Resets sandbox posture to AgentOS defaults (`bypass`).
+
+Pass `--config <path>` to target an explicit configuration file. Changes require a gateway restart (`agentos gateway restart`) to apply to running processes.
+
+Read: [`tools-and-sandbox.md`](tools-and-sandbox.md)
 
 ## Cost, Diagnostics, and Replay
 

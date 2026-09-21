@@ -29,6 +29,15 @@ _LOOSE_IMAGE_LINE_RE = re.compile(r"^\s*(?:image|file)\s*:\s*(?P<target>\S+)\s*$
 
 
 def artifact_delivery_key(artifact: dict[str, Any]) -> str:
+    """Stable identity for one artifact on the channel delivery path.
+
+    Delivery identity is keyed on content and name: two files with different
+    names but matching bytes (two empty CSVs, two regional reports) are distinct
+    deliverables, while two artifacts with matching content and matching name
+    are deduped to avoid duplicate delivery.
+    """
+    name = artifact.get("name")
+    qualifier = f"|name:{name}" if isinstance(name, str) and name else ""
     for field in (
         "sha256",
         "path",
@@ -36,11 +45,13 @@ def artifact_delivery_key(artifact: dict[str, Any]) -> str:
         "signed_download_url",
         "download_url",
         "id",
+        "artifact_id",
         "name",
     ):
         value = artifact.get(field)
         if value:
-            return f"{field}:{value}"
+            # "name" is already the qualifier; do not repeat it.
+            return f"{field}:{value}" if field == "name" else f"{field}:{value}{qualifier}"
     return ""
 
 
