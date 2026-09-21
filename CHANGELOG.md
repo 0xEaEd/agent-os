@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+
+- Telegram: a background result or a subagent completion announcement for a
+  turn that arrived in a forum topic reaches the group again. Both out-of-turn
+  builders carried `metadata["channel"]` only for Slack, so the topic id alone
+  landed in `reply_to` and `TelegramChannel` used it as the chat id — the
+  answer went to an unrelated chat or failed with `chat not found`, and both
+  call sites swallowed the error. They now use the same `thread_id and
+  channel_id` rule as the in-turn reply path. (#2390)
 - `docx` `edit_docx.py`: `replace_text` now walks the paragraphs inside text
   boxes as well as the body, tables and headers/footers. Word keeps text-box
   content in a `<w:txbxContent>` nested inside a run, which no paragraph walk
