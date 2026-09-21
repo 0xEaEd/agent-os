@@ -162,18 +162,58 @@ def test_a_near_miss_of_the_service_account_pattern_is_not_gated(name: str) -> N
 
 @pytest.mark.parametrize(
     "path",
-    [
-        "~/.terraform.d/credentials.tfrc.json",
-        "~/.cargo/credentials.toml",
-        "~/.m2/settings.xml",
-    ],
+    ["~/.terraform.d/credentials.tfrc.json", "~/.cargo/credentials.toml"],
 )
 def test_the_files_that_also_need_new_value_shapes_are_at_least_gated(path: str) -> None:
-    """Gating is necessary but not sufficient here: a bare ``token`` key and
-    an XML ``<password>`` element are shapes the assignment pass does not
-    know. That is a separate change; this pins that the gate no longer stands
-    in its way."""
+    """Gating is necessary but not sufficient here: a bare ``token`` key is a
+    shape the assignment pass does not know. That is a separate change; this
+    pins that the gate no longer stands in its way."""
     assert redact.reads_credential_file(f"cat {path}") is True
+
+
+def test_m2_settings_is_not_gated_because_the_pass_cannot_read_it() -> None:
+    """``~/.m2/settings.xml`` keeps its password in ``<password>`` elements,
+    which the assignment pass does not parse, so gating the whole ``~/.m2``
+    directory bought nothing -- and cost every JVM source under its cache the
+    source-code exemption."""
+    assert redact.reads_credential_file("cat ~/.m2/settings.xml") is False
+
+
+# ── source under a build cache keeps its exemption ──────────────────────────
+
+RUST_SOURCE = 'let password = "correct-horse-battery-staple";\n'
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "~/.cargo/registry/src/x/lib.rs",
+        "~/.cargo/registry/src/index.crates.io-6f17d22bba15001f/reqwest-0.12/src/auth.rs",
+        "~/.gradle/caches/modules-2/files-2.1/org.example/lib/1.0/Foo.java",
+        "~/.m2/repository/org/example/lib/1.0/sources/Auth.kt",
+        "~/.terraform.d/plugins/registry.terraform.io/x/main.go",
+    ],
+)
+def test_source_under_a_build_cache_is_not_masked(path: str) -> None:
+    """The review's measurement: gating ``~/.cargo`` and ``~/.gradle`` as
+    directories stripped the source-code exemption from every crate and JVM
+    source under their caches, so ``let password = "..."`` in a vendored
+    ``auth.rs`` came back as ``«redacted:…»`` -- the identifier masking the
+    exemption exists to prevent, on paths Rust and JVM agents read constantly."""
+    full = path.replace("~", HOME)
+
+    assert redact._is_source_code_path(full) is True
+    assert redact.redact_file_output(RUST_SOURCE, path=full) == RUST_SOURCE
+
+
+def test_a_credential_file_under_a_build_cache_is_still_masked() -> None:
+    """Dropping the directory list loses nothing the pass could mask: the
+    files it can read are matched by name wherever they sit."""
+    text = "password = 'cargo-hunter2-9f2b'\n"
+
+    out = redact.redact_file_output(text, path=f"{HOME}/.cargo/credentials.toml")
+
+    assert "cargo-hunter2-9f2b" not in out
 
 
 # ── mask, do not block ──────────────────────────────────────────────────────

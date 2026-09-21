@@ -904,6 +904,10 @@ CREDENTIAL_HOME_DIRS: tuple[str, ...] = (
 #: configuration often enough that hard-blocking ``read_file`` on it would
 #: break ordinary work -- ``gradle.properties`` sits in every Gradle project,
 #: usually with nothing secret in it, and sometimes with ``signing.password``.
+#: Files, not directories: gating all of ``~/.cargo`` or ``~/.gradle`` would
+#: strip the source-code exemption from every crate and JVM source under
+#: their caches, and the one file that would have gained from it,
+#: ``~/.m2/settings.xml``, holds its password in XML the pass cannot read.
 _REDACT_ONLY_CREDENTIAL_FILE_NAMES: frozenset[str] = frozenset(
     {
         ".boto",
@@ -919,10 +923,6 @@ _REDACT_ONLY_CREDENTIAL_FILE_NAMES: frozenset[str] = frozenset(
 #: ``service-account.json``, ``my-project-service_account-key.json`` -- a GCP
 #: service-account key by any of its usual names.
 _SERVICE_ACCOUNT_FILE_RE = re.compile(r"service[-_]?account.*\.json$", re.IGNORECASE)
-
-#: Directories masked when read but not blocked, for the same reason: the
-#: credential file sits next to caches and build config an agent needs.
-_REDACT_ONLY_CREDENTIAL_DIRS: tuple[str, ...] = (".cargo", ".gradle", ".m2", ".terraform.d")
 
 
 def _is_credential_file_name(name: str) -> bool:
@@ -943,7 +943,7 @@ def _in_credential_dir(path: str) -> bool:
     and not ``~/.config/other/gh/x``.
     """
     segments = [part.lower() for part in path.replace("\\", "/").split("/")[:-1]]
-    for entry in (*CREDENTIAL_HOME_DIRS, *_REDACT_ONLY_CREDENTIAL_DIRS):
+    for entry in CREDENTIAL_HOME_DIRS:
         wanted = entry.lower().split("/")
         width = len(wanted)
         if any(segments[i : i + width] == wanted for i in range(len(segments) - width + 1)):
