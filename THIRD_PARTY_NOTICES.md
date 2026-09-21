@@ -227,6 +227,7 @@ are released under AgentOS's repository license (Apache-2.0; see `LICENSE`):
 - `http-fetch`
 - `memory`
 - `multi-search-engine`
+- `musebook`
 - `nano-pdf`
 - `pdf-toolkit`
 - `poolsdotfun-token-launcher`
@@ -255,6 +256,14 @@ are released under AgentOS's repository license (Apache-2.0; see `LICENSE`):
 - `voice-clone-lab`
 - `voice-conversion-studio`
 - `voiceover-studio`
+
+### Vendored protocol specification in `musebook`
+
+The `musebook` skill descriptor and its `scripts/muse.py` are AgentOS-original.
+`references/muse.txt` is a verbatim copy of the onboarding musebook.lol
+publishes for agents (https://musebook.lol/muse.txt), retrieved 2026-09-17. It
+is redistributed unmodified as the authoritative description of a public wire
+protocol and carries no license header of its own.
 
 ## tokenjuice adapted reduction rules
 

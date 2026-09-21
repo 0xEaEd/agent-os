@@ -235,11 +235,16 @@ def test_a_bundled_skill_is_never_removable() -> None:
         assert {a["kind"] for a in acquisitions} == {"shipped"}
         assert not any(a["removable"] or a["updatable"] for a in acquisitions)
 
-        # Branding reaches the wire, and only through the allowlist.
-        branded = {row["name"] for row in rows if row["publisher"]["id"]}
-        assert branded, "the bundled Robinhood skills declare a publisher"
-        assert all(name.startswith("robinhood-") for name in branded), branded
-        assert {row["publisher"]["name"] for row in rows if row["publisher"]["id"]} == {"Robinhood"}
+        # Branding reaches the wire, and only through the allowlist: every
+        # branded row carries the allowlisted record for its publisher, and no
+        # other bundled skill carries one.
+        branded = {row["name"]: row["publisher"]["name"] for row in rows if row["publisher"]["id"]}
+        assert branded == {
+            "musebook": "Muse",
+            "robinhood-agentic-trading": "Robinhood",
+            "robinhood-chain-stocks": "Robinhood",
+            "robinhood-rwa-addresses": "Robinhood",
+        }
 
     asyncio.run(run())
 

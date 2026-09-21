@@ -26,26 +26,28 @@ _SHOT_RE = re.compile(
     r"===\s*SHOT_(\d+)\s*===(.*?)(?====\s*SHOT_\d+\s*===|\Z)",
     re.DOTALL,
 )
-_DUR_RE = re.compile(r"^\s*DURATION_S\s*:\s*(\d+)", re.MULTILINE)
+# Shot durations are seconds and may carry a fraction (``3.5``); matching
+# only ``\d+`` truncated that to ``3`` and every later cue drifted early.
+_DUR_RE = re.compile(r"^\s*DURATION_S\s*:\s*(\d+(?:\.\d+)?)", re.MULTILINE)
 _VO_RE = re.compile(r"^\s*VOICEOVER\s*:\s*(.+?)\s*$", re.MULTILINE)
 
 
-def parse_script(text: str) -> list[tuple[int, int, str]]:
+def parse_script(text: str) -> list[tuple[int, float, str]]:
     """Return [(shot_number, duration_s, voiceover), ...].
 
     Voiceover values of literal 'none' / empty / dashes are normalised
     to empty strings; such shots produce no SRT cue but their duration
     still advances the timestamp cursor.
     """
-    out: list[tuple[int, int, str]] = []
+    out: list[tuple[int, float, str]] = []
     for match in _SHOT_RE.finditer(text):
         shot_no = int(match.group(1))
         block = match.group(2)
         dur_m = _DUR_RE.search(block)
         vo_m = _VO_RE.search(block)
         if not dur_m:
-            continue
-        duration = int(dur_m.group(1))
+            raise ValueError(f"SHOT_{shot_no} has no DURATION_S field")
+        duration = float(dur_m.group(1))
         voiceover = (vo_m.group(1) if vo_m else "").strip()
         if voiceover.lower() in {"", "none", "-", "--"}:
             voiceover = ""
@@ -63,7 +65,7 @@ def fmt_ts(total_ms: int) -> str:
 
 
 def build_srt(
-    shots: list[tuple[int, int, str]],
+    shots: list[tuple[int, float, str]],
     gap_ms: int,
     leading_offset_ms: int = 0,
 ) -> str:
@@ -77,7 +79,8 @@ def build_srt(
     cursor_ms = max(0, leading_offset_ms)
     cue_index = 1
     for _shot_no, duration_s, voiceover in shots:
-        shot_ms = duration_s * 1000
+        # Round rather than truncate: ``1.1 * 1000`` is not exactly 1100.0.
+        shot_ms = int(round(duration_s * 1000))
         if voiceover:
             start = cursor_ms
             # Hold the line until ~gap_ms before the next shot starts so
@@ -128,7 +131,11 @@ def main() -> int:
         print("Error: empty script input.", file=sys.stderr)
         return 1
 
-    shots = parse_script(text)
+    try:
+        shots = parse_script(text)
+    except ValueError as exc:
+        print(f"Error: malformed script — {exc}.", file=sys.stderr)
+        return 1
     if not shots:
         print(
             "Error: no SHOT_N blocks found in script. Did ai-video-script "

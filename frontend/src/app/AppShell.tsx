@@ -175,7 +175,7 @@ export const NAV_SHORTCUTS: ReadonlyArray<NavShortcutSpec> = [
   { combo: 'g n', path: 'channels', descriptionKey: 'shell.shortcutNavChannels' },
   { combo: 'g m', path: 'mcp', descriptionKey: 'shell.shortcutNavMcp' },
   { combo: 'g k', path: 'skills', descriptionKey: 'shell.shortcutNavSkills' },
-  { combo: 'g j', path: 'projects', descriptionKey: 'shell.shortcutNavProjects' },
+  { combo: 'g p', path: 'projects', descriptionKey: 'shell.shortcutNavProjects' },
   { combo: 'g s', path: 'sessions', descriptionKey: 'shell.shortcutNavSessions' },
   { combo: 'g y', path: 'memory', descriptionKey: 'shell.shortcutNavMemory' },
   { combo: 'g a', path: 'agents', descriptionKey: 'shell.shortcutNavAgents' },
@@ -184,7 +184,7 @@ export const NAV_SHORTCUTS: ReadonlyArray<NavShortcutSpec> = [
   { combo: 'g ,', path: 'settings', descriptionKey: 'shell.shortcutNavSettings' },
   { combo: 'g e', path: 'env', descriptionKey: 'shell.shortcutNavEnv' },
   { combo: 'g l', path: 'logs', descriptionKey: 'shell.shortcutNavLogs' },
-  { combo: 'g p', path: 'approvals', descriptionKey: 'shell.shortcutNavApprovals' },
+  { combo: 'g v', path: 'approvals', descriptionKey: 'shell.shortcutNavApprovals' },
 ]
 
 function NavShortcut({

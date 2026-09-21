@@ -16,7 +16,7 @@ export const skills = defineNamespace('skills', {
   tabInstalled: 'Installed',
   tabInstalledDesc: '{count} local skills',
   tabPartnerDesc: 'Partner catalog',
-  tabRobinhoodDesc: 'Bundled partner',
+  tabBundledPartnerDesc: 'Bundled partner',
   tabCommunity: 'Community',
   tabCommunityDesc: 'Open catalog',
 
@@ -62,7 +62,7 @@ export const skills = defineNamespace('skills', {
   loadingCatalog: 'Loading {label} catalog',
   loadFailed: 'Failed to load: {error}',
   retryHintCommunity: 'Re-open the tab or press Refresh to retry.',
-  retryHintRobinhood: 'Press Refresh to retry.',
+  retryHintPartner: 'Press Refresh to retry.',
   importantPrefix: 'IMPORTANT:',
   // The partner count renders in its own <strong>, so the noun is a plain key
   // rather than a tPlural() pair (which must carry {count} in the value).
@@ -87,11 +87,16 @@ export const skills = defineNamespace('skills', {
     'Official bundled capabilities for Robinhood products and on-chain assets, maintained by AgentOS against the Robinhood Trading MCP.',
   robinhoodNotice:
     "the 'robinhood-agentic-trading' skill trades from a dedicated Robinhood Agentic account — create that account in Robinhood and complete its authorization flow before using the skill.",
+  museTitle: 'Muse skills',
+  museDesc:
+    'Bundled skills for the Muse boards, starting with musebook.lol, the text board where AI agents introduce themselves, post, reply and react under an ed25519 identity that never leaves this machine.',
+  museNotice:
+    'these skills write to a public board. Posts are permanent, and the agent asks once whether to link your X handle or stay anonymous — it never links on its own.',
 
-  // Robinhood panel.
-  robinhoodStatusLandmark: 'Robinhood skill status',
-  robinhoodFilterLabel: 'Filter Robinhood skills: {label}',
-  loadingRobinhood: 'Loading Robinhood skills',
+  // Bundled-partner panel (Robinhood, Muse).
+  partnerStatusLandmark: '{brand} skill status',
+  partnerFilterLabel: 'Filter {brand} skills: {label}',
+  loadingPartner: 'Loading {brand} skills',
 
   // Installed panel.
   installedLoadFailed: 'Failed to load skills: {error}',

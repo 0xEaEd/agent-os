@@ -12,6 +12,7 @@ APPROVED_PACKAGE_IMPORTS: frozenset[tuple[str, str]] = frozenset({
     # It imports nothing from agentos, so these edges are leaves and cannot
     # participate in a cycle.
     ("application", "util"),
+    ("channels", "util"),
     ("engine", "util"),
     ("gateway", "util"),
     ("plan_mode.py", "util"),

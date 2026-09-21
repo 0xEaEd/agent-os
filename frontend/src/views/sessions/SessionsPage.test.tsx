@@ -169,10 +169,10 @@ describe('SessionsPage', () => {
     vi.useRealTimers()
   })
 
-  it('loads sessions {limit:200} and agents.list after waitForConnection', async () => {
+  it('loads sessions {limit:500} and agents.list after waitForConnection', async () => {
     wireRpc()
     renderPage()
-    await waitFor(() => expect(mockRpc.call).toHaveBeenCalledWith('sessions.list', { limit: 200 }))
+    await waitFor(() => expect(mockRpc.call).toHaveBeenCalledWith('sessions.list', { limit: 500 }))
     expect(mockRpc.call).toHaveBeenCalledWith('agents.list', {})
     expect(mockRpc.waitForConnection).toHaveBeenCalled()
   })

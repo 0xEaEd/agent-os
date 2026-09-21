@@ -42,6 +42,14 @@ PairingRequestStatus = Literal[
 ]
 
 
+def _coerce_timestamp(value: Any) -> float:
+    """Return *value* as an epoch float, or ``0.0`` when it is not one."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class PairingStoreError(RuntimeError):
     """Base error for persistent channel pairing operations."""
 
@@ -216,6 +224,30 @@ class ChannelPairingStore:
         return True
 
     @staticmethod
+    def _cleanup_rate_limits(last_requests: dict[str, Any], now: float) -> None:
+        """Drop rate-limit stamps that can no longer produce a ``rate_limited``.
+
+        The counterpart to :meth:`_cleanup_pending` for the other per-sender
+        map. ``request`` only rate-limits while
+        ``now - stamp < PAIRING_REQUEST_RATE_LIMIT_S``, so once a stamp is that
+        old it is read, found stale, and ignored on every later request — but
+        it used to be kept, one row per sender who ever got a code, for the
+        life of the store. ``sender_id`` is whoever messaged the bot, so that
+        key space is unbounded and supplied from outside.
+
+        A stamp that is not a number is treated as expired rather than raised
+        on: this sweep walks every row, and one hand-edited entry must not be
+        able to take down the pairing path for every other sender.
+        """
+        stale = [
+            sender_id
+            for sender_id, stamp in last_requests.items()
+            if now - _coerce_timestamp(stamp) >= PAIRING_REQUEST_RATE_LIMIT_S
+        ]
+        for sender_id in stale:
+            del last_requests[sender_id]
+
+    @staticmethod
     def _channel_control(control: dict[str, Any], scope: str) -> dict[str, Any]:
         channels = control.setdefault("channels", {})
         raw: dict[str, Any] = channels.setdefault(scope, {})
@@ -290,6 +322,7 @@ class ChannelPairingStore:
                     "expires_at": now + PAIRING_CODE_TTL_S,
                 }
             )
+            self._cleanup_rate_limits(last_requests, now)
             last_requests[sender_id] = now
             self._write(pending_path, pending_doc)
             self._write(self._control_path, control)
