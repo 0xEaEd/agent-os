@@ -76,6 +76,11 @@ def config_set(
         except Exception as exc:  # noqa: BLE001 - show config validation errors as CLI input errors.
             console.print(f"[red]Invalid value for {escape(key)}:[/red] {escape(str(exc))}")
             raise typer.Exit(2) from exc
+        # ``updated`` is rebuilt from a dict, so it starts with no record of
+        # which secrets came from the environment; carry that over, except for
+        # the key the operator just set on purpose.
+        updated.inherit_runtime_secrets(cfg)
+        updated.clear_runtime_secret(key)
         persist = persist_config(updated, path=config_path, restart_required=True)
         console.print(f"[{ACCENT_MARKUP}]Config:[/] {persist.path}")
         if persist.backup_path:

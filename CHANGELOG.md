@@ -28,6 +28,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
   dropped rather than mis-rendered
   ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- `agentos config set --config` (and `agents add`, onboarding and the
+  hermes/openclaw migrations, which share `onboarding.config_store.load_config`)
+  no longer copies a gateway auth token/password or the LLM API key that was
+  supplied only through `AGENTOS_AUTH_TOKEN` / `AGENTOS_AUTH_PASSWORD` /
+  `AGENTOS_LLM_API_KEY` into `config.toml`. Because the file beats the
+  environment, the copy made a later rotation of the environment value a silent
+  no-op. Setting `auth.token` or `llm.api_key` explicitly still writes it. If an
+  earlier run already wrote such a value, it stays in the file until you remove
+  it (#3269).
+
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
   `_find_all` advanced its cursor past the whole needle, so the overlapping
