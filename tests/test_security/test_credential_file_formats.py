@@ -151,6 +151,17 @@ def test_a_multi_line_netrc_entry_is_masked() -> None:
     assert "  login me\n" in out
 
 
+def test_a_netrc_value_on_the_line_after_its_keyword_is_masked() -> None:
+    """``.netrc`` tokens are whitespace-separated, so the value may follow a
+    newline; the blanks-only separator let that spelling through."""
+    text = "machine h\n  login u\n  password\n  next-line-hunter2-e\nmachine h2\n"
+
+    out = redact.redact_terminal_output(text, "cat ~/.netrc")
+
+    assert "next-line-hunter2-e" not in out
+    assert "machine h2" in out
+
+
 def test_netrc_account_is_a_second_password_and_is_masked() -> None:
     text = "machine h login u password pass-hunter2-b account acct-hunter2-c\n"
 

@@ -772,7 +772,9 @@ _CREDENTIAL_FILE_FORMATS: Mapping[str, str] = {
 #: ``.netrc`` introduces each value with a keyword: ``machine H login U
 #: password P``. ``account`` is a second password in the same format, and a
 #: value may be quoted (curl reads quotes; ftp does not).
-_NETRC_SECRET_RE = re.compile(r'(?i)\b(password|passwd|account)([ \t]+)("(?:[^"\\]|\\.)*"|\S+)')
+#: ``\s+`` rather than blanks only: ``.netrc`` tokens are whitespace-separated,
+#: so the value may sit on the line after its keyword (``password\n  secret``).
+_NETRC_SECRET_RE = re.compile(r'(?i)\b(password|passwd|account)(\s+)("(?:[^"\\]|\\.)*"|\S+)')
 
 
 def _mask_whole(_token: str) -> str:
