@@ -8,6 +8,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Channels: a slash command separated from its argument by a tab or a newline
+  was matched as a command -- `match` and `channel_dispatch`'s intercept gate
+  both split on any whitespace -- but `dispatch` extracted the argument with a
+  literal `" "`, so the argument was dropped or cut short with no fallback to
+  the model. `/rename` then read the empty argument as "clear the custom name"
+  and `/plan off` read it as "turn plan mode on", both the opposite of what was
+  asked; `/use` pinned an empty model id. The argument is now split the same way
+  the command word is found (#3254).
+
+- `robinhood-chain-stocks` skill: a node-level JSON-RPC failure -- a public
+  endpoint's rate limit, an internal error, a response body that is not a usable
+  result -- was counted as "the contract answered", so `uiMultiplier()` failing
+  for that reason reported `isStockToken: false` about a genuine Robinhood Stock
+  Token, withheld its price as "contract failed the Stock Token check", and told
+  the agent the address was an impersonator. SKILL.md reserves `false` for a
+  confirmed revert and `null` for "unverified, not disproven"; `null` was
+  unreachable from any JSON-RPC-level fault. `RpcError` now records whether the
+  contract answered, and only an execution revert counts (#3253).
+
+- In `robinhood-chain-stocks`, `chain_stocks.py` dropped genuine Stock Tokens
+  whose 60-character-capped CoinGecko name had its `Robinhood Token` suffix
+  truncated (such as IBM and SPYD), causing them to fail resolution; it now
+  recognizes bullet-prefixed truncated suffixes and strips them in `_clean_name`.
+- Telegram: `is_group_mentioned`'s plain-text check matched the bot's
+  username as a substring, so `@helper` was found inside another bot's
+  `@helperbot2` and inside `someone@helperdesk.com`, and the bot replied in
+  groups to messages that never addressed it. That check runs after every
+  entity has been examined and none was us -- not only when a message has no
+  entities -- so a `mention` entity naming a different bot reached it too.
+  The username must now sit on a word boundary at both ends: a word
+  character after it is a longer username, and one before the `@` is an
+  address (#2464).
+- Sandbox: `read_file` on `~/.docker/config.json` no longer returns Docker
+  registry credentials. The denylist entry read `~/.docker/config`, and the
+  prefix match is anchored at a path segment boundary, so it matched only a
+  file literally named `config` — a path Docker never writes. The entry is
+  now the `~/.docker` directory, matching the neighbouring `~/.aws` and
+  `~/.kube` entries and the `.docker` the redaction layer already carried (#2623).
+- Surplus provider: `claude-haiku-4.5` no longer silently loses reasoning
+  support when the Surplus catalog fetch fails at boot. The offline fallback
+  prefix table (`_SURPLUS_REASONING_PREFIXES`) listed `claude-opus-` and
+  `claude-sonnet-` but not `claude-haiku-4.5`, even though the sibling vision
+  table right next to it does list `claude-haiku-4.5` — so a boot with no
+  live catalog answered `supports_reasoning=False` for a model that genuinely
+  supports extended thinking, silently turning a configured `thinking_level`
+  into a no-op (#2615).
+- Shell policy (Windows): the denylist prefix that anchors `rm` / `ri` / `rd`
+  / `erase` through a `powershell -c` wrapper only understood flags with no
+  value, so `powershell -ExecutionPolicy Bypass -Command "rm C:\x"` (and
+  `-ep Bypass`, `-WindowStyle Hidden`, `-ep:Bypass`) came back
+  `allowed=True`. The wrapper is now modelled as a repeatable unit whose flags
+  may carry a value, so a wrapper nested in a wrapper
+  (`cmd /c powershell -ep bypass -c "rm C:\x"`), PowerShell's call operator
+  and script block (`-Command "& {rm C:\x}"`), doubled or escaped payload
+  quotes, and whitespace after the opening quote are all seen through as well
+  (#2485).
+- `web_fetch` with `extract_mode="text"` passed extracted markdown straight to
+  `html2text` (an HTML parser), which collapsed multiline paragraphs into one
+  run-on line and left markdown syntax and angle brackets unparsed; it now
+  walks a real CommonMark token stream to strip markdown formatting while
+  preserving paragraph and list structure
+  ([#2482](https://github.com/use-agent-os/agent-os/issues/2482)).
+- Tools: `write_file` reported `len(content)` -- Unicode code points -- as
+  "bytes", so every multibyte character was under-counted (ten emoji came
+  back as "Written 10 bytes" for a 40-byte file) and callers comparing the
+  figure against disk limits or byte budgets reasoned from the wrong number.
+  The content is now encoded once and written as bytes, and the report is
+  the length of what reached the disk (#2478).
+- `rwa_lookup.py` in the `robinhood-rwa-addresses` bundled skill failed to
+  write card artifacts when target output paths specified non-existent parent
+  directories; it now creates parent directories recursively before writing.
 - Skills (hub scanner): `_strip_fenced_code_blocks` only recognized exactly-
   three-backtick fences, so a `~~~`-fenced example (CommonMark-valid) was
   scanned as plain text and scored `severity="dangerous"` -- the same
@@ -29,14 +100,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   dropped rather than mis-rendered
   ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
 
-- Channels: a slash command separated from its argument by a tab or a newline
-  was matched as a command -- `match` and `channel_dispatch`'s intercept gate
-  both split on any whitespace -- but `dispatch` extracted the argument with a
-  literal `" "`, so the argument was dropped or cut short with no fallback to
-  the model. `/rename` then read the empty argument as "clear the custom name"
-  and `/plan off` read it as "turn plan mode on", both the opposite of what was
-  asked; `/use` pinned an empty model id. The argument is now split the same way
-  the command word is found (#3254).
+- Scheduler/heartbeat: `active_hours` is read in the host's local time, as the
+  heartbeat module docstring has always defined it ("in 24-hour local time").
+  Both window checks took `.hour` straight off the `datetime.now(UTC)` their
+  callers pass — `HeartbeatRunner.poll`, `HeartbeatLoop._tick` and the cron
+  `wakeMode="now"` path `HeartbeatLoop.run_once_now` — so on any host outside
+  UTC the configured window was silently shifted by the host's offset, with
+  nothing in the logs to say why. On a UTC+9 host, `active_hours: [9, 21]`
+  went quiet through the working day and fired at night. The two duplicated
+  checks are now one shared helper that converts to local time first.
+  **Behaviour-changing:** an operator who set `active_hours` to compensate for
+  the old UTC reading will see their window move by their offset on upgrade,
+  and should set it back to the local hours they actually want
+  (#2603).
 
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
@@ -79,6 +155,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   per grid column it spans. Each `<w:tc>` is now visited exactly once, nested
   table text is included, and a corrupt file raises `ValueError` so the CLI
   exits 2 with a clean message instead of an unhandled traceback. (#2154)
+- `web_fetch` tool: error HTTP statuses (4xx/5xx) served as non-HTML content
+  (a JSON or plain-text API response) were returned as `extractor: "raw"`
+  success without the `error` hint and cached for 15 minutes, because the
+  non-HTML early return ran before the error-status handling that HTML
+  responses already used. The error-status check now runs first, so error
+  bodies take the same path regardless of content type and transient
+  statuses are not cached. (#3231)
 
 ## [2026.9.20] - 2026-09-20
 
