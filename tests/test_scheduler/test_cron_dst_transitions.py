@@ -93,17 +93,47 @@ def test_the_surviving_fall_back_fire_is_the_first_occurrence() -> None:
     assert fires[0].astimezone(NY).fold == 0
 
 
-def test_an_hourly_job_does_not_repeat_the_ambiguous_hour() -> None:
-    """``0 * * * *`` legitimately fires every hour, and the repeated 01:00 is
-    the one that must not be doubled."""
+def test_an_hourly_job_runs_through_the_repeated_hour() -> None:
+    """``0 * * * *`` is an interval, not a time of day: standard cron runs it
+    in both passes of the repeated hour, so the UTC cadence never breaks."""
     fires = fires_between(
         job("0 * * * *", "America/New_York"),
         datetime(2026, 11, 1, 3, 30, tzinfo=UTC),
         datetime(2026, 11, 1, 9, 0, tzinfo=UTC),
     )
 
-    stamps = locals_of(fires, NY)
-    assert len(stamps) == len(set(stamps)), f"a local hour fired twice: {stamps}"
+    assert fires == [datetime(2026, 11, 1, h, 0, tzinfo=UTC) for h in range(4, 9)]
+    assert locals_of(fires, NY).count("2026-11-01 01:00") == 2
+
+
+def test_an_interval_job_does_not_go_silent_across_the_fall_back() -> None:
+    """The reviewer's probe: gating every expression on ``fold == 0`` made
+    ``*/15 * * * *`` -- the most common watcher shape -- skip the whole
+    repeated hour, a 75-minute gap between 05:45Z and 07:00Z."""
+    fires = fires_between(
+        job("*/15 * * * *", "America/New_York"),
+        datetime(2026, 11, 1, 5, 0, tzinfo=UTC),
+        datetime(2026, 11, 1, 7, 30, tzinfo=UTC),
+    )
+
+    expected = [
+        datetime(2026, 11, 1, 5, 0, tzinfo=UTC) + timedelta(minutes=15 * n) for n in range(1, 10)
+    ]
+    assert fires == expected
+    gaps = {b - a for a, b in zip(fires, fires[1:], strict=False)}
+    assert gaps == {timedelta(minutes=15)}
+
+
+def test_a_fixed_hour_job_is_still_not_doubled_by_the_repeated_hour() -> None:
+    """The wildcard exemption is exactly that: a fixed hour inside the
+    repeated span still fires once."""
+    fires = fires_between(
+        job("30 1 * * *", "America/New_York"),
+        datetime(2026, 11, 1, 3, 30, tzinfo=UTC),
+        datetime(2026, 11, 1, 9, 0, tzinfo=UTC),
+    )
+
+    assert fires == [datetime(2026, 11, 1, 5, 30, tzinfo=UTC)]
 
 
 def test_berlin_fall_back_is_handled_too() -> None:
@@ -146,6 +176,25 @@ def test_a_daily_job_still_runs_on_the_spring_forward_day() -> None:
         "2027-03-15 02:30",
         "2027-03-16 02:30",
     ]
+
+
+def test_a_tick_in_the_last_minute_before_the_gap_still_finds_it() -> None:
+    """The reviewer's probe: seeding ``previous_wall`` by wall-clock
+    arithmetic produced the non-existent 02:59, so an ``after`` in the minute
+    before the gap never saw the gap and the job skipped a day."""
+    after = datetime(2027, 3, 14, 1, 59, 30, tzinfo=NY).astimezone(UTC)
+
+    assert _next_run(job("30 2 * * *", "America/New_York"), after) == datetime(
+        2027, 3, 14, 7, 0, tzinfo=UTC
+    )
+
+
+@pytest.mark.parametrize("seconds_before_gap", [1, 30, 59, 60, 61, 120, 3600])
+def test_the_gap_is_found_from_any_tick_before_it(seconds_before_gap: int) -> None:
+    gap_start = datetime(2027, 3, 14, 7, 0, tzinfo=UTC)
+    after = gap_start - timedelta(seconds=seconds_before_gap)
+
+    assert _next_run(job("30 2 * * *", "America/New_York"), after) == gap_start
 
 
 def test_the_shifted_fire_lands_at_the_first_instant_after_the_gap() -> None:

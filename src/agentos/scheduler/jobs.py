@@ -267,7 +267,10 @@ def _next_run(job: CronJob, after: datetime) -> datetime:
     tz_name = (job.tz or "").strip()
     tz = ZoneInfo(tz_name) if tz_name else None
     candidate = after.replace(second=0, microsecond=0) + timedelta(minutes=1)
-    previous_wall = candidate.astimezone(tz) - timedelta(minutes=1) if tz is not None else None
+    # Step back in UTC, not on the wall clock: a wall-clock minute before the
+    # first candidate can be a time that never happened, and seeding with it
+    # hides the gap it sits in.
+    previous_wall = (candidate - timedelta(minutes=1)).astimezone(tz) if tz is not None else None
     for _ in range(2_102_400):
         if tz is None:
             # UTC has no transitions, so every minute is distinct and real.
@@ -289,8 +292,9 @@ def _next_run(job: CronJob, after: datetime) -> datetime:
         # Fall back: the hour repeats, so two distinct UTC minutes render as
         # the same wall time and a daily schedule fired twice. ``fold`` is 1 on
         # the second pass; taking only the first keeps one run per scheduled
-        # local time.
-        if wall.fold == 0 and expr.matches(wall):
+        # local time. A wildcard hour is an interval, not a time of day, and
+        # keeps running through the repeated hour like any other.
+        if (wall.fold == 0 or expr.hour.is_wildcard) and expr.matches(wall):
             return candidate + timedelta(seconds=job.jitter_seconds)
 
         previous_wall = wall
