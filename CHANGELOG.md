@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Email channel: attachments sent through `send_file`, or through `send` with
+  an `Attachment` whose `mime_type` was unset, were all labelled
+  `application/octet-stream`, so images and PDFs arrived as opaque downloads
+  instead of previewing inline. The type is now inferred from the filename with
+  `mimetypes.guess_type`, and `application/octet-stream` is only the fallback
+  for an unknown extension (#2656).
+
 - CLI/TUI: terminal markdown table renderer `_split_table_row` parsed cells by
   splitting on raw pipe characters, which split code spans containing pipes
   (``` `a | b` ```) and escaped pipes (`\|`) into extraneous columns and silently
