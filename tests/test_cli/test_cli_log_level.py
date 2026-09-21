@@ -236,11 +236,15 @@ def _run_cli(args: list[str], env_home: Path, **extra_env: str) -> subprocess.Co
     env = dict(os.environ)
     env["AGENTOS_STATE_DIR"] = str(env_home)
     env.pop("AGENTOS_LOG_LEVEL", None)
+    # The CLI prints non-ASCII; pin both ends to UTF-8 so a cp1252 console
+    # on Windows cannot leave ``stdout`` as ``None``.
+    env["PYTHONIOENCODING"] = "utf-8"
     env.update(extra_env)
     return subprocess.run(
         [sys.executable, "-m", "agentos.cli.main", *args],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
         cwd=env_home,
         timeout=180,
