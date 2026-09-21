@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `video-merger` skill: merging to an output path whose parent directory did
+  not exist failed with `No such file or directory` after the concat and
+  encode work had already been done. The parent directory is now created
+  before ffmpeg writes (#2858).
+
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed
