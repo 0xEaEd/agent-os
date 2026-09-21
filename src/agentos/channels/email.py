@@ -549,8 +549,18 @@ class EmailChannel:
                     parsed = self._fetch_one(client, uid)
                     if parsed is None:
                         continue
-                    message = self._to_incoming(parsed)
+                    try:
+                        message = self._to_incoming(parsed)
+                    except Exception as exc:  # noqa: BLE001 — one bad mail, not the batch
+                        log.warning(
+                            "email.message_read_failed", name=self.config.name, error=str(exc)
+                        )
+                        # Same attempt budget as fetch/parse failures, so a message
+                        # that can never convert is quarantined, not refetched forever.
+                        self._register_fetch_failure(client, uid, "conversion_failed")
+                        continue
                     # Acknowledge only after parsing and conversion return normally.
+                    self._fetch_attempts.pop(uid, None)
                     self._mark_seen(client, uid)
                 except Exception as exc:  # noqa: BLE001 — one bad mail, not the batch
                     log.warning("email.message_read_failed", name=self.config.name, error=str(exc))
@@ -609,7 +619,7 @@ class EmailChannel:
         if not isinstance(parsed, EmailMessage):
             self._register_fetch_failure(client, uid, "parse_failed")
             return None
-        self._fetch_attempts.pop(uid, None)
+        # The attempt counter is cleared by the caller once conversion succeeds too.
         return parsed
 
     def _register_fetch_failure(self, client: imaplib.IMAP4, uid: str, reason: str) -> None:
