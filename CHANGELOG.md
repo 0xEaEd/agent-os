@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- MSTeams channel: the conversation-reference cache was written only from
+  `stop()`, so a crash, OOM kill or redeploy lost every conversation learned
+  since the previous clean stop -- and the last-activity order the
+  `reply_to=None` fallback relies on -- and proactive sends to those users
+  failed until they messaged again. The cache is now saved on every inbound
+  turn, atomically (temp file + rename), and a failed save is logged rather
+  than dropping the turn (#2658).
+
 - Email channel: attachments sent through `send_file`, or through `send` with
   an `Attachment` whose `mime_type` was unset, were all labelled
   `application/octet-stream`, so images and PDFs arrived as opaque downloads
