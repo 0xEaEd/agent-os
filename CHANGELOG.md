@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Slack channel: `send_file` passed a composite `<channel_id>|<thread_ts>`
+  target straight through as `channel_id`, so a thread upload failed with
+  `channel_not_found`. It now splits the target the way `send` does, threads
+  the upload, falls back to `slack_channel_id` when the channel part is
+  omitted, and checks file existence and size against a 1 GB `MAX_FILE_BYTES`
+  ceiling before any network call, like the other adapters (#2662).
+
 - MSTeams channel: the conversation-reference cache was written only from
   `stop()`, so a crash, OOM kill or redeploy lost every conversation learned
   since the previous clean stop -- and the last-activity order the
