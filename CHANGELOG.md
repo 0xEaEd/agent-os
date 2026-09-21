@@ -37,6 +37,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
   dropped rather than mis-rendered
   ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- Scheduler/heartbeat: `active_hours` is read in the host's local time, as the
+  heartbeat module docstring has always defined it ("in 24-hour local time").
+  Both window checks took `.hour` straight off the `datetime.now(UTC)` their
+  callers pass — `HeartbeatRunner.poll`, `HeartbeatLoop._tick` and the cron
+  `wakeMode="now"` path `HeartbeatLoop.run_once_now` — so on any host outside
+  UTC the configured window was silently shifted by the host's offset, with
+  nothing in the logs to say why. On a UTC+9 host, `active_hours: [9, 21]`
+  went quiet through the working day and fired at night. The two duplicated
+  checks are now one shared helper that converts to local time first.
+  **Behaviour-changing:** an operator who set `active_hours` to compensate for
+  the old UTC reading will see their window move by their offset on upgrade,
+  and should set it back to the local hours they actually want
+  (#2603).
+
 - `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
   now reported as ambiguous instead of silently editing the first occurrence.
   `_find_all` advanced its cursor past the whole needle, so the overlapping
