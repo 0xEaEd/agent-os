@@ -7,6 +7,101 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+
+- `web_fetch` with `extract_mode="text"` passed extracted markdown straight to
+  `html2text` (an HTML parser), which collapsed multiline paragraphs into one
+  run-on line and left markdown syntax and angle brackets unparsed; it now
+  walks a real CommonMark token stream to strip markdown formatting while
+  preserving paragraph and list structure
+  ([#2482](https://github.com/use-agent-os/agent-os/issues/2482)).
+- Tools: `write_file` reported `len(content)` -- Unicode code points -- as
+  "bytes", so every multibyte character was under-counted (ten emoji came
+  back as "Written 10 bytes" for a 40-byte file) and callers comparing the
+  figure against disk limits or byte budgets reasoned from the wrong number.
+  The content is now encoded once and written as bytes, and the report is
+  the length of what reached the disk (#2478).
+- `rwa_lookup.py` in the `robinhood-rwa-addresses` bundled skill failed to
+  write card artifacts when target output paths specified non-existent parent
+  directories; it now creates parent directories recursively before writing.
+- Skills (hub scanner): `_strip_fenced_code_blocks` only recognized exactly-
+  three-backtick fences, so a `~~~`-fenced example (CommonMark-valid) was
+  scanned as plain text and scored `severity="dangerous"` -- the same
+  outcome a real exfiltration attempt produces. Confirmed
+  `scan_result.verdict == "dangerous"` hard-blocks a hub install unless the
+  caller passes `force=True`, so a legitimately-written community skill
+  using the `~~~` convention would fail to install with no indication it's
+  a false positive. Tilde and backtick fences are now matched by a single
+  ordered pattern so a fence of one marker type can no longer be closed by
+  an unrelated later occurrence of the other marker -- the previous
+  two-independent-patterns approach let a backtick run inside a `~~~`
+  block pair with an unrelated backtick run further down the document,
+  silently exempting the prose in between from every check (#2324).
+- Telegram: a reply containing `***bold italic***` (or `___both___`) is
+  delivered again. The `**` pass consumed two of the three markers and the `*`
+  pass then paired the leftover one across the closing tag, producing
+  `<b><i>x</b></i>`; Telegram rejects improperly nested entities and the
+  adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
+  dropped rather than mis-rendered
+  ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+- `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
+  now reported as ambiguous instead of silently editing the first occurrence.
+  `_find_all` advanced its cursor past the whole needle, so the overlapping
+  second match was never counted and the same duplication with a separator line
+  in between behaved differently (#2290).
+- Telegram: a background result or a subagent completion announcement for a
+  turn that arrived in a forum topic reaches the group again. Both out-of-turn
+  builders carried `metadata["channel"]` only for Slack, so the topic id alone
+  landed in `reply_to` and `TelegramChannel` used it as the chat id — the
+  answer went to an unrelated chat or failed with `chat not found`, and both
+  call sites swallowed the error. They now use the same `thread_id and
+  channel_id` rule as the in-turn reply path. (#2390)
+- `docx` `edit_docx.py`: `replace_text` now walks the paragraphs inside text
+  boxes as well as the body, tables and headers/footers. Word keeps text-box
+  content in a `<w:txbxContent>` nested inside a run, which no paragraph walk
+  reached, so a placeholder or a name that also appeared in a pull quote,
+  callout or letterhead banner was left in the output while the op reported the
+  replacements it did make.
+
+- Bundled `poolsdotfun` skill: pass `encoding="utf-8"` when `selftest.py` reads
+  source files so Tier 7 capability-separation checks do not crash with
+  `UnicodeDecodeError` on CJK code pages (#2335).
+- Approvals: an approved destructive intent was cached by `(kind, target)`
+  alone, so a "rm -rf …" the operator approved in one session silently
+  answered every other session's prompt — and because `shell`'s exec gate
+  short-circuits on a cached intent before `ApprovalQueue.request()` is ever
+  called, the second delete ran with no prompt raised on any surface. The
+  elevated mode carried by the same approval was already filed under its
+  `sessionKey`; the intent it grants now is too. The cache key becomes
+  `(session, kind, target)`, and the registry declares `session_of` so
+  `drop_session_state` reaps a finished session's grants instead of leaving a
+  year-long "always" entry behind. `sessions.send` clears only its own
+  session's "once" grants, and the operator-facing `forget()` stays
+  process-wide (#2191).
+- `docx` skill: `inspect_docx.py` no longer walks tables through
+  `row.cells`. That API resolves vertically merged cells against the row
+  above, raising `ValueError: table has an irregular grid` on layouts
+  non-Word generators produce, and repeats a horizontally merged cell once
+  per grid column it spans. Each `<w:tc>` is now visited exactly once, nested
+  table text is included, and a corrupt file raises `ValueError` so the CLI
+  exits 2 with a clean message instead of an unhandled traceback. (#2154)
+
+## [2026.9.20] - 2026-09-20
+
+### Fixed
+
+- Gateway/Sessions: `sessions_history` and spawned-subagent result reporting
+  (`_read_child_result`) read a session's transcript through
+  `SessionStorage.get_transcript`'s `limit`, which windows from the
+  *oldest* end -- any session whose transcript outgrew the limit (20 for
+  `sessions_history`, 50 for subagent results) got the start of the
+  conversation instead of its current tail, or a stale/empty subagent
+  result instead of its real final answer. Both now read through the
+  existing newest-first `get_recent_transcript` query instead
+  (#2521).
+- `weather` skill script `weather_fetch.py` checked `"june"` as a raw substring
+  in `_seasonal_hint`, causing locations like Juneau to falsely trigger seasonal
+  date-window warnings; it now matches month names with word boundaries
+  (#2510).
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always
@@ -20,6 +115,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   type since the part's payload is the embedded message object, not encoded
   bytes -- the attachment vanished with no warning logged. It's now
   extracted by serializing the embedded message.
+- Gateway: `_handle_sessions_reset` carried a dead, unreachable duplicate
+  of its own final reset branch (a leftover from a past merge conflict) --
+  an unconditional `return` was immediately followed by an `if not
+  transcript:` block computing and returning the same thing a different
+  way, which `mypy --warn-unreachable` flags directly. Removed the dead
+  block and its now-unused `_reset_response` helper; the reachable branch
+  above it already covers the same case
+  (#2509).
+- Discord: `send_file` sent the whole caption as the upload's `content`, and
+  Discord 400s a message past 2000 characters whether or not a file is
+  attached, so an artifact with long accompanying text was never delivered.
+  The first 2000 characters now ride with the file and the rest follow as
+  ordinary channel messages through `send()`; a follow-up that fails after
+  the file has gone is logged with the ids rather than reported as a failed
+  file delivery, which would have the caller upload it again. `send_file`
+  also resolves its target the way `send()` does: the channel component of a
+  `<channel_id>|<message_id>` composite, `default_channel_id` for an empty
+  id, and a clear `ValueError` before any request when neither is available
+  (#2779).
+- Discord channel: a reaction added to the bot's own message in a guild
+  channel or thread is no longer silently dropped by the group mention
+  gate (#2790).
+- Control UI: the gateway root path returns the status payload when the
+  Control UI is disabled instead of a 404 (#2761), and the Control UI
+  bootstrap honours `X-Forwarded-Host` and a multi-value
+  `X-Forwarded-Proto` behind a reverse proxy (#2759).
+- Cron: `cron.update` keeps a job's delivery unless the caller changes it
+  (#2794); the gateway emits `last_status` so Control UI health reflects a
+  failed run (#2773); cron Python scripts run with UTF-8 stdout (#2580).
+- Tools: `apply_patch` applies an indented patch block and refuses one with
+  no operations (#2799); an inline artifact marker resolves against the
+  command's cwd (#2578); `web_fetch` decodes a page with the charset its
+  `<meta>` declares (#2557); the `message` tool addresses a target by
+  channel type, not channel name (#2566), and the platform render hint is
+  looked up the same way (#2568); quoted shell write targets containing
+  spaces are captured (#1230); `code_exec` flags every delete command
+  `shell_policy` blocks, quoted or not (#2776).
+- Sandbox/intent: an unexpandable `~` no longer crashes the sensitive-path
+  scan (#1503); destructive-intent extraction recognises `rmdir`, `rd`,
+  `del`, `erase`, `unlink` and `Remove-Item` (#1015).
+- Gateway: a debounced batch that fails to start replies on the channel
+  instead of going silent (#1206); websocket pong replies are serialised
+  through the writer queue; the tool result store is scanned at most once
+  per write (#2126).
+- Memory: a lowercase `memory.md` is exempt from retention pruning (#2522);
+  `memory_search` centres its evidence window for a non-ASCII query (#2517).
+- Telegram: `render_telegram_html` preserves bare URLs (#2560). Slack:
+  `send_streaming` `_edit` verifies the `ok` response.
+- Skills: `video-merger` escapes paths written to its concat manifest
+  (#2122) and handles missing duration metadata and silent inputs;
+  `dubbing_generate` accepts video containers; the pdf skill reports a
+  malformed `--pages` spec instead of raising `ValueError` (#2128).
+- Docs: `agentos sandbox` subcommands that were missing from `docs/cli.md`
+  are documented (#2550).
 
 ## [2026.9.18] - 2026-09-18
 
@@ -35,17 +184,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- Discord: `send_file` sent the whole caption as the upload's `content`, and
-  Discord 400s a message past 2000 characters whether or not a file is
-  attached, so an artifact with long accompanying text was never delivered.
-  The first 2000 characters now ride with the file and the rest follow as
-  ordinary channel messages through `send()`; a follow-up that fails after
-  the file has gone is logged with the ids rather than reported as a failed
-  file delivery, which would have the caller upload it again. `send_file`
-  also resolves its target the way `send()` does: the channel component of a
-  `<channel_id>|<message_id>` composite, `default_channel_id` for an empty
-  id, and a clear `ValueError` before any request when neither is available
-  (#2779).
 - WebUI chat: "Move to project" and "Rename session" on a brand-new chat
   (Cmd+Shift+O / `/new`, before the first message) failed with "Session not
   found". The WebUI mints the session key client-side and the row only
@@ -292,14 +430,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   every `<t>` descendant, including the ones inside `<rPh>`, so a Japanese
   workbook read back with each reading glued onto the word it annotates
   ([#2053](https://github.com/use-agent-os/agent-os/issues/2053)).
-
-- `web_fetch` with `extract_mode="text"` passed extracted markdown straight to
-  `html2text` (an HTML parser), which collapsed multiline paragraphs into one
-  run-on line and left markdown syntax and angle brackets unparsed; it now
-  walks a real CommonMark token stream to strip markdown formatting while
-  preserving paragraph and list structure
-  ([#2482](https://github.com/use-agent-os/agent-os/issues/2482)).
-
+  workbook read back with each reading glued onto the word it annotates.
+- `create_pdf_report`: Japanese kana are no longer deleted from a report built
+  on a host with no CJK-capable TTF. `_is_cjk` named only the ideograph blocks,
+  so every hiragana and katakana fell through to the drop that handles
+  characters the base font cannot render — the kanji and the `、。` survived and
+  the syllables joining them did not, leaving a plausible-looking PDF with the
+  grammar removed. Kana now take the same CJK-font fallback that CJK
+  punctuation has taken since #1739.
+- Memory search: a query written in Hangul, Cyrillic, Greek, Arabic, Hebrew,
+  Thai, Devanagari or accented Latin returns results again. `_build_fts_query`
+  tokenized with a class naming only ASCII, the CJK ideographs and the two kana
+  blocks, so those queries produced no token at all and the search
+  short-circuited to an empty list — over text the `unicode61` index had
+  already stored.
 ## [2026.9.16] - 2026-09-16
 
 ### Fixed

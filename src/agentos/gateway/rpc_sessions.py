@@ -1278,12 +1278,13 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
         try:
             _mark_started()
             # A new user turn invalidates any "once" intent approvals from the
-            # previous turn. "always" entries survive per IntentApprovalCache
-            # scope semantics.
+            # previous turn *of this session*. "always" entries survive per
+            # IntentApprovalCache scope semantics, and a concurrent session's
+            # in-flight grants are none of this turn's business.
             try:
                 from agentos.sandbox.intent_cache import get_intent_cache
 
-                get_intent_cache().clear_scope("once")
+                get_intent_cache().clear_scope("once", session_key=key)
             except Exception:  # pragma: no cover — never block turn start
                 pass
             if ctx.turn_runner is None:
@@ -1916,25 +1917,6 @@ async def _handle_sessions_reset(params: dict | None, ctx: RpcContext) -> dict[s
             "epoch": new_epoch,
         }
 
-        if not transcript:
-            updated, rotated = await ctx.session_manager.apply_intent(
-                key, SessionIntent.RESET_SAME_KEY
-            )
-            new_epoch = await _increment_and_emit_epoch(ctx, storage, key)
-            await _notify_provider_session_boundary(
-                ctx,
-                agent_id=agent_id,
-                transcript=transcript,
-                new_session_id=updated.session_id,
-            )
-            return _reset_response(
-                key,
-                rotated,
-                previous_session_id,
-                updated.session_id,
-                new_epoch,
-            )
-
     if lock is None:
         return await _run_locked()
     async with lock:
@@ -1982,23 +1964,6 @@ async def _increment_and_emit_epoch(
             new_epoch=new_epoch,
         )
     return new_epoch
-
-
-def _reset_response(
-    key: str,
-    rotated: bool,
-    previous_session_id: str,
-    session_id: str,
-    epoch: int = 0,
-) -> dict[str, Any]:
-    return {
-        "key": key,
-        "reset": True,
-        "rotated": rotated,
-        "previous_session_id": previous_session_id,
-        "session_id": session_id,
-        "epoch": epoch,
-    }
 
 
 @_d.method("sessions.delete")

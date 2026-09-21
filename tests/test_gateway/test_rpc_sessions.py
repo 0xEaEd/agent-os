@@ -796,6 +796,41 @@ class _LimitAwareSessionManager(FakeSessionManager):
 
 class TestSessionsSend:
     @pytest.mark.asyncio
+    async def test_send_clears_once_grants_of_its_own_session_only(
+        self, dispatcher, ctx_with_sessions, session
+    ):
+        """A turn starting here must not disarm a concurrent session's approval.
+
+        The "once" scope means "until this session's next user message", so a
+        sibling session sending a message is not the event that ends it.
+        """
+        from agentos.sandbox.intent_cache import get_intent_cache, reset_intent_cache
+
+        reset_intent_cache()
+        cache = get_intent_cache()
+        cache.record("rm /tmp/agentos-sender", session_key=session.session_key)
+        cache.record("rm /tmp/agentos-bystander", session_key="agent:other:main")
+        try:
+            res = await dispatcher.dispatch(
+                "r1",
+                "sessions.send",
+                {"key": session.session_key, "message": "hello"},
+                ctx_with_sessions,
+            )
+
+            assert res.ok is True
+            # The turn runs in a background task; yield until it has started.
+            for _ in range(100):
+                if not cache.check("rm /tmp/agentos-sender", session_key=session.session_key):
+                    break
+                await asyncio.sleep(0)
+
+            assert cache.check("rm /tmp/agentos-sender", session_key=session.session_key) is False
+            assert cache.check("rm /tmp/agentos-bystander", session_key="agent:other:main") is True
+        finally:
+            reset_intent_cache()
+
+    @pytest.mark.asyncio
     async def test_send_valid(self, dispatcher, ctx_with_sessions, session):
         res = await dispatcher.dispatch(
             "r1",
@@ -2083,6 +2118,36 @@ class TestSessionsReset:
         assert res.payload["previous_session_id"] == before
         assert res.payload["session_id"] != before
 
+    @pytest.mark.asyncio
+    async def test_reset_forced_with_covering_checkpoint_does_the_plain_reset(
+        self, dispatcher, session
+    ):
+        """Regression for #2509: a non-empty, checkpoint-covered transcript
+        reset with force=True falls through past both the not-force and the
+        not-checkpoint-safe branches to the plain apply_intent reset -- the
+        exact spot a dead, unreachable duplicate of this same logic used to
+        sit right after (a merge-conflict leftover). Pins that this path is
+        still reachable and still returns the plain shape (no reset_mode)
+        now that the duplicate is gone."""
+        manager = FakeSessionManager([session])
+        manager.transcript = [SimpleNamespace(id=1, content="message to preserve")]
+        manager._storage.memory_durable_receipts.append(
+            _checkpoint_receipt(session, turn_id="cmp-reset-forced", entries=manager.transcript)
+        )
+        ctx = make_ctx(session_manager=manager)
+        before = session.session_id
+
+        res = await dispatcher.dispatch(
+            "r1", "sessions.reset", {"key": session.session_key, "force": True}, ctx
+        )
+
+        assert res.ok is True
+        assert res.payload["reset"] is True
+        assert res.payload["previous_session_id"] == before
+        assert res.payload["session_id"] != before
+        assert "reset_mode" not in res.payload
+        assert manager.applied_intents == [(session.session_key, "reset_same_key")]
+
 
 class TestSessionsDelete:
     @pytest.mark.asyncio
@@ -2148,9 +2213,7 @@ class TestSessionsDelete:
 
         ctx = make_ctx(session_manager=FakeSessionManager([session]), task_runtime=_BrokenRuntime())
 
-        res = await dispatcher.dispatch(
-            "r1", "sessions.delete", {"key": session.session_key}, ctx
-        )
+        res = await dispatcher.dispatch("r1", "sessions.delete", {"key": session.session_key}, ctx)
 
         assert res.ok is True
         assert res.payload["deleted"] == [session.session_key]
