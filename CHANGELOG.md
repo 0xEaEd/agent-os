@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Tools: `read_spreadsheet` sized a row from whatever column a `.xlsx` cell
+  reference claimed, so a crafted or corrupt `r="..."` far past the format's
+  16,384-column ceiling drove a very large allocation. Such a cell is now
+  dropped (#2867).
+
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed
