@@ -20,7 +20,9 @@ from agentos.provider.types import (
     TextDeltaEvent,
     ToolDefinition,
     ToolInputSchema,
+    ToolUseDeltaEvent,
     ToolUseEndEvent,
+    ToolUseStartEvent,
 )
 
 
@@ -1486,6 +1488,64 @@ def test_gemini_stream_multiple_tool_calls_without_indexes_stay_separate(
         ("call_lookup", "lookup", {"q": "hi"}),
         ("call_save", "save", {"value": 1}),
     ]
+
+
+def test_stream_tool_use_id_stays_stable_when_id_arrives_after_start(
+    monkeypatch: Any,
+) -> None:
+    chunks: list[dict[str, Any]] = [
+        {"choices": [{"delta": {"tool_calls": [{"index": 0}]}, "finish_reason": None}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_123",
+                                "function": {"name": "lookup", "arguments": '{"q":"hi"}'},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [{"delta": {}, "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = b"".join(f"data: {json.dumps(chunk)}\n\n".encode() for chunk in chunks)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body + b"data: [DONE]\n\n",
+        )
+
+    transport = httpx.MockTransport(handler)
+    real_async_client = httpx.AsyncClient
+
+    def patched_async_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("agentos.provider.openai.httpx.AsyncClient", patched_async_client)
+    provider = OpenAIProvider(api_key="test", model="gpt-4o", base_url="https://example.test/v1")
+    tool = ToolDefinition(
+        name="lookup",
+        description="Lookup a value.",
+        input_schema=ToolInputSchema(properties={"q": {"type": "string"}}, required=["q"]),
+    )
+
+    events = _collect_events(provider, ChatConfig(), tools=[tool])
+
+    started = [e.tool_use_id for e in events if isinstance(e, ToolUseStartEvent)]
+    streamed = [e.tool_use_id for e in events if isinstance(e, ToolUseDeltaEvent | ToolUseEndEvent)]
+    assert len(started) == 1
+    assert streamed == [started[0], started[0]]
 
 
 # --- Null-valued streaming fields -------------------------------------------

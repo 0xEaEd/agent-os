@@ -1186,9 +1186,9 @@ class OpenAIProvider:
                                         tool_name=pending_calls[idx]["name"],
                                     )
                                 else:
-                                    # id/name may arrive in later chunks
-                                    if tc.get("id"):
-                                        pending_calls[idx]["id"] = tc["id"]
+                                    # name may arrive in later chunks. The id is NOT
+                                    # updated: ToolUseStartEvent already published it, and
+                                    # the delta/end events must name that same id.
                                     fname = function.get("name") or ""
                                     if fname:
                                         pending_calls[idx]["name"] = fname
