@@ -62,20 +62,93 @@ _APPLY_PATCH_APPROVAL_NAMESPACE = "exec"
 # ---------------------------------------------------------------------------
 
 
+def _leading_ws(line: str) -> str:
+    """The indentation *line* carries, as text."""
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _marker_span(lines: list[str]) -> tuple[int, int]:
+    """Indices of the ``*** Begin Patch`` / ``*** End Patch`` lines that delimit the body.
+
+    Both markers used to be located by an independent scan from index 0, which
+    picked the wrong line in two ways, each of them silent:
+
+    * An ``*** End Patch`` quoted in a preamble -- a transcript the model echoed
+      back, say -- came *before* the begin marker, so the body slice was empty
+      and every operation in the real patch was dropped while the tool still
+      reported success.
+    * A patch that edits a line reading ``*** End Patch`` carries it as a hunk
+      context line, ``" *** End Patch"``. Stripped, that equals the marker, so
+      the body was cut mid-hunk and the rest of the patch went missing.
+
+    So the end marker is searched for after the begin marker, and a line
+    indented past it does not count. Every line of patch *content* carries a
+    diff prefix -- ``" "``/``"+"``/``"-"`` in a hunk, ``"+"`` under
+    ``*** Add File`` -- which puts it at least one column past the directive
+    lines, so a marker that closes the block can never be mistaken for one
+    quoted inside it.
+    """
+    start_idx = next(
+        (i for i, ln in enumerate(lines) if ln.strip() == "*** Begin Patch"),
+        None,
+    )
+    if start_idx is None:
+        raise ValueError("Missing '*** Begin Patch' marker")
+
+    indent = _leading_ws(lines[start_idx])
+    end_idx = next(
+        (
+            i
+            for i in range(start_idx + 1, len(lines))
+            if lines[i].strip() == "*** End Patch" and len(_leading_ws(lines[i])) <= len(indent)
+        ),
+        None,
+    )
+    if end_idx is None:
+        raise ValueError("Missing '*** End Patch' marker")
+    return start_idx, end_idx
+
+
+_SECTION_DIRECTIVES = ("*** Add File: ", "*** Update File: ", "*** Delete File: ")
+
+
+def _dedent_body(body: list[str]) -> list[str]:
+    """Shift a patch body that sits indented as a block back to column 0.
+
+    A patch quoted inside a Markdown list, blockquote or indented block carries
+    the same indentation on every line, so no ``*** Add File:`` / ``*** Update
+    File:`` / ``*** Delete File:`` directive matched and every operation was
+    skipped. The block's column is the indentation of its first section
+    directive -- every valid body opens with one, and every content line sits
+    at least one column further right, behind its ``+``/``-``/``" "`` prefix.
+
+    It is deliberately not the ``*** Begin Patch`` line's indentation: an
+    opening marker that drifted right in front of a flush body still parses
+    (see ``_marker_span``). Lines carrying the block indentation lose exactly
+    that much, so indentation inside the patched code is kept. A
+    whitespace-only line shorter than the block becomes a bare blank, which
+    the parser already reads as an empty line. Any other line is left alone so
+    the parser can still reject it rather than have it guessed into shape.
+    """
+    indent = next(
+        (_leading_ws(line) for line in body if line.lstrip().startswith(_SECTION_DIRECTIVES)),
+        "",
+    )
+    if not indent:
+        return body
+    return [
+        line[len(indent) :] if line.startswith(indent) else ("" if not line.strip() else line)
+        for line in body
+    ]
+
+
 def _parse_patch(patch_text: str) -> list[PatchOp]:
     """Parse patch text into a list of PatchOp objects."""
     lines = patch_text.splitlines()
 
-    # Validate markers
-    if not any(line.strip() == "*** Begin Patch" for line in lines):
-        raise ValueError("Missing '*** Begin Patch' marker")
-    if not any(line.strip() == "*** End Patch" for line in lines):
-        raise ValueError("Missing '*** End Patch' marker")
-
     # Trim to content between markers
-    start_idx = next(i for i, ln in enumerate(lines) if ln.strip() == "*** Begin Patch")
-    end_idx = next(i for i, ln in enumerate(lines) if ln.strip() == "*** End Patch")
-    body = lines[start_idx + 1 : end_idx]
+    start_idx, end_idx = _marker_span(lines)
+    body = _dedent_body(lines[start_idx + 1 : end_idx])
 
     ops: list[PatchOp] = []
     i = 0
@@ -125,7 +198,18 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
                         and not body[i].startswith("@@@ ")
                         and not body[i].startswith("*** ")
                     ):
-                        hunk.lines.append(body[i])
+                        raw = body[i]
+                        if raw and raw[0] not in (" ", "-", "+"):
+                            # Same contract as the '*** Add File' block above:
+                            # a line that doesn't start with a recognized
+                            # hunk-line prefix is rejected here, not silently
+                            # excluded from both the context check and the
+                            # rebuilt content further down in _apply_hunk.
+                            raise ValueError(
+                                f"Invalid line in '*** Update File: {path}' hunk "
+                                f"(expected a ' ', '-', or '+' prefix): {raw!r}"
+                            )
+                        hunk.lines.append(raw)
                         i += 1
                     _trim_trailing_separators(hunk)
                     hunks.append(hunk)
@@ -141,6 +225,14 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
         else:
             i += 1
 
+    if not ops:
+        # Loud, not "Applied patch: no changes": a patch that fails is retried,
+        # one that reports success while dropping every operation is believed.
+        raise ValueError(
+            "No operations found between '*** Begin Patch' and '*** End Patch': "
+            "expected a '*** Add File: <path>', '*** Update File: <path>' or "
+            "'*** Delete File: <path>' line. Nothing was applied."
+        )
     return ops
 
 

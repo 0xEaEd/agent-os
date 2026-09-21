@@ -134,9 +134,11 @@ LAUNCHERS: dict[str, list[dict]] = {
         },
     ],
 
-    # Labels only. Bankr/Doppler is live here, but no Airlock has been verified on this
-    # chain, so there is no registry lookup to perform — resolve_launcher skips entries
-    # with neither a factory nor an airlock. Log-scan discovery works fine on Robinhood.
+    # No Airlock has been verified on this chain, so resolve_launcher has nothing to
+    # query and skips the entry. The hook label still does work: every Doppler pool
+    # is (token, quote, 0x800000, 200, hook), so the labelled hook alone lets
+    # labelled_hooks() derive the poolId and one getSlot0 confirm it — which is the
+    # only discovery route left now that the RPC caps eth_getLogs at 100k blocks.
     "robinhood": [
         {
             "id": "doppler",
@@ -155,6 +157,21 @@ LAUNCHERS: dict[str, list[dict]] = {
 def launchers_for(chain: dict) -> list[dict]:
     """Every launcher entry configured for a chain (empty when the chain has none)."""
     return LAUNCHERS.get(chain["key"], [])
+
+
+def labelled_hooks(chain: dict) -> list[tuple[dict, str]]:
+    """Every ``(entry, hook)`` a chain's launcher table labels, checksummed.
+
+    A hook address is a registry of one: a launcher's pools are fully determined by
+    it, so a token can be tested against it with a few keccaks and one getSlot0.
+    This is how a chain without a queryable factory or airlock still gets
+    registry-style discovery.
+    """
+    out = []
+    for entry in launchers_for(chain):
+        for hook in (entry.get("hooks") or {}):
+            out.append((entry, checksum_address(hook)))
+    return out
 
 
 def queryable_launchers(chain: dict) -> list[dict]:

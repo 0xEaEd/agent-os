@@ -47,6 +47,7 @@ DEFAULTS = (
         "http-fetch",
         "memory",
         "multi-search-engine",
+        "musebook",
         "nano-banana-pro",
         "nano-pdf",
         "pdf-toolkit",
