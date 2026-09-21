@@ -126,9 +126,7 @@ def test_markdown_to_text_does_not_treat_a_multiplication_sign_as_emphasis() -> 
     # Issue #2482's fix must not trade one corruption bug for another: a
     # regex like r"\*{1,3}(.*?)\*{1,3}" matches "5 * 3" as an emphasis open
     # and silently swallows everything up to the next unrelated asterisk.
-    plain = _markdown_to_text(
-        "5 * 3 = 15 and later some *actual emphasis* appears"
-    )
+    plain = _markdown_to_text("5 * 3 = 15 and later some *actual emphasis* appears")
     assert plain == "5 * 3 = 15 and later some actual emphasis appears"
 
 
@@ -255,3 +253,10 @@ async def test_web_fetch_extract_mode_text_end_to_end(monkeypatch: pytest.Monkey
     finally:
         reset_runtime()
         wf._cache.clear()
+
+
+def test_markdown_to_text_matches_issue_3142_expected_output() -> None:
+    text = "[AgentOS](https://agentos.org) is an **awesome** agent runtime <v1>."
+
+    assert _markdown_to_text(text) == "AgentOS is an awesome agent runtime <v1>."
+    assert _markdown_to_text("- item\n- two") == "- item\n- two"
