@@ -83,6 +83,45 @@ class RpcError(RuntimeError):
         self.raw = error
 
 
+def _jsonrpc_error_in(exc: urllib.error.HTTPError) -> Any | None:
+    """The JSON-RPC ``error`` member of an HTTP error body, or None.
+
+    Reads at most 64 KB — an error page is small, and a proxy can answer a 5xx
+    with anything at all — and treats a body that is not a JSON-RPC envelope as
+    "no structured error", which keeps the plain ``HTTP <code>`` path intact.
+    """
+    try:
+        raw = exc.read(65536)
+    except Exception:  # noqa: BLE001 — a closed or absent body is "no body"
+        return None
+    if not raw:
+        return None
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return None
+    if isinstance(body, list) and body:
+        body = body[0]
+    if isinstance(body, dict) and body.get("error"):
+        return body["error"]
+    return None
+
+
+_TRANSIENT_MARKERS = ("temporar", "retry", "timeout", "timed out", "overload", "busy",
+                      "rate limit", "too many")
+
+
+def _is_transient(error: Any) -> bool:
+    """Whether a JSON-RPC error names a passing condition rather than a rule.
+
+    drpc's ``code 19 "Temporary internal error. Please retry"`` is worth retrying;
+    its ``code 22 "range over 100000 blocks is not supported"`` never changes.
+    """
+    message = error.get("message", "") if isinstance(error, dict) else str(error)
+    lowered = str(message).lower()
+    return any(marker in lowered for marker in _TRANSIENT_MARKERS)
+
+
 class RpcClient:
     """A minimal, synchronous JSON-RPC client over ``urllib``."""
 
@@ -131,8 +170,19 @@ class RpcClient:
                     raw = zlib.decompress(raw)
                 return json.loads(raw)
             except urllib.error.HTTPError as exc:
-                retryable = exc.code in _RETRY_STATUS and label not in _NEVER_RETRY
+                # Proxies such as drpc put a real JSON-RPC error in a 5xx body
+                # ("eth_getLogs range over 100000 blocks is not supported ...").
+                # Surface it: "HTTP 500" alone sends the caller hunting for a network
+                # fault that is not there. A deterministic error is also not worth
+                # three retries with backoff — only a transient one is.
+                error = _jsonrpc_error_in(exc)
+                retryable = (
+                    exc.code in _RETRY_STATUS and label not in _NEVER_RETRY
+                    and (error is None or _is_transient(error))
+                )
                 if not retryable or attempt > retries:
+                    if error is not None:
+                        raise RpcError(label, error) from exc
                     raise RuntimeError(f"{label}: HTTP {exc.code}") from exc
                 self._sleep_before_retry(exc.headers.get("retry-after"), attempt)
             except (urllib.error.URLError, TimeoutError) as exc:

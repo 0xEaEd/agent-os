@@ -40,6 +40,7 @@ import {
   sessionName,
   sessionVisualStatus,
   sortSessions,
+  SESSIONS_LIST_LIMIT,
   type AgentEntry,
   type RawSession,
   type SortColumn,
@@ -375,13 +376,13 @@ export function SessionsPage() {
     return () => clearTimeout(id)
   }, [search])
 
-  // sessions.js:135-136 — sessions.list {limit:200} (opt into the larger page
-  // size for the WebUI only; CLI default stays 50).
+  // sessions.js:135-136 — sessions.list with the WebUI page size (opt into
+  // the larger window for the WebUI only; CLI default stays 50).
   const sessionsQuery = useQuery<RawSession[]>({
     queryKey: ['sessions'],
     queryFn: async () => {
       await rpc.waitForConnection()
-      const data = await rpc.call<SessionsList>('sessions.list', { limit: 200 })
+      const data = await rpc.call<SessionsList>('sessions.list', { limit: SESSIONS_LIST_LIMIT })
       return data.sessions ?? []
     },
     refetchOnWindowFocus: false,
