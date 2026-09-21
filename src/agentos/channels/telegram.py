@@ -101,6 +101,14 @@ _STREAM_UPDATE_INTERVAL_MS = 1200
 _STREAM_FLOOD_STRIKE_CAP = 3
 _STREAM_FLOOD_DECAY_S = 30.0
 
+#: Telegram refuses an edit whose rendered content matches what is already on
+#: screen ("Bad Request: message is not modified: ..."). That is a no-op, not a
+#: failure: the message already says what the edit was going to make it say.
+#: It is easy to reach while streaming, because it is the *rendered* text that
+#: is compared -- a chunk that is only a newline renders to the same HTML as
+#: the text before it, since the renderer works line by line.
+_EDIT_IS_A_NO_OP = "message is not modified"
+
 
 class TelegramApiError(RuntimeError):
     """Raised when the Telegram Bot API returns ``ok: false``."""
@@ -1349,12 +1357,22 @@ class TelegramChannel:
         try:
             await self._api("editMessageText", payload)
         except TelegramApiError as exc:
-            if "parse entities" not in str(exc).lower():
+            reason = str(exc).lower()
+            if _EDIT_IS_A_NO_OP in reason:
+                return
+            if "parse entities" not in reason:
                 raise
             log.warning("telegram.markdown_fallback", error=str(exc))
             payload["text"] = text
             payload.pop("parse_mode", None)
-            await self._api("editMessageText", payload)
+            try:
+                await self._api("editMessageText", payload)
+            except TelegramApiError as fallback_exc:
+                # The plain-text retry can be the no-op just as easily: it is
+                # the *rendered* text Telegram compares, and dropping the
+                # parse mode does not change that it may be unchanged.
+                if _EDIT_IS_A_NO_OP not in str(fallback_exc).lower():
+                    raise
 
     async def send_streaming(
         self,
