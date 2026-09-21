@@ -13,6 +13,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `_find_all` advanced its cursor past the whole needle, so the overlapping
   second match was never counted and the same duplication with a separator line
   in between behaved differently (#2290).
+- Telegram: a background result or a subagent completion announcement for a
+  turn that arrived in a forum topic reaches the group again. Both out-of-turn
+  builders carried `metadata["channel"]` only for Slack, so the topic id alone
+  landed in `reply_to` and `TelegramChannel` used it as the chat id — the
+  answer went to an unrelated chat or failed with `chat not found`, and both
+  call sites swallowed the error. They now use the same `thread_id and
+  channel_id` rule as the in-turn reply path. (#2390)
+- `docx` `edit_docx.py`: `replace_text` now walks the paragraphs inside text
+  boxes as well as the body, tables and headers/footers. Word keeps text-box
+  content in a `<w:txbxContent>` nested inside a run, which no paragraph walk
+  reached, so a placeholder or a name that also appeared in a pull quote,
+  callout or letterhead banner was left in the output while the op reported the
+  replacements it did make.
+
+- Bundled `poolsdotfun` skill: pass `encoding="utf-8"` when `selftest.py` reads
+  source files so Tier 7 capability-separation checks do not crash with
+  `UnicodeDecodeError` on CJK code pages (#2335).
 - Approvals: an approved destructive intent was cached by `(kind, target)`
   alone, so a "rm -rf …" the operator approved in one session silently
   answered every other session's prompt — and because `shell`'s exec gate
@@ -379,6 +396,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   workbook read back with each reading glued onto the word it annotates
   ([#2053](https://github.com/use-agent-os/agent-os/issues/2053)).
   workbook read back with each reading glued onto the word it annotates.
+- `create_pdf_report`: Japanese kana are no longer deleted from a report built
+  on a host with no CJK-capable TTF. `_is_cjk` named only the ideograph blocks,
+  so every hiragana and katakana fell through to the drop that handles
+  characters the base font cannot render — the kanji and the `、。` survived and
+  the syllables joining them did not, leaving a plausible-looking PDF with the
+  grammar removed. Kana now take the same CJK-font fallback that CJK
+  punctuation has taken since #1739.
 - Memory search: a query written in Hangul, Cyrillic, Greek, Arabic, Hebrew,
   Thai, Devanagari or accented Latin returns results again. `_build_fts_query`
   tokenized with a class naming only ASCII, the CJK ideographs and the two kana
