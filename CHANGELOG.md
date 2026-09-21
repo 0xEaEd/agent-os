@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `rwa_lookup.py` in the `robinhood-rwa-addresses` bundled skill failed to
+  write card artifacts when target output paths specified non-existent parent
+  directories; it now creates parent directories recursively before writing.
 - Skills (hub scanner): `_strip_fenced_code_blocks` only recognized exactly-
   three-backtick fences, so a `~~~`-fenced example (CommonMark-valid) was
   scanned as plain text and scored `severity="dangerous"` -- the same
