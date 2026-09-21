@@ -526,7 +526,6 @@ class DiscordChannel:
             elif op == 11:  # Heartbeat ACK
                 self._state.last_heartbeat_ack = True
 
-
     async def _handle_dispatch(self, event_type: str | None, data: dict[str, Any]) -> None:
         if event_type == "READY":
             self._state.session_id = data["session_id"]
@@ -949,9 +948,7 @@ class DiscordChannel:
 
     def is_connected(self) -> bool:
         return (
-            self._connected
-            and self._dispatch_task is not None
-            and not self._dispatch_task.done()
+            self._connected and self._dispatch_task is not None and not self._dispatch_task.done()
         )
 
     async def health_check(self) -> ChannelHealth:
@@ -964,7 +961,6 @@ class DiscordChannel:
                 "sequence": self._state.sequence,
             },
         )
-
 
     # ------------------------------------------------------------------
     # Inbound
@@ -1232,13 +1228,40 @@ class DiscordChannel:
 
     MAX_FILE_BYTES: ClassVar[int] = 10 * 1024 * 1024
 
+    def _resolve_file_target(self, channel_id: str) -> str:
+        """The channel a file goes to, from what ``send_file`` was handed.
+
+        Callers pass a bare channel id, the ``<channel_id>|<message_id>``
+        composite that message routing and thread references produce, or
+        nothing at all. Only the channel component can form a URL; the
+        message component is discarded, ``""`` falls back to
+        ``default_channel_id`` the way :meth:`send` does, and with neither
+        there is no ``/channels/<id>/messages`` to build, so refuse rather
+        than request ``/channels//messages`` or ``/channels/123|456/messages``.
+        """
+        head, sep, _message_id = channel_id.partition("|")
+        target = (head if sep else channel_id) or self.config.default_channel_id
+        if not target:
+            raise ValueError(
+                "discord.send_file requires a channel_id when default_channel_id is not configured"
+            )
+        return target
+
     async def send_file(
         self,
         channel_id: str,
         file_path: str,
         content: str = "",
     ) -> ChannelSendResult:
+        target_channel = self._resolve_file_target(channel_id)
         check_channel_file_size(file_path, self.MAX_FILE_BYTES, "Discord")
+        # Discord caps a message's content at 2000 characters whether or not
+        # a file is attached, and 400s the whole upload past it. The first
+        # chunk rides with the file as its caption; the rest follows as
+        # ordinary channel messages, which send() already splits and orders.
+        caption, overflow = "", ""
+        if content:
+            caption, overflow = split_text_for_limit(content, _DISCORD_MESSAGE_TEXT_LIMIT)
         await self._rate_limiter.acquire()
         client = self._get_client()
         path = Path(file_path)
@@ -1249,8 +1272,8 @@ class DiscordChannel:
             # first attempt would upload an empty body on the second.
             with path.open("rb") as f:
                 return await client.post(
-                    f"/channels/{channel_id}/messages",
-                    data={"content": content} if content else {},
+                    f"/channels/{target_channel}/messages",
+                    data={"content": caption} if caption else {},
                     files={"file": (path.name, f)},
                     headers=self._auth_headers(),
                 )
@@ -1260,10 +1283,25 @@ class DiscordChannel:
         data = resp.json()
         message_id = str(data.get("id", ""))
         if message_id:
-            self._sent_messages[message_id] = channel_id
+            self._sent_messages[message_id] = target_channel
+        if overflow:
+            # The file is in the channel by now. A failure here must not be
+            # reported as a failed file delivery -- the caller would retry and
+            # upload it again -- so it is logged with the ids and the file's
+            # own result stands.
+            try:
+                await self.send(OutgoingMessage(content=overflow, reply_to=target_channel))
+            except httpx.HTTPError as exc:
+                log.warning(
+                    "discord.send_file_caption_overflow_failed",
+                    channel_id=target_channel,
+                    message_id=message_id,
+                    overflow_chars=len(overflow),
+                    error=str(exc),
+                )
         return ChannelSendResult.sent(
             capability=ChannelCapabilities.NATIVE_FILE_UPLOAD,
-            target_id=channel_id,
+            target_id=target_channel,
             provider_message_id=message_id,
         )
 
@@ -1383,6 +1421,15 @@ class DiscordChannel:
         """Uniform mention check for group gating. Delegates to is_mentioned."""
         if msg.metadata.get("interaction_type") == "slash_command":
             return True
+        if msg.metadata.get("event_type") == "MESSAGE_REACTION_ADD":
+            # A reaction carries no text to search for a mention in, so
+            # is_mentioned("") is always False -- every reaction in a guild
+            # channel/thread would otherwise be dropped by the mention gate,
+            # even one on a message the bot itself just sent. Reacting to
+            # the bot's own message is already an unambiguous, directed
+            # response to it, equivalent to being mentioned.
+            message_id = msg.metadata.get("native_message_id")
+            return bool(message_id) and message_id in self._sent_messages
         return self.is_mentioned(msg.content)
 
     # ------------------------------------------------------------------
