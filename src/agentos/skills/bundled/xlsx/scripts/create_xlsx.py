@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
+from openpyxl.worksheet.cell_range import CellRange
 
 # Bundled scripts run under AgentOS's own interpreter; the path insert only
 # matters in a source checkout where the package is not installed (#2804).
@@ -41,6 +42,27 @@ def _coerce(value: Any) -> Any:
         except ValueError:
             return value
     return value
+
+
+def _merge_checked(ws: Any, rng: str) -> None:
+    """Merge *rng*, refusing one that intersects a merge the sheet already has.
+
+    openpyxl accepts an intersecting range and writes a workbook with
+    overlapping ``mergeCell`` entries, which Excel reports as corrupt and
+    repairs on open, while the run reported success. A malformed range already
+    failed loudly and left nothing written (#1993); an overlapping one now
+    fails the same way, naming both ranges so the caller can correct it.
+    ``CellRange`` raises the very error ``merge_cells`` would for a malformed
+    range, so that path is unchanged.
+    """
+    target = CellRange(rng)
+    for existing in ws.merged_cells.ranges:
+        if not target.isdisjoint(existing):
+            raise ValueError(
+                f"cannot merge {rng} on sheet {ws.title!r}: it overlaps the existing "
+                f"merged range {existing.coord}"
+            )
+    ws.merge_cells(rng)
 
 
 def build(spec: Any) -> Workbook:
@@ -77,13 +99,13 @@ def build(spec: Any) -> Workbook:
         if isinstance(raw_merged, (list, tuple)):
             for merged in raw_merged:
                 if isinstance(merged, str):
-                    ws.merge_cells(merged)
+                    _merge_checked(ws, merged)
                 elif (
                     isinstance(merged, dict)
                     and "range" in merged
                     and isinstance(merged["range"], str)
                 ):
-                    ws.merge_cells(merged["range"])
+                    _merge_checked(ws, merged["range"])
 
         freeze = sheet_spec.get("freeze")
         if isinstance(freeze, str) and freeze:

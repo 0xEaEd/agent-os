@@ -22,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   explicitly are not rewritten.
 
 ### Fixed
+- `xlsx` skill: `edit_xlsx.py`'s `merge_cells` op and `create_xlsx.py`'s
+  `merged` spec passed a range straight to openpyxl, which accepts one that
+  intersects an existing merge and writes intersecting `mergeCell` entries --
+  a file Excel reports as corrupt and repairs on open -- while the run reported
+  `{"applied": 1}`. A malformed range already failed loudly with nothing
+  written; an overlapping one now fails the same way, before `wb.save`, with a
+  `ValueError` naming the sheet and both ranges. The malformed path is
+  unchanged (#3280).
 
 - Pricing: the live OpenRouter price for a model now comes from the owner's
   standard endpoint rather than whichever of its service tiers is listed
