@@ -81,9 +81,11 @@ def test_latin_text_is_unaffected() -> None:
     assert _markup("Quarterly Report 2026") == "Quarterly Report 2026"
 
 
-def test_without_a_cjk_font_kana_is_dropped_not_crashed() -> None:
+def test_without_a_cjk_font_kana_becomes_the_placeholder_not_a_crash() -> None:
+    """With no CJK font there is nothing to route to; the unrenderable
+    placeholder from #2187 stands in, as it does for any other script."""
     _register_pdf_fonts()
-    assert _pdf_markup_text("aあb", base_font="Helvetica", cjk_font=None) == "ab"
+    assert _pdf_markup_text("aあb", base_font="Helvetica", cjk_font=None) == "a?b"
 
 
 def _channel_artifact_context(tmp_path: Path) -> ToolContext:
