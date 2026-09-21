@@ -15,7 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   of whatever followed got the assignment pass and `secret_key =
   self._secret_key` in a `cat` of source came back masked. The command is
   now found under any wrapper that runs it and by its basename, and its
-  arguments decide what it does (#2617).
+  arguments decide what it does; redirections such as `env 2>&1` are not
+  operands, and `env -i printenv` is judged as the `printenv` it runs (#2617).
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.

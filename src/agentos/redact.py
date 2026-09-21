@@ -732,6 +732,15 @@ _SEGMENT_SEPARATOR_RE = re.compile(r"[|;&\n\r]+")
 #: to the command by the time ``shlex`` is done with them.
 _SHELL_GROUPING_CHARS = "(){}"
 
+#: A redirection is not an operand: ``env 2>&1`` still prints the environment
+#: and ``set >vars.txt`` is still a bare ``set``. Matches the operator at the
+#: front of a token (``2>&1``, ``2>/dev/null``, ``>out``, ``&>log``, ``<in``).
+_REDIRECTION_RE = re.compile(r"^(\d+|&)?(>>?|<<?<?)")
+
+#: The operator alone (``2>``, ``>``, ``>>``, ``<``): the target is the token
+#: after it, and neither is an operand.
+_BARE_REDIRECTION_RE = re.compile(r"^(\d+|&)?(>>?|<<?<?)$")
+
 
 def _unwrap_command(tokens: list[str]) -> list[str]:
     """Peel ``sudo -E``, ``command``, ``exec`` ... off the front of *tokens*.
@@ -754,21 +763,38 @@ def _unwrap_command(tokens: list[str]) -> list[str]:
     return tokens
 
 
-def _env_runs_no_command(arguments: list[str]) -> bool:
-    """Whether ``env`` with *arguments* prints the environment.
+def _without_redirections(tokens: list[str]) -> list[str]:
+    """Drop redirections and their targets, which are never operands."""
+    kept: list[str] = []
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if _BARE_REDIRECTION_RE.match(token):
+            skip_next = True
+            continue
+        if _REDIRECTION_RE.match(token):
+            continue
+        kept.append(token)
+    return kept
 
-    ``env`` prints only when nothing remains after its options and
-    ``NAME=value`` assignments; the first bare word is a program to run, and
-    ``-S`` carries a program in its argument.
+
+def _env_operand(arguments: list[str]) -> list[str] | None:
+    """The command ``env`` runs with *arguments*, as its own token list.
+
+    Empty when nothing remains after ``env``'s options and ``NAME=value``
+    assignments, which is when ``env`` prints the environment. ``None`` for
+    ``-S``, whose argument carries a command this parser does not split.
     """
     index = 0
     while index < len(arguments):
         argument = arguments[index]
         if argument == "--":
-            return index + 1 >= len(arguments)
+            return arguments[index + 1 :]
         if argument.startswith("-"):
             if argument in ("-S", "--split-string") or argument.startswith("--split-string="):
-                return False
+                return None
             if argument in _ENV_OPTIONS_WITH_ARGUMENT:
                 index += 1
             index += 1
@@ -776,8 +802,8 @@ def _env_runs_no_command(arguments: list[str]) -> bool:
         if "=" in argument:
             index += 1
             continue
-        return False
-    return True
+        return arguments[index:]
+    return []
 
 
 def _segment_dumps_environment(tokens: list[str]) -> bool:
@@ -790,7 +816,13 @@ def _segment_dumps_environment(tokens: list[str]) -> bool:
     if name in _ALWAYS_ENV_DUMP_COMMANDS:
         return True
     if name == "env":
-        return _env_runs_no_command(arguments)
+        # ``env`` with nothing to run prints; with something to run it is
+        # whatever that is, so ``env -i printenv`` and ``env sudo printenv``
+        # are judged as the command they run.
+        operand = _env_operand(arguments)
+        if operand is None:
+            return False
+        return not operand or _segment_dumps_environment(operand)
     if name == "set":
         # ``set -o`` lists options and ``set -- a b`` sets the positionals;
         # only a bare ``set`` prints variables.
@@ -835,7 +867,7 @@ def is_env_dump_command(command: str | None) -> bool:
             for stripped in (token.strip(_SHELL_GROUPING_CHARS) for token in tokens)
             if stripped
         ]
-        if _segment_dumps_environment(tokens):
+        if _segment_dumps_environment(_without_redirections(tokens)):
             return True
     return False
 

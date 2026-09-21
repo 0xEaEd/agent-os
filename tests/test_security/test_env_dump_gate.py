@@ -88,7 +88,8 @@ def test_sudo_dash_n_takes_no_argument_unlike_nice_dash_n() -> None:
 
 def test_double_dash_ends_wrapper_options() -> None:
     assert redact.is_env_dump_command("sudo -- printenv") is True
-    assert redact.is_env_dump_command("env -- printenv") is False, "env runs printenv here"
+    assert redact.is_env_dump_command("env -- printenv") is True, "env runs printenv, a dump"
+    assert redact.is_env_dump_command("env -- make") is False
 
 
 # ── arguments decide what the command does ──────────────────────────────────
@@ -126,6 +127,62 @@ def test_env_running_a_program_is_not_a_dump(command: str) -> None:
 )
 def test_env_with_only_options_and_assignments_is_a_dump(command: str) -> None:
     assert redact.is_env_dump_command(command) is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "env -u FOO printenv",
+        "env -i printenv",
+        "env FOO=bar printenv",
+        "sudo env printenv",
+        "env sudo printenv",
+        "env -- printenv",
+        "env env",
+        "env -- env -i",
+        "env -i env -u HOME printenv HOME",
+    ],
+)
+def test_env_running_a_dump_is_a_dump(command: str) -> None:
+    """``env`` running ``printenv`` prints the environment, so the program
+    ``env`` hands off to is judged like any other command, wrappers and all."""
+    assert redact.is_env_dump_command(command) is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "env 2>&1",
+        "env 2>/dev/null",
+        "env 2>/dev/null | sort",
+        "env 2> /dev/null",
+        "env >vars.txt",
+        "env >> vars.txt",
+        "env &>log",
+        "env -i 2>&1",
+        "set 2>&1",
+        "export >exports.txt",
+        "printenv 2>&1",
+    ],
+)
+def test_a_redirection_is_not_an_operand(command: str) -> None:
+    """``2>&1`` after ``env`` is not a program to run; the environment is
+    still printed, just with stderr folded in."""
+    assert redact.is_env_dump_command(command) is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat notes.txt 2>&1",
+        "ls > out.txt",
+        "env python3 build.py 2>&1",
+        "python3 -c 'x' 2>&1 | tee env",
+        "make 2>&1 | tail -n 20 > build.log",
+    ],
+)
+def test_dropping_redirections_does_not_invent_a_dump(command: str) -> None:
+    assert redact.is_env_dump_command(command) is False
 
 
 @pytest.mark.parametrize("command", ["printenv HOME", "printenv -0", "printenv --null HOME PATH"])
