@@ -15,6 +15,8 @@ import yaml
 
 from agentos.env_store import write_env_file_values
 from agentos.gateway.config import ChannelsConfig, GatewayConfig, MCPServerEntry
+from agentos.migration._mcp import headers as mcp_headers
+from agentos.migration._mcp import remote_transport
 from agentos.onboarding.config_store import load_config, persist_config
 from agentos.paths import default_agentos_home
 
@@ -885,7 +887,8 @@ class HermesMigrator:
                 if key in raw:
                     payload[key] = raw[key]
             if payload.get("url") and not payload.get("command"):
-                payload["transport"] = "sse"
+                payload["transport"] = remote_transport(raw)
+                payload["headers"] = mcp_headers(raw)
             elif payload.get("command"):
                 payload["transport"] = "stdio"
             imported.append(MCPServerEntry.model_validate(payload))
