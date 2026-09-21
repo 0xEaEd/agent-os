@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Tools: a failed `edit_file` match, an invalid `grep_search` regex, a
+  rejected project path and an unresolvable `web_fetch` host each reached the
+  model as a bare `ValueError`, so the envelope reduced them to "The tool
+  received an invalid argument" and discarded the diagnostics that make them
+  actionable -- the closest-match hint and ambiguous line numbers, the regex
+  error, the reason. All four now raise a `SafeToolError` carrying the
+  authored message (#2888, #2889, #2890, #2891).
+
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed
