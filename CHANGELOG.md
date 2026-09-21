@@ -63,6 +63,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   result instead of its real final answer. Both now read through the
   existing newest-first `get_recent_transcript` query instead
   (#2521).
+- Web UI: `control_ui.show_thinking = false` now stops the live reasoning
+  stream. `chat.history` and `chat.thinking` honoured it, but every turn runs
+  through `TaskRuntime`, whose event path forwarded each `session.event.thinking`
+  and the `reasoning_content` on `session.event.done` to subscribed WebSockets
+  regardless; the only check lived in the no-runtime fallback of
+  `sessions.send`. With the flag off the gateway now drops thinking events and
+  strips `reasoning_content` from `done`, as docs/web-ui.md describes (#3276).
+
+
 - `weather` skill script `weather_fetch.py` checked `"june"` as a raw substring
   in `_seasonal_hint`, causing locations like Juneau to falsely trigger seasonal
   date-window warnings; it now matches month names with word boundaries
