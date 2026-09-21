@@ -956,59 +956,23 @@ def prove_provider_payload(
     return proof
 
 
-def _prove_or_none(
+def _compact_and_prove(
     payload: dict[str, Any],
+    first_chars: int,
     *,
+    critical_tool_content: dict[int, Any] | None,
     projection_adapter: str,
     proof_budget: int,
     status_projection_mode: str,
     fallback_reason: str | None,
-) -> dict[str, Any] | None:
-    """``prove_provider_payload``, returning ``None`` instead of raising.
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the compaction tiers in order and return the first that proves.
 
-    Only for the final tier, which tries a second shape when the first does
-    not fit and needs to tell "too big" apart from "proved" without unwinding.
+    *critical_tool_content* maps each failed tool message's index to the
+    content every tier preserves; ``None`` runs the chain exactly as it ran
+    before #2363. Raises the final tier's ``ProviderRequestBudgetExceededError``
+    when nothing fits.
     """
-    try:
-        return prove_provider_payload(
-            payload,
-            projection_adapter=projection_adapter,
-            proof_budget=proof_budget,
-            status_projection_mode=status_projection_mode,
-            fallback_reason=fallback_reason,
-        )
-    except ProviderRequestBudgetExceededError:
-        return None
-
-
-def prove_or_compact_provider_payload(
-    payload: dict[str, Any],
-    *,
-    projection_adapter: str,
-    proof_budget: int,
-    status_projection_mode: str = "native_or_none",
-    fallback_reason: str | None = None,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    if proof_budget <= 0:
-        return payload, None
-    payload, scrubbed_projection = _scrub_leaked_tool_argument_projections_once(payload)
-    try:
-        proof = prove_provider_payload(
-            payload,
-            projection_adapter=projection_adapter,
-            proof_budget=proof_budget,
-            status_projection_mode=status_projection_mode,
-            fallback_reason=fallback_reason,
-        )
-    except ProviderRequestBudgetExceededError as first_error:
-        first_chars = int(first_error.proof["estimated_chars"])
-    else:
-        if scrubbed_projection:
-            proof["compact_needed"] = True
-            proof["tool_argument_projection_scrubbed"] = True
-        return payload, proof
-
-    critical_tool_content = _critical_tool_message_content(payload)
     tool_compacted = _compact_tool_payload_once(
         payload, critical_tool_content=critical_tool_content
     )
@@ -1058,43 +1022,17 @@ def prove_or_compact_provider_payload(
                 emergency_compacted, critical_tool_content=critical_tool_content
             )
             hard_compacted_chars = _payload_chars(hard_compacted)
-            critical_diagnostics_dropped = False
-            proof_or_none: dict[str, Any] | None = _prove_or_none(
-                hard_compacted,
-                projection_adapter=projection_adapter,
-                proof_budget=proof_budget,
-                status_projection_mode=status_projection_mode,
-                fallback_reason=fallback_reason,
-            )
-            if proof_or_none is None and critical_tool_content:
-                # Keeping the diagnostics costs characters, and at a budget
-                # this tight they are what tipped the payload over. Rebuild the
-                # whole chain with no preservation at any tier -- byte for byte
-                # what this function produced before #2363 -- and send that.
-                # The failure detail is lost, which is the bug being fixed, but
-                # the request still goes out: a degraded answer beats
-                # ProviderRequestBudgetExceededError, which is what the caller
-                # would otherwise get. Preservation must never turn a request
-                # that worked into one that does not.
-                plain_tool = _compact_tool_payload_once(payload)
-                plain_tail, _plain_tail_metadata = _compact_recent_tail_payload_once(plain_tool)
-                plain_emergency = _emergency_compact_current_turn_payload_once(plain_tail)
-                fallback = _final_hard_cap_payload_once(plain_emergency)
-                fallback_proof = _prove_or_none(
-                    fallback,
+            try:
+                proof = prove_provider_payload(
+                    hard_compacted,
                     projection_adapter=projection_adapter,
                     proof_budget=proof_budget,
                     status_projection_mode=status_projection_mode,
                     fallback_reason=fallback_reason,
                 )
-                if fallback_proof is not None:
-                    critical_diagnostics_dropped = True
-                    hard_compacted = fallback
-                    hard_compacted_chars = _payload_chars(hard_compacted)
-                    proof_or_none = fallback_proof
-            if proof_or_none is not None:
-                proof = proof_or_none
-                proof["critical_tool_diagnostics_dropped"] = critical_diagnostics_dropped
+            except ProviderRequestBudgetExceededError:
+                pass
+            else:
                 proof["retry_count"] = 4
                 proof["compact_needed"] = True
                 proof["tool_payload_compaction_not_smaller"] = tool_compacted_chars >= first_chars
@@ -1146,6 +1084,72 @@ def prove_or_compact_provider_payload(
     proof["recent_tail_too_large"] = False
     proof.update(tail_metadata)
     return tail_compacted, proof
+
+
+def prove_or_compact_provider_payload(
+    payload: dict[str, Any],
+    *,
+    projection_adapter: str,
+    proof_budget: int,
+    status_projection_mode: str = "native_or_none",
+    fallback_reason: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if proof_budget <= 0:
+        return payload, None
+    payload, scrubbed_projection = _scrub_leaked_tool_argument_projections_once(payload)
+    try:
+        proof = prove_provider_payload(
+            payload,
+            projection_adapter=projection_adapter,
+            proof_budget=proof_budget,
+            status_projection_mode=status_projection_mode,
+            fallback_reason=fallback_reason,
+        )
+    except ProviderRequestBudgetExceededError as first_error:
+        first_chars = int(first_error.proof["estimated_chars"])
+    else:
+        if scrubbed_projection:
+            proof["compact_needed"] = True
+            proof["tool_argument_projection_scrubbed"] = True
+        return payload, proof
+
+    critical_tool_content = _critical_tool_message_content(payload)
+    try:
+        compacted, proof = _compact_and_prove(
+            payload,
+            first_chars,
+            critical_tool_content=critical_tool_content,
+            projection_adapter=projection_adapter,
+            proof_budget=proof_budget,
+            status_projection_mode=status_projection_mode,
+            fallback_reason=fallback_reason,
+        )
+    except ProviderRequestBudgetExceededError:
+        if not critical_tool_content:
+            raise
+        # Keeping the diagnostics costs characters, and at a budget this
+        # tight they are what tipped the payload over. Rerun the whole chain
+        # with no preservation at any tier -- byte for byte what this
+        # function produced before #2363, returning at whichever tier that
+        # chain fits -- and send that. The failure detail is lost, which is
+        # the bug being fixed, but the request still goes out: a degraded
+        # answer beats ProviderRequestBudgetExceededError, which is what the
+        # caller would otherwise get. Preservation must never turn a request
+        # that worked into one that does not.
+        compacted, proof = _compact_and_prove(
+            payload,
+            first_chars,
+            critical_tool_content=None,
+            projection_adapter=projection_adapter,
+            proof_budget=proof_budget,
+            status_projection_mode=status_projection_mode,
+            fallback_reason=fallback_reason,
+        )
+        proof["critical_tool_diagnostics_dropped"] = True
+        return compacted, proof
+    if critical_tool_content:
+        proof["critical_tool_diagnostics_dropped"] = False
+    return compacted, proof
 
 
 def prove_provider_payload_from_env(

@@ -42,7 +42,6 @@ from agentos.provider.request_proof import (
     _critical_field_preview,
     _critical_tool_content_for_provider,
     _critical_tool_message_content,
-    _effective_proof_budget,
     _emergency_compact_current_turn_payload_once,
     _emergency_compact_string,
     _final_hard_cap_payload_once,
@@ -50,6 +49,7 @@ from agentos.provider.request_proof import (
     _payload_chars,
     _tool_content_is_critical,
     prove_or_compact_provider_payload,
+    prove_provider_payload,
 )
 
 FAILURE = {"status": "error", "exit_code": 137, "message": "container OOM-killed after 42s"}
@@ -90,6 +90,22 @@ def payload_with(tool_content: str) -> dict:
 
 def tool_content_of(payload: dict) -> str:
     return next(m["content"] for m in payload["messages"] if m.get("role") == "tool")
+
+
+def plain_chain_sends(payload: dict, budget: int) -> tuple[int, dict] | None:
+    """What this function sent before #2363: the plain stages proved in order,
+    the first that fits winning. ``None`` when the request was impossible."""
+    tool = _compact_tool_payload_once(payload)
+    tail = _compact_recent_tail_payload_once(tool)[0]
+    emergency = _emergency_compact_current_turn_payload_once(tail)
+    stages = [tool, tail, emergency, _final_hard_cap_payload_once(emergency)]
+    for tier, stage in enumerate(stages, start=1):
+        try:
+            prove_provider_payload(stage, projection_adapter="openai", proof_budget=budget)
+        except ProviderRequestBudgetExceededError:
+            continue
+        return tier, stage
+    return None
 
 
 def keeps_failure(content: str) -> bool:
@@ -230,20 +246,104 @@ def test_preservation_never_turns_a_working_request_into_a_failure(
             payload, projection_adapter="openai", proof_budget=budget
         )
     except ProviderRequestBudgetExceededError:
-        # Only acceptable when the *unpreserved* chain cannot fit either --
-        # i.e. this payload was already impossible before the change.
-        plain = _final_hard_cap_payload_once(
-            _emergency_compact_current_turn_payload_once(
-                _compact_recent_tail_payload_once(_compact_tool_payload_once(payload))[0]
-            )
-        )
-        effective, _headroom = _effective_proof_budget(budget)
-        assert _payload_chars(plain) > effective, (
+        # Only acceptable when the *unpreserved* chain cannot fit at any
+        # stage either -- i.e. this payload was already impossible before.
+        assert plain_chain_sends(payload, budget) is None, (
             f"the unpreserved chain fits at {budget} but preservation raised"
         )
         return
 
     assert proof["fits"] is True
+
+
+# ── the fallback must land where the plain chain lands, not only at tier 4 ──
+
+
+def partial_failure_result() -> str:
+    """The reviewer's shape: a short diagnostic block ahead of the bulk."""
+    body = {
+        "execution_status": {"status": "error", "reason": "partial_failure", "stderr": "E" * 230},
+        "output": "x" * 6000,
+    }
+    return json.dumps(body)
+
+
+def small_payload_with(tool_content: str) -> dict:
+    """A turn whose surrounding messages are tiny, so the tool result alone
+    decides which tier fits."""
+    return {
+        "model": "m",
+        "messages": [
+            {"role": "user", "content": "u" * 10},
+            {
+                "role": "assistant",
+                "content": "a" * 10,
+                "tool_calls": [
+                    {
+                        "id": "t1",
+                        "type": "function",
+                        "function": {"name": "run", "arguments": json.dumps({"cmd": "y" * 10})},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "t1", "content": tool_content},
+        ],
+    }
+
+
+def test_the_plain_hard_cap_can_be_larger_than_the_plain_emergency_stage() -> None:
+    """Why proving only the hard cap was not enough: for this shape the
+    final tier re-compacts an already-compacted string and adds a second
+    marker, so plain tier 4 is *bigger* than plain tier 3."""
+    payload = small_payload_with(partial_failure_result())
+    emergency = _emergency_compact_current_turn_payload_once(
+        _compact_recent_tail_payload_once(_compact_tool_payload_once(payload))[0]
+    )
+
+    assert _payload_chars(_final_hard_cap_payload_once(emergency)) > _payload_chars(emergency)
+
+
+def test_the_fallback_returns_at_tier_three_where_only_tier_three_fits() -> None:
+    """The reviewer's regression: ``main`` sent this at tier 3; proving only
+    the plain hard cap raised instead."""
+    payload = small_payload_with(partial_failure_result())
+    plain = plain_chain_sends(payload, 1200)
+    assert plain is not None and plain[0] == 3, "the shape no longer straddles tier 3"
+
+    compacted, proof = prove_or_compact_provider_payload(
+        payload, projection_adapter="openai", proof_budget=1200
+    )
+
+    assert proof is not None
+    assert proof["fits"] is True
+    assert proof["retry_count"] == 3
+    assert proof["critical_tool_diagnostics_dropped"] is True
+    assert compacted == plain[1]
+
+
+@pytest.mark.parametrize("position", ["first", "last", "middle"])
+@pytest.mark.parametrize("budget", range(900, 1500, 25))
+def test_the_fallback_is_exactly_what_the_plain_chain_sends(position: str, budget: int) -> None:
+    """Whenever preservation gives up, the request that goes out is the one
+    the plain chain produces: same tier, same bytes."""
+    payload = small_payload_with(result(position))
+    plain = plain_chain_sends(payload, budget)
+
+    try:
+        compacted, proof = prove_or_compact_provider_payload(
+            payload, projection_adapter="openai", proof_budget=budget
+        )
+    except ProviderRequestBudgetExceededError:
+        assert plain is None, f"the plain chain sends at tier {plain and plain[0]} but this raised"
+        return
+
+    assert proof is not None
+    if proof.get("critical_tool_diagnostics_dropped"):
+        assert plain is not None
+        assert proof["retry_count"] == plain[0]
+        assert compacted == plain[1]
+    else:
+        assert keeps_failure(tool_content_of(compacted))
 
 
 def test_the_dropped_diagnostics_fallback_is_reported_in_the_proof() -> None:
