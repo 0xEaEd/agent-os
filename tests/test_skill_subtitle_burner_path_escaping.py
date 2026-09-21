@@ -35,12 +35,11 @@ def _burn_module():
     return burn
 
 
-def _parse_ffmpeg_token(token: str) -> str:
-    """Read a quoted ffmpeg filtergraph token back to its literal value.
+def _av_get_token(token: str) -> str:
+    """One ffmpeg unescaping pass, the way ``av_get_token`` reads a token.
 
-    ffmpeg's rules, and the reason ``\\'`` cannot work: inside ``'...'``
-    every character is literal and a quote closes the section; outside,
-    a backslash escapes the next character.
+    Inside ``'...'`` every character is literal and a quote closes the
+    section; outside, a backslash escapes the next character.
     """
     out: list[str] = []
     quoted = False
@@ -67,6 +66,19 @@ def _parse_ffmpeg_token(token: str) -> str:
     return "".join(out)
 
 
+def _filter_argument_value(escaped: str) -> str:
+    """What the ``subtitles=`` filter finally opens, after **both** passes.
+
+    A ``-vf`` argument is tokenised twice: the filtergraph parser reads it
+    first and strips the outer quotes, then the option parser reads the
+    result. The existing ``\\:`` drive-colon escape is aimed at that second
+    pass, which is the clue that one level of quote escaping is not enough:
+    after the first pass a singly-escaped quote is bare again, and the second
+    pass opens a section with it that never closes.
+    """
+    return _av_get_token(_av_get_token(f"'{escaped}'"))
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -77,22 +89,37 @@ def _parse_ffmpeg_token(token: str) -> str:
         "trailing'.srt",
     ],
 )
-def test_a_quoted_path_survives_the_filtergraph_parser(name: str) -> None:
-    """The property that matters: what ffmpeg reads back is the path given."""
+def test_a_quoted_path_survives_both_parser_passes(name: str) -> None:
+    """The property that matters: what ffmpeg finally opens is the path given."""
     burn = _burn_module()
 
     escaped = burn._escape_subtitle_path(name)
 
-    assert _parse_ffmpeg_token(f"'{escaped}'") == name
+    assert _filter_argument_value(escaped) == name
 
 
-def test_the_quote_is_written_the_way_ffmpeg_spells_it() -> None:
+@pytest.mark.parametrize(
+    "name",
+    ["test's_cues.srt", "two''quotes.srt", "trailing'.srt"],
+)
+def test_a_single_level_escape_would_not_have_survived(name: str) -> None:
+    """The regression this PR exists for, modelled rather than asserted by
+    absence: the shell/concat spelling loses the quote on the second pass,
+    which is exactly what ffmpeg reported (`Unable to open tests_cues.srt`)."""
+    single_level = name.replace("'", "'\\''")
+
+    assert _filter_argument_value(single_level) != name
+
+
+def test_the_quote_is_written_at_two_levels() -> None:
     burn = _burn_module()
 
     escaped = burn._escape_subtitle_path("test's_cues.srt")
 
-    assert escaped == "test'\\''s_cues.srt"
-    # The old spelling left an unpaired quote in the middle of the token.
+    assert escaped == "test'\\\\\\''s_cues.srt"
+    # ...and specifically not the one-level spelling that fails pass two.
+    assert escaped != "test'\\''s_cues.srt"
+    # Nor the bare backslash-quote, which the graph pass strips outright.
     assert escaped != "test\\'s_cues.srt"
 
 
@@ -129,5 +156,6 @@ def test_a_windows_path_containing_a_quote_gets_both_treatments() -> None:
     escaped = burn._escape_subtitle_path("C:\\Videos\\Clips\\a'b\\cues.srt")
 
     assert escaped.startswith("C\\:/Videos/Clips/")
-    assert "'\\''" in escaped
-    assert "\\" in escaped  # the drive colon escape survived
+    assert "'\\\\\\''" in escaped
+    # Both escapes survive together, and the path still arrives intact.
+    assert _filter_argument_value(escaped) == "C:/Videos/Clips/a'b/cues.srt"

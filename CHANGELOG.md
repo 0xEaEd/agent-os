@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `subtitle-burner` skill: a subtitle path containing an apostrophe failed the
+  burn outright (`No option name near ''s_cues.srt`). A `-vf` argument is
+  tokenised twice -- by the filtergraph parser, then by the option parser --
+  and the quote was escaped for only the first, so the second met a bare quote
+  and swallowed the rest of the argument, taking `:force_style=...` into the
+  filename on an odd quote count. The quote is now escaped at both levels
+  (#3162).
+
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed
