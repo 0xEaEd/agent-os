@@ -1191,6 +1191,101 @@ describe('ChatPage', () => {
     )
   })
 
+  // ── Move to project on an unsent draft (Cmd+Shift+O → move → first send) ──
+
+  function rpcWithProjects() {
+    const rpc = makeRpc()
+    const base = rpc.call
+    rpc.call = vi.fn((...args: unknown[]) => {
+      if (args[0] === 'projects.list') {
+        return Promise.resolve({ projects: [{ project_id: 'p1', name: 'Alpha research' }] })
+      }
+      if (args[0] === 'sessions.patch') return Promise.resolve({ key: 'x', updated: ['projectId'] })
+      return base(...args)
+    })
+    return rpc
+  }
+
+  it('moves an unsent new chat into a project and drops the new_chat intent from the first send', async () => {
+    // A new chat mints its key client-side; the backend only materializes the
+    // row on the first send (or, now, on the move). Once the move succeeded the
+    // session exists, so the first send must go out as a plain continue — a
+    // `new_chat` intent against an existing key is rejected as a conflict.
+    mockRpc = rpcWithProjects()
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await waitFor(() => {
+      const subs = mockRpc.call.mock.calls
+        .filter(([m]) => m === 'sessions.messages.subscribe')
+        .map(([, p]) => (p as { key: string }).key)
+      expect(
+        subs.some((k) => k.startsWith('agent:main:webchat:') && k !== 'agent:main:webchat:default'),
+      ).toBe(true)
+    })
+
+    await clickChatAction('Move this session to a project')
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Alpha research' }))
+    await waitFor(() =>
+      expect(mockRpc.call).toHaveBeenCalledWith(
+        'sessions.patch',
+        expect.objectContaining({ projectId: 'p1' }),
+      ),
+    )
+    const [, patchParams] = mockRpc.call.mock.calls.find(([m]) => m === 'sessions.patch')!
+    expect((patchParams as { key: string }).key).toMatch(/^agent:main:webchat:(?!default$)/)
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Session moved to project'))
+
+    typeAndSend('first message')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send')).toHaveLength(1),
+    )
+    const [, sendParams] = mockRpc.call.mock.calls.find(([m]) => m === 'chat.send')!
+    expect(sendParams).not.toHaveProperty('intent')
+    expect((sendParams as { sessionKey: string }).sessionKey).toBe(
+      (patchParams as { key: string }).key,
+    )
+  })
+
+  it('renames an unsent new chat and drops the new_chat intent from the first send', async () => {
+    // Same seam as the move: a rename materializes the draft row server side.
+    mockRpc = rpcWithSessionName('')
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await clickChatAction('Rename session')
+    const input = await screen.findByRole('textbox', { name: 'Session name' })
+    fireEvent.change(input, { target: { value: 'Draft title' } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Session renamed'))
+
+    typeAndSend('first message')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send')).toHaveLength(1),
+    )
+    const [, sendParams] = mockRpc.call.mock.calls.find(([m]) => m === 'chat.send')!
+    expect(sendParams).not.toHaveProperty('intent')
+  })
+
+  it('keeps the new_chat intent when the move fails', async () => {
+    mockRpc = rpcWithProjects()
+    const base = mockRpc.call
+    mockRpc.call = vi.fn((...args: unknown[]) => {
+      if (args[0] === 'sessions.patch') return Promise.reject(new Error('storage down'))
+      return base(...args)
+    })
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await clickChatAction('Move this session to a project')
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Alpha research' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Move failed: storage down'))
+
+    typeAndSend('first message')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send')).toHaveLength(1),
+    )
+    const [, sendParams] = mockRpc.call.mock.calls.find(([m]) => m === 'chat.send')!
+    expect(sendParams).toMatchObject({ intent: 'new_chat' })
+  })
+
   it('closes Chat actions on Escape without aborting an active turn', async () => {
     mockRpc = makeRpc()
     renderPage()

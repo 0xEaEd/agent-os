@@ -5,7 +5,12 @@ from __future__ import annotations
 import html
 import re
 
-_TABLE_DELIMITER_RE = re.compile(r"^:?-{3,}:?$")
+# GFM's delimiter cell is *one or more* hyphens with an optional leading
+# and/or trailing colon, so `-`, `--`, `:-`, `-:` and `:-:` are all valid.
+# Demanding three eliminated the compact spellings, and a table written that
+# way was not recognised as a table at all: the raw pipes and dashes were
+# delivered to the reader as prose.
+_TABLE_DELIMITER_RE = re.compile(r"^:?-+:?$")
 # A fence opens with three or more backticks or tildes followed by an info
 # string, which CommonMark takes to be the rest of the line: its first word is
 # the language, anything after it is attributes this renderer has no use for.
@@ -30,10 +35,37 @@ _UNORDERED_LIST_RE = re.compile(r"^(?P<indent>\s*)[-+*]\s+(?P<text>.+)$")
 # of being cut at the first `)` with the remainder rendered as text after the
 # anchor. Deeper nesting is left as literal text rather than a truncated link.
 _LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://(?:[^\s()<]|\([^\s()<]*\))+)\)")
+_BARE_URL_RE = re.compile(r"(https?://(?:[^\s()<]|\([^\s()<]*\))+)")
 # CommonMark's blockquote marker: up to 3 leading spaces, `>`, then at most
 # one space before the content. `>quote` (no space) and `>` alone (an empty
 # quote line, used to separate paragraphs within one quote) both match.
 _BLOCKQUOTE_RE = re.compile(r"^ {0,3}>[ ]?(?P<text>.*)$")
+
+
+def _find_closing_backtick_run(text: str, start: int, length: int) -> int:
+    """Index of the next backtick run of *exactly* ``length``, at or after ``start``.
+
+    CommonMark closes a code span on a backtick run of the same length as the
+    opener -- not on any run that merely contains one. ``str.find`` cannot
+    express that: searching for a one-backtick marker matches the first
+    backtick of a two-backtick run, which is how ``` ` `` ` ``` (a span quoting
+    a longer run, the ordinary way to show a literal backtick) came out as two
+    empty spans with the quoted backticks deleted. Runs that are the wrong
+    length are content, so they are skipped whole rather than a character at a
+    time -- otherwise the scan would land inside the run it just rejected.
+    """
+    cursor = start
+    while cursor < len(text):
+        if text[cursor] != "`":
+            cursor += 1
+            continue
+        run_end = cursor
+        while run_end < len(text) and text[run_end] == "`":
+            run_end += 1
+        if run_end - cursor == length:
+            return cursor
+        cursor = run_end
+    return -1
 
 
 def _replace_code_spans(text: str) -> tuple[str, list[str]]:
@@ -50,7 +82,7 @@ def _replace_code_spans(text: str) -> tuple[str, list[str]]:
         while marker_end < len(text) and text[marker_end] == "`":
             marker_end += 1
         marker = text[cursor:marker_end]
-        closing = text.find(marker, marker_end)
+        closing = _find_closing_backtick_run(text, marker_end, len(marker))
         if closing < 0:
             output.append(marker)
             cursor = marker_end
@@ -159,6 +191,7 @@ def _render_inline(text: str) -> str:
     protected, code_chunks = _replace_code_spans(text)
     rendered = html.escape(protected)
     hrefs: list[str] = []
+    bare_urls: list[str] = []
 
     def _park_href(match: re.Match[str]) -> str:
         # Park the URL before the inline passes below run. They match `**`,
@@ -173,7 +206,24 @@ def _render_inline(text: str) -> str:
         hrefs.append(match.group(2))
         return f'<a href="\x00TG_HREF_{len(hrefs) - 1}\x00">{match.group(1)}</a>'
 
+    def _park_bare_url(match: re.Match[str]) -> str:
+        bare_urls.append(match.group(1))
+        return f"\x00TG_URL_{len(bare_urls) - 1}\x00"
+
     rendered = _LINK_RE.sub(_park_href, rendered)
+    rendered = _BARE_URL_RE.sub(_park_bare_url, rendered)
+    # `***both***` is one run, not a bold run next to an italic one, and it has
+    # to be consumed before the `**` pass gets to it. Left to the passes below,
+    # the bold pass took the first two markers and handed the capture the third
+    # (`<b>*both</b>*`), then the italic pass paired that stray marker with the
+    # trailing one *across* the closing tag: `<b><i>both</b></i>`. Telegram's
+    # parser requires properly nested entities, so the message was rejected
+    # rather than rendered -- and this adapter sends `parse_mode=HTML` with no
+    # plain-text retry, so the reply never arrived.
+    rendered = re.sub(r"\*\*\*(?=\S)(.+?)(?<=\S)\*\*\*", r"<b><i>\1</i></b>", rendered)
+    rendered = re.sub(
+        r"(?<!\w)___(?=[^\s_])(.+?)(?<=[^\s_])___(?!\w)", r"<b><i>\1</i></b>", rendered
+    )
     rendered = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<b>\1</b>", rendered)
     # Not a blanket sub: `__init__` is a delimiter run with whitespace on both
     # sides, exactly like an intentional single-word `__bold__`, so the content
@@ -186,6 +236,8 @@ def _render_inline(text: str) -> str:
     rendered = re.sub(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)", r"<i>\1</i>", rendered)
     # Restore in reverse order of protection: code spans were parked first, so
     # they come back last and a restored code span is never rescanned.
+    for index, url in enumerate(bare_urls):
+        rendered = rendered.replace(f"\x00TG_URL_{index}\x00", url)
     for index, href in enumerate(hrefs):
         rendered = rendered.replace(f"\x00TG_HREF_{index}\x00", href)
     for index, chunk in enumerate(code_chunks):

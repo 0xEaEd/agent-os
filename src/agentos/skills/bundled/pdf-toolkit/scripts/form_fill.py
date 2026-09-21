@@ -57,16 +57,31 @@ def list_fields(path: Path) -> dict[str, Any]:
     return out
 
 
+class NoFieldsError(ValueError):
+    """The input has no form for ``data`` to land in. Reported as ``error:`` /
+    exit 2, like the other refused inputs, rather than written out: a PDF
+    with no AcroForm is the wrong input, not an empty edit."""
+
+
 def fill(path: Path, data: dict[str, str], out: Path) -> int:
     reader = PdfReader(str(path))
     writer = PdfWriter(clone_from=reader)
     filled = 0
+    failures: list[str] = []
     for page in writer.pages:
         try:
             writer.update_page_form_field_values(page, data)
             filled += 1
         except Exception as exc:  # pragma: no cover — defensive against pypdf API drift
             print(f"warn: page update failed: {exc}", file=sys.stderr)
+            failures.append(str(exc))
+    if filled == 0:
+        # Every page raised (no AcroForm at all) -- writing anyway produced a
+        # complete, valid, entirely unfilled copy of the input reported as a
+        # successful fill, including when `out` pointed at an existing filled
+        # form (#2131).
+        detail = f": {failures[0]}" if failures else ""
+        raise NoFieldsError(f"{path} has no AcroForm fields to fill{detail}")
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("wb") as fh:
         writer.write(fh)
@@ -114,8 +129,23 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    data = {str(k): str(v) for k, v in raw.items()}
-    pages = fill(args.input, data, args.out)
+    # JSON ``null`` is how a caller says "this optional field has no value" --
+    # an absent middle name, an apartment number there isn't one of. ``str``
+    # turned each of those into the literal word "None", which the form then
+    # carried as if it were the answer. An empty string is what "no value"
+    # renders as; every other type keeps its ``str``, so 0 and false still
+    # print as themselves rather than disappearing.
+    data = {str(k): ("" if v is None else str(v)) for k, v in raw.items()}
+    try:
+        pages = fill(args.input, data, args.out)
+    except NoFieldsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print(
+            f"hint: run `form_fill.py {args.input} --list-fields` to inspect "
+            "the form before filling",
+            file=sys.stderr,
+        )
+        return 2
     _write_stdout(
         json.dumps({"pages_processed": pages, "fields": len(data)}, ensure_ascii=False) + "\n"
     )

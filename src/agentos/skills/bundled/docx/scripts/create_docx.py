@@ -21,9 +21,43 @@ from typing import Any
 
 from docx import Document
 
+#: Every body entry kind ``build`` renders. Anything else is a caller mistake:
+#: ``build`` skips it, so a typo like ``paragrpah`` produced an empty document
+#: reported as a success.
+BODY_KINDS = ("heading", "paragraph", "table", "page_break")
 
-def build(spec: dict[str, Any]) -> Document:
+
+class SpecError(ValueError):
+    """A spec that cannot be used. Reported as ``error:`` / exit 2, never as a
+    traceback: the caller passed bad input, the script did not break."""
+
+
+def check_body_entries(spec: dict[str, Any]) -> None:
+    """Raise :class:`SpecError` for a body entry ``build`` would silently skip.
+
+    An entry that is not an object has no ``kind`` at all, and an object with
+    a ``kind`` outside :data:`BODY_KINDS` is a misspelling nine times out of
+    ten; both used to fall through ``build`` unmentioned. An empty ``body`` is
+    a valid, empty document and is left alone.
+    """
+    body = spec.get("body")
+    if not isinstance(body, (list, tuple)):
+        return
+    for index, item in enumerate(body):
+        if not isinstance(item, dict):
+            raise SpecError(f"body entry {index} must be an object, got {type(item).__name__}")
+        kind = item.get("kind")
+        if kind not in BODY_KINDS:
+            raise SpecError(
+                f"body entry {index} has unknown kind {kind!r}; "
+                f"expected one of {', '.join(BODY_KINDS)}"
+            )
+
+
+def build(spec: Any) -> Document:
     doc = Document()
+    if not isinstance(spec, dict):
+        return doc
 
     meta = spec.get("metadata", {})
     if isinstance(meta, dict):
@@ -33,20 +67,36 @@ def build(spec: dict[str, Any]) -> Document:
         if "author" in meta:
             core.author = str(meta["author"])
 
-    for item in spec.get("body", []):
+    body = spec.get("body")
+    if not isinstance(body, (list, tuple)):
+        return doc
+
+    for item in body:
         if not isinstance(item, dict):
             continue
         kind = item.get("kind")
         if kind == "heading":
-            doc.add_heading(str(item.get("text", "")), level=int(item.get("level", 1)))
+            try:
+                level = int(item.get("level", 1))
+            except (TypeError, ValueError):
+                level = 1
+            level = max(0, min(9, level))
+            doc.add_heading(str(item.get("text", "")), level=level)
         elif kind == "paragraph":
             style = item.get("style") or "Normal"
             doc.add_paragraph(str(item.get("text", "")), style=style)
         elif kind == "table":
-            rows = item.get("rows") or []
-            if not rows:
+            raw_rows = item.get("rows")
+            if not isinstance(raw_rows, (list, tuple)):
                 continue
-            ncols = max(len(r) for r in rows)
+            # A scalar row entry (str/int/None/...) becomes a single-cell row
+            # rather than being iterated -- a bare string would otherwise be
+            # split into one cell per character, and len() on a non-sequence
+            # scalar like an int would raise TypeError outright.
+            rows = [r if isinstance(r, (list, tuple)) else [r] for r in raw_rows]
+            ncols = max((len(r) for r in rows), default=0)
+            if ncols <= 0:
+                continue
             table = doc.add_table(rows=len(rows), cols=ncols)
             for r_idx, row in enumerate(rows):
                 for c_idx, value in enumerate(row):
@@ -68,10 +118,30 @@ def main() -> int:
     if not args.spec.is_file():
         print(f"error: spec {args.spec} not found", file=sys.stderr)
         return 2
-    spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    try:
+        spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        print(f"error: spec {args.spec} is not valid JSON: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(spec, dict):
+        print(
+            f'error: spec {args.spec} must be a JSON object with a "body" array',
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        check_body_entries(spec)
+    except SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     doc = build(spec)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(args.out))
+    # The sibling scripts all print a summary; this one printed nothing at all,
+    # so a caller had no signal beyond the exit code.
+    body = spec.get("body")
+    entries = len(body) if isinstance(body, (list, tuple)) else 0
+    print(json.dumps({"entries": entries, "out": str(args.out)}, ensure_ascii=False))
     return 0
 
 
