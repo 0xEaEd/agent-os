@@ -5,7 +5,12 @@ from __future__ import annotations
 import html
 import re
 
-_TABLE_DELIMITER_RE = re.compile(r"^:?-{3,}:?$")
+# GFM's delimiter cell is *one or more* hyphens with an optional leading
+# and/or trailing colon, so `-`, `--`, `:-`, `-:` and `:-:` are all valid.
+# Demanding three eliminated the compact spellings, and a table written that
+# way was not recognised as a table at all: the raw pipes and dashes were
+# delivered to the reader as prose.
+_TABLE_DELIMITER_RE = re.compile(r"^:?-+:?$")
 # A fence opens with three or more backticks or tildes followed by an info
 # string, which CommonMark takes to be the rest of the line: its first word is
 # the language, anything after it is attributes this renderer has no use for.
@@ -37,6 +42,32 @@ _BARE_URL_RE = re.compile(r"(https?://(?:[^\s()<]|\([^\s()<]*\))+)")
 _BLOCKQUOTE_RE = re.compile(r"^ {0,3}>[ ]?(?P<text>.*)$")
 
 
+def _find_closing_backtick_run(text: str, start: int, length: int) -> int:
+    """Index of the next backtick run of *exactly* ``length``, at or after ``start``.
+
+    CommonMark closes a code span on a backtick run of the same length as the
+    opener -- not on any run that merely contains one. ``str.find`` cannot
+    express that: searching for a one-backtick marker matches the first
+    backtick of a two-backtick run, which is how ``` ` `` ` ``` (a span quoting
+    a longer run, the ordinary way to show a literal backtick) came out as two
+    empty spans with the quoted backticks deleted. Runs that are the wrong
+    length are content, so they are skipped whole rather than a character at a
+    time -- otherwise the scan would land inside the run it just rejected.
+    """
+    cursor = start
+    while cursor < len(text):
+        if text[cursor] != "`":
+            cursor += 1
+            continue
+        run_end = cursor
+        while run_end < len(text) and text[run_end] == "`":
+            run_end += 1
+        if run_end - cursor == length:
+            return cursor
+        cursor = run_end
+    return -1
+
+
 def _replace_code_spans(text: str) -> tuple[str, list[str]]:
     """Replace balanced Markdown code spans with private placeholders."""
     chunks: list[str] = []
@@ -51,7 +82,7 @@ def _replace_code_spans(text: str) -> tuple[str, list[str]]:
         while marker_end < len(text) and text[marker_end] == "`":
             marker_end += 1
         marker = text[cursor:marker_end]
-        closing = text.find(marker, marker_end)
+        closing = _find_closing_backtick_run(text, marker_end, len(marker))
         if closing < 0:
             output.append(marker)
             cursor = marker_end

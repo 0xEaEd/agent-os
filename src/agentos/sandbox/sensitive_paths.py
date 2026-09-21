@@ -53,7 +53,13 @@ _BASE_SENSITIVE_PREFIXES: tuple[str, ...] = (
     "~/.config/gh",
     "~/.anthropic",
     "~/.openai",
-    "~/.docker/config",
+    # The directory, not ``~/.docker/config``: the match below is anchored at a
+    # path segment boundary, and ``docker login`` writes ``config.json``, so the
+    # narrower spelling guarded a path Docker never creates while the registry
+    # credentials beside it stayed readable. ``.docker`` is also how the
+    # redaction layer's ``_CREDENTIAL_DIR_NAMES`` already names it, so the two
+    # layers now agree on this entry.
+    "~/.docker",
     "~/.kube",
     "~/.gnupg",
     "~/.password-store",
