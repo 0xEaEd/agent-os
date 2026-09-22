@@ -16,6 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `_strip_delivered_artifact_image_references` never saw its name and left
   the dead reference sitting right after the real attachment.
 
+- `exec_command`: an inline artifact marker naming a file the finished
+  process still holds, or one the agent cannot read, no longer fails the whole
+  command and withholds its output. `publish_inline_artifacts` reports an
+  `OSError` from the publish in place of the marker, as it already did for a
+  `ToolError` (#2892)
+
 - Tools: the reasons `edit_file`, `grep_search`, `projects_create` and
   `projects_update` refuse a call now reach the model instead of "The tool
   received an invalid argument" — the closest-match hint and ambiguous line
