@@ -59,6 +59,7 @@ _XLSX_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _XLSX_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _XLSX_OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _XLSX_MAX_ROWS = 1_048_576
+_XLSX_MAX_COLUMNS = 16_384
 _BOOTSTRAP_SOURCE_FILENAMES = frozenset(BOOTSTRAP_FILENAMES)
 
 
@@ -765,6 +766,13 @@ def _read_xlsx_worksheet(
         for cell_el in row_el.findall(f"{{{_XLSX_MAIN_NS}}}c"):
             cell_ref = cell_el.attrib.get("r")
             column_index = _xlsx_column_index(cell_ref) if cell_ref else next_column
+            # A crafted or corrupt ref can name a column far past the format's
+            # own ceiling. The dict above no longer grows with it, but the row
+            # is materialised below over range(max(cells) + 1), so one such
+            # cell still sizes the list by whatever the document claimed.
+            # Drop it instead, leaving next_column where it was.
+            if column_index >= _XLSX_MAX_COLUMNS:
+                continue
             cells[column_index] = _xlsx_cell_value(cell_el, shared_strings)
             next_column = column_index + 1
         row = [cells.get(i, "") for i in range(max(cells, default=-1) + 1)]
@@ -778,9 +786,14 @@ def _xlsx_column_index(cell_ref: str) -> int:
     match = re.match(r"([A-Za-z]+)", cell_ref)
     if not match:
         return 0
+    letters = match.group(1).upper()
+    if len(letters) > 3:
+        return _XLSX_MAX_COLUMNS
     index = 0
-    for char in match.group(1).upper():
+    for char in letters:
         index = index * 26 + (ord(char) - ord("A") + 1)
+        if index > _XLSX_MAX_COLUMNS:
+            return _XLSX_MAX_COLUMNS
     return max(0, index - 1)
 
 
