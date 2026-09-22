@@ -68,13 +68,35 @@ def _find_closing_backtick_run(text: str, start: int, length: int) -> int:
     return -1
 
 
+def _is_escaped(text: str, index: int) -> bool:
+    """True when the character at *index* is preceded by an odd backslash run.
+
+    CommonMark consumes a backslash together with the ASCII punctuation it
+    escapes, so an escaped backtick is literal and cannot open a code span.
+    Counting the whole run keeps a double backslash before a backtick a real
+    delimiter: there the first backslash escapes the second, so the backtick
+    itself is unescaped.
+    """
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
 def _replace_code_spans(text: str) -> tuple[str, list[str]]:
-    """Replace balanced Markdown code spans with private placeholders."""
+    """Replace balanced Markdown code spans with private placeholders.
+
+    A backslash-escaped backtick is literal and cannot *open* a span. The scan
+    for the closer stays raw: matching the reference implementation, an
+    escaped backtick still closes the span it sits in.
+    """
     chunks: list[str] = []
     output: list[str] = []
     cursor = 0
     while cursor < len(text):
-        if text[cursor] != "`":
+        if text[cursor] != "`" or _is_escaped(text, cursor):
             output.append(text[cursor])
             cursor += 1
             continue
@@ -192,8 +214,26 @@ def _bold_underscore_strip(match: re.Match[str]) -> str:
     return match.group(1)
 
 
+#: CommonMark: a backslash before ASCII punctuation makes that character
+#: literal -- the escape is consumed and the character must not act as a
+#: delimiter. Applied to the raw text before ``html.escape``, so a parked
+#: ``\<`` is restored as ``&lt;`` and cannot smuggle markup through.
+_ESCAPED_PUNCT_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
+
+
 def _render_inline(text: str) -> str:
     protected, code_chunks = _replace_code_spans(text)
+    escapes: list[str] = []
+
+    def _park_escape(match: re.Match[str]) -> str:
+        # Parked before the URL passes below, so an escaped bracket cannot
+        # open a link and a backslash inside a destination never reaches the
+        # emphasis passes; parked before `html.escape`, so the character
+        # cannot smuggle markup either.
+        escapes.append(match.group(1))
+        return f"\x00TG_ESC_{len(escapes) - 1}\x00"
+
+    protected = _ESCAPED_PUNCT_RE.sub(_park_escape, protected)
     rendered = html.escape(protected)
     hrefs: list[str] = []
     bare_urls: list[str] = []
@@ -240,11 +280,14 @@ def _render_inline(text: str) -> str:
     # must not follow a word character and a closing one must not precede one.
     rendered = re.sub(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)", r"<i>\1</i>", rendered)
     # Restore in reverse order of protection: code spans were parked first, so
-    # they come back last and a restored code span is never rescanned.
+    # they come back last and a restored code span is never rescanned. Escapes
+    # are restored after the URLs and hrefs that may still carry one.
     for index, url in enumerate(bare_urls):
         rendered = rendered.replace(f"\x00TG_URL_{index}\x00", url)
     for index, href in enumerate(hrefs):
         rendered = rendered.replace(f"\x00TG_HREF_{index}\x00", href)
+    for index, char in enumerate(escapes):
+        rendered = rendered.replace(f"\x00TG_ESC_{index}\x00", html.escape(char))
     for index, chunk in enumerate(code_chunks):
         rendered = rendered.replace(f"\x00TG_CODE_{index}\x00", chunk)
     return rendered
@@ -257,12 +300,22 @@ def _plain_inline(text: str) -> str:
     # lost those characters outright and the reader was handed a link that does
     # not resolve. Park the URLs, strip the markers, put them back.
     hrefs: list[str] = []
+    escapes: list[str] = []
 
     def _park_href(match: re.Match[str]) -> str:
         hrefs.append(match.group(2))
         return f"{match.group(1)} (\x00TG_HREF_{len(hrefs) - 1}\x00)"
 
+    def _park_escape(match: re.Match[str]) -> str:
+        # Same rule as `_render_inline`: consume `\<punct>` so the character
+        # stays literal and cannot be stripped as a delimiter below. A
+        # backslash before a non-punctuation character (`C:\Users`, `\d+`) is
+        # left alone.
+        escapes.append(match.group(1))
+        return f"\x00TG_ESC_{len(escapes) - 1}\x00"
+
     text = _LINK_RE.sub(_park_href, text)
+    text = _ESCAPED_PUNCT_RE.sub(_park_escape, text)
     text = text.replace("`", "")
     # `__` goes through the regex rather than `str.replace`: a blanket strip ate
     # the delimiters of `__init__` and handed the reader `init`, with not even a
@@ -281,6 +334,8 @@ def _plain_inline(text: str) -> str:
     text = _ITALIC_ASTERISK_RE.sub(r"\1", text)
     for index, href in enumerate(hrefs):
         text = text.replace(f"\x00TG_HREF_{index}\x00", href)
+    for index, char in enumerate(escapes):
+        text = text.replace(f"\x00TG_ESC_{index}\x00", char)
     return text.strip()
 
 
