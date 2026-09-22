@@ -49,6 +49,7 @@ from agentos.engine.pipeline import TurnContext  # noqa: E402
 from agentos.engine.steps import agentos_router as router_mod  # noqa: E402
 from agentos.env import load_env  # noqa: E402
 from agentos.gateway.config import GatewayConfig  # noqa: E402
+from agentos.router_strategies import get_strategy_info  # noqa: E402
 
 DATA_DIR = REPO_ROOT / "tests" / "data" / "router_eval"
 REPORTS_DIR = DATA_DIR / "reports"
@@ -84,6 +85,18 @@ def _class_rank(route_class: str | None) -> int:
 
 def _tier_rank(tier: str | None) -> int:
     return TIER_ORDER.index(tier) if tier in TIER_ORDER else -1
+
+
+def expected_routing_source(strategy_id: str) -> str:
+    """Healthy ``routing_source`` tag for a strategy id.
+
+    The registry owns the id → telemetry-tag mapping (``pilot-v1`` reports
+    ``pilot_v1``, ``llm_judge`` reports ``llm_judge``, ``jev`` reports ``jev``);
+    comparing the raw id against the tag made every ``pilot-v1`` run abort with
+    "strategy did not engage".
+    """
+    info = get_strategy_info(strategy_id)
+    return info.source if info is not None else strategy_id
 
 
 def _reset_router_state(*, reset_strategy: bool = False) -> None:
@@ -238,9 +251,7 @@ async def _run_cases(
     return rows
 
 
-async def _run_sessions(
-    config: GatewayConfig, sessions: list[dict[str, Any]]
-) -> dict[str, Any]:
+async def _run_sessions(config: GatewayConfig, sessions: list[dict[str, Any]]) -> dict[str, Any]:
     session_rows: list[dict[str, Any]] = []
     followup_turns = 0
     downgrades = 0
@@ -312,16 +323,12 @@ def _agreement(runs: list[list[dict[str, Any]]]) -> dict[str, Any]:
     for rows in runs:
         for row in rows:
             by_id[row["id"]].append(row.get("pred_class"))
-    disagreements = sorted(
-        case_id for case_id, preds in by_id.items() if len(set(preds)) > 1
-    )
+    disagreements = sorted(case_id for case_id, preds in by_id.items() if len(set(preds)) > 1)
     total = len(by_id)
     return {
         "repeats": len(runs),
         "case_count": total,
-        "class_agreement_rate": (
-            round((total - len(disagreements)) / total, 4) if total else None
-        ),
+        "class_agreement_rate": (round((total - len(disagreements)) / total, 4) if total else None),
         "disagreeing_case_ids": disagreements,
     }
 
@@ -360,11 +367,12 @@ async def _run_eval(args: argparse.Namespace) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - recorded verbatim in the report
         report["runtime_error"] = traceback.format_exc()
         return report
-    if probe["source"] != args.strategy or probe["applied"] is not True:
+    expected_source = expected_routing_source(args.strategy)
+    if probe["source"] != expected_source or probe["applied"] is not True:
         report["runtime_error"] = (
             "strategy did not engage: "
             f"routing_source={probe['source']!r} routing_applied={probe['applied']!r} "
-            f"(expected source={args.strategy!r}) — probe result: {probe!r}"
+            f"(expected source={expected_source!r}) — probe result: {probe!r}"
         )
         return report
 
@@ -384,9 +392,7 @@ async def _run_eval(args: argparse.Namespace) -> dict[str, Any]:
     report["sessions"] = session_report
     if args.repeat > 1:
         report["repeat_consistency"] = _agreement(runs)
-    report["cases"] = [
-        {key: value for key, value in row.items() if key != "tags"} for row in rows
-    ]
+    report["cases"] = [{key: value for key, value in row.items() if key != "tags"} for row in rows]
     return report
 
 
@@ -406,9 +412,7 @@ def main() -> int:
         default=1,
         help="run single-turn cases N times and report class-agreement rate",
     )
-    parser.add_argument(
-        "--out", default=None, help="report path (default: reports/<name>.json)"
-    )
+    parser.add_argument("--out", default=None, help="report path (default: reports/<name>.json)")
     args = parser.parse_args()
     if args.name is None:
         args.name = args.strategy
@@ -420,9 +424,7 @@ def main() -> int:
 
     out_path = Path(args.out) if args.out else REPORTS_DIR / f"{args.name}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"report written to {out_path}", file=sys.stderr)
 
     summary = {
@@ -433,9 +435,7 @@ def main() -> int:
         "downgrade_within_window_rate": (report.get("sessions") or {}).get(
             "downgrade_within_window_rate"
         ),
-        "repeat_consistency": (report.get("repeat_consistency") or {}).get(
-            "class_agreement_rate"
-        ),
+        "repeat_consistency": (report.get("repeat_consistency") or {}).get("class_agreement_rate"),
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if not report.get("runtime_error") else 1

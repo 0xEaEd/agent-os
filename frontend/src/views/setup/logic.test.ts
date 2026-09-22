@@ -435,6 +435,7 @@ describe('router derivation (setup.js:550-635,1767-1846)', () => {
     expect(routerMode({ enabled: false })).toBe('disabled')
     expect(routerMode({ strategy: 'pilot-v1' })).toBe('pilot-v1')
     expect(routerMode({ strategy: 'llm_judge' })).toBe('llm_judge')
+    expect(routerMode({ strategy: 'jev' })).toBe('jev')
     expect(routerMode({ strategy: 'v4_phase3' })).toBe('pilot-v1')
     expect(routerMode({})).toBe('pilot-v1')
   })
@@ -543,6 +544,63 @@ describe('router derivation (setup.js:550-635,1767-1846)', () => {
     expect(params.strategy).toBe('llm_judge')
     expect(params.safetyNetThreshold).toBeUndefined()
     expect(params.judgeModel).toBe('j')
+  })
+  it('buildRouterConfigureParams: jev forwards key + threshold, never the pilot threshold', () => {
+    const params = buildRouterConfigureParams({
+      sel: 'jev',
+      defaultTier: 'c1',
+      judgeModel: null,
+      pilotThresholdRaw: '0.9',
+      jevApiKeyRaw: 'k',
+      jevHighRiskThresholdRaw: '0.7',
+      translateCeilingEnabled: true,
+      translateCeilingTier: 'c0',
+      tiers: [],
+    })
+    expect(params.mode).toBe('recommended')
+    expect(params.strategy).toBe('jev')
+    expect(params.jevApiKey).toBe('k')
+    expect(params.jevHighRiskThreshold).toBe(0.7)
+    expect(params.safetyNetThreshold).toBeUndefined()
+  })
+  it('buildRouterConfigureParams: jev blank key preserves (null), bad threshold is dropped', () => {
+    const forThreshold = (raw: string | undefined) =>
+      buildRouterConfigureParams({
+        sel: 'jev',
+        defaultTier: 'c1',
+        judgeModel: null,
+        pilotThresholdRaw: '0.5',
+        jevApiKeyRaw: '   ',
+        jevHighRiskThresholdRaw: raw,
+        translateCeilingEnabled: true,
+        translateCeilingTier: 'c0',
+        tiers: [],
+      })
+    expect(forThreshold('0.7').jevApiKey).toBeNull()
+    expect(forThreshold('').jevHighRiskThreshold).toBeUndefined()
+    expect(forThreshold(undefined).jevHighRiskThreshold).toBeUndefined()
+    expect(forThreshold('abc').jevHighRiskThreshold).toBeUndefined()
+    expect(forThreshold('1.5').jevHighRiskThreshold).toBeUndefined()
+    expect(forThreshold('-0.1').jevHighRiskThreshold).toBeUndefined()
+    expect(forThreshold('0').jevHighRiskThreshold).toBe(0)
+    expect(forThreshold('1').jevHighRiskThreshold).toBe(1)
+  })
+  it('buildRouterConfigureParams: jev fields are only forwarded for the jev strategy', () => {
+    for (const sel of ['pilot-v1', 'llm_judge', 'disabled'] as const) {
+      const params = buildRouterConfigureParams({
+        sel,
+        defaultTier: 'c1',
+        judgeModel: null,
+        pilotThresholdRaw: '0.5',
+        jevApiKeyRaw: 'k',
+        jevHighRiskThresholdRaw: '0.7',
+        translateCeilingEnabled: true,
+        translateCeilingTier: 'c0',
+        tiers: [],
+      })
+      expect(params).not.toHaveProperty('jevApiKey')
+      expect(params).not.toHaveProperty('jevHighRiskThreshold')
+    }
   })
 })
 

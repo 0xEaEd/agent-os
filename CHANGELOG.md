@@ -11,6 +11,139 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `***bold italic***`) no longer leaks its asterisks into the rendered
   `<b>…</b>`; the label path strips single-asterisk italics the way it already
   stripped `_italic_` (#2964)
+
+## [2026.9.22.post1] - 2026-09-22
+
+### Added
+- Pilot Router: new opt-in, experimental `jev` strategy (typesafe.ai Jev
+  System One) — one `/v1/systemone` call with a `route` choice (R0–R3,
+  criteria derived from the tier descriptions) and a `high_risk` noul that
+  floors destructive/production requests at c3; the calibrated confidence
+  passes through the engine's confidence gate; selectable from the CLI and
+  Web UI setup wizards (`agentos configure router`, `agentos onboard`);
+  degrades to `jev_unavailable` on a missing key, HTTP error or timeout.
+  Sends the current turn text to typesafe.ai; requires `TYPESAFE_API_KEY`
+  (`[agentos_router.jev]`)
+
+### Fixed
+- Pilot Router `jev` strategy: sharpened the R2/R3 criteria so whole-system
+  architecture design and end-to-end incident-triage process design land on
+  R3 while single-service log diagnosis stays R2. On the labeled router
+  corpus (121 cases, vi/zh/en) classifier accuracy rises from 0.760 to 0.901
+  and R3 recall from 0.56 to 0.91.
+
+- `scripts/router_eval.py`: the strategy-engaged probe compared
+  `routing_source` against the raw strategy id, so `--strategy pilot-v1`
+  (tag `pilot_v1`) always aborted with "strategy did not engage". It now
+  resolves the expected tag through the strategy registry.
+
+- `weather` skill: a planner contract whose `DESTINATION:` field is present
+  but blank no longer silently forwards an unrelated field (e.g. `DATES:
+  next weekend`) to wttr.in as the city name. `_extract_location` now
+  treats a blank destination the same as no text at all and falls back to
+  `"London"`, instead of falling through to the contract's first line.
+
+- `session_search`: transcripts are now indexed with FTS5's `trigram`
+  tokenizer, query terms are joined with `OR` and ranked by `bm25`, and terms
+  shorter than three characters are answered by a scan. A query could not
+  match inside a run of CJK characters (`迁移计划` never found
+  `数据库迁移计划`) and every term had to be present (`migration plan for
+  postgres` found nothing in a transcript that lacked only `for`). An existing
+  index is rebuilt once, at the first open after upgrading (#2897)
+
+- `http-fetch` skill: `--max-bytes` now bounds what is *read*, not just what is
+  printed. The whole body used to be downloaded and held in memory before the
+  cap was applied, and a slow or endless stream (SSE, a log tail) was waited on
+  until the skill runner's timeout killed the process with no output; the read
+  now stops one byte past the cap and closes the connection (#2895)
+
+- Gateway channel dispatch: the batch-fallback reply sent after a streaming
+  turn no longer leaves a stale markdown image reference (e.g.
+  `![chart](chart.png)`) in the text for an artifact the stream relay
+  already delivered as a native file. `_deliver_runtime_channel_reply`
+  stripped that artifact out of the list *before* stripping its inline
+  reference from the re-fetched transcript text, so
+  `_strip_delivered_artifact_image_references` never saw its name and left
+  the dead reference sitting right after the real attachment.
+
+- `exec_command`: an inline artifact marker naming a file the finished
+  process still holds, or one the agent cannot read, no longer fails the whole
+  command and withholds its output. `publish_inline_artifacts` reports an
+  `OSError` from the publish in place of the marker, as it already did for a
+  `ToolError` (#2892)
+
+- CLI: commands no longer print structlog debug events to stderr — `agentos
+  context` put ~190 `tool_filtered` lines on the terminal on top of its tables.
+  The CLI filters at `INFO` (`AGENTOS_LOG_LEVEL` overrides); the gateway keeps
+  its own configured `log_level` for the console and `debug.log` (#2896)
+
+- Tools: the reasons `edit_file`, `grep_search`, `projects_create` and
+  `projects_update` refuse a call now reach the model instead of "The tool
+  received an invalid argument" — the closest-match hint and ambiguous line
+  numbers, the regex diagnostic, and the project-name rule; and `web_fetch`
+  reports an unresolvable hostname in its result's `error` field like every
+  other unreachable URL (#2888, #2889, #2890, #2891)
+
+- Tools: `read_spreadsheet` sized a row from whatever column a `.xlsx` cell
+  reference claimed, so a crafted or corrupt `r="..."` far past the format's
+  16,384-column ceiling drove a very large allocation. Such a cell is now
+  dropped (#2867).
+
+- `poolsdotfun-token-launcher` and `senior-unilp-manager` skills: a boolean flag
+  before the subcommand (`--json pools`) consumed the subcommand as its value,
+  so the command ran without one. Flags that take no argument no longer
+  swallow the positional (#2863, #2864).
+
+- `video-merger` skill: merging to an output path whose parent directory did
+  not exist failed with `No such file or directory` after the concat and
+  encode work had already been done. The parent directory is now created
+  before ffmpeg writes (#2858).
+
+- Channels: `split_text_for_limit` recognises a `~~~` fence without breaking a
+  closed backtick one -- a stray `~~~` inside an already-closed ``` ``` ```
+  body (a pasted example, a divider, a conflict marker) no longer pairs with
+  an unrelated one further down and rebalances the wrong block (#2954).
+- MSTeams: `send_streaming` chunks at the 40 KB activity payload limit and
+  rolls over into a fresh activity like the Telegram and Discord adapters,
+  remembering every activity id it creates, instead of failing with HTTP 413
+  (#2876).
+- Gateway: an attachment a channel turn (Telegram, Discord, Slack, ...) staged
+  under the session *key* was unreachable through the download route
+  `chat.history` links to, which only looked under the session *id*; both
+  directories are consulted now (#2944).
+- Artifacts: `strip_artifact_markers_from_text` stopped at the first `]`, so a
+  name with its own brackets (`Q3 Report [Draft].pdf`) left the marker's tail
+  in the reply; it now matches the marker's own closing bracket without
+  swallowing the text around it (#2942).
+- Gateway: `logs.tail` kept only the newest `limit` lines of everything unread
+  and then advanced the cursor to end-of-file, so a burst larger than `limit`
+  between two polls lost its older lines for good despite `has_more: true`.
+  The cursor now resumes through the burst while the first poll still opens
+  on the live tail (#2938).
+- Engine: a silent-reply sentinel the model wrapped in Markdown (`**NO_REPLY**`,
+  `` `HEARTBEAT_OK` ``) is treated as the bare sentinel instead of being
+  delivered as a message (#2945).
+- Scheduler: a cron script that closes the `{"wakeAgent": false}` gate keeps
+  its output on the run record instead of a fixed "silent" string (#2922), and
+  the gate is still honoured when the output before it pushes stdout past the
+  16k clip -- the clip previously cut the gate off and the run was treated as
+  news (#2921).
+- CLI: `agentos cost --csv` and `cost savings --csv` print through plain
+  stdout instead of Rich, so a long row redirected to a file is no longer
+  wrapped at 80 columns into two records (#2946). `agentos memory …` and
+  `agentos cron …` print stored text, job names and run output verbatim
+  instead of interpreting `[word]` as Rich markup and `:name:` as an emoji
+  (#2820), and the interactive chat's tool status line shows tool arguments
+  literally, where a `[/]` in a shell command or URL previously raised
+  `MarkupError` and killed the REPL (#2823).
+- `pptx` skill: `render_thumbs.sh` prints only the slide images the current
+  run wrote, and documents pdftoppm's page-number padding, instead of globbing
+  whatever an earlier run left in the directory (#2817).
+
+## [2026.9.22] - 2026-09-22
+
+### Fixed
+- Memory notes containing ZWJ emoji sequences, ZWNJ-shaped Persian/Hindi text or a leading BOM are no longer refused on write or silently replaced with a `[BLOCKED: ...]` placeholder on load; `memory_tools` now takes its invisible-character verdict from `injection_guard` (which already exempts the joiners) instead of a private list that had drifted (#2966).
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.
