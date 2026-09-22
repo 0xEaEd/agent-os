@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Telegram: a Markdown table header or row label written as `*italic*` (or
+  `***bold italic***`) no longer leaks its asterisks into the rendered
+  `<b>…</b>`; the label path strips single-asterisk italics the way it already
+  stripped `_italic_` (#2964)
+
 ## [2026.9.22.post1] - 2026-09-22
 
 ### Added
