@@ -19,7 +19,7 @@ import pytest
 
 from agentos.tools.builtin import filesystem as fs
 from agentos.tools.fuzzy_match import AmbiguousMatchError, fuzzy_find_and_replace
-from agentos.tools.types import CallerKind, ToolContext, current_tool_context
+from agentos.tools.types import CallerKind, SafeToolError, ToolContext, current_tool_context
 
 _TRIPLE = "x = 1\nx = 1\nx = 1\n"
 _PAIR = "x = 1\nx = 1"
@@ -96,7 +96,9 @@ async def test_edit_file_refuses_an_overlapping_duplicate(tmp_path: Path) -> Non
     target = tmp_path / "sample.py"
     target.write_text(_TRIPLE, encoding="utf-8")
 
-    with tool_context(tmp_path), pytest.raises(ValueError, match="matches 2 locations"):
+    # SafeToolError: the message is the one the model sees, so it must stay
+    # this specific rather than collapse to "invalid argument".
+    with tool_context(tmp_path), pytest.raises(SafeToolError, match="matches 2 locations"):
         await edit_file(str(target), _PAIR, "y = 2\ny = 2")
 
     assert target.read_text(encoding="utf-8") == _TRIPLE

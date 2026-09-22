@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import structlog
 
@@ -196,11 +197,31 @@ def _webhook_origin(url: str) -> str:
     A Slack/Discord/Teams webhook URL *is* the credential — the path is the
     secret. The model only needs to know where a job reports, so it gets the
     host and nothing that would let it re-post there.
+
+    The path is not the only place a secret sits. Splitting on the first
+    ``/`` kept everything the authority can carry: basic-auth userinfo
+    (``https://key:token@host/x`` → ``https://key:token@host``), and, when the
+    URL has no path at all, the query and fragment too
+    (``https://host?token=secret`` came back whole). Parse the authority and
+    rebuild it from the host and port alone, so nothing else can ride along.
     """
-    if "://" not in url:
-        return url.split("/", 1)[0]
-    scheme, rest = url.split("://", 1)
-    return f"{scheme}://{rest.split('/', 1)[0]}"
+    parts = urlsplit(url if "://" in url else f"//{url}")
+    try:
+        port = parts.port
+    except ValueError:
+        # A non-numeric port is not something to raise over from a view
+        # builder; treat the authority as unusable and fall through.
+        port = None
+    host = parts.hostname or ""
+    if not host:
+        # Unparseable. Return the leading token with every secret-bearing
+        # separator cut, rather than handing back the original string.
+        head = url.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+        return head.rpartition("@")[2]
+    if ":" in host:  # IPv6 literal: urlsplit strips the brackets.
+        host = f"[{host}]"
+    origin = f"{host}:{port}" if port else host
+    return f"{parts.scheme}://{origin}" if parts.scheme else origin
 
 
 def _cron_delivery_view(delivery: Any) -> dict[str, Any]:
@@ -873,7 +894,9 @@ def _session_storage_or_none() -> Any:
                 "thread_id": {
                     "type": "string",
                     "description": (
-                        "Optional thread id inside the recipient chat (Slack only today)."
+                        "Optional thread id inside the recipient chat: a Slack "
+                        "thread ts, a Telegram forum topic id, or a Discord "
+                        "thread id."
                     ),
                 },
                 "best_effort": {

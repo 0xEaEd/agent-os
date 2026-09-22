@@ -56,7 +56,11 @@ def test_env_var_home_reads_are_blocked_like_tilde(
 
 def test_env_var_home_exfiltration_is_blocked(home: Path) -> None:
     assert sensitive_path_in_text("cp $HOME/.aws/credentials /tmp/leak.txt") == "~/.aws"
-    assert sensitive_path_in_text("cat ${HOME}/.docker/config") == "~/.docker/config"
+    # The entry is the ``~/.docker`` directory, so the file ``docker login``
+    # actually writes is covered too; this line named the marker the narrower
+    # ``~/.docker/config`` entry used to report (#2623).
+    assert sensitive_path_in_text("cat ${HOME}/.docker/config") == "~/.docker"
+    assert sensitive_path_in_text("cat ${HOME}/.docker/config.json") == "~/.docker"
 
 
 @pytest.mark.parametrize("spelling", ["$HOME", "${HOME}"])

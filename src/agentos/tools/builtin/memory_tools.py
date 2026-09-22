@@ -228,6 +228,27 @@ def _is_checkpoint_sidecar_path(path: str) -> bool:
     )
 
 
+def _count_memory_files(workspace_dir: Path) -> int:
+    """Number of memory source files (``MEMORY.md`` and ``memory/**/*.md``).
+
+    ``max_files`` is documented as the number of memory files, and in the
+    default ``source="workspace"`` layout the workspace also holds the
+    bootstrap files, ``knowledge_base/`` and whatever the agent cloned or
+    wrote there. Counting every ``*.md`` under it refused a new memory file
+    once a single repository's docs pushed the total past the cap. Only the
+    paths ``memory_save`` itself accepts are counted.
+    """
+    count = 1 if (workspace_dir / "MEMORY.md").is_file() else 0
+    memory_root = workspace_dir / "memory"
+    if not memory_root.is_dir():
+        return count
+    for path in memory_root.rglob("*.md"):
+        rel = path.relative_to(workspace_dir).as_posix()
+        if path.is_file() and is_memory_source_path(rel):
+            count += 1
+    return count
+
+
 def _is_memory_save_path(path: str) -> bool:
     """Return True for model-callable writable memory files."""
     return _is_memory_source_path(path)
@@ -268,8 +289,11 @@ _MEMORY_SEARCH_STOP_WORDS: Final[frozenset[str]] = frozenset(
 _YAML_FRONTMATTER_RE = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|$)", re.S)
 # Unicode letters and digits; underscore is excluded so it still splits words.
 _MEMORY_SEARCH_WORD_RE = re.compile(r"[^\W_]+")
-# CJK ideographs and kana carry no spaces, so they are matched one char at a time.
+# CJK ideographs and kana carry no spaces, so they are matched one char at a time,
+# and in runs: a bigram is only meaningful inside one unbroken run (see
+# ``_memory_search_query_terms``).
 _MEMORY_SEARCH_CJK_RE = re.compile(r"[一-鿿぀-ヿ]")
+_MEMORY_SEARCH_CJK_RUN_RE = re.compile(f"{_MEMORY_SEARCH_CJK_RE.pattern}+")
 
 
 def _memory_search_limit(value: object) -> int:
@@ -328,6 +352,9 @@ def _memory_search_query_terms(query: str) -> tuple[str, ...]:
     CJK carries no spaces, so a run of ideographs or kana is additionally
     expanded into unigrams and bigrams -- the shape
     ``agentos.memory.retrieval._jaccard_similarity`` already tokenizes with.
+    A bigram is only formed inside one unbroken run: two characters separated by
+    a space, punctuation or Latin text are not adjacent, and pairing them
+    produced a term the query never contained.
     """
     terms: list[str] = []
     seen: set[str] = set()
@@ -338,9 +365,12 @@ def _memory_search_query_terms(query: str) -> tuple[str, ...]:
         for term in _MEMORY_SEARCH_WORD_RE.findall(lowered)
         if len(term) >= _min_term_chars(term)
     ]
-    cjk = _MEMORY_SEARCH_CJK_RE.findall(lowered)
-    candidates.extend(cjk)
-    candidates.extend(cjk[index] + cjk[index + 1] for index in range(len(cjk) - 1))
+    # Per run, not across the whole query: pairing the flat list of every CJK
+    # character in the query glued the tail of one word to the head of the next
+    # (#3180), inventing a term that appears nowhere in it.
+    for run in _MEMORY_SEARCH_CJK_RUN_RE.findall(lowered):
+        candidates.extend(run)
+        candidates.extend(run[index : index + 2] for index in range(len(run) - 1))
 
     for term in candidates:
         if term in _MEMORY_SEARCH_STOP_WORDS or term in seen:
@@ -703,7 +733,7 @@ def create_memory_tools(
 
         max_files = getattr(memory_config, "max_files", 0)
         if max_files > 0 and not mem_path.exists():
-            file_count = len(list(workspace_dir.rglob("*.md")))
+            file_count = _count_memory_files(workspace_dir)
             if file_count >= max_files:
                 raise ToolError(f"max file count reached ({max_files}).")
 
