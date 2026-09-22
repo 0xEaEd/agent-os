@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `weather` skill: a planner contract whose `DESTINATION:` field is present
+  but blank no longer silently forwards an unrelated field (e.g. `DATES:
+  next weekend`) to wttr.in as the city name. `_extract_location` now
+  treats a blank destination the same as no text at all and falls back to
+  `"London"`, instead of falling through to the contract's first line.
 
 - `session_search`: transcripts are now indexed with FTS5's `trigram`
   tokenizer, query terms are joined with `OR` and ranked by `bm25`, and terms
