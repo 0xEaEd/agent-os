@@ -31,7 +31,12 @@ from agentos.tools.fuzzy_match import (
 )
 from agentos.tools.path_policy import reject_foreign_host_path
 from agentos.tools.registry import tool
-from agentos.tools.types import ToolError, WorkspaceAccessError, current_tool_context
+from agentos.tools.types import (
+    SafeToolError,
+    ToolError,
+    WorkspaceAccessError,
+    current_tool_context,
+)
 from agentos.tools.write_tracking import record_workspace_file_write
 
 log = structlog.get_logger(__name__)
@@ -54,6 +59,7 @@ _XLSX_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _XLSX_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _XLSX_OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _XLSX_MAX_ROWS = 1_048_576
+_XLSX_MAX_COLUMNS = 16_384
 _BOOTSTRAP_SOURCE_FILENAMES = frozenset(BOOTSTRAP_FILENAMES)
 
 
@@ -760,6 +766,13 @@ def _read_xlsx_worksheet(
         for cell_el in row_el.findall(f"{{{_XLSX_MAIN_NS}}}c"):
             cell_ref = cell_el.attrib.get("r")
             column_index = _xlsx_column_index(cell_ref) if cell_ref else next_column
+            # A crafted or corrupt ref can name a column far past the format's
+            # own ceiling. The dict above no longer grows with it, but the row
+            # is materialised below over range(max(cells) + 1), so one such
+            # cell still sizes the list by whatever the document claimed.
+            # Drop it instead, leaving next_column where it was.
+            if column_index >= _XLSX_MAX_COLUMNS:
+                continue
             cells[column_index] = _xlsx_cell_value(cell_el, shared_strings)
             next_column = column_index + 1
         row = [cells.get(i, "") for i in range(max(cells, default=-1) + 1)]
@@ -773,9 +786,14 @@ def _xlsx_column_index(cell_ref: str) -> int:
     match = re.match(r"([A-Za-z]+)", cell_ref)
     if not match:
         return 0
+    letters = match.group(1).upper()
+    if len(letters) > 3:
+        return _XLSX_MAX_COLUMNS
     index = 0
-    for char in match.group(1).upper():
+    for char in letters:
         index = index * 26 + (ord(char) - ord("A") + 1)
+        if index > _XLSX_MAX_COLUMNS:
+            return _XLSX_MAX_COLUMNS
     return max(0, index - 1)
 
 
@@ -978,14 +996,18 @@ def _locate_edit(original: str, old_text: str, new_text: str, *, path: str) -> F
     Exact equality is tried first and costs nothing extra. The fallback chain
     only runs once exact has missed, so the common case is unchanged. Both
     failure modes keep the wording the model already knows, enriched with
-    whatever the matcher learned.
+    whatever the matcher learned -- and raise ``SafeToolError`` so that
+    wording reaches the model: the failure envelope forwards only
+    ``SafeToolUserMessage`` subclasses, and a plain ``ValueError`` arrived as
+    "The tool received an invalid argument" with the line numbers and the
+    closest-match hint discarded (#2888).
     """
 
     try:
         return fuzzy_find_and_replace(original, old_text, new_text)
     except AmbiguousMatchError as exc:
         lines = ", ".join(str(line) for line in exc.lines)
-        raise ValueError(
+        raise SafeToolError(
             f"old_text matches {exc.match_count} locations in {path} (lines {lines});"
             " be more specific"
         ) from exc
@@ -994,7 +1016,7 @@ def _locate_edit(original: str, old_text: str, new_text: str, *, path: str) -> F
         # channel like any other and gets the same mask.
         hint = redact_file_output(exc.hint, path=path) if exc.hint else ""
         detail = f" Closest match: {hint}" if hint else ""
-        raise ValueError(f"old_text not found in {path}.{detail}") from exc
+        raise SafeToolError(f"old_text not found in {path}.{detail}") from exc
 
 
 @tool(
@@ -1243,7 +1265,11 @@ async def grep_search(
         try:
             regex = re.compile(pattern)
         except re.error as e:
-            raise ValueError(f"Invalid regex pattern: {e}") from e
+            # SafeToolError so the parser's diagnostic reaches the model
+            # (#2890). It describes the model's own ``pattern`` argument --
+            # "nothing to repeat at position 0" -- and quotes nothing from the
+            # workspace or the environment.
+            raise SafeToolError(f"Invalid regex pattern: {e}") from e
 
         results: list[str] = []
 

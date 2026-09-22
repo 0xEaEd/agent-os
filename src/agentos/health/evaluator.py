@@ -960,6 +960,33 @@ def _router_runtime_invalid_finding(
             restart_required=True,
         )
 
+    if reason == "credentials_missing":
+        # A remote-credential strategy (Jev) has no API key: routing degrades
+        # to the default tier on every turn (non-blocking). Nothing to do with
+        # local files or the LLM judge.
+        env_name = str(payload.get("credentialEnv") or "TYPESAFE_API_KEY")
+        return HealthFinding(
+            id="router.credentials.missing",
+            severity="warn",
+            surface="router",
+            title="Router credentials missing",
+            detail=detail,
+            evidence=evidence,
+            fix_steps=[
+                FixStep(
+                    label="Set the router API key",
+                    detail=(
+                        f"Run `agentos env set {env_name}` and paste the key at the prompt (or set "
+                        "agentos_router.jev.api_key) and restart AgentOS, or switch "
+                        "agentos_router.strategy back to pilot-v1."
+                    ),
+                ),
+                reconfigure,
+                restart,
+            ],
+            restart_required=True,
+        )
+
     if reason == "judge_no_credentials":
         return HealthFinding(
             id="router.judge.no_credentials",

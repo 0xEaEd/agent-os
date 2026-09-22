@@ -544,6 +544,78 @@ def _verify_local_judge_endpoint(base_url: str, model: str, api_key: str) -> Non
         )
 
 
+
+def _verify_jev_endpoint(api_key: str, base_url: str, model: str) -> None:
+    """Probe typesafe.ai Jev with one test classification.
+
+    Raises ``ValueError`` with the probe's message when the key is refused or
+    the service is unreachable, so a programmatic/RPC caller cannot persist a
+    Jev key that would degrade to ``jev_unavailable`` on every turn. Shares
+    the exact probe the interactive CLI flow uses. The key never appears in the
+    message.
+    """
+    from agentos.agentos_router.jev import probe_jev
+
+    error = probe_jev(api_key, base_url=base_url, model=model)
+    if error is not None:
+        raise ValueError(f"jev endpoint {base_url!r} is not usable: {error}")
+
+
+def _apply_router_jev_fields(
+    router_payload: dict[str, Any],
+    *,
+    jev_api_key: str | None,
+    jev_api_key_env: str | None,
+    jev_high_risk_threshold: float | None,
+    verify_jev: bool,
+) -> None:
+    """Write the ``[agentos_router.jev]`` fields into the router payload.
+
+    ``None`` preserves the persisted value (carried through by the caller's
+    ``model_dump``); ``""`` clears the key / resets the env name to its
+    default. The sub-table is strategy-independent — switching away from
+    ``"jev"`` must leave it intact so a later switch back needs no re-entry.
+    """
+    from agentos.agentos_router.jev import DEFAULT_API_KEY_ENV, resolve_jev_api_key
+
+    jev_payload = dict(router_payload.get("jev") or {})
+    if jev_api_key is not None:
+        jev_payload["api_key"] = str(jev_api_key).strip() or None
+    if jev_api_key_env is not None:
+        jev_payload["api_key_env"] = str(jev_api_key_env).strip() or DEFAULT_API_KEY_ENV
+    if jev_high_risk_threshold is not None:
+        threshold = float(jev_high_risk_threshold)
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError(
+                "agentos_router.jev.high_risk_threshold must be between 0.0 and 1.0; "
+                f"got {jev_high_risk_threshold!r}"
+            )
+        jev_payload["high_risk_threshold"] = threshold
+    router_payload["jev"] = jev_payload
+    if verify_jev:
+        # Verify whichever key would actually be used at routing time (given,
+        # persisted, or exported). No key at all means nothing to probe — the
+        # boot preflight / doctor report the missing credential.
+        from agentos.gateway.config import JevConfig
+
+        jev_cfg = JevConfig(**jev_payload)
+        key, _source = resolve_jev_api_key(jev_cfg)
+        if key:
+            _verify_jev_endpoint(key, jev_cfg.base_url, jev_cfg.model)
+
+
+def _router_jev_public_payload(config: GatewayConfig) -> dict[str, Any]:
+    """Public ``jev`` echo: whether a key resolves and from which env name.
+
+    Never includes the key itself (redacted on every public surface).
+    """
+    from agentos.agentos_router.jev import resolve_jev_api_key
+
+    jev = config.agentos_router.jev
+    key, _source = resolve_jev_api_key(jev)
+    return {"api_key_configured": bool(key), "api_key_env": jev.api_key_env}
+
+
 def _validate_router_tiers(tiers: dict[str, Any], default_tier: str) -> None:
     if default_tier not in _TEXT_ROUTER_TIERS:
         raise ValueError("defaultTier must reference a text tier")
@@ -886,14 +958,19 @@ def upsert_router(
     translate_ceiling_enabled: bool | None = None,
     translate_ceiling_tier: str | None = None,
     verify_local_endpoint: bool = False,
+    jev_api_key: str | None = None,
+    jev_api_key_env: str | None = None,
+    jev_high_risk_threshold: float | None = None,
+    verify_jev: bool = False,
 ) -> MutationResult:
     """Upsert router config.
 
     ``strategy`` selects the routing engine: ``"pilot-v1"`` (local ONNX+MiniLM
-    router, English-optimized, the default) or ``"llm_judge"`` (classify each
-    turn via a small LLM call). Valid ids come from the router strategy registry
-    (``agentos.router_strategies``). ``None`` preserves the persisted strategy;
-    any unknown value raises.
+    router, English-optimized, the default), ``"llm_judge"`` (classify each
+    turn via a small LLM call) or ``"jev"`` (experimental: typesafe.ai Jev
+    cloud classifier; sends the current turn text to typesafe.ai). Valid ids
+    come from the router strategy registry (``agentos.router_strategies``).
+    ``None`` preserves the persisted strategy; any unknown value raises.
     The strategy is recorded whenever it is provided — even when ``mode`` is
     ``"disabled"`` — so a later re-enable keeps the operator's choice.
 
@@ -918,6 +995,17 @@ def upsert_router(
     returns no usable routing decision. Onboarding surfaces that collect a local
     endpoint from an operator (WebUI/RPC) pass ``True``; the CLI probes it itself
     before calling here.
+
+    ``jev_api_key`` / ``jev_api_key_env`` / ``jev_high_risk_threshold`` set the
+    ``[agentos_router.jev]`` sub-table (only meaningful under
+    ``strategy="jev"``, but written under any strategy so switching away and
+    back keeps the operator's key): ``None`` preserves the persisted value,
+    ``""`` clears the key (falls back to ``$<api_key_env>``) or resets the env
+    name to its default, and the threshold is range-validated (0.0–1.0).
+    ``verify_jev`` probes typesafe.ai with the key that would be used at
+    routing time (given, persisted, or exported) and raises on failure; with no
+    key anywhere nothing is probed. The key is never echoed in
+    ``public_payload`` — only ``jev.api_key_configured`` / ``jev.api_key_env``.
     """
     if mode not in {"recommended", "openrouter-mix", "disabled"}:
         raise ValueError("router mode must be recommended, openrouter-mix, or disabled")
@@ -947,6 +1035,16 @@ def upsert_router(
         pilot_payload = dict(router_payload.get("pilot") or {})
         pilot_payload["safety_net_threshold"] = safety_net_threshold
         router_payload["pilot"] = pilot_payload
+
+    # Jev sub-table ([agentos_router.jev]). Strategy-independent like the pilot
+    # threshold: switching strategy must leave the operator's key intact.
+    _apply_router_jev_fields(
+        router_payload,
+        jev_api_key=jev_api_key,
+        jev_api_key_env=jev_api_key_env,
+        jev_high_risk_threshold=jev_high_risk_threshold,
+        verify_jev=verify_jev,
+    )
 
     # Translation ceiling. Strategy-independent: the cap is an engine guard, so
     # it is written at the top level rather than into the pilot sub-table.
@@ -1054,6 +1152,7 @@ def upsert_router(
     public_payload["default_tier"] = new_cfg.agentos_router.default_tier
     public_payload["tiers"] = new_cfg.agentos_router.tiers
     public_payload["pilot"] = new_cfg.agentos_router.pilot.model_dump(mode="python")
+    public_payload["jev"] = _router_jev_public_payload(new_cfg)
     if new_cfg.agentos_router.enabled:
         public_payload["judge"] = _router_judge_public_payload(new_cfg)
     return MutationResult(

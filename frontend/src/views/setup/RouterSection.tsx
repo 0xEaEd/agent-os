@@ -1,6 +1,6 @@
-// Router section (setup.js:550-635,1790-1855). Mode (Pilot / LLM judge / Off),
-// default text model tier, judge model, pilot safety-net threshold, and the
-// editable tier table. Save via onboarding.router.configure, gated on the
+// Router section (setup.js:550-635,1790-1855). Mode (Pilot / LLM judge / Jev /
+// Off), default text model tier, judge model, pilot safety-net threshold, the
+// Jev key + high-risk floor, and the editable tier table. Save via onboarding.router.configure, gated on the
 // provider being saved (effective === configured).
 import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -85,6 +85,14 @@ export function RouterSection({
   const pilotThresholdInitial =
     router.pilot?.safety_net_threshold != null ? String(router.pilot.safety_net_threshold) : '0.5'
   const [pilotThreshold, setPilotThreshold] = useState(pilotThresholdInitial)
+
+  // Jev (typesafe.ai) cloud classifier. The key is write-only: the public
+  // config never echoes it back, so the field starts blank and a blank save
+  // preserves whatever is persisted (or the TYPESAFE_API_KEY env fallback).
+  const [jevApiKey, setJevApiKey] = useState('')
+  const jevHighRiskInitial =
+    router.jev?.high_risk_threshold != null ? String(router.jev.high_risk_threshold) : '0.7'
+  const [jevHighRiskThreshold, setJevHighRiskThreshold] = useState(jevHighRiskInitial)
 
   // The translation cap is an engine guard rather than a strategy setting, so
   // it stays visible for every mode. An absent key means the default (on).
@@ -185,6 +193,7 @@ export function RouterSection({
 
   const showJudge = mode === 'llm_judge'
   const showPilot = mode === 'pilot-v1'
+  const showJev = mode === 'jev'
 
   const summary = provider ? `${provider} / ${tierLabel(defaultTier)}` : 'Choose a provider first'
 
@@ -226,6 +235,8 @@ export function RouterSection({
       defaultTier,
       judgeModel,
       pilotThresholdRaw: pilotThreshold,
+      jevApiKeyRaw: jevApiKey,
+      jevHighRiskThresholdRaw: jevHighRiskThreshold,
       translateCeilingEnabled,
       translateCeilingTier,
       // Tiers select the MODEL; requests always go through llm.provider, and a
@@ -256,9 +267,11 @@ export function RouterSection({
           >
             <option value="pilot-v1">{t('setup.routerModePilot')}</option>
             <option value="llm_judge">{t('setup.routerModeJudge')}</option>
+            <option value="jev">{t('setup.routerModeJev')}</option>
             <option value="disabled">{t('setup.routerModeOff')}</option>
           </SetupSelect>
           {showPilot ? <small className="setup-hint">{t('setup.routerPilotHint')}</small> : null}
+          {showJev ? <small className="setup-hint">{t('setup.routerJevHint')}</small> : null}
         </label>
         <label>
           <span>{t('setup.routerDefaultModel')}</span>
@@ -306,6 +319,34 @@ export function RouterSection({
             />
             <small className="setup-hint">{t('setup.routerPilotThresholdHint')}</small>
           </label>
+        ) : null}
+        {showJev ? (
+          <>
+            <label>
+              <span>{t('setup.routerJevApiKey')}</span>
+              <input
+                type="password"
+                autoComplete="off"
+                aria-label={t('setup.routerJevApiKeyAria')}
+                placeholder={t('setup.routerJevApiKeyPlaceholder')}
+                value={jevApiKey}
+                onChange={(e) => setJevApiKey(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>{t('setup.routerJevHighRisk')}</span>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                aria-label={t('setup.routerJevHighRiskAria')}
+                value={jevHighRiskThreshold}
+                onChange={(e) => setJevHighRiskThreshold(e.target.value)}
+              />
+              <small className="setup-hint">{t('setup.routerJevHighRiskHint')}</small>
+            </label>
+          </>
         ) : null}
         <label>
           <span>{t('setup.routerTranslateCap')}</span>
