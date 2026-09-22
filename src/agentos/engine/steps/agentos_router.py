@@ -514,6 +514,29 @@ def _strategy_cache_key(config: object, llm_cfg: object | None = None) -> tuple:
             getattr(pilot_cfg, "pilot_artifact_dir", None),
             getattr(config, "require_router_runtime", False),
         )
+    if strategy_name == "jev":
+        # JevStrategy snapshots every [agentos_router.jev] field, the inner
+        # timeout (from routing_timeout_seconds), the runtime flag and the
+        # route criteria (built from the live tiers) in __init__, so each must
+        # perturb the key or a hot edit silently no-ops until restart.
+        jev_cfg = getattr(config, "jev", None)
+        key = (
+            *key,
+            getattr(jev_cfg, "api_key", None),
+            getattr(jev_cfg, "api_key_env", None),
+            getattr(jev_cfg, "base_url", None),
+            getattr(jev_cfg, "model", None),
+            getattr(jev_cfg, "input_max_chars", None),
+            getattr(jev_cfg, "high_risk_threshold", None),
+            getattr(jev_cfg, "timeout_seconds", None),
+            getattr(jev_cfg, "short_circuit_enabled", None),
+            getattr(jev_cfg, "agentic_floor_enabled", None),
+            getattr(config, "routing_timeout_seconds", None),
+            getattr(config, "require_router_runtime", False),
+            getattr(config, "tier_profile", None),
+            getattr(config, "default_tier", None),
+            _tiers_fingerprint(config),
+        )
     return key
 
 
@@ -593,6 +616,38 @@ def _build_pilot_strategy(config: object) -> RouterStrategy:
         return _UnavailableJudgeStrategy(exc, source=degraded_source)
 
 
+def _build_jev_strategy(config: object) -> RouterStrategy:
+    """Build the Jev cloud classifier strategy (strategy="jev", experimental).
+
+    ``confidence_threshold`` is forwarded from live config so a floor the
+    strategy applies (high-risk / agentic) lifts confidence to the SAME value
+    the engine confidence gate reads. A construction failure degrades to the
+    default tier with ``routing_source="jev_unavailable"`` unless
+    ``require_router_runtime`` is set (Pilot parity).
+    """
+    from agentos.router_strategies import JEV_STRATEGY_ID, get_strategy_info
+
+    info = get_strategy_info(JEV_STRATEGY_ID)
+    degraded_source = info.degraded_source if info is not None else "jev_unavailable"
+    require_runtime = bool(getattr(config, "require_router_runtime", False))
+    try:
+        from agentos.agentos_router.jev import JevStrategy
+
+        return cast(
+            RouterStrategy,
+            JevStrategy(
+                router_cfg=config,
+                confidence_threshold=getattr(config, "confidence_threshold", 0.5),
+                require_router_runtime=require_runtime,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("agentos_router.jev_strategy_unavailable", error=str(exc))
+        if require_runtime:
+            raise
+        return _UnavailableJudgeStrategy(exc, source=degraded_source)
+
+
 def _get_strategy(config: object, llm_cfg: object | None = None) -> RouterStrategy:
     global _strategy, _strategy_key  # noqa: PLW0603
     with _strategy_lock:
@@ -604,6 +659,8 @@ def _get_strategy(config: object, llm_cfg: object | None = None) -> RouterStrate
         strategy_name = _strategy_name(config)
         if strategy_name == "pilot-v1":
             strategy = _build_pilot_strategy(config)
+        elif strategy_name == "jev":
+            strategy = _build_jev_strategy(config)
         else:
             strategy = _build_llm_judge_strategy(config, llm_cfg)
         _strategy = strategy

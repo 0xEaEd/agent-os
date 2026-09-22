@@ -372,6 +372,21 @@ agentos providers configure openrouter
 agentos providers status
 ```
 
+`agentos configure router` **without** `--router` (and the router step of
+`agentos onboard`) opens a Mode selector: **Local ML — English-optimized
+(Pilot)** (default), **Smart routing (LLM-based)**, **Jev cloud classifier
+(typesafe.ai, experimental)**, or **Off**. Passing `--router <mode>` is the
+non-interactive form: it writes that tier profile and saves without asking
+anything. Picking the Jev mode asks for a TypeSafe API key (leave it blank to
+use `TYPESAFE_API_KEY` from the env store, set with `agentos env set
+TYPESAFE_API_KEY`, which prompts for the value), verifies it with one test
+call, and saves. A key typed at the prompt is written to `config.toml` under
+`[agentos_router.jev]` (redacted on every public surface, and omitted whenever
+it equals `$TYPESAFE_API_KEY`). To skip the wizard entirely:
+`agentos config set agentos_router.strategy jev`. Jev sends the current turn
+text to typesafe.ai; see
+[`features/agentos-router.md`](features/agentos-router.md#the-jev-strategy).
+
 `providers status` includes a `circuit` column with the active provider's
 failover circuit-breaker state (`closed`, `half_open`, or `open (42s)`); see
 [`providers-and-models.md`](providers-and-models.md#provider-health-circuit-breaker).
