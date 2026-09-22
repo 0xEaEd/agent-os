@@ -22,6 +22,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `OSError` from the publish in place of the marker, as it already did for a
   `ToolError` (#2892)
 
+- CLI: commands no longer print structlog debug events to stderr — `agentos
+  context` put ~190 `tool_filtered` lines on the terminal on top of its tables.
+  The CLI filters at `INFO` (`AGENTOS_LOG_LEVEL` overrides); the gateway keeps
+  its own configured `log_level` for the console and `debug.log` (#2896)
+
 - Tools: the reasons `edit_file`, `grep_search`, `projects_create` and
   `projects_update` refuse a call now reach the model instead of "The tool
   received an invalid argument" — the closest-match hint and ambiguous line
