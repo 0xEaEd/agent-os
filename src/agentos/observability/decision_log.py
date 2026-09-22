@@ -38,6 +38,14 @@ _SECRET_ASSIGN_RE = re.compile(
 )
 _LONG_SECRET_RE = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|[A-Za-z0-9_/-]{32,})\b")
 _ABS_PATH_RE = re.compile(r"(?<!\w)(?:/home/[^/\s]+|/Users/[^/\s]+|/root)(?:/[^\s]+)*")
+#: Windows user-profile paths (``C:\Users\<name>\...``, or the forward-slash
+#: spelling some shells accept). ``_ABS_PATH_RE`` only covers POSIX; without
+#: this, a Windows user's pasted file path -- machine-local, carrying their
+#: username -- passed through this function completely unredacted.
+_WIN_PATH_RE = re.compile(
+    r"[A-Za-z]:[\\/]Users[\\/][^\\/\s]+(?:[\\/][^\s]+)*",
+    re.IGNORECASE,
+)
 
 RoutingSource = Literal[
     "llm_judge",
@@ -195,15 +203,34 @@ def build_intent_summary(message: str, max_chars: int = _INTENT_SUMMARY_MAX_CHAR
     text = _URL_RE.sub("[url]", text)
     text = _EMAIL_RE.sub("[email]", text)
     text = _SECRET_ASSIGN_RE.sub(lambda m: f"{m.group(1)}=[secret]", text)
-    text = _LONG_SECRET_RE.sub("[secret]", text)
+    # Path redaction runs before the generic long-secret catch-all: a
+    # realistic path (most are 32+ chars once a couple of directories deep)
+    # otherwise matches _LONG_SECRET_RE's bare alnum/slash/hyphen run first,
+    # producing a stray unredacted prefix/suffix around "[secret]" instead
+    # of this function's own, more informative "[path:basename]".
+    #
+    # _WIN_PATH_RE runs before _ABS_PATH_RE: a forward-slash Windows path
+    # (`C:/Users/...`, a spelling some shells accept) also satisfies
+    # _ABS_PATH_RE's own `/Users/...` alternative -- the ":" right before it
+    # isn't a word character, so _ABS_PATH_RE's negative lookbehind doesn't
+    # block it either. Left to run first, _ABS_PATH_RE would consume just
+    # the "/Users/..." tail and strand the "C:" drive letter unredacted
+    # ahead of it. Matching the drive-letter form whole, first, avoids that.
+    text = _WIN_PATH_RE.sub(_redact_path_keep_basename, text)
     text = _ABS_PATH_RE.sub(_redact_path_keep_basename, text)
+    text = _LONG_SECRET_RE.sub("[secret]", text)
     if len(text) > max_chars:
         text = text[: max(0, max_chars - 1)].rstrip() + "…"
     return text
 
 
 def _redact_path_keep_basename(match: re.Match[str]) -> str:
-    basename = match.group(0).rstrip("/").rsplit("/", 1)[-1]
+    # Separator-aware: shared by _ABS_PATH_RE (POSIX, "/") and _WIN_PATH_RE
+    # (Windows, "\" or "/"). A "/"-only split left a Windows match's basename
+    # as the entire matched string -- including the username -- since a pure
+    # backslash path has no "/" to split on at all.
+    stripped = match.group(0).rstrip("/\\")
+    basename = re.split(r"[\\/]", stripped)[-1]
     return f"[path:{basename}]" if basename else "[path]"
 
 
