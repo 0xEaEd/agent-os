@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.22.post1] - 2026-09-22
+
 ### Added
 - Pilot Router: new opt-in, experimental `jev` strategy (typesafe.ai Jev
   System One) — one `/v1/systemone` call with a `route` choice (R0–R3,
@@ -90,6 +92,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   not exist failed with `No such file or directory` after the concat and
   encode work had already been done. The parent directory is now created
   before ffmpeg writes (#2858).
+
+- Channels: `split_text_for_limit` recognises a `~~~` fence without breaking a
+  closed backtick one -- a stray `~~~` inside an already-closed ``` ``` ```
+  body (a pasted example, a divider, a conflict marker) no longer pairs with
+  an unrelated one further down and rebalances the wrong block (#2954).
+- MSTeams: `send_streaming` chunks at the 40 KB activity payload limit and
+  rolls over into a fresh activity like the Telegram and Discord adapters,
+  remembering every activity id it creates, instead of failing with HTTP 413
+  (#2876).
+- Gateway: an attachment a channel turn (Telegram, Discord, Slack, ...) staged
+  under the session *key* was unreachable through the download route
+  `chat.history` links to, which only looked under the session *id*; both
+  directories are consulted now (#2944).
+- Artifacts: `strip_artifact_markers_from_text` stopped at the first `]`, so a
+  name with its own brackets (`Q3 Report [Draft].pdf`) left the marker's tail
+  in the reply; it now matches the marker's own closing bracket without
+  swallowing the text around it (#2942).
+- Gateway: `logs.tail` kept only the newest `limit` lines of everything unread
+  and then advanced the cursor to end-of-file, so a burst larger than `limit`
+  between two polls lost its older lines for good despite `has_more: true`.
+  The cursor now resumes through the burst while the first poll still opens
+  on the live tail (#2938).
+- Engine: a silent-reply sentinel the model wrapped in Markdown (`**NO_REPLY**`,
+  `` `HEARTBEAT_OK` ``) is treated as the bare sentinel instead of being
+  delivered as a message (#2945).
+- Scheduler: a cron script that closes the `{"wakeAgent": false}` gate keeps
+  its output on the run record instead of a fixed "silent" string (#2922), and
+  the gate is still honoured when the output before it pushes stdout past the
+  16k clip -- the clip previously cut the gate off and the run was treated as
+  news (#2921).
+- CLI: `agentos cost --csv` and `cost savings --csv` print through plain
+  stdout instead of Rich, so a long row redirected to a file is no longer
+  wrapped at 80 columns into two records (#2946). `agentos memory …` and
+  `agentos cron …` print stored text, job names and run output verbatim
+  instead of interpreting `[word]` as Rich markup and `:name:` as an emoji
+  (#2820), and the interactive chat's tool status line shows tool arguments
+  literally, where a `[/]` in a shell command or URL previously raised
+  `MarkupError` and killed the REPL (#2823).
+- `pptx` skill: `render_thumbs.sh` prints only the slide images the current
+  run wrote, and documents pdftoppm's page-number padding, instead of globbing
+  whatever an earlier run left in the directory (#2817).
 
 ## [2026.9.22] - 2026-09-22
 
