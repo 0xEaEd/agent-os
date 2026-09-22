@@ -14,6 +14,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   things the chat does not show on its own.
 
 ### Fixed
+- CLI: `agentos replay`, chat's `/new`, `/save`, `/approvals`, `/model` and
+  `/use`, `agentos chat --model`/`--session` startup notices, the background
+  task-group status line, and `agentos projects delete`/`move` printed a
+  user-supplied or gateway-controlled string (a session title, a
+  saved-transcript path, an approval scope/target, a model id, a
+  `--session`/`--model` value, a subagent's error message, recorded free-text
+  turn fields) straight into a Rich `console.print` call -- a bracketed value
+  like `[redacted]` was either swallowed or raised a markup error and crashed
+  the command. Escaped every site with `markup_escape` (`replay`'s transcript
+  now prints with `markup=False, emoji=False, soft_wrap=True` to keep its
+  plain-string contract), matching the fix already applied to `projects
+  create`/`show`/`update` and chat's `/rename` (#2820/#2823/#2920, fixed in
+  #2822/#2824/#2923) (#3319)
 - Security: secret redaction and the payload guard matched connection strings
   against a scheme list that carried `redis` and `amqp` but not their TLS
   spellings, so `rediss://user:password@host` (what `REDIS_TLS_URL` holds) and
