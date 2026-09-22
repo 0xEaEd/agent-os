@@ -226,7 +226,7 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
                             # hunk-line prefix is rejected here, not silently
                             # excluded from both the context check and the
                             # rebuilt content further down in _apply_hunk.
-                            raise ValueError(
+                            raise PatchError(
                                 f"Invalid line in '*** Update File: {path}' hunk "
                                 f"(expected a ' ', '-', or '+' prefix): {raw!r}"
                             )

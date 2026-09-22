@@ -104,6 +104,12 @@ async def _failure(workspace: Path, patch: str) -> dict[str, Any]:
             id="hunk-header",
         ),
         pytest.param(
+            _update("app.py", "@@@ -1,1 +1,1 @@@", "-print('old')", "oops", "+print('new')"),
+            "Invalid line in '*** Update File: app.py' hunk "
+            "(expected a ' ', '-', or '+' prefix): 'oops'",
+            id="update-file-line",
+        ),
+        pytest.param(
             _update("../../outside.py", "@@@ -1,1 +1,1 @@@", "-a", "+b"),
             "resolves outside patch root",
             id="path-traversal",
