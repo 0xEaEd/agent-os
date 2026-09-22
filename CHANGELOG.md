@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Tools: the reasons `edit_file`, `grep_search`, `projects_create` and
+  `projects_update` refuse a call now reach the model instead of "The tool
+  received an invalid argument" — the closest-match hint and ambiguous line
+  numbers, the regex diagnostic, and the project-name rule; and `web_fetch`
+  reports an unresolvable hostname in its result's `error` field like every
+  other unreachable URL (#2888, #2889, #2890, #2891)
+
 - Tools: `read_spreadsheet` sized a row from whatever column a `.xlsx` cell
   reference claimed, so a crafted or corrupt `r="..."` far past the format's
   16,384-column ceiling drove a very large allocation. Such a cell is now
