@@ -108,8 +108,14 @@ class HeartbeatService:
                 delivery.account_id = override["account_id"]
             if override.get("thread_id"):
                 delivery.thread_id = override["thread_id"]
-            elif not turn_source_thread_id:
-                delivery.thread_id = ""
+            # Else: leave delivery.thread_id as infer_delivery() resolved it,
+            # exactly like channel_name/channel_id/account_id above -- no
+            # override is the ordinary case, not "target nothing", and
+            # infer_delivery already read the session's actual last thread
+            # (node.last_thread_id). Resetting it here silently dropped every
+            # reply into the wrong thread for the default heartbeat trigger
+            # (#3347). turn_source_thread_id, when populated, still wins over
+            # this via the shared override below.
             if override.get("mode") == DeliveryMode.CHANNEL and override.get("channel_id"):
                 # The override carries a recipient someone configured, not
                 # the conversation the session last spoke to. Without an id
