@@ -844,6 +844,32 @@ async def _dispatch_channel_new_command(
     return _preserve_route_channel_metadata(reply, route_envelope)
 
 
+async def _reply_debounce_failure(
+    channel: Any,
+    route_envelope: Any,
+    text: str,
+    *,
+    session_key: str,
+    reason: str,
+) -> None:
+    """Best-effort failure notice for a debounced batch, sent from an ``except``.
+
+    A channel that just failed to carry a turn is exactly the condition where
+    the notice itself is likely to fail too, so a raise here must not escape
+    the handler it was called from and must not skip the caller's cleanup.
+    The send failure is logged instead; the batch is still lost, but the
+    operator can see both halves.
+    """
+    try:
+        await channel.send(_route_envelope_reply_message(text, route_envelope))
+    except Exception:
+        log.warning(
+            "channel_dispatch.debounce_error_reply_failed",
+            session_key=session_key,
+            reason=reason,
+        )
+
+
 # fmt: off
 async def _dispatch_combined_message_after_debounce(channel: Any, combined: Any, turn_runner: Any, session_manager: Any, session_key: str, session_prefix: str, task_runtime: Any, config: Any = None, event_bridge: EventBridge | None = None, _in_flight: _ChannelInFlightSet | None = None, channel_rpc_context_factory: Callable[[Any], Any] | None = None) -> None:  # noqa: E501
     from agentos.gateway.routing import build_channel_route_envelope
@@ -931,10 +957,11 @@ async def _dispatch_combined_message_after_debounce(channel: Any, combined: Any,
         if isinstance(exc, TaskQueueFullError):
             await status_reactor.failed(msg)
             log.warning("channel_dispatch.debounce_enqueue_failed", session_key=session_key, reason="queue_full", coalesced_count=combined.coalesced_count)  # noqa: E501
-            await channel.send(_route_envelope_reply_message("Your messages couldn't be processed because the queue is full. Please retry.", route_envelope))  # noqa: E501
+            await _reply_debounce_failure(channel, route_envelope, "Your messages couldn't be processed because the queue is full. Please retry.", session_key=session_key, reason="queue_full")  # noqa: E501
             return
-        log.exception("channel_dispatch.debounce_enqueue_failed", session_key=session_key, reason="unexpected")  # noqa: E501
+        log.exception("channel_dispatch.debounce_enqueue_failed", session_key=session_key, reason="unexpected", error=str(exc))  # noqa: E501
         await status_reactor.failed(msg)
+        await _reply_debounce_failure(channel, route_envelope, "Your messages couldn't be processed because of an unexpected error. Please retry.", session_key=session_key, reason="unexpected")  # noqa: E501
         return
 
     # Enqueue succeeded — release the placeholder reservation now that the real
@@ -2404,14 +2431,19 @@ async def _deliver_runtime_channel_reply(
 
     if content:
         content, artifacts = _split_assistant_artifact_content(content)
+        content = _strip_artifact_markers_from_channel_text(content)
+        # Strip inline references for every artifact named in this text, not
+        # just the ones still pending delivery below -- one already delivered
+        # natively by the stream relay is just as stale a reference as one
+        # about to be delivered here, and dropping it from `artifacts` first
+        # left its "![name](name)" markdown sitting in the fallback text.
+        content = _strip_delivered_artifact_image_references(content, artifacts)
         if stream_relay is not None and stream_relay.delivered_artifact_keys:
             artifacts = [
                 artifact
                 for artifact in artifacts
                 if _artifact_delivery_key(artifact) not in stream_relay.delivered_artifact_keys
             ]
-        content = _strip_artifact_markers_from_channel_text(content)
-        content = _strip_delivered_artifact_image_references(content, artifacts)
         if _can_deliver_channel_files(channel):
             if content:
                 await channel.send(

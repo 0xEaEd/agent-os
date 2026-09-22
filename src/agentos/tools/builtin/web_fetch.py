@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 import os
+import re
 from typing import Any
 from urllib.parse import urljoin
 
@@ -21,7 +23,11 @@ from agentos.sandbox.integration import sandboxed
 from agentos.tools.registry import tool
 from agentos.tools.ssrf import validate_http_url_for_fetch
 from agentos.tools.ssrf_client import ssrf_guarded_client
-from agentos.tools.types import SSRFBlockedError, current_tool_context
+from agentos.tools.types import (
+    SSRFBlockedError,
+    UnsupportedURLSchemeError,
+    current_tool_context,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -66,10 +72,70 @@ _WEB_FETCH_DOWNLOAD_LIMIT_BYTES = 1_048_576
 _WEB_FETCH_DOWNLOAD_LIMIT_ENV = "AGENTOS_WEB_FETCH_DOWNLOAD_LIMIT"
 _STREAM_CHUNK_BYTES = 65_536
 
+# The HTML encoding prescan: when Content-Type names no charset, a page can
+# still declare one in a <meta> tag within its first 1024 bytes.
+_META_PRESCAN_BYTES = 1024
+_HTML_COMMENT_RE = re.compile(rb"<!--.*?-->", re.DOTALL)
+_META_TAG_RE = re.compile(rb"<meta[\s/]([^>]*)>", re.IGNORECASE)
+_TAG_ATTR_RE = re.compile(rb"""([^\s=/>]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]*)))?""")
+_CONTENT_CHARSET_RE = re.compile(rb"charset\s*=\s*[\"']?\s*([^\s;\"']+)", re.IGNORECASE)
+
+
+def _unreachable_result(url: str, extract_mode: str, error: str) -> dict[str, Any]:
+    """The result for a URL that could not be fetched at all (status 0)."""
+    return {
+        "url": url,
+        "final_url": url,
+        "status": 0,
+        "content_type": "",
+        "title": "",
+        "extract_mode": extract_mode,
+        "extractor": "none",
+        "truncated": False,
+        "length": 0,
+        "text": "",
+        "error": error,
+    }
+
 
 def _check_ssrf(url: str) -> None:
     """Raise ValueError if the URL resolves to a private/internal address."""
     validate_http_url_for_fetch(url)
+
+
+def _sniff_meta_charset(body: bytes) -> str | None:
+    """Return the codec an HTML page declares in its own ``<meta>`` tag.
+
+    Reads ``<meta charset=...>`` and ``<meta http-equiv="Content-Type"
+    content="...; charset=...">`` from the first 1024 bytes, skipping
+    comments. Labels Python has no codec for are passed over, so the caller
+    keeps its UTF-8 fallback.
+    """
+    head = _HTML_COMMENT_RE.sub(b"", body[:_META_PRESCAN_BYTES])
+    head = head.split(b"<!--", 1)[0]
+    for tag in _META_TAG_RE.finditer(head):
+        attrs: dict[bytes, bytes] = {}
+        for attr in _TAG_ATTR_RE.finditer(tag.group(1)):
+            value = attr.group(2) or attr.group(3) or attr.group(4) or b""
+            attrs.setdefault(attr.group(1).lower(), value)
+        label = attrs.get(b"charset")
+        if label is None and attrs.get(b"http-equiv", b"").strip().lower() == b"content-type":
+            found = _CONTENT_CHARSET_RE.search(attrs.get(b"content", b""))
+            label = found.group(1) if found else None
+        if not label:
+            continue
+        try:
+            name = codecs.lookup(label.strip().decode("ascii")).name
+            # codecs also knows non-text codecs such as base64 and rot13,
+            # which str.encode/bytes.decode refuse with LookupError; treat
+            # those as no declaration at all.
+            "a".encode(name)
+        except (LookupError, UnicodeDecodeError):
+            continue
+        # An ASCII-compatible prescan cannot truthfully find a UTF-16 label,
+        # and UTF-32 is no web encoding; the HTML spec decodes both as UTF-8.
+        return "utf-8" if name.startswith(("utf-16", "utf-32")) else name
+    return None
 
 
 def _html_to_markdown(html: str) -> str:
@@ -83,17 +149,108 @@ def _html_to_markdown(html: str) -> str:
 
 
 def _markdown_to_text(markdown: str) -> str:
-    """Strip markdown formatting to plain text via html2text."""
-    import html2text
+    """Strip markdown formatting to plain text, preserving paragraph breaks.
 
-    h = html2text.HTML2Text()
-    h.ignore_links = True
-    h.ignore_images = True
-    h.body_width = 0
-    # html2text can also strip simple markdown when fed as plain text
-    # but the cleanest approach: pass through as-is since we already
-    # have the markdown. Just strip link/image noise.
-    return h.handle(markdown)
+    ``html2text`` parses HTML, not Markdown (issue #2482): feeding it the
+    markdown we already extracted treats its blank-line paragraph breaks as
+    ordinary whitespace and folds every paragraph into one run-on line,
+    while leaving markdown syntax (``**bold**``, ``[text](url)``,
+    ``# Heading``) untranslated.
+
+    A hand-rolled regex pass over the same text isn't a safe replacement
+    either: matching something like ``\\*{1,3}(.*?)\\*{1,3}`` as "emphasis"
+    also matches an ordinary multiplication sign (``5 * 3``), silently
+    swallowing everything up to the next unrelated asterisk in the text.
+    What counts as an emphasis delimiter (flanking whitespace/punctuation,
+    paired vs. stray markers) is exactly what a real CommonMark parser
+    already gets right, so this walks markdown-it's token stream instead of
+    re-deriving those rules with regex.
+    """
+    if not markdown:
+        return ""
+    from markdown_it import MarkdownIt
+
+    parser = MarkdownIt("commonmark")
+    return _render_tokens_as_text(parser.parse(markdown)).strip()
+
+
+def _render_tokens_as_text(tokens: list[Any]) -> str:
+    """Render a markdown-it token stream as plain text.
+
+    Block-level content (paragraphs, headings, list items, code blocks) is
+    joined with blank lines; inline formatting markers (emphasis, links,
+    images) are dropped, keeping only their literal text.
+    """
+    # Each block is (text, is_list_item): adjacent list items are joined by a
+    # single newline, everything else by a blank line, so a list reads as a
+    # tight list rather than being spaced out like separate paragraphs.
+    blocks: list[tuple[str, bool]] = []
+    current: list[str] = []
+    list_stack: list[dict[str, Any]] = []
+    pending_prefix = ""
+    in_list_item = False
+
+    def flush() -> None:
+        nonlocal pending_prefix, in_list_item
+        text = "".join(current).strip()
+        current.clear()
+        if text:
+            blocks.append((pending_prefix + text, in_list_item))
+        pending_prefix = ""
+        in_list_item = False
+
+    def walk_inline(children: list[Any]) -> None:
+        for child in children:
+            if child.type in ("text", "code_inline", "html_inline"):
+                current.append(child.content)
+            elif child.type == "softbreak":
+                current.append(" ")
+            elif child.type == "hardbreak":
+                current.append("\n")
+            elif child.children:
+                walk_inline(child.children)
+
+    for token in tokens:
+        if token.type == "inline":
+            walk_inline(token.children or [])
+        elif token.type in (
+            "paragraph_close",
+            "heading_close",
+            "blockquote_close",
+            "list_item_close",
+        ):
+            flush()
+        elif token.type in ("fence", "code_block", "html_block"):
+            flush()
+            content = token.content.rstrip("\n")
+            if content:
+                blocks.append((content, False))
+        elif token.type == "bullet_list_open":
+            list_stack.append({"ordered": False})
+        elif token.type == "ordered_list_open":
+            start = token.attrGet("start")
+            list_stack.append({"ordered": True, "next": start if isinstance(start, int) else 1})
+        elif token.type in ("bullet_list_close", "ordered_list_close"):
+            if list_stack:
+                list_stack.pop()
+        elif token.type == "list_item_open" and list_stack:
+            top = list_stack[-1]
+            if top["ordered"]:
+                pending_prefix = f"{top['next']}. "
+                top["next"] += 1
+            else:
+                pending_prefix = "- "
+            in_list_item = True
+
+    flush()
+    rendered: list[str] = []
+    prev_is_list_item = False
+    for text, is_list_item in blocks:
+        if rendered:
+            rendered.append("\n" if is_list_item and prev_is_list_item else "\n\n")
+        rendered.append(text)
+        prev_is_list_item = is_list_item
+    return "".join(rendered)
 
 
 async def _try_firecrawl(url: str, api_key: str) -> tuple[str, str] | None:
@@ -228,7 +385,18 @@ async def web_fetch(
     max_chars: int | None = None,
 ) -> str:
     # --- SSRF guard ---
-    _check_ssrf(url)
+    try:
+        _check_ssrf(url)
+    except (SSRFBlockedError, UnsupportedURLSchemeError):
+        raise
+    except ValueError as exc:
+        # "Cannot resolve hostname: <host>" (or a URL with no host at all) is a
+        # fetch that cannot happen, not a policy refusal: report it the way
+        # every other unreachable URL is reported, in the result's ``error``
+        # field, instead of letting it escape as a bare ValueError that the
+        # failure envelope reduces to "invalid argument" (#2891). The message
+        # is ``ssrf.py``'s own and names only the hostname the caller passed.
+        return json.dumps(_unreachable_result(url, extract_mode, str(exc)), ensure_ascii=False)
     from agentos.tools.builtin.web import _sensitive_body_block, _sensitive_url_marker
 
     marker = _sensitive_url_marker(url)
@@ -295,6 +463,7 @@ async def web_fetch(
                 # (e.g. text/plain; charset=iso-8859-1) instead of assuming
                 # UTF-8. Falling back to utf-8 matches httpx's own default.
                 response_encoding = response.encoding or "utf-8"
+                header_names_charset = bool(response.charset_encoding)
                 total = 0
                 chunks: list[bytes] = []
                 truncated = False
@@ -306,12 +475,17 @@ async def web_fetch(
                         break
 
                 raw_body = b"".join(chunks)
+                content_type = response.headers.get("content-type", "")
+                # httpx's UTF-8 default is only a guess when the header names
+                # no charset; an HTML page's own <meta> declaration beats it.
+                if not header_names_charset and "html" in content_type.lower():
+                    response_encoding = _sniff_meta_charset(raw_body) or response_encoding
                 raw_text = raw_body.decode(response_encoding, errors="replace")
 
                 return (
                     response.status_code,
                     str(response.url),
-                    response.headers.get("content-type", ""),
+                    content_type,
                     raw_text,
                     truncated,
                 )
@@ -331,20 +505,9 @@ async def web_fetch(
             if attempt_idx == 0:
                 await asyncio.sleep(_RETRY_DELAY_SECONDS)
                 continue
-            result: dict[str, Any] = {
-                "url": url,
-                "final_url": url,
-                "status": 0,
-                "content_type": "",
-                "title": "",
-                "extract_mode": extract_mode,
-                "extractor": "none",
-                "truncated": False,
-                "length": 0,
-                "text": "",
-                "error": last_error,
-            }
-            return json.dumps(result, ensure_ascii=False)
+            return json.dumps(
+                _unreachable_result(url, extract_mode, last_error), ensure_ascii=False
+            )
 
         is_transient = status in _TRANSIENT_STATUSES
         is_empty_success = 200 <= status < 300 and not raw_html.strip()
@@ -353,25 +516,10 @@ async def web_fetch(
             continue
         break
 
-    # --- Non-HTML: return as-is ---
-    is_html = "html" in content_type.lower()
-    if not is_html:
-        result = {
-            "url": url,
-            "final_url": final_url,
-            "status": status,
-            "content_type": content_type,
-            "title": "",
-            "extract_mode": extract_mode,
-            "extractor": "raw",
-            "truncated": body_truncated,
-            "length": len(raw_html),
-            "text": _wrap_content(final_url, raw_html),
-        }
-        _cache[cache_key] = result
-        return json.dumps(_apply_max_chars(result, effective_max_chars), ensure_ascii=False)
-
     # --- Error HTTP status: return empty ---
+    # Checked before the non-HTML early return: an error response is an error
+    # regardless of content type, so a 4xx/5xx JSON/text body must take this
+    # path instead of being returned and cached as raw success (#3231).
     if status >= 400:
         hint = (
             "rate-limited or blocked upstream; try a different URL from search results, "
@@ -395,6 +543,24 @@ async def web_fetch(
         if status not in _TRANSIENT_STATUSES:
             _cache[cache_key] = result
         return json.dumps(result, ensure_ascii=False)
+
+    # --- Non-HTML: return as-is ---
+    is_html = "html" in content_type.lower()
+    if not is_html:
+        result = {
+            "url": url,
+            "final_url": final_url,
+            "status": status,
+            "content_type": content_type,
+            "title": "",
+            "extract_mode": extract_mode,
+            "extractor": "raw",
+            "truncated": body_truncated,
+            "length": len(raw_html),
+            "text": _wrap_content(final_url, raw_html),
+        }
+        _cache[cache_key] = result
+        return json.dumps(_apply_max_chars(result, effective_max_chars), ensure_ascii=False)
 
     # --- Extraction pipeline ---
     # Try local extractors first (zero-cost, handles ~90% of mainstream pages),

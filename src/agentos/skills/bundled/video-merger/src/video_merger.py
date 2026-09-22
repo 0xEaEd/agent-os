@@ -51,6 +51,24 @@ def _resolve_ffmpeg_binary(explicit: str, tool: str) -> str:
     return explicit  # let subprocess raise the canonical "not found" error
 
 
+def _concat_manifest_line(path: str) -> str:
+    """Return one ``file '...'`` directive for ffmpeg's concat demuxer.
+
+    The demuxer parses the quoted token with ffmpeg's own escaping rules: a
+    single quote ends the token, so it is written as ``'\\''`` (close, escaped
+    quote, reopen), and a Windows backslash is an escape character outside the
+    quotes, so on Windows the path is normalised to forward slashes, which
+    every Windows API accepts. (On POSIX a backslash is an ordinary filename
+    character and is left alone.) Without this a clip called
+    ``01_user's_intro.mp4`` or a path under ``C:\\Users`` made ffmpeg fail
+    with "Impossible to open".
+    """
+    normalised = os.path.abspath(path)
+    if os.name == "nt":
+        normalised = normalised.replace("\\", "/")
+    return "file '" + normalised.replace("'", "'\\''") + "'\n"
+
+
 class VideoMerger:
     def __init__(self, ffmpeg_path: str = "ffmpeg", ffprobe_path: str = "ffprobe"):
         """
@@ -102,8 +120,45 @@ class VideoMerger:
             video_path
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        width, height, duration = result.stdout.strip().split("\n")[:3]
-        return int(width), int(height), float(duration)
+        lines = result.stdout.strip().split("\n")
+        width, height = int(lines[0]), int(lines[1])
+        duration_str = lines[2] if len(lines) > 2 else ""
+        duration = self._parse_duration(duration_str, video_path)
+        return width, height, duration
+
+    def _parse_duration(self, duration_str: str, video_path: str) -> float:
+        """
+        解析ffprobe返回的时长字符串；当stream级时长缺失或为"N/A"时
+        （部分AI生成的MP4容器只在format层记录时长），回退到format=duration查询。
+        """
+        if duration_str and duration_str != "N/A":
+            return float(duration_str)
+
+        cmd = [
+            self.ffprobe_path, "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            video_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        fallback_str = result.stdout.strip()
+        if not fallback_str or fallback_str == "N/A":
+            raise ValueError(f"无法获取视频时长：{video_path}")
+        return float(fallback_str)
+
+    def _has_audio_stream(self, video_path: str) -> bool:
+        """
+        检测视频是否包含音频轨道（部分AI生成视频不带音轨）。
+        """
+        cmd = [
+            self.ffprobe_path, "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=index",
+            "-of", "csv=p=0",
+            video_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return bool(result.stdout.strip())
 
     def merge(self,
               input_dir: str,
@@ -137,9 +192,9 @@ class VideoMerger:
             print(f"使用自定义分辨率：{resolution}")
 
         # 生成concat列表
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
             for v in video_list:
-                f.write(f"file '{os.path.abspath(v)}'\n")
+                f.write(_concat_manifest_line(v))
             concat_file = f.name
 
         try:
@@ -162,17 +217,29 @@ class VideoMerger:
 
             # 统一参数+添加转场
             print("正在编码和添加转场效果...")
+            has_audio = self._has_audio_stream(temp_raw)
+            # 确保输出目录存在
+            out_dir = os.path.dirname(os.path.abspath(output_path))
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+
             cmd_final = [
                 self.ffmpeg_path, "-y", "-i", temp_raw,
                 "-vf", (f"scale={resolution},fps={fps},format=yuv420p,"
                         f"fade=t=in:st=0:d={transition_duration},"
                         f"fade=t=out:st={total_duration-transition_duration}:d={transition_duration}"),
-                "-af", (f"afade=t=in:st=0:d={transition_duration},"
-                        f"afade=t=out:st={total_duration-transition_duration}:d={transition_duration}"),
-                "-c:v", "h264", "-crf", str(crf), "-preset", preset,
-                "-c:a", "aac", "-ar", "44100", "-ac", "2",
-                output_path
             ]
+            if has_audio:
+                cmd_final += [
+                    "-af", (f"afade=t=in:st=0:d={transition_duration},"
+                            f"afade=t=out:st={total_duration-transition_duration}:d={transition_duration}"),
+                ]
+            cmd_final += ["-c:v", "h264", "-crf", str(crf), "-preset", preset]
+            if has_audio:
+                cmd_final += ["-c:a", "aac", "-ar", "44100", "-ac", "2"]
+            else:
+                cmd_final += ["-an"]
+            cmd_final += [output_path]
             subprocess.run(cmd_final, capture_output=True, check=True)
 
             # 验证输出文件
@@ -279,9 +346,9 @@ class VideoMerger:
         合并单个分块
         """
         # 生成concat列表
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
             for v in video_list:
-                f.write(f"file '{os.path.abspath(v)}'\n")
+                f.write(_concat_manifest_line(v))
             concat_file = f.name
 
         try:
@@ -302,17 +369,24 @@ class VideoMerger:
             _, _, chunk_duration = self.get_video_info(temp_raw)
 
             # 统一参数+添加转场
+            has_audio = self._has_audio_stream(temp_raw)
             cmd_final = [
                 self.ffmpeg_path, "-y", "-i", temp_raw,
                 "-vf", (f"scale={resolution},fps={fps},format=yuv420p,"
                         f"fade=t=in:st=0:d={transition_duration},"
                         f"fade=t=out:st={chunk_duration-transition_duration}:d={transition_duration}"),
-                "-af", (f"afade=t=in:st=0:d={transition_duration},"
-                        f"afade=t=out:st={chunk_duration-transition_duration}:d={transition_duration}"),
-                "-c:v", "h264", "-crf", str(crf), "-preset", preset,
-                "-c:a", "aac", "-ar", "44100", "-ac", "2",
-                output_path
             ]
+            if has_audio:
+                cmd_final += [
+                    "-af", (f"afade=t=in:st=0:d={transition_duration},"
+                            f"afade=t=out:st={chunk_duration-transition_duration}:d={transition_duration}"),
+                ]
+            cmd_final += ["-c:v", "h264", "-crf", str(crf), "-preset", preset]
+            if has_audio:
+                cmd_final += ["-c:a", "aac", "-ar", "44100", "-ac", "2"]
+            else:
+                cmd_final += ["-an"]
+            cmd_final += [output_path]
             subprocess.run(cmd_final, capture_output=True, check=True)
 
             return True
