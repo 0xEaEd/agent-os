@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `session_search`: transcripts are now indexed with FTS5's `trigram`
+  tokenizer, query terms are joined with `OR` and ranked by `bm25`, and terms
+  shorter than three characters are answered by a scan. A query could not
+  match inside a run of CJK characters (`迁移计划` never found
+  `数据库迁移计划`) and every term had to be present (`migration plan for
+  postgres` found nothing in a transcript that lacked only `for`). An existing
+  index is rebuilt once, at the first open after upgrading (#2897)
+
 - `http-fetch` skill: `--max-bytes` now bounds what is *read*, not just what is
   printed. The whole body used to be downloaded and held in memory before the
   cap was applied, and a slow or endless stream (SSE, a log tail) was waited on
