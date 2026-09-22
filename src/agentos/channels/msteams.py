@@ -71,6 +71,16 @@ FATAL_ERROR_CLASSES: tuple[str, ...] = (
 
 _CONVERSATION_CACHE_SCHEMA_VERSION = 1
 
+#: Not a defence against an oversized file (see #733/#736: the maintainer
+#: ruled that threat model doesn't apply here -- the cache is written only
+#: by this adapter, in AgentOS's own trusted state dir, never from outside
+#: input). This bounds ordinary operational growth instead: a bot running
+#: for a long time talking to many distinct conversations accumulates one
+#: entry per conversation with no eviction otherwise, the same class of
+#: leak already accepted and fixed for the sibling
+#: ``_message_conversation_keys`` (#3052).
+_MAX_CACHED_CONVERSATION_REFERENCES = 10_000
+
 # Teams rejects an Activity whose serialized payload exceeds 40 KB with
 # ``413 MessageSizeTooBig`` -- nothing is delivered, not a truncated message.
 # The budget for the text leaves room for the rest of the envelope (ids,
@@ -381,6 +391,16 @@ class MSTeamsChannel:
             # spoke" fallback -- tracks last activity, not first insertion.
             self._references.pop(cache_key, None)
             self._references[cache_key] = ref
+            if len(self._references) > _MAX_CACHED_CONVERSATION_REFERENCES:
+                # Oldest-first iteration order (the pop-and-reinsert above
+                # keeps it that way): the first key is whichever conversation
+                # has gone longest without speaking -- the right one to drop
+                # first. A plain dict, not BoundedRegistry: that primitive's
+                # .get() moves a key to the end on every *read*, which would
+                # let an outbound send to an older, explicitly-addressed
+                # conversation steal the "most recent" rank this fallback
+                # depends on away from whoever actually spoke last.
+                self._references.pop(next(iter(self._references)))
             self._persist_conversation_cache()
         if activity.recipient is not None and getattr(activity.recipient, "id", None):
             self._bot_id = activity.recipient.id
