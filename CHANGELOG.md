@@ -349,6 +349,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   emphasis passes and before the label strip, restored afterwards as the
   bare character (HTML-escaped on the way out).
 
+- Skills (`poolsdotfun-token-launcher`): a rate-limited RPC node made
+  `pools_read` report a `startTickFor` revert that never happened. `RpcError`
+  is raised both when the contract answers with a revert and when the node
+  refuses the call (a bare-string `"rate limit exceeded"`, a transient internal
+  error), and `read_start_tick` reported every one of them as
+  `startTickFor reverted for <asset>` -- a definitive protocol claim -- with the
+  actual cause swallowed into the chained exception. `RpcError` now records
+  `answered`, and the node-fault paths in `read_start_tick` / `simulate_launch`
+  say the endpoint refused the call and that it is retryable instead.
+
 ## [2026.9.22.post1] - 2026-09-22
 
 ### Added
