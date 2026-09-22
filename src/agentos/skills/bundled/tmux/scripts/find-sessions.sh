@@ -65,7 +65,7 @@ list_sessions() {
     # there as missing.
     sessions="$(
       printf '%s\n' "$sessions" |
-        awk -F'\t' -v q="$query" 'BEGIN { q = tolower(q) } index(tolower($1), q)'
+        q="$query" awk -F'\t' 'BEGIN { q = tolower(ENVIRON["q"]) } index(tolower($1), q)'
     )"
   fi
 

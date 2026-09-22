@@ -38,6 +38,7 @@ _SESSIONS = (
     "notes[draft]\t0\tWed Sep 16 10:06:00 2026\n"
     "api.v2\t0\tWed Sep 16 10:07:00 2026\n"
     "apiXv2\t0\tWed Sep 16 10:08:00 2026\n"
+    "foo\\bar\t0\tWed Sep 16 10:08:30 2026\n"
     "my session\t0\tWed Sep 16 10:09:00 2026\n"
 )
 
@@ -155,6 +156,18 @@ def test_a_star_in_a_query_finds_nothing_rather_than_everything(wrapper) -> None
     assert _names(wrapper, "-q", "worker*") == []
 
 
+def test_a_backslash_in_a_query_is_a_literal_backslash(wrapper) -> None:
+    """``awk -v`` runs C-style escape processing on its value (``\\b`` -> backspace,
+    ``\\t``/``\\n``/``\\\\`` likewise); passing the query through ``ENVIRON`` instead
+    is not escape-processed, so a query holding a backslash still matches literally.
+    """
+    if _no_usable_bash():
+        return
+
+    assert _names(wrapper, "-q", "foo\\bar") == ["foo\\bar"]
+    assert _names(wrapper, "-q", "foo\\") == ["foo\\bar"]
+
+
 def test_listing_without_a_query_is_unchanged(wrapper) -> None:
     if _no_usable_bash():
         return
@@ -165,6 +178,7 @@ def test_listing_without_a_query_is_unchanged(wrapper) -> None:
         "notes[draft]",
         "api.v2",
         "apiXv2",
+        "foo\\bar",
         "my session",
     ]
 
@@ -213,3 +227,5 @@ def test_the_filter_reads_the_name_field_and_not_the_whole_row() -> None:
 
     assert "index(tolower($1), q)" in text, "the filter must match the name field"
     assert 'grep -i -- "$query"' not in text, "the whole-row grep must be gone"
+    assert 'ENVIRON["q"]' in text, "the query must pass through ENVIRON, not awk -v"
+    assert "-v q=" not in text, "awk -v escape-processes backslashes in the value"
