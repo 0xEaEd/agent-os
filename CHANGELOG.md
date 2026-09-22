@@ -14,6 +14,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   members was missing — the same defect #1198 fixed for `c++`/`c#`/`.NET`.
   `go`, `c` and `r` are matched only in target position, since they are
   ordinary English words as well as language names. (#2968)
+- CLI: a copy-pasteable hint whose path holds `$` or a backtick is now escaped
+  for PowerShell inside its double quotes; `"C:\home\Jo$hn\config.toml"`
+  pasted into PowerShell used to expand `$hn` and open the wrong path (#2978)
 - Telegram: a Markdown table header or row label written as `*italic*` (or
   `***bold italic***`) no longer leaks its asterisks into the rendered
   `<b>…</b>`; the label path strips single-asterisk italics the way it already
