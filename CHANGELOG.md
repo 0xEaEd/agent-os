@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Pilot Router: new opt-in, experimental `jev` strategy (typesafe.ai Jev
+  System One) — one `/v1/systemone` call with a `route` choice (R0–R3,
+  criteria derived from the tier descriptions) and a `high_risk` noul that
+  floors destructive/production requests at c3; the calibrated confidence
+  passes through the engine's confidence gate; selectable from the CLI and
+  Web UI setup wizards (`agentos configure router`, `agentos onboard`);
+  degrades to `jev_unavailable` on a missing key, HTTP error or timeout.
+  Sends the current turn text to typesafe.ai; requires `TYPESAFE_API_KEY`
+  (`[agentos_router.jev]`)
+
 ### Fixed
 - `weather` skill: a planner contract whose `DESTINATION:` field is present
   but blank no longer silently forwards an unrelated field (e.g. `DATES:

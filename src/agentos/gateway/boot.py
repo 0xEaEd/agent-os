@@ -1319,6 +1319,23 @@ def validate_agentos_router_runtime(config: GatewayConfig) -> None:
         return
     if info is not None and info.uses_judge:
         _log_resolved_judge(config, router_cfg)
+        return
+    if info is not None and info.requires_remote_credentials and info.credential_probe is not None:
+        # A remote-credential strategy (Jev) needs no local assets and no
+        # judge; its only preflight is "is there a key?". Missing → warn (every
+        # turn degrades to the default tier) unless require_router_runtime.
+        problem = info.credential_probe(router_cfg)
+        if problem:
+            message = f"{strategy} router credentials missing: {problem}"
+            if getattr(router_cfg, "require_router_runtime", False):
+                raise RuntimeError(message)
+            log.warning(
+                "build_services.agentos_router_credentials_missing",
+                strategy=strategy,
+                problem=problem,
+            )
+            return
+        log.info("build_services.agentos_router_ready", strategy=strategy)
 
 
 def _preload_agentos_router_strategy(router_cfg: Any, llm_cfg: Any = None) -> object:
