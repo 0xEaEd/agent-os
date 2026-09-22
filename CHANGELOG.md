@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `poolsdotfun-token-launcher` and `senior-unilp-manager` skills: a boolean flag
+  before the subcommand (`--json pools`) consumed the subcommand as its value,
+  so the command ran without one. Flags that take no argument no longer
+  swallow the positional (#2863, #2864).
+
 - `video-merger` skill: merging to an output path whose parent directory did
   not exist failed with `No such file or directory` after the concat and
   encode work had already been done. The parent directory is now created
