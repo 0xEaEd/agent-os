@@ -21,7 +21,9 @@ Pilot Router is useful when you want:
 - stronger models reserved for hard reasoning, recovery, and long tasks;
 - one AgentOS workflow that can route across provider profiles;
 - local routing decisions without sending prompts to a separate external
-  classifier just to choose the model.
+  classifier just to choose the model (the default `pilot-v1` strategy; the
+  opt-in `jev` strategy is the one exception — it sends the current turn text
+  to typesafe.ai, see [The Jev strategy](#the-jev-strategy)).
 
 It is not required. AgentOS can also run in direct single-model mode.
 
@@ -126,22 +128,24 @@ but the cap did not apply, `task_type_blocked_by` records why.
 
 ## Strategies
 
-Pilot Router has two selectable strategies, set via
+Pilot Router has three selectable strategies, set via
 `agentos_router.strategy` in `agentos.toml` (or the onboarding wizard):
 
 | Strategy | Mode label | How it decides |
 | --- | --- | --- |
 | `pilot-v1` (default) | Local ML — English-optimized (Pilot) | An AgentOS-native, English-optimized local router (MiniLM embeddings + a self-trained AgentOS model, ONNX). Decides on-device with no LLM call, nothing leaving your machine. The bundle ships in the wheel under `src/agentos/agentos_router/models/pilot_v1/`; a missing bundle degrades to the default tier (c1). See [The Pilot strategy](#the-pilot-strategy) below for status, config, and upgrade-from-v4 behavior. |
 | `llm_judge` | Smart routing (LLM-based) | A small "judge" model classifies each turn (R0–R3) via a forced tool call. The judge can be a cloud model (default: the cheapest tier of your active provider) or a local OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, vLLM) configured with `judge_model` / `judge_base_url`. |
+| `jev` (experimental, opt-in) | Jev cloud classifier (typesafe.ai, experimental) | One call to typesafe.ai's Jev "System One" classifier per turn. Sends the **current turn text** to typesafe.ai (nothing else: no system prompt, history, or tool list). Returns a calibrated probability over R0–R3 that feeds the engine's confidence gate, plus a `high_risk` score that floors destructive / production-affecting requests at c3. Configured under `[agentos_router.jev]`; the key comes from `TYPESAFE_API_KEY`. See [The Jev strategy](#the-jev-strategy). |
 
 Both the Web UI setup wizard and the CLI (`agentos onboard`,
-`agentos configure router`) offer a Mode dropdown with three options:
-**Local ML — English-optimized (Pilot)**, **Smart routing (LLM-based)**, and
-**Off** — the legacy **Smart routing (on-device)** (`v4_phase3`) option is no
-longer offered. The "Judge model" field only
-appears when the LLM-based strategy is selected; the "Pilot safety net" field
-only appears when the Pilot strategy is selected — each is irrelevant to the
-other strategies.
+`agentos configure router`) offer a Mode dropdown with four options:
+**Local ML — English-optimized (Pilot)**, **Smart routing (LLM-based)**,
+**Jev cloud classifier (typesafe.ai, experimental)**, and **Off** — the legacy
+**Smart routing (on-device)** (`v4_phase3`) option is no longer offered. The
+"Judge model" field only appears when the LLM-based strategy is selected; the
+"Pilot safety net" field only appears when the Pilot strategy is selected; the
+"TypeSafe API key" field only appears when the Jev strategy is selected — each
+is irrelevant to the other strategies.
 
 ### The Pilot strategy
 
@@ -196,6 +200,72 @@ migration is idempotent — once rewritten there is nothing left to migrate. The
 is no way to keep `v4_phase3` in config: the legacy engine and its model bundle
 were removed from the tree (Phase C), and a value that bypasses the file
 migration (e.g. an env override) normalizes to `pilot-v1` at config load.
+
+### The Jev strategy
+
+`jev` is an **experimental, opt-in** strategy backed by typesafe.ai's Jev
+"System One" classifier. Jev is not a text generator: one `POST /v1/systemone`
+call answers two typed questions in parallel — a `route` choice over R0–R3
+(criteria derived from your tier descriptions) and a `high_risk` score ("is
+this a destructive / production-affecting request?") — and returns a
+**calibrated** probability distribution. Unlike the LLM judge, whose
+self-reported confidence is uncalibrated and therefore pinned to 1.0, Jev's
+confidence flows through the engine's confidence gate unchanged. A `high_risk`
+score at or above `high_risk_threshold` floors the turn at c3 (the decision
+carries `high_risk_floor_applied = true`), and a floor is never undone by the
+confidence gate.
+
+**Privacy.** Selecting this strategy sends the current turn text (truncated to
+`input_max_chars`) to typesafe.ai on every routed turn. Nothing else leaves the
+machine — no system prompt, no history, no tool list. It is never the default.
+
+Select it from the wizard — run `agentos configure router` with **no**
+`--router` flag (the flag is the non-interactive form and saves without
+asking), then pick **Jev cloud classifier (typesafe.ai, experimental)**; it
+asks for the API key (blank = use `TYPESAFE_API_KEY`, set beforehand with
+`agentos env set TYPESAFE_API_KEY`, which prompts for the value) and verifies
+it with one test call. Or set it by hand (`agentos config set
+agentos_router.strategy jev`, or edit the file):
+
+```toml
+[agentos_router]
+strategy = "jev"
+
+[agentos_router.jev]
+# api_key = "..."                   # or leave unset and export TYPESAFE_API_KEY
+api_key_env = "TYPESAFE_API_KEY"
+base_url = "https://api.typesafe.ai"
+model = "jev-latest"
+input_max_chars = 4000              # min 1000; head/tail truncation
+high_risk_threshold = 0.7           # high_risk >= this floors the turn at c3
+# timeout_seconds = 8.0             # unset: derived from routing_timeout_seconds
+short_circuit_enabled = true        # greetings/acks skip the call
+agentic_floor_enabled = false       # true: tool-bearing turns never go below c1
+```
+
+`api_key` is redacted on every public surface and is never written to
+`config.toml` when it equals `$TYPESAFE_API_KEY`.
+
+**Degrade behavior.** Every failure routes the turn to the default tier with
+`routing_source = "jev_unavailable"` and a `reason` in `routing_extra`; there is
+no in-band retry. `agentos doctor` reports a missing key as
+`router.credentials.missing`, and boot logs
+`build_services.agentos_router_credentials_missing`.
+
+| Condition | `reason` | Result |
+| --- | --- | --- |
+| No key in `api_key` or `$TYPESAFE_API_KEY` | `api key missing (TYPESAFE_API_KEY)` | default tier, no network call |
+| HTTP 401 / 422 / 429 / 529 (or any 4xx/5xx) | `http <status>` | default tier |
+| Network error | exception class name | default tier |
+| Inner timeout (strictly below `routing_timeout_seconds`) | `jev timeout` | default tier |
+| Unparsable body / no usable `route` answer | `malformed jev response` | default tier |
+
+With `agentos_router.require_router_runtime = true` every degrade becomes a
+`RuntimeError` instead, and a missing key is fatal at boot (Pilot parity).
+
+For a classifier-only eval on the labeled dataset (accuracy, under-routing,
+ECE/NLL, cost) see `scripts/pilot_router/evaluate_jev.py`; for the
+engine-level view, `scripts/router_eval.py --strategy jev`.
 
 ## One Router, One Provider
 
@@ -346,7 +416,18 @@ If routing does not appear to work:
    to route without any local ML bundle at all. On Windows, ONNX Runtime may
    require the Visual C++ Redistributable.
 
-4. If you need deterministic model behavior for a run, disable routing:
+4. If `strategy = "jev"` and decisions show `routing_source = "jev_unavailable"`,
+   read `routing_extra.reason`: `api key missing (TYPESAFE_API_KEY)` means no
+   key resolved (`agentos env set TYPESAFE_API_KEY`, which prompts for the value, or
+   `agentos_router.jev.api_key`); `http 401` is a rejected key, `http 429` /
+   `http 529` is rate limiting or vendor overload, `jev timeout` means the call
+   exceeded `jev.timeout_seconds`, and `malformed jev response` means the body
+   had no usable `route` answer. `agentos doctor` surfaces the missing-key case
+   as the finding `router.credentials.missing` (`runtimeInvalidReason =
+   "credentials_missing"`). Every case routes the turn to the default tier; the
+   turn itself never fails unless `require_router_runtime = true`.
+
+5. If you need deterministic model behavior for a run, disable routing:
 
    ```sh
    agentos configure router --router disabled
