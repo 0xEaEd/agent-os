@@ -922,7 +922,6 @@ class UsageTracker:
         usage = self._sessions.get(session_key)
         if usage is None:
             usage = SessionUsage(model_id=model_id, provider_id=effective_provider_id)
-            self._sessions[session_key] = usage
         usage.add(
             input_tokens,
             output_tokens,
@@ -932,6 +931,11 @@ class UsageTracker:
             billed_cost=billed_cost,
             provider_id=effective_provider_id,
         )
+        # Re-set on every write, not just the first: BoundedRegistry stamps the
+        # TTL in `set()` only, so a session that never re-triggers this would
+        # have its cache_ttl_seconds measured from the first turn, not the last
+        # -- a continuously active session would lose its SessionUsage mid-run.
+        self._sessions[session_key] = usage
         if model_id:
             usage.model_id = model_id
         scope_key = _current_usage_scope.get()

@@ -21,14 +21,39 @@ from __future__ import annotations
 import pytest
 
 from agentos.engine.usage import UsageTracker
-from agentos.util.bounded_registry import BoundedRegistry, drop_session_state
+from agentos.util.bounded_registry import (
+    BoundedRegistry,
+    configure_registry_limits,
+    drop_session_state,
+    reset_registry_limits,
+)
 
 KEY = "agent:main:main"
+
+
+class _Clock:
+    """Deterministic time source for TTL tests; see test_bounded_registry.py."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 @pytest.fixture
 def tracker() -> UsageTracker:
     return UsageTracker()
+
+
+@pytest.fixture(autouse=True)
+def _reset_limits():
+    reset_registry_limits()
+    yield
+    reset_registry_limits()
 
 
 def _spend(tracker: UsageTracker, session_key: str, cost: float = 0.25) -> None:
@@ -88,6 +113,31 @@ def test_the_usage_rows_survive_the_terminal_event(tracker) -> None:
 
     assert KEY in tracker._sessions
     assert KEY in tracker.all_sessions()
+
+
+def test_a_continuously_active_session_keeps_accumulating_past_one_ttl(tracker) -> None:
+    """BoundedRegistry stamps the TTL only in ``set()``; ``get()`` does not
+    refresh it. ``add()`` wrote ``_sessions[key]`` once, on first sight, and
+    mutated the ``SessionUsage`` object in place after that -- so a session
+    that is continuously active lost its entry (and every accumulated token)
+    the moment the TTL measured from its *first* turn elapsed, and the next
+    ``add()`` silently started a fresh ``SessionUsage``. This breaks per-turn
+    deltas (``session_checkpoint`` / ``session_delta_snapshot``), ``get()`` /
+    ``format_usage``, ``total_cost()`` and the in-memory ``usage.status`` rows
+    for any session older than the TTL.
+    """
+    configure_registry_limits(cache_ttl_seconds=0.5)
+    clock = _Clock()
+    tracker._sessions._now = clock
+
+    tracker.add(KEY, 1000, 0, model_id="claude-opus-5", provider_id="anthropic")
+    clock.advance(0.3)
+    tracker.add(KEY, 1000, 0, model_id="claude-opus-5", provider_id="anthropic")
+    clock.advance(0.3)  # 0.6s since the first write, past the 0.5s TTL
+    tracker.add(KEY, 1000, 0, model_id="claude-opus-5", provider_id="anthropic")
+
+    usage = tracker.all_sessions()[KEY]
+    assert usage.input_tokens == 3000
 
 
 def test_the_usage_rows_are_bounded_by_a_ceiling_instead(tracker) -> None:
