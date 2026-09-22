@@ -18,6 +18,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`[agentos_router.jev]`)
 
 ### Fixed
+- Pilot Router `jev` strategy: sharpened the R2/R3 criteria so whole-system
+  architecture design and end-to-end incident-triage process design land on
+  R3 while single-service log diagnosis stays R2. On the labeled router
+  corpus (121 cases, vi/zh/en) classifier accuracy rises from 0.760 to 0.901
+  and R3 recall from 0.56 to 0.91.
+
+- `scripts/router_eval.py`: the strategy-engaged probe compared
+  `routing_source` against the raw strategy id, so `--strategy pilot-v1`
+  (tag `pilot_v1`) always aborted with "strategy did not engage". It now
+  resolves the expected tag through the strategy registry.
+
 - `weather` skill: a planner contract whose `DESTINATION:` field is present
   but blank no longer silently forwards an unrelated field (e.g. `DATES:
   next weekend`) to wttr.in as the city name. `_extract_location` now
