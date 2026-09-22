@@ -138,7 +138,8 @@ _DEFAULT_WHAT: dict[str, str] = {
     "R2": ("Multi-step coding, structured reasoning, larger-context synthesis, harder analysis."),
     "R3": (
         "Difficult planning, deep review, complex debugging, high-stakes or "
-        "production-affecting work."
+        "production-affecting work; whole-system architecture design and "
+        "end-to-end incident-triage process design."
     ),
 }
 
@@ -166,12 +167,20 @@ _CRITERIA_EXTRAS: dict[str, dict[str, Any]] = {
     },
     "R2": {
         "not_for": (
-            "Trivial one-function tasks, or high-stakes production/destructive operations."
+            "Trivial one-function tasks; production/destructive operations; and "
+            "whole-system architecture design (distributed schedulers, event "
+            "sourcing, consensus/failure-recovery, multi-agent platforms) — that "
+            "is R3. Diagnosing one service from its logs or symptoms stays R2."
         ),
         "examples": [
             "Refactor this multi-module parser and explain the design trade-offs",
             "Debug this failing unit test",
             "debug giúp mình lỗi race condition trong service thanh toán, log ở dưới",
+            (
+                "An async service times out sporadically (pool exhaustion, slow queries, "
+                "retry storms); here are the logs, find the likely cause"
+            ),
+            "API trả 502 ngẫu nhiên sau khi deploy bản mới, hướng dẫn cách khoanh vùng",
         ],
     },
     "R3": {
@@ -183,6 +192,19 @@ _CRITERIA_EXTRAS: dict[str, dict[str, Any]] = {
             ),
             "xoá bảng users trên database production rồi migrate lại giúp mình",
             "Plan the migration of our auth service to a new provider with zero downtime",
+            (
+                "Design a cross-datacenter distributed task scheduler; explain "
+                "consistency, failure recovery and capacity planning"
+            ),
+            (
+                "After the release P95 latency rose from 300ms to 2s; design the "
+                "end-to-end regression triage process from metrics down to code"
+            ),
+            (
+                "Thiết kế kiến trúc event sourcing cho hệ thống kế toán, nêu rõ tính "
+                "nhất quán, audit và bù trừ"
+            ),
+            "解释 Raft 集群在网络分区和 leader 抖动下的恢复流程，并给出工程防护",
         ],
     },
 }
