@@ -995,9 +995,26 @@ def _remove_structlog_tee() -> None:
     _structlog_processors_before_tee = None
 
 
+def _apply_structlog_level(config: GatewayConfig) -> None:
+    """Let structlog through at the gateway's configured level.
+
+    The CLI entry point installs an INFO threshold so a one-shot command does
+    not print every debug event it brushes past (#2896). The gateway is the
+    process those events are *for* -- ``log_level`` defaults to DEBUG and the
+    file tee below copies each event into ``debug.log`` -- so it sets the
+    threshold from its own config before the first event is logged.
+    """
+    import structlog
+
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(_resolve_log_level(config)),
+    )
+
+
 def _setup_file_logging(config: GatewayConfig | None = None) -> None:
     """Configure structlog + stdlib logging to write to a debug.log file."""
     config = config or GatewayConfig()
+    _apply_structlog_level(config)
     root = logging.getLogger()
     _remove_debug_file_handlers(root)
 
@@ -1302,6 +1319,23 @@ def validate_agentos_router_runtime(config: GatewayConfig) -> None:
         return
     if info is not None and info.uses_judge:
         _log_resolved_judge(config, router_cfg)
+        return
+    if info is not None and info.requires_remote_credentials and info.credential_probe is not None:
+        # A remote-credential strategy (Jev) needs no local assets and no
+        # judge; its only preflight is "is there a key?". Missing → warn (every
+        # turn degrades to the default tier) unless require_router_runtime.
+        problem = info.credential_probe(router_cfg)
+        if problem:
+            message = f"{strategy} router credentials missing: {problem}"
+            if getattr(router_cfg, "require_router_runtime", False):
+                raise RuntimeError(message)
+            log.warning(
+                "build_services.agentos_router_credentials_missing",
+                strategy=strategy,
+                problem=problem,
+            )
+            return
+        log.info("build_services.agentos_router_ready", strategy=strategy)
 
 
 def _preload_agentos_router_strategy(router_cfg: Any, llm_cfg: Any = None) -> object:

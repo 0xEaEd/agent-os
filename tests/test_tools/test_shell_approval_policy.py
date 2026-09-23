@@ -721,12 +721,19 @@ def test_shell_write_targets_leaves_unquoted_targets_unchanged(
         "echo hi | tee /dev/null",
         "echo hi | tee -a /dev/null",
         "make build >/dev/null; make test >/dev/null",
+        "dir > nul",
+        "dir >> nul",
+        "dir >nul",
+        "python app.py 2> NUL",
+        "python app.py 2>nul",
+        "cmd 2>&1 > nul",
+        "echo hi | tee nul",
     ],
 )
 def test_shell_write_targets_ignores_the_null_sink(command: str) -> None:
-    """Discarding output is not a write. ``/dev/null`` is not under any lockdown
-    root, so counting it as a write target refused a large share of ordinary
-    commands under workspace lockdown."""
+    """Discarding output is not a write. ``/dev/null`` and Windows ``nul`` are
+    not under any lockdown root, so counting them as write targets refused a large
+    share of ordinary commands under workspace lockdown."""
     assert shell._shell_write_targets(command) == []
 
 
@@ -757,6 +764,8 @@ def test_shell_write_targets_keeps_real_targets_beside_a_null_sink(
         "pip install requests &>/dev/null",
         "pip install requests > /dev/null 2>&1",
         "echo hi | tee /dev/null",
+        "pip install requests > nul",
+        "pip install requests 2> NUL",
     ],
 )
 async def test_workspace_lockdown_allows_null_sink_redirections(

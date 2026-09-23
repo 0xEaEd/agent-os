@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import io
 from dataclasses import dataclass
 from pathlib import Path
@@ -138,6 +139,31 @@ def _extract_docx_text(data: bytes | io.BytesIO | Path) -> str:
         raise ValueError(f"Failed to extract text from DOCX: {exc}") from exc
 
 
+def _pptx_shapes_text(shapes: Any) -> list[str]:
+    """Paragraphs and table rows of *shapes*, descending into groups at any depth.
+
+    A table sits in a graphic frame and a group shape holds its members in a
+    shape tree of its own; neither has a text frame, so checking only
+    ``has_text_frame`` indexes none of their text.
+    """
+    parts: list[str] = []
+    for shape in shapes:
+        if shape.has_text_frame:
+            for paragraph in shape.text_frame.paragraphs:
+                text = paragraph.text.strip()
+                if text:
+                    parts.append(text)
+        if getattr(shape, "has_table", False):
+            for row in shape.table.rows:
+                row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                if row_text:
+                    parts.append(row_text)
+        members = getattr(shape, "shapes", None)
+        if members is not None:
+            parts.extend(_pptx_shapes_text(members))
+    return parts
+
+
 def _extract_pptx_text(data: bytes | io.BytesIO | Path) -> str:
     """Extract text from a PowerPoint presentation (.pptx)."""
     try:
@@ -151,19 +177,29 @@ def _extract_pptx_text(data: bytes | io.BytesIO | Path) -> str:
         prs = pptx.Presentation(stream)
         slides_text: list[str] = []
         for i, slide in enumerate(prs.slides):
-            slide_parts: list[str] = []
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for paragraph in shape.text_frame.paragraphs:
-                        text = paragraph.text.strip()
-                        if text:
-                            slide_parts.append(text)
+            slide_parts = _pptx_shapes_text(slide.shapes)
             if slide_parts:
                 slides_text.append(f"[Slide {i + 1}]\n" + "\n".join(slide_parts))
         return "\n\n".join(slides_text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("ingest.pptx_failed", error=str(exc))
         raise ValueError(f"Failed to extract text from PPTX: {exc}") from exc
+
+
+def _bom_encoding(head: bytes) -> str:
+    """The codec for text that starts with *head*: whatever its byte-order mark names.
+
+    Windows tools write UTF-16 with a BOM by default (PowerShell 5 ``>`` and
+    ``Out-File``, Notepad's "Unicode", Excel's "Unicode Text"). Read as UTF-8,
+    every other character of such a file is a NUL and none of its words can be
+    searched. Every codec returned here also drops the mark itself, and
+    ``utf-8-sig`` reads a file with no BOM exactly as ``utf-8`` does.
+    """
+    if head.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        return "utf-32"
+    if head.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return "utf-16"
+    return "utf-8-sig"
 
 
 def extract_document_text(
@@ -187,7 +223,9 @@ def extract_document_text(
             return _extract_docx_text(p)
         if suffix == ".pptx":
             return _extract_pptx_text(p)
-        return p.read_text(encoding="utf-8", errors="replace")
+        with p.open("rb") as handle:
+            head = handle.read(4)
+        return p.read_text(encoding=_bom_encoding(head), errors="replace")
 
     raw_bytes = source
     if suffix == ".pdf":
@@ -196,7 +234,7 @@ def extract_document_text(
         return _extract_docx_text(raw_bytes)
     if suffix == ".pptx":
         return _extract_pptx_text(raw_bytes)
-    return raw_bytes.decode(encoding="utf-8", errors="replace")
+    return raw_bytes.decode(encoding=_bom_encoding(raw_bytes[:4]), errors="replace")
 
 
 async def ingest_document(
