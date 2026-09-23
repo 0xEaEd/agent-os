@@ -85,8 +85,10 @@ _SANDBOX_NETWORK_FAILURE_MARKERS: tuple[str, ...] = (
     "curl: (6)",
 )
 _NULL_SINK_PATH = "/dev/null"
+_NULL_SINK_PATHS: frozenset[str] = frozenset({"/dev/null", "nul"})
 _SHELL_NULL_REDIRECT_RE = re.compile(
-    r"(?:(?<=^)|(?<=[\s;|&]))\d*[<>]{1,2}\s*/dev/null(?=$|[\s;|&])"
+    r"""(?:(?<=^)|(?<=[\s;|&]))\d*[<>]{1,2}\s*(?:/dev/null|nul|"/dev/null"|'/dev/null'|"nul"|'nul')(?=$|[\s;|&])""",
+    re.IGNORECASE,
 )
 PROCESS_ACTIONS: frozenset[str] = frozenset(
     {"eof", "kill", "list", "log", "poll", "remove", "submit", "write"}
@@ -391,7 +393,11 @@ def _shell_write_targets(command: str) -> list[str]:
             # Exactly one of the double-quoted / single-quoted / bare groups
             # took part in the match; the other two are None.
             targets.append(next(group for group in match.groups() if group is not None))
-    return [target for target in targets if target != _NULL_SINK_PATH]
+    return [
+        target
+        for target in targets
+        if target != _NULL_SINK_PATH and target.strip("'\"").lower() not in _NULL_SINK_PATHS
+    ]
 
 
 def _workspace_lockdown_shell_block(
@@ -1582,7 +1588,7 @@ async def _check_exec_approval(
     if approval_id is None and not sandbox_off_requires_approval:
         from agentos.sandbox.intent_cache import get_intent_cache
 
-        if get_intent_cache().check(command):
+        if get_intent_cache().check(command, session_key=str(params["sessionKey"])):
             log.info(
                 "shell_approval_intent_cached",
                 command=_audit_command(command),

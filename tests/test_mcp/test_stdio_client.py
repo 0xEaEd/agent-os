@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from agentos.mcp import stdio
 from agentos.mcp.stdio import MCPStdioClient
 from agentos.mcp.types import MCPServerConfig
 
@@ -603,3 +604,224 @@ async def test_a_result_that_is_not_an_object_is_reported_as_an_error(
 
     assert result.is_error is True
     assert result.content
+
+
+# --- Windows command resolution (#2726) -------------------------------------
+#
+# ``create_subprocess_exec`` reaches ``CreateProcessW``, which appends ``.exe``
+# to an extensionless name and stops. It never walks ``PATHEXT``. ``npx``,
+# ``npm``, ``uvx`` and ``pipx`` are ``.cmd`` wrappers, so every published MCP
+# server config failed with ``WinError 2`` on Windows before a byte of MCP
+# traffic. The platform is simulated rather than skipped, so these run on both
+# CI jobs.
+
+
+def _spawn_recorder(monkeypatch: pytest.MonkeyPatch, calls: list[tuple[Any, ...]]) -> None:
+    """Capture what ``connect()`` hands the subprocess layer."""
+
+    async def fake_exec(*args: Any, **kwargs: Any) -> _PipeProcess:
+        calls.append(args)
+        return _PipeProcess(_reader(data=b'{"jsonrpc":"2.0","id":1,"result":{}}\n'))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+
+def _windows(monkeypatch: pytest.MonkeyPatch, table: dict[str, str]) -> list[str]:
+    """Pretend to be Windows with *table* as the PATHEXT lookup's answers."""
+    monkeypatch.setattr(stdio.sys, "platform", "win32")
+    searched: list[str] = []
+
+    def fake_which(command: str, path: str | None = None) -> str | None:
+        searched.append(path if path is not None else "<process PATH>")
+        return table.get(command)
+
+    monkeypatch.setattr(stdio.shutil, "which", fake_which)
+    return searched
+
+
+@pytest.mark.parametrize(
+    ("command", "resolved"),
+    [
+        ("npx", r"C:\Program Files\nodejs\npx.cmd"),
+        ("npm", r"C:\Program Files\nodejs\npm.cmd"),
+        ("uvx", r"C:\tools\uv\uvx.exe"),
+        ("pipx", r"C:\Python312\Scripts\pipx.exe"),
+    ],
+)
+async def test_a_wrapper_command_is_spawned_by_its_resolved_path_on_windows(
+    monkeypatch: pytest.MonkeyPatch, command: str, resolved: str
+) -> None:
+    """All four commands the issue enumerates, each as its own case."""
+    _windows(monkeypatch, {command: resolved})
+    calls: list[tuple[Any, ...]] = []
+    _spawn_recorder(monkeypatch, calls)
+
+    client = MCPStdioClient(
+        MCPServerConfig(
+            name="filesystem",
+            transport="stdio",
+            command=command,
+            args=["-y", "@modelcontextprotocol/server-filesystem", r"C:\workspace"],
+        )
+    )
+    await client.connect()
+
+    assert calls[0] == (
+        resolved,
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        r"C:\workspace",
+    )
+
+
+async def test_an_unresolvable_command_names_itself_and_its_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The failure has to say which server and which command.
+
+    ``WinError 2`` names neither, and an operator with several servers
+    configured cannot tell from it which one failed to start.
+    """
+    _windows(monkeypatch, {})
+    calls: list[tuple[Any, ...]] = []
+    _spawn_recorder(monkeypatch, calls)
+
+    client = MCPStdioClient(
+        MCPServerConfig(name="filesystem", transport="stdio", command="npx", args=["-y", "srv"])
+    )
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        await client.connect()
+
+    message = str(excinfo.value)
+    assert "npx" in message
+    assert "filesystem" in message
+    assert "PATHEXT" in message
+    # The spawn must not be attempted at all, or the clear message is buried
+    # under the ``WinError 2`` it was written to replace.
+    assert calls == []
+
+
+async def test_the_error_stays_a_filenotfounderror(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``WinError 2`` is a ``FileNotFoundError``, and callers catch ``OSError``.
+
+    Raising the same type keeps every existing handler working; only the
+    message improves.
+    """
+    _windows(monkeypatch, {})
+    _spawn_recorder(monkeypatch, [])
+
+    client = MCPStdioClient(MCPServerConfig(name="demo", transport="stdio", command="nope"))
+
+    with pytest.raises(OSError):
+        await client.connect()
+
+
+async def test_resolution_uses_the_path_the_child_will_get(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server that pins its own ``PATH`` must be resolved against that one.
+
+    Searching this process's ``PATH`` instead would find a different binary
+    than the one the operator configured, or none at all.
+    """
+    searched = _windows(monkeypatch, {"uvx": r"C:\pinned\uvx.exe"})
+    calls: list[tuple[Any, ...]] = []
+    _spawn_recorder(monkeypatch, calls)
+
+    client = MCPStdioClient(
+        MCPServerConfig(
+            name="pinned",
+            transport="stdio",
+            command="uvx",
+            env={"PATH": r"C:\pinned"},
+        )
+    )
+    await client.connect()
+
+    assert searched == [r"C:\pinned"]
+    assert calls[0] == (r"C:\pinned\uvx.exe",)
+
+
+async def test_a_lowercase_path_override_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows environment names are case-insensitive, so ``Path`` is legal.
+
+    The merged environment is ``{**os.environ, **config.env}``, which leaves
+    the inherited ``PATH`` *and* the config's ``Path`` in the dict. Picking the
+    first match would search the inherited one and silently ignore the
+    override the operator wrote.
+    """
+    monkeypatch.setenv("PATH", r"C:\inherited")
+    searched = _windows(monkeypatch, {"npx": r"C:\override\npx.cmd"})
+    _spawn_recorder(monkeypatch, [])
+
+    client = MCPStdioClient(
+        MCPServerConfig(
+            name="pinned",
+            transport="stdio",
+            command="npx",
+            env={"Path": r"C:\override"},
+        )
+    )
+    await client.connect()
+
+    assert searched == [r"C:\override"]
+
+
+async def test_no_configured_env_searches_this_process_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no ``env`` in the config the child inherits ours, so ``which``
+    must be left to read ``os.environ`` itself rather than be handed a
+    half-built ``PATH``."""
+    searched = _windows(monkeypatch, {"npx": r"C:\nodejs\npx.cmd"})
+    _spawn_recorder(monkeypatch, [])
+
+    client = MCPStdioClient(MCPServerConfig(name="demo", transport="stdio", command="npx"))
+    await client.connect()
+
+    assert searched == ["<process PATH>"]
+
+
+# --- POSIX is deliberately untouched ---------------------------------------
+
+
+async def test_posix_spawns_the_command_as_written(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The boundary this fix deliberately does not cross.
+
+    POSIX ``exec`` already searches ``PATH`` for a bare command, so there is
+    nothing to fix; substituting the resolved path would hand the program a
+    different ``argv[0]`` than it has today for no gain. Passes either way by
+    design -- it is the guard that keeps the Windows fix from leaking.
+    """
+    monkeypatch.setattr(stdio.sys, "platform", "linux")
+    monkeypatch.setattr(stdio.shutil, "which", lambda cmd, path=None: "/usr/local/bin/npx")
+    calls: list[tuple[Any, ...]] = []
+    _spawn_recorder(monkeypatch, calls)
+
+    client = MCPStdioClient(
+        MCPServerConfig(name="demo", transport="stdio", command="npx", args=["-y", "srv"])
+    )
+    await client.connect()
+
+    assert calls[0] == ("npx", "-y", "srv")
+
+
+async def test_posix_does_not_raise_early_for_an_unresolvable_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``which`` returning nothing on POSIX must not pre-empt the spawn.
+
+    ``os.access(X_OK)`` can disagree with what ``exec`` will accept, and the
+    POSIX ``ENOENT`` already names the file. Failing early here would turn a
+    working server into a refused one. Passes either way by design.
+    """
+    monkeypatch.setattr(stdio.sys, "platform", "linux")
+    monkeypatch.setattr(stdio.shutil, "which", lambda cmd, path=None: None)
+    calls: list[tuple[Any, ...]] = []
+    _spawn_recorder(monkeypatch, calls)
+
+    client = MCPStdioClient(MCPServerConfig(name="demo", transport="stdio", command="npx"))
+    await client.connect()
+
+    assert calls[0] == ("npx",)

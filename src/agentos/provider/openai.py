@@ -1175,19 +1175,17 @@ class OpenAIProvider:
                                 thought_sig = _extract_thought_signature(tc)
                                 if idx not in pending_calls:
                                     pending_calls[idx] = {
-                                        "id": tc.get("id") or f"call_{uuid4().hex[:12]}",
+                                        "id": tc.get("id") or "",
                                         "name": function.get("name") or "",
                                         "parts": [],
                                         "thought_signature": thought_sig,
+                                        "started": False,
                                     }
-                                    emitted_stream_event = True
-                                    yield ToolUseStartEvent(
-                                        tool_use_id=pending_calls[idx]["id"],
-                                        tool_name=pending_calls[idx]["name"],
-                                    )
                                 else:
-                                    # id/name may arrive in later chunks
-                                    if tc.get("id"):
+                                    # id/name may arrive in later chunks. Once the start
+                                    # event has published an id it is kept: the later
+                                    # delta/end events must name that same id.
+                                    if tc.get("id") and not pending_calls[idx]["started"]:
                                         pending_calls[idx]["id"] = tc["id"]
                                     fname = function.get("name") or ""
                                     if fname:
@@ -1198,6 +1196,18 @@ class OpenAIProvider:
                                         pending_calls[idx]["thought_signature"] = thought_sig
 
                                 fragment = function.get("arguments") or ""
+                                # ToolUseStartEvent publishes the id, so it waits for the
+                                # real one; a synthetic id is minted only once an argument
+                                # fragment (or the end of the stream) forces the start.
+                                call = pending_calls[idx]
+                                if not call["started"] and (call["id"] or fragment):
+                                    call["id"] = call["id"] or f"call_{uuid4().hex[:12]}"
+                                    call["started"] = True
+                                    emitted_stream_event = True
+                                    yield ToolUseStartEvent(
+                                        tool_use_id=call["id"],
+                                        tool_name=call["name"],
+                                    )
                                 if fragment:
                                     pending_calls[idx]["parts"].append(fragment)
                                     emitted_stream_event = True
@@ -1219,6 +1229,10 @@ class OpenAIProvider:
 
                     # Emit ToolUseEnd for each completed call
                     for call in pending_calls.values():
+                        if not call["started"]:
+                            call["id"] = call["id"] or f"call_{uuid4().hex[:12]}"
+                            call["started"] = True
+                            yield ToolUseStartEvent(tool_use_id=call["id"], tool_name=call["name"])
                         full_json = "".join(call["parts"])
                         try:
                             args = json.loads(full_json) if full_json else {}

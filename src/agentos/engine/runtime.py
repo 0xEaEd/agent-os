@@ -713,6 +713,9 @@ _TOOL_RESULT_METADATA_KEYS: Final[frozenset[str]] = frozenset(
 )
 _SENTINELS: Final[frozenset[str]] = frozenset({"NO_REPLY", "HEARTBEAT_OK"})
 _HEARTBEAT_ACK_TOKEN: Final[str] = "HEARTBEAT_OK"
+# Markdown a model puts around a bare token. The system prompt itself shows the
+# sentinels as code spans, so `NO_REPLY` and **HEARTBEAT_OK** are ordinary replies.
+_SENTINEL_WRAPPERS: Final[str] = "`*_~"
 _THINKING_ALIASES: Final[dict[str, str]] = {
     "x-high": "xhigh",
     "x_high": "xhigh",
@@ -1046,13 +1049,23 @@ def _should_use_selector_fallback(provider_name: str, event: ProviderErrorEvent)
     return _kind_uses_selector_fallback(_classify_provider_event(provider_name, event))
 
 
+def _unwrap_sentinel(text: str) -> str:
+    """Return *text* without the Markdown and closing full stop around it.
+
+    A code span around NO_REPLY, ``**HEARTBEAT_OK**`` and ``NO_REPLY.`` all mean
+    the bare token. Compared as written, each went out to the channel verbatim.
+    """
+    unwrapped = text.strip().strip(_SENTINEL_WRAPPERS)
+    return unwrapped.rstrip(".!").strip(_SENTINEL_WRAPPERS).strip()
+
+
 def _normalize_heartbeat_text(
     text: str,
     *,
     run_kind: str,
     heartbeat_ack_max_chars: int,
 ) -> str:
-    stripped = text.strip()
+    stripped = _unwrap_sentinel(text)
     if stripped in _SENTINELS:
         log.debug("turn_runner.sentinel_suppressed", sentinel=stripped)
         return ""
@@ -1060,7 +1073,7 @@ def _normalize_heartbeat_text(
         return text
 
     def _suppressed(payload: str) -> bool:
-        return len(payload.strip()) <= heartbeat_ack_max_chars
+        return len(_unwrap_sentinel(payload)) <= heartbeat_ack_max_chars
 
     if stripped.startswith(_HEARTBEAT_ACK_TOKEN):
         remainder = stripped[len(_HEARTBEAT_ACK_TOKEN) :].strip()
@@ -1729,12 +1742,31 @@ class TurnRunner:
         )
         # User turns since the last memory review, keyed (agent_id, session_key).
         self._memory_nudge_counters: dict[tuple[str, str], int] = {}
-        self._compaction_failures: dict[str, _CompactionFailureState] = {}
+        # Consecutive-failure circuit state, keyed by session_key. Only cleared
+        # on the next compaction *success* (#2399) -- a session that fails once
+        # and is never revisited would otherwise pin this entry forever, the
+        # same "nothing notifies this runner when a session ends" gap
+        # _memory_snapshots/_bootstrap_snapshots are already bounded against.
+        self._compaction_failures: BoundedRegistry[str, _CompactionFailureState] = (
+            BoundedRegistry(
+                name="TurnRunner._compaction_failures",
+                session_of=lambda key, _value: key,
+            )
+        )
         self._turn_compaction_attempted_sessions: set[str] = set()
         self._turn_compacted_sessions: set[str] = set()
         self._active_pre_compaction_flush_tasks: dict[str, asyncio.Task] = {}
         self._background_tasks: set[asyncio.Task] = set()
-        self._emergency_compaction_overrides: dict[str, _EmergencyCompactionOverride] = {}
+        # Emergency-compaction result awaiting the session's next turn, keyed by
+        # session_key. Only popped when that next turn loads history (#2399) --
+        # each entry carries a full kept-transcript slice, so an abandoned
+        # session leaks more than a counter would.
+        self._emergency_compaction_overrides: BoundedRegistry[
+            str, _EmergencyCompactionOverride
+        ] = BoundedRegistry(
+            name="TurnRunner._emergency_compaction_overrides",
+            session_of=lambda key, _value: key,
+        )
         # Last persisted row each session's loaded history covers, keyed by
         # session key; anchors inline compaction persistence so rows appended
         # mid-turn (queued follow-ups) are never overwritten or archived.
@@ -1851,8 +1883,9 @@ class TurnRunner:
     def refresh_memory_snapshot(self, agent_id: str) -> None:
         """Refresh frozen snapshots for all sessions of the given agent.
 
-        Called by the on_memory_write callback when agent writes to
-        MEMORY.md or daily notes via memory_save.
+        Called by the on_memory_write callback when the agent writes to
+        MEMORY.md, USER.md, or daily notes via memory_save, memory_delete,
+        or memory (add/replace/remove).
         """
         ws = self._resolve_memory_source_dir(agent_id)
         new_snap = MemorySnapshot(
@@ -5930,14 +5963,20 @@ class TurnRunner:
 
     def _record_compaction_failure(self, session_key: str) -> None:
         if not hasattr(self, "_compaction_failures"):
-            self._compaction_failures = {}
+            self._compaction_failures = BoundedRegistry(
+                name="TurnRunner._compaction_failures",
+                session_of=lambda key, _value: key,
+            )
         state = self._compaction_failures.setdefault(session_key, _CompactionFailureState())
         state.count += 1
         state.opened_at = time.monotonic() if state.count >= _COMPACTION_FAILURE_LIMIT else None
 
     def _record_compaction_success(self, session_key: str) -> None:
         if not hasattr(self, "_compaction_failures"):
-            self._compaction_failures = {}
+            self._compaction_failures = BoundedRegistry(
+                name="TurnRunner._compaction_failures",
+                session_of=lambda key, _value: key,
+            )
         self._compaction_failures.pop(session_key, None)
 
     @staticmethod
@@ -6365,7 +6404,12 @@ class TurnRunner:
             Message,
         )
 
-        prompt_block = ContentBlockText(text=message)
+        # An attachment sent with no text -- a photo with no caption, a file
+        # dropped into the web chat with an empty box -- arrives as message "".
+        # An empty text block is not "no text": Anthropic rejects it outright
+        # (text content blocks must be non-empty), failing the whole turn. A
+        # user turn made only of attachments is valid for every provider.
+        prompt_blocks: list[Any] = [ContentBlockText(text=message)] if message.strip() else []
         attachment_blocks: list[Any] = []
         for index, att in enumerate(attachments, start=1):
             att_type = att.get("type")
@@ -6451,6 +6495,6 @@ class TurnRunner:
         return [
             Message(
                 role="user",
-                content=[prompt_block] + attachment_blocks,  # type: ignore[arg-type]
+                content=prompt_blocks + attachment_blocks,  # type: ignore[arg-type]
             )
         ]

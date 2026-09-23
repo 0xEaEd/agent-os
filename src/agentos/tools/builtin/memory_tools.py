@@ -40,6 +40,7 @@ from agentos.memory.types import (
     normalize_memory_search_min_score,
     normalize_memory_source_filter,
 )
+from agentos.safety.injection_guard import classify_injection
 from agentos.tools.registry import tool
 from agentos.tools.types import ToolError, current_tool_context
 
@@ -98,11 +99,6 @@ _MEMORY_THREAT_PATTERNS: tuple[re.Pattern[str], ...] = (
     # into every prompt is worth the occasional false positive.
     re.compile(r"(?:api[_-]?key|token|secret|password)\s*[=:]\s*[\"'][A-Za-z0-9+/=_-]{20,}", re.I),
 )
-
-# Invisible / bidirectional unicode used to hide injected text from a human
-# reviewing the file. Includes directional isolates (U+2066-U+2069) and
-# invisible math operators (U+2062-U+2064), both real attack tools.
-_INVISIBLE_CHARS = re.compile(r"[\u200b\u200c\u200d\ufeff\u202a-\u202e\u2062-\u2064\u2066-\u2069]")
 
 # Actions that mirror to an external memory provider. Read-only or unknown
 # actions never reach a provider \u2014 ported from hermes-agent's
@@ -175,8 +171,17 @@ def _scan_memory_content(content: str) -> str | None:
     """Lightweight check for injection/exfiltration in memory content.
 
     Returns an error message if blocked, None if clean.
+
+    The invisible-character verdict is ``injection_guard``'s ``invisible_char``
+    class rather than a list kept here. This module used to keep its own, and
+    it never got #2610's fix: ZWJ (every compound emoji), ZWNJ (Persian,
+    Arabic and Indic words) and a leading BOM (every file that has been
+    through Excel or Notepad) were still refused on write and silently
+    dropped from the system prompt on every load (#2966). One list, one
+    verdict. ``_MEMORY_THREAT_PATTERNS`` stays this module's own: it is the
+    broader, strict-scope list curated entries are held to.
     """
-    if _INVISIBLE_CHARS.search(content):
+    if "invisible_char" in classify_injection(content):
         return "Blocked: content contains invisible Unicode control characters."
     for pattern in _MEMORY_THREAT_PATTERNS:
         if pattern.search(content):
@@ -228,6 +233,27 @@ def _is_checkpoint_sidecar_path(path: str) -> bool:
     )
 
 
+def _count_memory_files(workspace_dir: Path) -> int:
+    """Number of memory source files (``MEMORY.md`` and ``memory/**/*.md``).
+
+    ``max_files`` is documented as the number of memory files, and in the
+    default ``source="workspace"`` layout the workspace also holds the
+    bootstrap files, ``knowledge_base/`` and whatever the agent cloned or
+    wrote there. Counting every ``*.md`` under it refused a new memory file
+    once a single repository's docs pushed the total past the cap. Only the
+    paths ``memory_save`` itself accepts are counted.
+    """
+    count = 1 if (workspace_dir / "MEMORY.md").is_file() else 0
+    memory_root = workspace_dir / "memory"
+    if not memory_root.is_dir():
+        return count
+    for path in memory_root.rglob("*.md"):
+        rel = path.relative_to(workspace_dir).as_posix()
+        if path.is_file() and is_memory_source_path(rel):
+            count += 1
+    return count
+
+
 def _is_memory_save_path(path: str) -> bool:
     """Return True for model-callable writable memory files."""
     return _is_memory_source_path(path)
@@ -268,8 +294,11 @@ _MEMORY_SEARCH_STOP_WORDS: Final[frozenset[str]] = frozenset(
 _YAML_FRONTMATTER_RE = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|$)", re.S)
 # Unicode letters and digits; underscore is excluded so it still splits words.
 _MEMORY_SEARCH_WORD_RE = re.compile(r"[^\W_]+")
-# CJK ideographs and kana carry no spaces, so they are matched one char at a time.
+# CJK ideographs and kana carry no spaces, so they are matched one char at a time,
+# and in runs: a bigram is only meaningful inside one unbroken run (see
+# ``_memory_search_query_terms``).
 _MEMORY_SEARCH_CJK_RE = re.compile(r"[一-鿿぀-ヿ]")
+_MEMORY_SEARCH_CJK_RUN_RE = re.compile(f"{_MEMORY_SEARCH_CJK_RE.pattern}+")
 
 
 def _memory_search_limit(value: object) -> int:
@@ -328,6 +357,9 @@ def _memory_search_query_terms(query: str) -> tuple[str, ...]:
     CJK carries no spaces, so a run of ideographs or kana is additionally
     expanded into unigrams and bigrams -- the shape
     ``agentos.memory.retrieval._jaccard_similarity`` already tokenizes with.
+    A bigram is only formed inside one unbroken run: two characters separated by
+    a space, punctuation or Latin text are not adjacent, and pairing them
+    produced a term the query never contained.
     """
     terms: list[str] = []
     seen: set[str] = set()
@@ -338,9 +370,12 @@ def _memory_search_query_terms(query: str) -> tuple[str, ...]:
         for term in _MEMORY_SEARCH_WORD_RE.findall(lowered)
         if len(term) >= _min_term_chars(term)
     ]
-    cjk = _MEMORY_SEARCH_CJK_RE.findall(lowered)
-    candidates.extend(cjk)
-    candidates.extend(cjk[index] + cjk[index + 1] for index in range(len(cjk) - 1))
+    # Per run, not across the whole query: pairing the flat list of every CJK
+    # character in the query glued the tail of one word to the head of the next
+    # (#3180), inventing a term that appears nowhere in it.
+    for run in _MEMORY_SEARCH_CJK_RUN_RE.findall(lowered):
+        candidates.extend(run)
+        candidates.extend(run[index : index + 2] for index in range(len(run) - 1))
 
     for term in candidates:
         if term in _MEMORY_SEARCH_STOP_WORDS or term in seen:
@@ -672,11 +707,14 @@ def create_memory_tools(
         return redact_memory_text(content)
 
     async def _maybe_prune(r: ResolvedAgent) -> None:
-        if memory_config and getattr(memory_config, "entry_ttl_days", 0) > 0 and r.memory_dir:
+        # Live, not the captured ``memory_config``: see _live_memory_config.
+        live = _live_memory_config()
+        ttl_days = getattr(live, "entry_ttl_days", 0) if live else 0
+        if ttl_days > 0 and r.memory_dir:
             await _prune_expired_files(
                 r.memory_dir,
                 r.store,
-                memory_config.entry_ttl_days,
+                ttl_days,
                 workspace_dir=r.workspace_dir,
             )
 
@@ -687,12 +725,19 @@ def create_memory_tools(
         content: str,
         mode: str,
     ) -> None:
-        if not memory_config:
+        # Read the limits from the live config on every write. config.patch
+        # replaces ``config.memory`` with a new instance (see
+        # _live_memory_config), so the captured ``memory_config`` goes on
+        # enforcing the boot-time limits -- a tightened or relaxed max_files,
+        # max_file_size_kb or max_total_size_kb never took effect without a
+        # restart, and limits enabled after boot were never enforced at all.
+        live = _live_memory_config()
+        if not live:
             return
 
         content_size_kb = len(content.encode("utf-8")) / 1024
 
-        max_file = getattr(memory_config, "max_file_size_kb", 0)
+        max_file = getattr(live, "max_file_size_kb", 0)
         if max_file > 0:
             existing_size = mem_path.stat().st_size / 1024 if mem_path.exists() else 0
             projected = (existing_size + content_size_kb) if mode != "replace" else content_size_kb
@@ -701,13 +746,13 @@ def create_memory_tools(
                     f"write would exceed per-file limit ({projected:.0f} KB > {max_file} KB)."
                 )
 
-        max_files = getattr(memory_config, "max_files", 0)
+        max_files = getattr(live, "max_files", 0)
         if max_files > 0 and not mem_path.exists():
-            file_count = len(list(workspace_dir.rglob("*.md")))
+            file_count = _count_memory_files(workspace_dir)
             if file_count >= max_files:
                 raise ToolError(f"max file count reached ({max_files}).")
 
-        max_total = getattr(memory_config, "max_total_size_kb", 0)
+        max_total = getattr(live, "max_total_size_kb", 0)
         if max_total > 0:
             total_kb = (await r.store.total_size()) / 1024
             if total_kb + content_size_kb > max_total:
@@ -1111,6 +1156,17 @@ def create_memory_tools(
                 old_text=None,
                 operations=operations,
             )
+            # Same contract as memory_save/memory_delete: the frozen per-session
+            # snapshot only rebuilds through this callback, so without it a
+            # committed write here keeps being invisible to the model -- the
+            # prompt keeps injecting the pre-write memory_md -- until the
+            # session ends. Gated the same way _mirror_memory_write already is,
+            # so a staged-for-approval or failed batch does not trigger a
+            # refresh for a write that never actually landed.
+            if on_memory_write is not None and _memory_write_committed(result):
+                ctx = current_tool_context.get()
+                _aid = (ctx.agent_id if ctx else None) or "main"
+                on_memory_write(_aid)
             return json.dumps(result, ensure_ascii=False)
 
         # --- Single-op path --------------------------------------------------
@@ -1153,6 +1209,12 @@ def create_memory_tools(
             old_text=old_text,
             operations=None,
         )
+        # See the batch path above: without this, a committed add/replace/
+        # remove here is invisible to the model for the rest of the session.
+        if on_memory_write is not None and _memory_write_committed(result):
+            ctx = current_tool_context.get()
+            _aid = (ctx.agent_id if ctx else None) or "main"
+            on_memory_write(_aid)
         return json.dumps(result, ensure_ascii=False)
 
     @tool(

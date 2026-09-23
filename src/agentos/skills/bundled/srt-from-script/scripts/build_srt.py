@@ -46,7 +46,7 @@ def parse_script(text: str) -> list[tuple[int, float, str]]:
         dur_m = _DUR_RE.search(block)
         vo_m = _VO_RE.search(block)
         if not dur_m:
-            continue
+            raise ValueError(f"SHOT_{shot_no} has no DURATION_S field")
         duration = float(dur_m.group(1))
         voiceover = (vo_m.group(1) if vo_m else "").strip()
         if voiceover.lower() in {"", "none", "-", "--"}:
@@ -131,7 +131,11 @@ def main() -> int:
         print("Error: empty script input.", file=sys.stderr)
         return 1
 
-    shots = parse_script(text)
+    try:
+        shots = parse_script(text)
+    except ValueError as exc:
+        print(f"Error: malformed script — {exc}.", file=sys.stderr)
+        return 1
     if not shots:
         print(
             "Error: no SHOT_N blocks found in script. Did ai-video-script "

@@ -201,6 +201,31 @@ def _is_cjk_font_covered(char: str) -> bool:
     )
 
 
+def _is_kana(char: str) -> bool:
+    """Hiragana and katakana, restricted to what ``STSong-Light`` can map.
+
+    Japanese is not writable without kana, yet ``_is_cjk`` names only the
+    ideograph blocks -- so on a host whose base font stops before U+3040 every
+    kana fell through to the ``continue`` below and was deleted, leaving the
+    kanji and the punctuation standing. ``確認してください`` came out as
+    ``確認``: still a plausible sentence, with the verb ending gone.
+
+    The blocks are cut to the codepoints the registered CID font actually
+    carries (Adobe-GB1 via GB2312). The handful it does not -- the small
+    ``ゕゖ``, the combining marks U+3099/U+309A, the digraphs ``ゟヿ``,
+    ``゠・`` and the Ainu extensions at U+31F0 -- are deliberately left on the
+    existing path: routing them here would trade a silent drop for a wrong
+    glyph, which is the worse of the two.
+    """
+    codepoint = ord(char)
+    return (
+        0x3041 <= codepoint <= 0x3094  # hiragana letters
+        or 0x309B <= codepoint <= 0x309E  # spacing sound marks, iteration marks
+        or 0x30A1 <= codepoint <= 0x30FA  # katakana letters
+        or 0x30FC <= codepoint <= 0x30FE  # prolonged sound mark, iteration marks
+    )
+
+
 def _font_supports_char(font_name: str, char: str) -> bool:
     from reportlab.pdfbase import pdfmetrics  # type: ignore[import-untyped]
 
@@ -210,6 +235,15 @@ def _font_supports_char(font_name: str, char: str) -> bool:
     if char_widths is None:
         return ord(char) < 256
     return ord(char) in char_widths
+
+
+#: reportlab's Paragraph markup collapses a literal "\n"/"\t" to a single
+#: space, the same whitespace-folding HTML does -- it never reads them as
+#: line breaks or tab stops. "\n" is a request for a new line (rendered
+#: below as a literal <br/>) and "\t" is a request for visible separation,
+#: approximated with this many non-breaking spaces (Paragraph collapses
+#: plain spaces the same way, but not "&#160;" runs).
+_PDF_TAB_EXPANSION = "&#160;" * 4
 
 
 def _pdf_markup_text(value: Any, *, base_font: str, cjk_font: str | None) -> str:
@@ -233,12 +267,25 @@ def _pdf_markup_text(value: Any, *, base_font: str, cjk_font: str | None) -> str
         run = []
         run_font = None
 
-    for char in text:
+    # Every newline spelling becomes one line break below: CRLF and a lone
+    # CR (old Mac text) are real line breaks too, not a second character to
+    # render next to "\n".
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    for char in normalized:
+        if char == "\n":
+            flush()
+            parts.append("<br/>")
+            continue
+        if char == "\t":
+            flush()
+            parts.append(_PDF_TAB_EXPANSION)
+            continue
         target_font: str | None = None
         if cjk_font is not None and (
             _is_cjk(char)
             or (
-                (_is_cjk_symbol(char) or _is_cjk_font_covered(char))
+                (_is_cjk_symbol(char) or _is_cjk_font_covered(char) or _is_kana(char))
                 and not _font_supports_char(base_font, char)
             )
         ):

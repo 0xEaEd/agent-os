@@ -18,9 +18,13 @@ def _extract_location(raw: str) -> str:
     if not text:
         return "London"
     for line in text.splitlines():
-        match = re.match(r"\s*DESTINATION:\s*(.+?)\s*$", line, flags=re.I)
+        match = re.match(r"\s*DESTINATION:\s*(.*?)\s*$", line, flags=re.I)
         if match:
-            return match.group(1).strip()
+            # A DESTINATION field is present, so it -- not some other field
+            # in the contract -- is the caller's answer for "where"; a blank
+            # value means no destination was resolved, same as no text at
+            # all, not "fall through to whatever line comes first".
+            return match.group(1).strip() or "London"
     first = text.splitlines()[0].strip()
     return first[:120] or "London"
 
@@ -48,7 +52,11 @@ def _seasonal_hint(query: str, location: str) -> str:
 
 
 def _fetch_wttr_json(location: str, timeout: float) -> dict[str, Any]:
-    encoded = urllib.parse.quote(location)
+    # safe="" rather than the default "/": the location is one path segment,
+    # and the entrypoint defaults it to the user's own message, so an ordinary
+    # "Dallas/Fort Worth" or a "15/09" date would otherwise split the path and
+    # address somewhere else entirely.
+    encoded = urllib.parse.quote(location, safe="")
     url = f"https://wttr.in/{encoded}?format=j1"
     req = urllib.request.Request(  # noqa: S310 - fixed trusted weather endpoint
         url,
