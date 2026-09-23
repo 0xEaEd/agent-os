@@ -23,7 +23,14 @@ from agentos.scheduler.types import CronJob, ScheduleKind
 
 
 def _scan(expr: str, after: datetime, tz: ZoneInfo | None, limit_minutes: int) -> datetime | None:
-    """The previous implementation, minute by minute, over a bounded window."""
+    """The previous implementation, minute by minute, over a bounded window.
+
+    An oracle for ordinary schedules only. #2472 has since given the scan two
+    daylight-saving rules of its own -- fire at the end of a spring-forward
+    gap, fire once per scheduled local time unless the hour is a wildcard --
+    which this plain scan does not have, so the cases that cross a transition
+    are pinned against those rules by hand instead.
+    """
     parsed = parse_cron(expr)
     candidate = after.replace(second=0, microsecond=0) + timedelta(minutes=1)
     for _ in range(limit_minutes):
@@ -111,16 +118,17 @@ def test_sparse_schedules_land_where_the_scan_did(
 # ── daylight saving ────────────────────────────────────────────────────────
 
 
-def test_a_wall_time_inside_the_spring_forward_gap_is_skipped() -> None:
-    """02:30 does not exist on 2026-03-08 in New York; the scan never
-    produced it either, because no UTC minute maps onto it."""
+def test_a_wall_time_inside_the_spring_forward_gap_fires_when_the_gap_ends() -> None:
+    """02:30 does not exist on 2026-03-08 in New York. #2472 fires the job
+    once at the first instant the clock does show rather than skipping the
+    day, and this search has to land in the same place."""
     zone = ZoneInfo("America/New_York")
     after = datetime(2026, 3, 8, 6, 0, tzinfo=UTC)  # 01:00 EST that morning
 
     got = _next_cron_instant(parse_cron("30 2 * * *"), after, zone)
 
-    assert got == _scan("30 2 * * *", after, zone, 60 * 48)
-    assert got == datetime(2026, 3, 9, 6, 30, tzinfo=UTC)  # the next day, 02:30 EDT
+    assert got == datetime(2026, 3, 8, 7, 0, tzinfo=UTC)  # 03:00 EDT, where the gap ends
+    assert got == _next_run(_job("30 2 * * *", "America/New_York"), after)
 
 
 def test_the_repeated_hour_on_a_fall_back_night_fires_on_its_first_pass() -> None:
@@ -131,6 +139,110 @@ def test_the_repeated_hour_on_a_fall_back_night_fires_on_its_first_pass() -> Non
 
     assert got == datetime(2026, 11, 1, 5, 30, tzinfo=UTC)  # 01:30 EDT, the first 01:30
     assert got == _scan("30 1 * * *", after, zone, 60 * 3)
+
+
+def _chain(expr: str, start: datetime, zone: ZoneInfo, count: int) -> list[datetime]:
+    """``count`` consecutive fires, the way the timer drives the scheduler."""
+    parsed = parse_cron(expr)
+    out: list[datetime] = []
+    cursor = start
+    for _ in range(count):
+        nxt = _next_cron_instant(parsed, cursor, zone)
+        assert nxt is not None
+        out.append(nxt)
+        cursor = nxt
+    return out
+
+
+def _scan_chain(
+    expr: str, start: datetime, zone: ZoneInfo, count: int, window_minutes: int = 60 * 6
+) -> list[datetime]:
+    out: list[datetime] = []
+    cursor = start
+    for _ in range(count):
+        nxt = _scan(expr, cursor, zone, window_minutes)
+        assert nxt is not None
+        out.append(nxt)
+        cursor = nxt
+    return out
+
+
+@pytest.mark.parametrize("expr", ["* * * * *", "*/15 * * * *", "*/30 * * * *", "0 * * * *"])
+def test_a_sub_daily_schedule_runs_through_the_repeated_hour(expr: str) -> None:
+    """#3099's scope: behaviour for a schedule that fires today is unchanged.
+    The walk moves forward on the wall clock, so the second pass of 01:xx --
+    which is *behind* the first on that clock -- was skipped, leaving a
+    75-minute hole in a `*/15` watcher (review on #3105)."""
+    zone = ZoneInfo("America/New_York")
+    start = datetime(2026, 11, 1, 5, 40, tzinfo=UTC)  # 01:40 EDT, in the first pass
+
+    assert _chain(expr, start, zone, 6) == _scan_chain(expr, start, zone, 6)
+
+
+def test_the_repeated_hour_is_visited_once_per_pass() -> None:
+    """Named instants, so a future change cannot quietly drop or double one."""
+    zone = ZoneInfo("America/New_York")
+    start = datetime(2026, 11, 1, 5, 40, tzinfo=UTC)
+
+    fires = _chain("*/15 * * * *", start, zone, 6)
+
+    assert [f.astimezone(zone).strftime("%H:%M %Z") for f in fires] == [
+        "01:45 EDT",
+        "01:00 EST",
+        "01:15 EST",
+        "01:30 EST",
+        "01:45 EST",
+        "02:00 EST",
+    ]
+    assert fires == sorted(fires), "instants must advance even when the clock does not"
+
+
+@pytest.mark.parametrize(
+    ("expr", "expected"),
+    [("* * * * *", "01:31 EST"), ("*/15 * * * *", "01:45 EST"), ("0 * * * *", "02:00 EST")],
+)
+def test_an_after_inside_the_second_pass_continues_from_there(expr: str, expected: str) -> None:
+    """``after`` at 01:30 EST is itself an ambiguous wall time; the fire after
+    it is the next one in that same pass, not the top of the next hour."""
+    zone = ZoneInfo("America/New_York")
+    after = datetime(2026, 11, 1, 1, 30, tzinfo=zone, fold=1).astimezone(UTC)
+
+    got = _next_cron_instant(parse_cron(expr), after, zone)
+
+    assert got is not None
+    assert got.astimezone(zone).strftime("%H:%M %Z") == expected
+    assert got == _scan(expr, after, zone, 60 * 6)
+
+
+def test_a_schedule_naming_an_hour_still_fires_once_on_the_fall_back_night() -> None:
+    """The other half of #2472's rule: the repeated-hour search must not hand
+    a fixed-hour schedule its second pass. 01:30 happens twice; the job runs
+    at the first one only."""
+    zone = ZoneInfo("America/New_York")
+    start = datetime(2026, 11, 1, 4, 0, tzinfo=UTC)  # 00:00 EDT
+
+    fires = _chain("30 1 * * *", start, zone, 2)
+
+    assert [f.astimezone(zone).strftime("%m-%d %H:%M %Z") for f in fires] == [
+        "11-01 01:30 EDT",
+        "11-02 01:30 EST",
+    ]
+    assert fires[0] == _next_run(_job("30 1 * * *", "America/New_York"), start)
+
+
+def test_the_southern_hemisphere_fall_back_behaves_the_same() -> None:
+    zone = ZoneInfo("Australia/Sydney")
+    start = datetime(2026, 4, 4, 15, 40, tzinfo=UTC)  # 02:40 AEDT, in the first pass
+
+    assert _chain("*/15 * * * *", start, zone, 6) == _scan_chain("*/15 * * * *", start, zone, 6)
+
+
+def test_a_zone_without_a_transition_is_untouched_by_the_extra_scan() -> None:
+    """The repeated-hour check is skipped wherever the wall time is unique."""
+    zone = ZoneInfo("Asia/Kolkata")
+    start = datetime(2026, 11, 1, 5, 40, tzinfo=UTC)
+
+    assert _chain("*/15 * * * *", start, zone, 6) == _scan_chain("*/15 * * * *", start, zone, 6)
 
 
 def test_the_local_date_not_the_utc_date_decides_the_day_fields() -> None:

@@ -278,6 +278,37 @@ def _next_run(job: CronJob, after: datetime) -> datetime:
 _NEXT_RUN_HORIZON_YEARS = 4
 
 
+def _first_fire_in_a_repeated_hour(
+    expr: CronExpression, after: datetime, zone: ZoneInfo
+) -> datetime | None:
+    """The first fire in a repeated hour that the wall-clock walk jumps over.
+
+    On a fall-back night the same wall time happens twice, so the second pass
+    lies *behind* the first on the naive clock :func:`_next_cron_instant`
+    walks forward: from 01:45 EDT the walk goes to 02:00 EST and never looks
+    at 01:00-01:45 EST, dropping every fire in between (review on #3105).
+    Those minutes are bounded by the length of the repetition -- an hour in
+    every zone tzdata ships -- so they are checked one at a time, and only
+    when *after* itself sits in the first pass of a repeated span.
+
+    Callers gate this on a wildcard hour: an interval schedule runs through
+    the repeated hour, while one naming an hour fires once per scheduled
+    local time (#2472).
+    """
+    wall = after.astimezone(zone).replace(second=0, microsecond=0, tzinfo=None)
+    first = wall.replace(tzinfo=zone, fold=0).astimezone(UTC)
+    second = wall.replace(tzinfo=zone, fold=1).astimezone(UTC)
+    if second <= first or after >= second:
+        # Not an ambiguous wall time, or the second pass is already behind us.
+        return None
+    candidate = after.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    while candidate <= second:
+        if candidate > after and expr.matches(candidate.astimezone(zone)):
+            return candidate
+        candidate += timedelta(minutes=1)
+    return None
+
+
 def _next_cron_instant(
     expr: CronExpression, after: datetime, tz: ZoneInfo | None
 ) -> datetime | None:
@@ -293,10 +324,19 @@ def _next_cron_instant(
 
     Each matching wall time is mapped back to an instant through the zone,
     which is what decides the daylight-saving cases: a wall time inside a
-    spring-forward gap does not exist and is skipped, and a wall time that
-    occurs twice on a fall-back night fires on its first occurrence.
+    spring-forward gap does not exist, so the job fires once at the instant
+    the gap ends; a wall time that occurs twice on a fall-back night fires on
+    its first occurrence, and again on its second only for a schedule whose
+    hour is a wildcard (#2472).
     """
     zone = tz or UTC
+    # The walk below only ever moves forward on the wall clock, so a repeated
+    # hour's second pass has to be looked for separately.
+    second_pass = (
+        _first_fire_in_a_repeated_hour(expr, after, tz)
+        if tz is not None and expr.hour.is_wildcard
+        else None
+    )
     wall = (after.astimezone(zone) + timedelta(minutes=1)).replace(
         second=0, microsecond=0, tzinfo=None
     )
@@ -332,13 +372,35 @@ def _next_cron_instant(
             continue
 
         instant = wall.replace(tzinfo=zone).astimezone(UTC)
-        # A wall time in a spring-forward gap maps to an instant whose own wall
-        # time is different; it never happens on the clock, so it never fires.
-        if instant.astimezone(zone).replace(tzinfo=None) != wall or instant <= after:
+        if instant.astimezone(zone).replace(tzinfo=None) != wall:
+            # Spring forward: this wall time never happens. Rather than skip
+            # the day, the job fires once at the first instant the clock does
+            # show, which is where the gap ends (#2472).
+            for _ in range(_MAX_GAP_MINUTES):
+                wall += timedelta(minutes=1)
+                instant = wall.replace(tzinfo=zone).astimezone(UTC)
+                if instant.astimezone(zone).replace(tzinfo=None) == wall:
+                    break
+            else:  # pragma: no cover - no zone in tzdata skips a whole day
+                continue
+            if instant <= after:
+                continue
+            return min(instant, second_pass) if second_pass is not None else instant
+        if instant <= after:
+            # On a fall-back night the same wall time happens twice, and the
+            # first pass is the one already behind us. ``fold=1`` names the
+            # second, a later instant reading as this same wall time, so an
+            # interval schedule keeps running through the repeated hour
+            # (review on #3105); one naming an hour fires once per scheduled
+            # local time and stops here (#2472).
+            if expr.hour.is_wildcard:
+                folded = wall.replace(tzinfo=zone, fold=1).astimezone(UTC)
+                if folded > after and folded.astimezone(zone).replace(tzinfo=None) == wall:
+                    return folded
             wall += timedelta(minutes=1)
             continue
-        return instant
-    return None
+        return min(instant, second_pass) if second_pass is not None else instant
+    return second_pass
 
 
 async def apply_result(job: CronJob, execution: JobExecution, store: JobStore) -> None:
