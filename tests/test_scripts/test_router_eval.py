@@ -53,6 +53,20 @@ def test_tier_rank(tier, expected) -> None:
     assert router_eval._tier_rank(tier) == expected
 
 
+@pytest.mark.parametrize(
+    "strategy, source",
+    [("pilot-v1", "pilot_v1"), ("llm_judge", "llm_judge"), ("jev", "jev")],
+)
+def test_expected_routing_source_uses_registry_tag(strategy: str, source: str) -> None:
+    # Regression: the probe used to compare routing_source against the raw
+    # strategy id, so `--strategy pilot-v1` always reported "did not engage".
+    assert router_eval.expected_routing_source(strategy) == source
+
+
+def test_expected_routing_source_falls_back_to_id_for_unknown() -> None:
+    assert router_eval.expected_routing_source("nope") == "nope"
+
+
 def test_class_and_tier_ranks_align() -> None:
     # R0->c0 ... R3->c3: the two rank tables must index identically so the
     # directional KPI compares like-for-like.
@@ -210,8 +224,13 @@ async def test_run_sessions_flags_followup_downgrade_within_window(monkeypatch) 
     # downgrade. Turn 0 is never counted as a follow-up (index > 0 gate).
     _script_route_turn(monkeypatch, {"hard": "c2", "followup": "c0"})
     sessions = [
-        {"id": "s1", "turns": [{"message": "hard", "gold_class": "R2"},
-                               {"message": "followup", "gold_class": "R2"}]},
+        {
+            "id": "s1",
+            "turns": [
+                {"message": "hard", "gold_class": "R2"},
+                {"message": "followup", "gold_class": "R2"},
+            ],
+        },
     ]
     report = await router_eval._run_sessions(_config_stub(), sessions)
     assert report["followup_turn_count"] == 1  # turn 0 excluded
@@ -226,9 +245,14 @@ async def test_run_sessions_no_downgrade_when_tier_holds_or_rises(monkeypatch) -
     # not count (strict < against max prior tier rank).
     _script_route_turn(monkeypatch, {"t0": "c2", "hold": "c2", "rise": "c3"})
     sessions = [
-        {"id": "s1", "turns": [{"message": "t0", "gold_class": "R2"},
-                               {"message": "hold", "gold_class": "R2"},
-                               {"message": "rise", "gold_class": "R3"}]},
+        {
+            "id": "s1",
+            "turns": [
+                {"message": "t0", "gold_class": "R2"},
+                {"message": "hold", "gold_class": "R2"},
+                {"message": "rise", "gold_class": "R3"},
+            ],
+        },
     ]
     report = await router_eval._run_sessions(_config_stub(), sessions)
     assert report["followup_turn_count"] == 2
@@ -243,9 +267,14 @@ async def test_run_sessions_window_is_versus_running_max_prior_tier(monkeypatch)
     # running max prior tier (c3), so c1 < c3 is also a downgrade -> 2/2.
     _script_route_turn(monkeypatch, {"peak": "c3", "drop": "c0", "partial": "c1"})
     sessions = [
-        {"id": "s1", "turns": [{"message": "peak", "gold_class": "R3"},
-                               {"message": "drop", "gold_class": "R3"},
-                               {"message": "partial", "gold_class": "R3"}]},
+        {
+            "id": "s1",
+            "turns": [
+                {"message": "peak", "gold_class": "R3"},
+                {"message": "drop", "gold_class": "R3"},
+                {"message": "partial", "gold_class": "R3"},
+            ],
+        },
     ]
     report = await router_eval._run_sessions(_config_stub(), sessions)
     assert report["followup_turn_count"] == 2

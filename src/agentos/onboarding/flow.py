@@ -917,6 +917,7 @@ _DONE_LABEL = "Done"
 
 _ROUTER_LLM_JUDGE_LABEL = "Smart routing (LLM-based)"
 _ROUTER_PILOT_LABEL = "Local ML — English-optimized (Pilot)"
+_ROUTER_JEV_LABEL = "Jev cloud classifier (typesafe.ai, experimental)"
 _ROUTER_DISABLED_LABEL = "Off"
 _JUDGE_AUTO_LABEL = "Auto (recommended)"
 _JUDGE_MANUAL_LABEL = "Pick a specific model"
@@ -942,10 +943,11 @@ def _router_mode_choices(provider_id: str) -> list[str]:
     # The legacy on-device ML strategy (v4_phase3) is intentionally NOT offered:
     # it is no longer a supported persisted strategy (a config pinning it is
     # force-migrated to pilot-v1 on load), so the human-facing selector is a
-    # clean 3-way — Pilot / LLM judge / off.
+    # clean 4-way — Pilot / LLM judge / Jev (experimental, opt-in) / off.
     return [
         _ROUTER_PILOT_LABEL,
         _ROUTER_LLM_JUDGE_LABEL,
+        _ROUTER_JEV_LABEL,
         _ROUTER_DISABLED_LABEL,
     ]
 
@@ -955,6 +957,8 @@ def _router_mode_default(provider_id: str, requested: str) -> str:
         return _ROUTER_DISABLED_LABEL
     if requested == "llm_judge":
         return _ROUTER_LLM_JUDGE_LABEL
+    if requested == "jev":
+        return _ROUTER_JEV_LABEL
     # pilot-v1 is the default, and a legacy v4_phase3 request maps to it too:
     # v4 is force-migrated away, so it must never preselect a dropped option.
     return _ROUTER_PILOT_LABEL
@@ -970,13 +974,15 @@ def _router_mode_to_internal(selected: str | None) -> str:
 def _router_mode_to_strategy(selected: str | None) -> str | None:
     """Return the router ``strategy`` for the choice (None when disabled).
 
-    Any enabled selection other than the LLM judge resolves to pilot-v1 (the
-    default); the legacy v4_phase3 label was dropped from the selector.
+    Any enabled selection other than the LLM judge or Jev resolves to pilot-v1
+    (the default); the legacy v4_phase3 label was dropped from the selector.
     """
     if selected == _ROUTER_DISABLED_LABEL:
         return None
     if selected == _ROUTER_LLM_JUDGE_LABEL:
         return "llm_judge"
+    if selected == _ROUTER_JEV_LABEL:
+        return "jev"
     return "pilot-v1"
 
 
@@ -1189,6 +1195,57 @@ def _ask_local_judge(questionary, config) -> dict[str, Any]:
     }
 
 
+def _ask_router_jev(questionary, config) -> dict[str, Any]:
+    """Collect and verify the typesafe.ai key for the Jev strategy.
+
+    Prints the consent line first (Jev is a cloud classifier: the current turn
+    text leaves the machine), then shows whether ``$<api_key_env>`` is already
+    exported. A blank answer means "use the env var" and returns
+    ``{"jevApiKey": None}`` so nothing is persisted; an entered key is returned
+    as ``{"jevApiKey": key}``. Whichever key applies is probed once; on failure
+    the operator may retry, keep the config anyway, or fall back to Pilot (the
+    returned ``{"strategy": "pilot-v1"}`` overrides the selector's choice).
+    """
+    from agentos.agentos_router.jev import DEFAULT_API_KEY_ENV, probe_jev
+
+    jev_cfg = getattr(config.agentos_router, "jev", None)
+    env_name = str(getattr(jev_cfg, "api_key_env", "") or "").strip() or DEFAULT_API_KEY_ENV
+    base_url = str(getattr(jev_cfg, "base_url", "") or "")
+    model = str(getattr(jev_cfg, "model", "") or "")
+    console.print(
+        f"[{ACCENT_DIM}]jev[/] [dim]Experimental. Sends the current turn text to typesafe.ai.[/dim]"
+    )
+    env_key = os.environ.get(env_name, "").strip()
+    state = "set" if env_key else "not set"
+    console.print(
+        f"[{ACCENT_DIM}]jev[/] [dim]{markup_escape(env_name)} is {state} in the environment.[/dim]"
+    )
+    while True:
+        entered = str(
+            questionary.password(f"typesafe.ai API key (blank = use ${env_name})").ask() or ""
+        ).strip()
+        key_to_probe = entered or env_key
+        if not key_to_probe:
+            console.print(
+                f"[{ACCENT_DIM}]jev[/] [dim]no key available yet; the router degrades to "
+                f"the default tier until {markup_escape(env_name)} is set.[/dim]"
+            )
+            return {"jevApiKey": None}
+        error = probe_jev(key_to_probe, base_url=base_url, model=model)
+        if error is None:
+            console.print(f"[{ACCENT_DIM}]jev[/] [dim]typesafe.ai reachable[/dim]")
+            return {"jevApiKey": entered or None}
+        console.print(
+            f"[{ACCENT_DIM}]jev[/] [dim]typesafe.ai test failed: {markup_escape(error)}[/dim]"
+        )
+        if questionary.confirm("Retry with a different key?", default=True).ask():
+            continue
+        if questionary.confirm("Keep the Jev configuration anyway?", default=False).ask():
+            return {"jevApiKey": entered or None}
+        console.print(f"[{ACCENT_DIM}]jev[/] [dim]falling back to the local Pilot router[/dim]")
+        return {"strategy": "pilot-v1"}
+
+
 def _router_tier_overrides(questionary, config) -> dict[str, dict[str, Any]]:
     overrides: dict[str, dict[str, Any]] = {}
     choices = [_DONE_LABEL] + [
@@ -1255,15 +1312,21 @@ def _ask_router_fields(
     ).config
     _print_router_defaults(preview)
     # Only the LLM-judge strategy uses a judge model; the local ML router doesn't.
-    judge_fields = (
-        _ask_router_judge(questionary, preview) if strategy == "llm_judge" else {}
-    )
+    # Jev needs its consent line + key instead. Either fragment may override
+    # ``strategy`` (Jev falls back to Pilot when its probe fails and the operator
+    # declines to keep it).
+    if strategy == "llm_judge":
+        strategy_fields = _ask_router_judge(questionary, preview)
+    elif strategy == "jev":
+        strategy_fields = _ask_router_jev(questionary, preview)
+    else:
+        strategy_fields = {}
 
     payload: dict[str, Any] = {
         "mode": mode,
         "strategy": strategy,
         "defaultTier": default_tier,
-        **judge_fields,
+        **strategy_fields,
     }
     if questionary.confirm("Edit router tier models now?", default=False).ask():
         payload["tiers"] = _router_tier_overrides(questionary, preview)
@@ -1285,6 +1348,8 @@ def run_interactive_router_configure(
         requested_mode = "disabled"
     elif cfg.agentos_router.strategy == "llm_judge":
         requested_mode = "llm_judge"
+    elif cfg.agentos_router.strategy == "jev":
+        requested_mode = "jev"
     elif cfg.agentos_router.strategy == "pilot-v1":
         requested_mode = "pilot-v1"
     else:
@@ -1305,6 +1370,7 @@ def run_interactive_router_configure(
         judge_provider=payload.get("judgeProvider"),
         judge_base_url=payload.get("judgeBaseUrl"),
         judge_api_key=payload.get("judgeApiKey"),
+        jev_api_key=payload.get("jevApiKey"),
     )
     return persist_config(result.config, path=config_path, restart_required=False)
 
@@ -1880,12 +1946,14 @@ def _use_imported_provider_credentials_with_router_defaults(
         router_res = upsert_router(
             cfg_after_provider,
             mode=router_payload["mode"],
+            strategy=router_payload.get("strategy"),
             default_tier=router_payload.get("defaultTier"),
             tiers=router_payload.get("tiers"),
             judge_model=router_payload.get("judgeModel"),
             judge_provider=router_payload.get("judgeProvider"),
             judge_base_url=router_payload.get("judgeBaseUrl"),
             judge_api_key=router_payload.get("judgeApiKey"),
+            jev_api_key=router_payload.get("jevApiKey"),
         )
         cfg_after_provider = router_res.config
     return cfg_after_provider
@@ -2073,12 +2141,14 @@ def run_interactive_onboard(options: OnboardOptions) -> PersistResult:
                 router_res = upsert_router(
                     cfg_after_provider,
                     mode=router_payload["mode"],
+                    strategy=router_payload.get("strategy"),
                     default_tier=router_payload.get("defaultTier"),
                     tiers=router_payload.get("tiers"),
                     judge_model=router_payload.get("judgeModel"),
                     judge_provider=router_payload.get("judgeProvider"),
                     judge_base_url=router_payload.get("judgeBaseUrl"),
                     judge_api_key=router_payload.get("judgeApiKey"),
+                    jev_api_key=router_payload.get("jevApiKey"),
                 )
                 cfg_after_provider = router_res.config
         else:
@@ -2117,12 +2187,14 @@ def run_interactive_onboard(options: OnboardOptions) -> PersistResult:
                 router_res = upsert_router(
                     cfg_after_provider,
                     mode=router_payload["mode"],
+                    strategy=router_payload.get("strategy"),
                     default_tier=router_payload.get("defaultTier"),
                     tiers=router_payload.get("tiers"),
                     judge_model=router_payload.get("judgeModel"),
                     judge_provider=router_payload.get("judgeProvider"),
                     judge_base_url=router_payload.get("judgeBaseUrl"),
                     judge_api_key=router_payload.get("judgeApiKey"),
+                    jev_api_key=router_payload.get("jevApiKey"),
                 )
                 cfg_after_provider = router_res.config
         persist = persist_config(
