@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `http_request`: with `output_path` set, `body_preview` is now cut at
+  `_TEXT_BODY_LIMIT` *characters*, the way the inline `body` on the other
+  branch already is. It was cut out of the raw bytes, so a page in any script
+  that is not Latin-1 previewed about a third as much text as an ASCII one at
+  the same cap, and the character straddling the cut reached the model as a
+  `\ufffd` that was never in the document.
+
 - Ollama provider: an image the user attached now reaches the model.
   `_build_ollama_message` had no branch for image blocks, so the block was
   skipped and the message went out as its text alone — the model answered
