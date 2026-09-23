@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `agentos config set --config` (and `agents add`, onboarding and the
+  hermes/openclaw migrations, which share `onboarding.config_store.load_config`)
+  no longer copies a gateway auth token/password or the LLM API key that was
+  supplied only through `AGENTOS_AUTH_TOKEN` / `AGENTOS_AUTH_PASSWORD` /
+  `AGENTOS_LLM_API_KEY` into `config.toml`. Because the file beats the
+  environment, the copy made a later rotation of the environment value a silent
+  no-op. Setting `auth.token` or `llm.api_key` explicitly still writes it. If an
+  earlier run already wrote such a value, it stays in the file until you remove
+  it (#3269).
+
 - Channel message splitting: a long fenced code block no longer arrives with a
   statement broken in two across the seam. `split_text_for_limit` documents
   that its cut is "nudged back to the nearest line/word boundary so a chunk
