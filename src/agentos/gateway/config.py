@@ -1279,6 +1279,39 @@ class PilotConfig(BaseModel):
     pilot_artifact_dir: str | None = None
 
 
+class JevConfig(BaseModel):
+    """Jev cloud classifier settings (``[agentos_router.jev]``).
+
+    Only relevant when ``agentos_router.strategy = "jev"`` (experimental,
+    opt-in). The strategy sends the CURRENT turn text to typesafe.ai's Jev
+    "System One" model and maps its calibrated ``choice`` / ``noul`` answers
+    onto ``c0``–``c3``. ``api_key`` is redacted on every public surface and is
+    never written to ``config.toml`` when it equals ``$<api_key_env>``.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    api_key: str | None = None
+    api_key_env: str = "TYPESAFE_API_KEY"
+    base_url: str = "https://api.typesafe.ai"
+    model: str = "jev-latest"
+    # Own budget (not judge_input_max_chars): a different service with its own
+    # pricing, so tuning the judge must not silently change Jev traffic.
+    input_max_chars: int = Field(default=4000, ge=1000)
+    # ``high_risk`` noul probability at or above which the turn is floored at
+    # c3 (destructive / production-affecting request).
+    high_risk_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    # Strategy-internal timeout; None derives it from routing_timeout_seconds,
+    # staying strictly below the outer router budget.
+    timeout_seconds: float | None = Field(default=None, gt=0.0)
+    short_circuit_enabled: bool = True
+    # When True, a turn that carries tool definitions is never routed below
+    # c1 (LLM-judge parity). Off by default: Jev's calibrated confidence
+    # already lets the engine gate handle an unsure R0, and the floor would
+    # make c0 unreachable in every tool-bearing chat.
+    agentic_floor_enabled: bool = False
+
+
 class AgentOSRouterConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="AGENTOS_ROUTER_",
@@ -1290,7 +1323,9 @@ class AgentOSRouterConfig(BaseSettings):
     auto_thinking: bool = True
     rollout_phase: str = "full"  # "observe" | "prompt_only" | "full"
     # "pilot-v1" (default: local ONNX+MiniLM router, English-optimized, no LLM
-    # call) | "llm_judge" (routes via a small LLM judge call). The pilot bundle
+    # call) | "llm_judge" (routes via a small LLM judge call) | "jev"
+    # (experimental: typesafe.ai Jev cloud classifier, see [agentos_router.jev]).
+    # The pilot bundle
     # ships in the wheel under agentos_router/models/; a missing bundle degrades
     # to the default tier unless require_router_runtime is set. Valid ids come
     # from the router strategy registry (agentos.router_strategies); a persisted
@@ -1333,6 +1368,9 @@ class AgentOSRouterConfig(BaseSettings):
     # Pilot router strategy (strategy="pilot-v1"). Local ONNX+MiniLM router
     # (English-optimized). Settings live in the [agentos_router.pilot] sub-table.
     pilot: PilotConfig = Field(default_factory=PilotConfig)
+    # Jev cloud classifier (strategy="jev", experimental). Settings live in the
+    # [agentos_router.jev] sub-table.
+    jev: JevConfig = Field(default_factory=JevConfig)
     routing_timeout_seconds: float = Field(default=10.0, gt=0.0)
     kv_cache_anti_downgrade_enabled: bool = True
     kv_cache_anti_downgrade_window_seconds: int = 600
@@ -2589,6 +2627,12 @@ class GatewayConfig(BaseSettings):
             "audio.providers.elevenlabs.api_key_env",
             default_env="ELEVENLABS_API_KEY",
             settings_env="AGENTOS_AUDIO_PROVIDERS__ELEVENLABS__API_KEY",
+        )
+        _delete_env_sourced_secret(
+            data,
+            "agentos_router.jev.api_key",
+            "agentos_router.jev.api_key_env",
+            default_env="TYPESAFE_API_KEY",
         )
         router = data.get("agentos_router")
         if isinstance(router, dict) and router.get("tier_profile"):

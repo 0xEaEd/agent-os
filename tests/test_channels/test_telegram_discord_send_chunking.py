@@ -222,6 +222,85 @@ def test_split_text_for_limit_falls_back_to_an_unbalanced_cut_rather_than_hang()
     assert "".join(chunks).count("z") == segment.count("z")
 
 
+def test_split_text_for_limit_keeps_a_tilde_fenced_block_whole() -> None:
+    """``~~~`` is the other CommonMark fence, reached for exactly when the
+    body contains backticks; the Telegram renderer has treated it as a fence
+    since #2022, so the splitter must back a cut out of one just like it
+    does for ``` (the ``` half of this pair is the assertion above)."""
+    body = "\n".join(f"line {i} of *sample* code" for i in range(40))
+    segment = f"Here is the snippet:\n\n~~~markdown\n{body}\n~~~\n"
+
+    head, tail = split_text_for_limit(segment, 300)
+
+    assert head.count("~~~") % 2 == 0
+    assert tail.count("~~~") % 2 == 0
+    assert head + tail == segment
+
+
+def test_split_text_for_limit_balances_a_bare_tilde_fence_that_opens_the_segment() -> None:
+    """The #2127 shape with the tilde marker: nothing before the fence to
+    back up to, so the head is closed and the tail reopened -- with ``~~~``,
+    not a backtick closer that would leave both halves malformed."""
+    segment = "~~~" + ("a" * 100) + "~~~\nrest"
+
+    head, tail = split_text_for_limit(segment, 50)
+
+    assert head.count("~~~") % 2 == 0
+    assert tail.count("~~~") % 2 == 0
+    assert "```" not in head + tail
+    assert len(head) <= 50
+
+
+def test_split_text_for_limit_does_not_split_a_closed_backtick_fence_over_a_stray_tilde() -> None:
+    """A ``` fence's body is verbatim content, not markdown -- a stand-alone
+    ``~~~`` inside it (a pasted example, a divider, a conflict marker) is not
+    a second, unclosed fence. Counting each marker independently reads this
+    segment as "0 backticks open, 1 tilde open" and relocates the cut into
+    the middle of a block that was never unbalanced, producing two halves
+    that are BOTH malformed -- the exact failure this function exists to
+    prevent, self-inflicted."""
+    segment = (
+        "before text\n"
+        "```\n"
+        "some code\n"
+        "~~~\n"
+        "more code after the stray tilde\n"
+        "```\n"
+        "trailing text long enough to push the natural cut point past the "
+        "whole fenced block so it would not need splitting here at all, "
+        "padded further to comfortably exceed the limit used below"
+    )
+
+    head, tail = split_text_for_limit(segment, 200)
+
+    assert head.count("```") % 2 == 0
+    assert tail.count("```") % 2 == 0
+    assert head + tail == segment
+    # The fence closed cleanly inside head; nothing was invented to rebalance it.
+    assert "```\n```" not in head and "```\n```" not in tail
+
+
+def test_split_text_for_limit_does_not_split_a_closed_tilde_fence_over_a_stray_backtick() -> None:
+    """The mirror image: a stray ``` inside an already-closed ~~~ fence."""
+    segment = (
+        "before text\n"
+        "~~~\n"
+        "some code\n"
+        "```\n"
+        "more code after the stray backtick\n"
+        "~~~\n"
+        "trailing text long enough to push the natural cut point past the "
+        "whole fenced block so it would not need splitting here at all, "
+        "padded further to comfortably exceed the limit used below"
+    )
+
+    head, tail = split_text_for_limit(segment, 200)
+
+    assert head.count("~~~") % 2 == 0
+    assert tail.count("~~~") % 2 == 0
+    assert head + tail == segment
+
+
 class _DiscordResponse:
     status_code = 200
 
