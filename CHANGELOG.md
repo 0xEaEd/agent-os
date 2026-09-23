@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+
+- Scheduler: a cron job with a `tz` mis-fired across daylight-saving
+  transitions. `_next_run` walked UTC minute by minute and matched the cron
+  fields against the converted wall time — but a wall-clock time is not unique.
+  On the fall-back night the hour repeats, so two UTC minutes both rendered as
+  the scheduled local time and a *daily* job fired twice; on spring-forward the
+  hour is skipped, so nothing rendered as the scheduled time and the job was
+  silently skipped for that day. A fixed-hour schedule now fires on the first
+  occurrence of an ambiguous local time only, while an interval schedule with a
+  wildcard hour (`*/15 * * * *`, `0 * * * *`) keeps running through the
+  repeated hour as standard cron does; a local time that does not exist fires
+  once at the first instant after the gap. UTC-scheduled jobs are unchanged
+  (#2472).
+
 - Migration: `agentos migrate openclaw` writes the provider's own model id into
   `llm.model`. An OpenClaw reference such as `anthropic/claude-sonnet-4-5` was
   stored verbatim next to `llm.provider = "anthropic"`, so the Anthropic API was
