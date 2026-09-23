@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Tools: `exec_command` leaked its process tree. On Windows a timeout called
+  `proc.kill()` -- `TerminateProcess` on the `cmd.exe` asyncio tracks -- and
+  whatever `cmd.exe` had spawned ran on orphaned for the life of the gateway;
+  the timeout now goes through `taskkill /T /F`, the same fix `agentos
+  upgrade` got in #541. On every platform an outer cancellation (a turn
+  deadline, a session kill, a cancelled tool call) raised `CancelledError`,
+  a `BaseException` the `except Exception` around the exec block never saw,
+  so nothing was cleaned up at all; the cancellation path now runs the same
+  tree kill, shielded so a second cancellation cannot interrupt it, and then
+  propagates (#2507).
+
 - Scheduler: a cron job with a `tz` mis-fired across daylight-saving
   transitions. `_next_run` walked UTC minute by minute and matched the cron
   fields against the converted wall time — but a wall-clock time is not unique.
