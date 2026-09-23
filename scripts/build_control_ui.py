@@ -43,6 +43,9 @@ BUNDLED_FONT_LICENSES = (
 VENDORED_LICENSE_DIRNAME = "vendor-licenses"
 VENDORED_PACKAGE_LICENSES = {
     "fancy-canvas": "fancy-canvas-LICENSE.txt",
+    # qrcode-generator's npm tarball has an npm `files` allowlist of its
+    # sources, README and types; the MIT text lives only in the repository.
+    "qrcode-generator": "qrcode-generator-LICENSE.txt",
 }
 REQUIRED_DIST_FILES = ("theme-bootstrap.js",)
 TYPE_ONLY_PACKAGES = frozenset({"csstype"})

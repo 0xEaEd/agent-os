@@ -18,6 +18,7 @@ export class WsRpcClient {
   private stateValue: RpcState = 'disconnected'
   private url = ''
   private token: string | null = null
+  private extraAuth: Record<string, string> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectDelay = 800
   private readonly maxReconnectDelay = 15000
@@ -36,9 +37,15 @@ export class WsRpcClient {
     this.WebSocketImpl = opts?.WebSocketImpl ?? WebSocket
   }
 
-  connect(url: string, token?: string | null): void {
+  /**
+   * `extraAuth` rides along in the handshake's `auth` object: the desktop
+   * presents its operator secret there so the gateway never mistakes the
+   * app's own connection for an agent's (see gateway/agent_surface.py).
+   */
+  connect(url: string, token?: string | null, extraAuth?: Record<string, string> | null): void {
     this.url = url
     this.token = token ?? null
+    this.extraAuth = extraAuth && Object.keys(extraAuth).length ? { ...extraAuth } : null
     this.autoReconnect = true
     this.doConnect()
   }
@@ -121,7 +128,9 @@ export class WsRpcClient {
 
       // Handshake: server sends connect.challenge, we reply with connect request
       if (data.type === 'event' && data.event === 'connect.challenge') {
-        const authParams = this.token ? { auth: { token: this.token } } : {}
+        const auth: Record<string, string> = { ...(this.extraAuth ?? {}) }
+        if (this.token) auth.token = this.token
+        const authParams = Object.keys(auth).length ? { auth } : {}
         const id = String(++this.reqId)
         this.pending.set(id, {
           resolve: () => {}, // HelloOk is not a res frame, handled below

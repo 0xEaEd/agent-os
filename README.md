@@ -88,6 +88,7 @@ file name.
 
 | Path | Audience | When to use |
 | --- | --- | --- |
+| [AgentOS for Mac](#agentos-for-mac) | macOS users | A signed desktop app that installs the engine for you and updates itself |
 | [Windows portable](#windows-portable-no-python) | Windows users | No Python needed; just unzip and run |
 | [Quick terminal install](#quick-terminal-install) **(recommended)** | End users on any OS | Install a release from a terminal |
 | [Install from source](#install-from-source) | Users who want the latest `main` code | Run from a Git checkout, but don't edit it |
@@ -128,6 +129,25 @@ it — it just routes every turn to one single model instead.
 Install links: [Git](https://git-scm.com/downloads) ·
 [Git LFS](https://git-lfs.com/) ·
 [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+### AgentOS for Mac
+
+The desktop app for macOS 13 or newer, Apple silicon and Intel. It is
+signed with a Developer ID and notarized, so it opens without any
+Gatekeeper workaround.
+
+1. Download the dmg for your Mac from the
+   [latest release](https://github.com/use-agent-os/agent-os/releases/latest):
+   `AgentOS-<version>-arm64.dmg` for Apple silicon, `AgentOS-<version>.dmg`
+   for Intel. The number in the file name is the app's build version; the
+   release it belongs to is the tag.
+2. Drag AgentOS into Applications and open it. On first launch it installs
+   the engine (the same `use-agent-os` package the terminal install uses)
+   and starts the gateway for you.
+3. Later releases show up inside the app as an **Update** pill; nothing
+   downloads or installs until you click it. See
+   [`desktop/README.md`](desktop/README.md) for how the app and the engine
+   update together.
 
 ### Windows portable (no Python)
 

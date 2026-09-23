@@ -104,13 +104,24 @@ exists. Fully pinned URLs remain available:
 
 1. Verify `git status` is clean.
 2. Update `CHANGELOG.md`: move entries from `[Unreleased]` to the release section; reopen empty `[Unreleased]`.
-3. Bump `pyproject.toml` and `uv.lock` to the release version.
+3. Bump every version file at once with `python scripts/pump_version.py
+   <version> --notes "..."` (`pyproject.toml`, `uv.lock`, `install.sh`,
+   `install.ps1`, `README.md`, `desktop/package.json`, `CHANGELOG.md`,
+   `RELEASES.md` and the two consistency tests; `tests/test_release_consistency.py`
+   fails on any file left behind).
 4. `git tag -a v0.0.1 -m "AgentOS 0.0.1"`
-5. `git push origin v0.0.1` (this triggers `.github/workflows/wheelhouse-release.yml`)
+5. `git push origin v0.0.1` (this triggers `.github/workflows/wheelhouse-release.yml`
+   and `.github/workflows/desktop-release.yml`)
 6. Wait for the Windows release workflow → review the draft GitHub Release.
    For non-preview releases, confirm it contains versioned assets, latest
    aliases, `SHA256SUMS`, plus GitHub's generated source archives before
-   publishing.
+   publishing. The desktop workflow adds the macOS app to the same release
+   once the Python release exists: two dmg/zip pairs (arm64 and x64), their
+   blockmaps and `latest-mac.yml`, named after the app's semver twin
+   (`2026.9.22.post1` → `2026.922.1`; see `desktop/README.md`). It refuses to
+   upload unless the bundle passed `codesign --verify`, `stapler validate`
+   and `spctl --assess` on the runner, and it marks the release Latest,
+   which is where installed apps look for their next version.
 7. Confirm the draft GitHub Release is not marked as a pre-release.
 8. Publish the GitHub Release, then run the post-publish tag URL checks:
 
@@ -144,6 +155,11 @@ These checks cannot be fully proven by local artifact generation:
 - Windows browser downloads may carry Mark-of-the-Web; SmartScreen,
   Smart App Control, enterprise policy, and unsigned binary reputation must be
   checked on a real Windows machine.
+- After the desktop workflow ran, the release marked Latest carries
+  `latest-mac.yml` and both zips (`.../releases/latest` redirects to the tag,
+  `.../releases/download/<tag>/latest-mac.yml` lists `AgentOS-<twin>-mac.zip`
+  and `AgentOS-<twin>-arm64-mac.zip`); an installed app then shows the
+  Update pill within five minutes or on its next window focus.
 
 ## Why preview package versions use rc
 

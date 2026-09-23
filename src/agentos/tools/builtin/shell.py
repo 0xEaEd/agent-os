@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import structlog
 
+from agentos.gateway.agent_surface import AGENT_TOKEN_ENV, get_agent_surface
 from agentos.gateway.approval_queue import get_approval_queue
 from agentos.redact import redact_terminal_output
 from agentos.sandbox.backend.bubblewrap import BubblewrapBackend, build_bwrap_argv
@@ -166,6 +167,32 @@ def _sandbox_effectively_off() -> bool:
     runtime = get_runtime()
     effective = getattr(runtime, "effective", None) if runtime is not None else None
     return runtime is None or not bool(getattr(effective, "sandbox_enabled", False))
+
+
+def _add_session_env(env: dict[str, str]) -> None:
+    """Tell a child process which agent session is running it.
+
+    ``agentos trade swap`` reads ``AGENTOS_SESSION_KEY`` / ``AGENTOS_AGENT`` to
+    mark the order as agent-initiated and to link it to the chat that asked,
+    so the desktop can dock the approval card in that conversation. Explicit
+    overrides passed by the caller win.
+    """
+    ctx = current_tool_context.get()
+    if ctx is None:
+        return
+    if ctx.session_key and not env.get("AGENTOS_SESSION_KEY"):
+        env["AGENTOS_SESSION_KEY"] = ctx.session_key
+    if ctx.agent_id and not env.get("AGENTOS_AGENT"):
+        env["AGENTOS_AGENT"] = ctx.agent_id
+    # The gateway-minted token is what makes the marking binding: the CLI
+    # presents it at the handshake and the gateway, not the client, decides
+    # the connection is an agent's. Never overridable by the caller.
+    env[AGENT_TOKEN_ENV] = get_agent_surface().mint_token(ctx.session_key, ctx.agent_id)
+
+
+def _window_session_key() -> str | None:
+    ctx = current_tool_context.get()
+    return ctx.session_key if ctx is not None else None
 
 
 def _context_elevated_mode() -> str | None:
@@ -642,6 +669,12 @@ def _append_bg_output(session: _BgSession, output: str) -> None:
         )
 
 
+def _open_bg_window(session: _BgSession) -> None:
+    """A background process keeps the agent's exec window open until it ends."""
+    handle = get_agent_surface().begin_window(session.session_key)
+    session.cleanup_callbacks.append(lambda: get_agent_surface().end_window(handle))
+
+
 def _finalize_bg_session(session: _BgSession) -> None:
     session.returncode = session.process.returncode
     if session.ended_at is None:
@@ -765,6 +798,27 @@ def _signal_exec_process_tree(proc: Any, sig: signal.Signals) -> bool:
     return True
 
 
+async def _reap_exec_process_tree(proc: Any) -> None:
+    """After the command exited: kill what it left in its process group.
+
+    The exec window closes when this function's caller returns, and a
+    detached child (``setsid``, ``nohup … &``, a double fork) that connected
+    to the gateway afterwards would otherwise be an unmarked connection.
+    SIGTERM first, then SIGKILL half a second later for whatever ignored it.
+    A group that is already empty is the common case and costs nothing.
+    """
+    if os.name != "posix":
+        return
+    os_mod = cast(Any, os)
+    try:
+        os_mod.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        return
+    await asyncio.sleep(0.5)
+    with contextlib.suppress(ProcessLookupError, OSError):
+        os_mod.killpg(proc.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+
+
 async def _terminate_exec_process_tree(proc: Any) -> None:
     """Stop *proc* and everything it spawned.
 
@@ -839,8 +893,6 @@ async def exec_command(
     env: dict[str, str] | None = None,
     approval_id: str | None = None,
 ) -> str:
-    import os
-
     result = check_safe_bin(command)
     cwd = _effective_workdir(workdir)
 
@@ -896,9 +948,19 @@ async def exec_command(
                 )
             return json.dumps(approval_response)
 
+    # While the child runs, any new gateway connection that cannot prove it
+    # is the operator's counts as this agent's (gateway.agent_surface).
+    with get_agent_surface().exec_window(_window_session_key()):
+        return await _run_exec_subprocess(command, cwd, env, timeout)
+
+
+async def _run_exec_subprocess(
+    command: str, cwd: str | None, env: dict[str, str] | None, timeout: float | int | None
+) -> str:
     # AgentOS's own provider credentials do not cross into a child process;
     # see tools/env_passthrough.py for why the rest of the environment does.
     merged_env = build_subprocess_env(extra=env)
+    _add_session_env(merged_env)
     effective_timeout = _resolve_exec_timeout(timeout)
 
     # /elevated on|bypass|full — route exec around the sandbox backend so host
@@ -937,13 +999,17 @@ async def exec_command(
             if isinstance(escalation, DenialResult):
                 return json.dumps(escalation.to_dict())
             try:
-                proc = await asyncio.create_subprocess_shell(
-                    command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    cwd=cwd,
-                    env=merged_env,
-                )
+                fallback_kwargs: dict[str, Any] = {
+                    "stdout": asyncio.subprocess.PIPE,
+                    "stderr": asyncio.subprocess.STDOUT,
+                    "cwd": cwd,
+                    "env": merged_env,
+                }
+                if os.name == "posix":
+                    # Own process group, so what the command detached dies
+                    # with it (see the host path below).
+                    fallback_kwargs["start_new_session"] = True
+                proc = await asyncio.create_subprocess_shell(command, **fallback_kwargs)
                 try:
                     stdout_bytes, _ = await asyncio.wait_for(
                         proc.communicate(), timeout=effective_timeout
@@ -951,7 +1017,9 @@ async def exec_command(
                 except TimeoutError:
                     proc.kill()
                     await proc.communicate()
+                    await _reap_exec_process_tree(proc)
                     return f"[timeout after {effective_timeout}s]\ncommand: {command}"
+                await _reap_exec_process_tree(proc)
                 output = redact_terminal_output(
                     stdout_bytes.decode("utf-8", errors="replace"), command
                 )
@@ -999,8 +1067,7 @@ async def exec_command(
             if not finished:
                 await _terminate_exec_process_tree(proc)
                 return f"[timeout after {effective_timeout}s]\ncommand: {command}"
-            if os.name == "posix":
-                _signal_exec_process_tree(proc, signal.SIGTERM)
+            await _reap_exec_process_tree(proc)
 
             output_file.flush()
             output_file.seek(0)
@@ -1120,6 +1187,7 @@ async def background_process(
             local_urls=_local_server_urls_from_command(command),
             cleanup_callbacks=spawned.cleanup_callbacks,
         )
+        _open_bg_window(session)
         _bg_sessions[session_id] = session
         effective_timeout = _resolve_background_timeout(timeout)
 
@@ -1143,6 +1211,8 @@ async def background_process(
 
     session_id = str(uuid.uuid4())[:8]
 
+    bg_env = build_subprocess_env()
+    _add_session_env(bg_env)
     if os.name == "posix":
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -1150,7 +1220,7 @@ async def background_process(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
-            env=build_subprocess_env(),
+            env=bg_env,
             start_new_session=True,
         )
     else:
@@ -1160,7 +1230,7 @@ async def background_process(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
-            env=build_subprocess_env(),
+            env=bg_env,
         )
 
     ctx = current_tool_context.get()
@@ -1172,6 +1242,7 @@ async def background_process(
         agent_id=ctx.agent_id if ctx is not None else None,
         local_urls=_local_server_urls_from_command(command),
     )
+    _open_bg_window(session)
     _bg_sessions[session_id] = session
     effective_timeout = _resolve_background_timeout(timeout)
 

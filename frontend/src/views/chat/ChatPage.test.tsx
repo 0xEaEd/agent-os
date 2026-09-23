@@ -832,6 +832,71 @@ describe('ChatPage', () => {
     expect(thread.scrollTop).toBe(200)
   })
 
+  it('re-pins to the tail when content grows without a render seam (a <details> toggle)', async () => {
+    // The regression: tail following was driven ONLY by the seams that append
+    // rows. Anything that changed the transcript's HEIGHT without going through
+    // one — a tool/thinking <details> collapsing at turn end, an image decoding,
+    // a chart mounting a frame late — fires no scroll event and no delta, so the
+    // reader was left stranded above the bottom with no way back but a drag.
+    mockRpc = makeRpc()
+    renderPage()
+    const thread = document.querySelector('.chat-thread') as HTMLElement
+    await waitFor(() => expect(thread).toHaveAttribute('data-history-ready', 'true'))
+    let scrollHeight = 1_000
+    Object.defineProperties(thread, {
+      clientHeight: { configurable: true, get: () => 300 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    })
+
+    await act(async () => {
+      mockRpc.emit('session.event.text_delta', { seq: 1, text: 'answer' }, {})
+    })
+    expect(thread.scrollTop).toBe(1_000)
+
+    // A row already in the thread grows on its own — no append, no scroll event.
+    const grown = document.createElement('details')
+    scrollHeight = 1_800
+    await act(async () => {
+      thread.appendChild(grown)
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    })
+    expect(thread.scrollTop).toBe(1_800)
+  })
+
+  it('offers a "jump to latest" pill once the reader is away from the tail, and it re-arms following', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    const thread = document.querySelector('.chat-thread') as HTMLElement
+    await waitFor(() => expect(thread).toHaveAttribute('data-history-ready', 'true'))
+    Object.defineProperties(thread, {
+      clientHeight: { configurable: true, get: () => 300 },
+      scrollHeight: { configurable: true, get: () => 1_000 },
+    })
+    const dock = document.querySelector('.chat-jump-dock') as HTMLElement
+    expect(dock).toHaveAttribute('data-visible', 'false')
+
+    // Max scrollTop is 700; park the reader far above it.
+    await act(async () => {
+      thread.scrollTop = 100
+      fireEvent.scroll(thread)
+    })
+    expect(dock).toHaveAttribute('data-visible', 'true')
+
+    await act(async () => {
+      fireEvent.click(dock.querySelector('.chat-jump-to-latest') as HTMLElement)
+    })
+    expect(thread.scrollTop).toBe(1_000)
+    expect(dock).toHaveAttribute('data-visible', 'false')
+
+    // The pill must re-arm following, not just land at the bottom once: the next
+    // streamed delta has to keep the reader there.
+    await act(async () => {
+      mockRpc.emit('session.event.text_delta', { seq: 1, text: 'more' }, {})
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    })
+    expect(thread.scrollTop).toBe(1_000)
+  })
+
   it('renders a "Response timed out" row when the stream idle timer fires (stream.ts:522)', async () => {
     // Fix 2: `addMessage` must be wired into the controller. Without it, the
     // idle-timeout row (stream.ts:522) silently no-ops and a stalled stream ends

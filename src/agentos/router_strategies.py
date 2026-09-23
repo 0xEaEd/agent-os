@@ -122,13 +122,24 @@ def pilot_asset_probe(config: object | None = None) -> list[str]:
     embedder directory the feature builder needs. An empty list means the Pilot
     runtime is fully present.
     """
-    artifact_dir = _resolve_pilot_artifact_dir(config)
+    try:
+        artifact_dir = _resolve_pilot_artifact_dir(config)
+        minilm_dir = _minilm_onnx_dir()
+    except ImportError as exc:
+        # The pilot package imports numpy/onnxruntime at module level, so on
+        # an install without the ``ml-router``/``recommended`` extra the probe
+        # itself blew up — and boot with it, as a traceback instead of the
+        # "missing assets" warning this probe exists to produce. A missing
+        # dependency is one more missing asset.
+        return [
+            f"python package '{exc.name or 'numpy'}' for {PILOT_STRATEGY_ID} "
+            "(install the 'ml-router' or 'recommended' extra)"
+        ]
     missing = [
         str(artifact_dir / name)
         for name in _PILOT_REQUIRED_FILES
         if not (artifact_dir / name).exists()
     ]
-    minilm_dir = _minilm_onnx_dir()
     if minilm_dir is None or not Path(minilm_dir).is_dir():
         missing.append(f"MiniLM embedder dir ({_MINILM_MODEL_ID})")
     else:
