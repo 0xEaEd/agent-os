@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `deep-research` skill: the compiled report dropped every source's `relevance`
+  and never named the source count, two of the five output elements SKILL.md
+  enumerates. Relevance is the entire output of the five-axis rubric in
+  `references/sources.md`, whose bar calls anything below 0.40 a dead end and
+  which tells the host to record a paywalled page with `relevance: 0` -- so a
+  dead end was cited in the same shape, with the same weight, as a primary
+  source. `compile.py` now prints `[relevance N.NN]` on every reference line and
+  the recorded source count in the Methodology block (#3115).
+
 - `deep-research` skill: a sub-question's coverage counted the same URL once per
   time it was recorded, so re-submitting a source across rounds -- the normal
   shape of the documented loop, since `--print-fetches` reports how many sources
