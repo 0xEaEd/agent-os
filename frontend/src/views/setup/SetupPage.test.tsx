@@ -337,6 +337,29 @@ describe('SetupPage', () => {
     })
   })
 
+  it('router save forwards the jev strategy with its key and threshold', async () => {
+    wireCalls()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Setup')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /^Router Tiers:/ }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Save Router' })).toBeInTheDocument(),
+    )
+    fireEvent.change(screen.getByLabelText('Router mode'), { target: { value: 'jev' } })
+    fireEvent.change(screen.getByLabelText('TypeSafe API key'), { target: { value: 'k' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Router' }))
+    await waitFor(() => {
+      const call = mockRpc.call.mock.calls.find((c) => c[0] === 'onboarding.router.configure')
+      expect(call).toBeTruthy()
+      expect(call![1]).toMatchObject({
+        mode: 'recommended',
+        strategy: 'jev',
+        jevApiKey: 'k',
+        jevHighRiskThreshold: 0.7,
+      })
+    })
+  })
+
   it('router preview uses the drafted provider chosen (unsaved) in the Provider step', async () => {
     // No configured provider yet: config.llm carries no provider, needsOnboarding.
     const noProviderConfig = { ...CONFIG, llm: {} }

@@ -15,6 +15,7 @@ import yaml
 
 from agentos.env_store import write_env_file_values
 from agentos.gateway.config import ChannelsConfig, GatewayConfig, MCPServerEntry
+from agentos.migration._dotenv import parse_env_value
 from agentos.migration._mcp import headers as mcp_headers
 from agentos.migration._mcp import remote_transport
 from agentos.onboarding.config_store import load_config, persist_config
@@ -181,7 +182,7 @@ def _load_env_file(path: Path) -> dict[str, str]:
         if stripped.startswith("export "):
             stripped = stripped[len("export ") :].lstrip()
         key, value = stripped.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
+        values[key.strip()] = parse_env_value(value)
     return values
 
 

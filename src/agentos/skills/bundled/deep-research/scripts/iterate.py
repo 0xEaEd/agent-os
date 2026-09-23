@@ -38,14 +38,29 @@ def under_target(plan: Plan) -> list[dict[str, object]]:
     return out
 
 
-def record_evidence(plan: Plan, evidence: list[dict[str, object]]) -> int:
+def record_evidence(plan: Plan, evidence: list[dict[str, object]]) -> tuple[int, int]:
+    """Record evidence into the plan; return ``(added, duplicates)``.
+
+    A sub-question counts one source per URL. Coverage is ``len(sources)``
+    against ``target_sources``, so appending a URL the sub-question already
+    has would report it as backed by sources it does not have — and the
+    rounds loop re-offers the same top hit, since the fetch list reports only
+    how many sources are missing, never which URLs are already in hand.
+    Only the URL decides: title, excerpt and relevance are the host's own
+    judgement and may legitimately be revised on a later round.
+    """
     by_id = {sq.id: sq for sq in plan.subquestions}
     added = 0
+    duplicates = 0
     for item in evidence:
         sq_id = str(item.get("subquestion_id", ""))
         if sq_id not in by_id:
             continue
         sq = by_id[sq_id]
+        url = str(item.get("url", "")).strip()
+        if any(source.url.strip() == url for source in sq.sources):
+            duplicates += 1
+            continue
         sq.sources.append(
             Source(
                 url=str(item.get("url", "")),
@@ -59,7 +74,7 @@ def record_evidence(plan: Plan, evidence: list[dict[str, object]]) -> int:
     plan.rounds = max(plan.rounds, plan.rounds + 0)
     if all(sq.coverage() >= 1.0 for sq in plan.subquestions):
         plan.done = True
-    return added
+    return added, duplicates
 
 
 def _parse_args() -> argparse.Namespace:
@@ -124,13 +139,16 @@ def main() -> int:
             )
             return 2
         evidence = raw
-        added = record_evidence(plan, evidence)
+        added, duplicates = record_evidence(plan, evidence)
         save_plan(plan, args.plan)
         sys.stdout.write(
             json.dumps(
                 {
                     "round": args.round_num,
                     "added": added,
+                    # Reported so a round that re-submits URLs the plan already
+                    # holds is visible instead of looking like progress.
+                    "duplicates": duplicates,
                     "overall_coverage": plan.overall_coverage(),
                     "done": plan.done,
                 },

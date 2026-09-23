@@ -396,7 +396,11 @@ async def publish_inline_artifacts(output: str, cwd: str | None = None) -> str:
             path = str(Path(cwd) / path)
         try:
             await publish_artifact(path=path, mime=mime)
-        except ToolError as exc:
+        except (ToolError, OSError) as exc:
+            # OSError too: publish_artifact hashes and copies the announced
+            # file, and a file the finished process still holds, or one the
+            # agent cannot read, raises PermissionError there rather than
+            # ToolError (#2892). Anything else is a defect and still surfaces.
             replacements[marker] = f"[inline artifact not published: {exc}]"
             continue
         published += 1
