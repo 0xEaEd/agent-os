@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Ollama provider: an image the user attached now reaches the model.
+  `_build_ollama_message` had no branch for image blocks, so the block was
+  skipped and the message went out as its text alone — the model answered
+  about a picture it was never sent, and nothing reported the loss. Images are
+  now carried in Ollama's per-message `images` field as bare base64.
+
 - `skill_edit` erased existing YAML frontmatter metadata (`requires`,
   `install`, `metadata.agentos`, and custom keys) when updating a skill's
   description or content ([#2426](https://github.com/use-agent-os/agent-os/issues/2426)).
