@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Provider: a genuinely failed tool result could reach the model as a bare
+  digest with no failure information. `_final_hard_cap_payload_once` asked
+  `_tool_content_is_critical` about content that up to three earlier
+  compaction tiers had already truncated, and those tiers slice on raw
+  character position with no idea where `execution_status` sits. Whether the
+  diagnostics survived depended only on where the marker happened to be in the
+  JSON: a marker in the middle was lost at the *first* tier, a trailing one at
+  the emergency tier, and only a leading one reached the hard cap. Criticality
+  is now decided once, on the original content, before any tier runs, and that
+  verdict is carried into every tier that rewrites tool content. Preserved
+  results keep each diagnostic field bounded rather than verbatim, every
+  other field -- nested or not -- is bounded by the tier's own compactor
+  rather than collapsed to a digest, and if the preserved form no longer
+  fits the budget the whole chain is rebuilt without
+  preservation, so this can never turn a request that previously succeeded
+  into `ProviderRequestBudgetExceededError` (#2363).
+
 - `http_request`: with `output_path` set, `body_preview` is now cut at
   `_TEXT_BODY_LIMIT` *characters*, the way the inline `body` on the other
   branch already is. It was cut out of the raw bytes, so a page in any script
