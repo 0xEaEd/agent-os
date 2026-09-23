@@ -12,6 +12,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from agentos.cli.ui import ACCENT_HEADER, ACCENT_MARKUP, console
+from agentos.cli_quoting import quote_cli_arg
 
 app = typer.Typer(help="Manage AgentOS configuration.")
 
@@ -63,7 +64,6 @@ def config_set(
 ) -> None:
     """Set a configuration value (env-var backed, prints export command)."""
     if config_path is not None:
-        from agentos.gateway.config import GatewayConfig
         from agentos.onboarding.config_store import load_config, persist_config
 
         cfg = load_config(config_path)
@@ -71,11 +71,7 @@ def config_set(
         if not _set_key(data, key, _parse_config_value(value)):
             console.print(f"[red]Key not found: {escape(key)}[/red]")
             raise typer.Exit(1)
-        try:
-            updated = GatewayConfig.model_validate(data)
-        except Exception as exc:  # noqa: BLE001 - show config validation errors as CLI input errors.
-            console.print(f"[red]Invalid value for {escape(key)}:[/red] {escape(str(exc))}")
-            raise typer.Exit(2) from exc
+        updated = _validated_config(data, key)
         persist = persist_config(updated, path=config_path, restart_required=True)
         console.print(f"[{ACCENT_MARKUP}]Config:[/] {persist.path}")
         if persist.backup_path:
@@ -91,10 +87,37 @@ def config_set(
     if skill_config_map or not (_get_key(data, key) is not _MISSING or _is_declared_key(key)):
         console.print(f"[red]Key not found: {escape(key)}[/red]")
         raise typer.Exit(1)
+    # The export line is an instruction; validate what it would set exactly as
+    # the --config branch does, or the gateway is the first to see the mistake
+    # -- as a traceback at boot (#3100).
+    _set_key(data, key, _parse_config_value(value))
+    _validated_config(data, key)
 
     env_key = "AGENTOS_GATEWAY_" + key.upper().replace(".", "__")
     console.print("[dim]To persist this setting, export:[/dim]")
-    console.print(f"  [bold]export {env_key}={value}[/bold]")
+    # This line is the whole output of the command: it is meant to be pasted
+    # back into a shell. So the value is quoted for that shell (a path with a
+    # space is one argument), escaped so Rich does not read "[...]" in it as
+    # markup, and printed with soft_wrap so a long value is not folded mid-token
+    # when stdout is redirected.
+    console.print(
+        f"  [bold]export {env_key}={escape(quote_cli_arg(value))}[/bold]",
+        soft_wrap=True,
+    )
+
+
+def _validated_config(data: dict[str, Any], key: str) -> Any:
+    """Validate the edited TOML dict through the model, or exit 2 naming *key*."""
+    from agentos.gateway.config import GatewayConfig
+
+    try:
+        return GatewayConfig.model_validate(data)
+    except Exception as exc:  # noqa: BLE001 - show config validation errors as CLI input errors.
+        # soft_wrap keeps the key on one line so it stays copy-pasteable.
+        console.print(
+            f"[red]Invalid value for {escape(key)}:[/red] {escape(str(exc))}", soft_wrap=True
+        )
+        raise typer.Exit(2) from exc
 
 
 def _parse_config_value(value: str) -> Any:

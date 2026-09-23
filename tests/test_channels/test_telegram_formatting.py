@@ -657,3 +657,15 @@ def test_a_triple_marker_run_beside_a_bold_run() -> None:
 
     assert rendered == "<b><i>a</i></b> and <b>b</b>"
     assert _entities_are_properly_nested(rendered)
+
+
+def test_telegram_heading_with_bold_does_not_nest_bold_tags() -> None:
+    """Issue #3049: Telegram Bot API rejects nested identical tags (<b> inside <b>).
+    Headings containing bold markers should not produce nested <b><b>...</b></b> tags."""
+    rendered = render_telegram_html("# **Bold Heading**")
+    assert rendered == "<b>Bold Heading</b>"
+    assert "<b><b>" not in rendered
+
+    rendered_partial = render_telegram_html("## Prefix **Bold** and *Italic* Suffix")
+    assert rendered_partial == "<b>Prefix Bold and <i>Italic</i> Suffix</b>"
+    assert "<b><b>" not in rendered_partial

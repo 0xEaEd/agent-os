@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import structlog
@@ -26,6 +26,7 @@ from agentos.channels._util import (
     ChannelAccessPolicy,
     EventDedupeCache,
     StreamThrottle,
+    check_channel_file_size,
     retry_request,
     split_text_for_limit,
 )
@@ -46,7 +47,8 @@ log = structlog.get_logger(__name__)
 
 SLACK_API_BASE = "https://slack.com/api"
 
-_MENTION_RE = re.compile(r"<@(U[A-Z0-9]+)(?:\|[^>]*)?>")
+# Slack IDs: 'U' (workspace user), 'W' (Enterprise Grid user), 'B' (bot).
+_MENTION_RE = re.compile(r"<@([UWB][A-Z0-9]+)(?:\|[^>]*)?>")
 
 # Slack truncates (and may split) chat.postMessage's text field past 40000
 # characters (https://docs.slack.dev/changelog/2018-truncating-really-long-messages/).
@@ -109,6 +111,8 @@ class SlackChannel:
 
     Outbound messages use ``chat.postMessage`` via httpx.
     """
+
+    MAX_FILE_BYTES: ClassVar[int] = 1024 * 1024 * 1024
 
     token: str
     slack_channel_id: str
@@ -470,12 +474,23 @@ class SlackChannel:
         content: str = "",
     ) -> ChannelSendResult:
         """Upload a local file to Slack using the external upload flow."""
+        target_channel, sep, thread_ts = (channel_id or "").partition("|")
+        if not sep:
+            if target_channel[:1] in ("C", "G", "D"):
+                target_channel, thread_ts = target_channel, ""
+            elif target_channel:
+                target_channel, thread_ts = "", target_channel
+        target_channel = target_channel or self.slack_channel_id
+        if not target_channel:
+            raise RuntimeError("Slack file upload has no target channel")
+
         path = Path(file_path)
+        file_size = check_channel_file_size(path, self.MAX_FILE_BYTES, "Slack")
         client = self._get_client()
         start_resp = await retry_request(
             client.post,
             "/files.getUploadURLExternal",
-            json={"filename": path.name, "length": path.stat().st_size},
+            json={"filename": path.name, "length": file_size},
         )
         start_resp.raise_for_status()
         start_data = start_resp.json()
@@ -497,8 +512,10 @@ class SlackChannel:
 
         complete_payload: dict[str, Any] = {
             "files": [{"id": file_id, "title": path.name}],
-            "channel_id": channel_id,
+            "channel_id": target_channel,
         }
+        if thread_ts:
+            complete_payload["thread_ts"] = thread_ts
         if content:
             complete_payload["initial_comment"] = content
         complete_resp = await retry_request(
@@ -1058,6 +1075,7 @@ class SlackChannel:
                 "channel": channel_id,
                 "text": "Approve" if approved else "Deny",
                 "team": team_id,
+                "ts": orig_message.get("ts"),
                 "thread_ts": orig_message.get("thread_ts"),
             }
         )

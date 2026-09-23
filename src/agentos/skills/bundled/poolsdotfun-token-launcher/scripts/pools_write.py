@@ -422,11 +422,34 @@ def cmd_set_fee_recipient(client: RpcClient, args: dict) -> None:
 
 
 # ── approve ─────────────────────────────────────────────────────────────────
+def _approve_replay(paired: str, args: dict) -> str:
+    """The command that reproduces this exact approve plan.
+
+    ``PLAN_HASH`` covers the amount, so every flag that feeds it has to
+    survive into the printed command or the re-run hashes differently and
+    ``--confirm`` refuses it. ``--from`` is deliberately absent: it is
+    planning mode and ``_send`` rejects it, so a command labelled "to execute"
+    must not carry it.
+    """
+    command = f"python3 pools_write.py approve --paired {asset_label(paired).lower()}"
+    for flag in ("amount", "signer-env", "rpc"):
+        value = args.get(flag)
+        # ``True`` is a bare ``--flag`` with no value; it carries nothing to
+        # reproduce and would re-parse as a different plan.
+        if value is not None and value is not True:
+            command += f" --{flag} {shlex.quote(str(value))}"
+    return command
+
+
 def cmd_approve(client: RpcClient, args: dict) -> None:
     signer = resolve_signer(args)
     paired = resolve_paired_asset(args.get("paired"))
-    amount_raw = _amount(args.get("amount"), 18, "amount")
-    amount = amount_raw if amount_raw else 2**256 - 1
+    # Presence of the flag, not the truthiness of its value: ``approve(spender,
+    # 0)`` is how ERC20 revokes an allowance, and ``parse_units("0", 18)`` is
+    # ``0``. Reading that as "nothing given" turned a revoke into an unlimited
+    # allowance — the opposite of what the operator asked for.
+    requested = args.get("amount")
+    amount = _amount(requested, 18, "amount") if requested is not None else 2**256 - 1
     current = client.read(paired, ERC20_ABI, "allowance",
                           [signer["address"], PARTY_FACTORY])
 
@@ -445,8 +468,7 @@ def cmd_approve(client: RpcClient, args: dict) -> None:
     print(f"\n  PLAN_HASH  {digest}")
     if not _confirmed(args, digest):
         print("\n  Nothing was sent. To execute:")
-        print(f"    python3 pools_write.py approve --paired "
-              f"{asset_label(paired).lower()} --broadcast --confirm {digest}")
+        print(f"    {_approve_replay(paired, args)} --broadcast --confirm {digest}")
         return
 
     data = encode_function_data(ERC20_ABI, "approve", [PARTY_FACTORY, amount])

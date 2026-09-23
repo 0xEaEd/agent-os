@@ -349,8 +349,12 @@ strategy = "pilot-v1"    # "pilot-v1" (default; local ONNX+MiniLM router,
                          # models/pilot_v1/ bundle + the bundled MiniLM embedder;
                          # a missing bundle degrades to the default tier unless
                          # require_router_runtime is set. See [agentos_router.pilot].
-# strategy = "llm_judge" # the only other selectable strategy: routes via a small
-                         # LLM judge call (see judge_* settings below).
+# strategy = "llm_judge" # routes via a small LLM judge call (see judge_*
+                         # settings below).
+# strategy = "jev"       # EXPERIMENTAL, opt-in: typesafe.ai Jev cloud
+                         # classifier. Sends the current turn text to
+                         # typesafe.ai; needs TYPESAFE_API_KEY. See
+                         # [agentos_router.jev] below.
 # NOTE: the legacy "v4_phase3" local ML strategy is no longer a supported
 # persisted choice — a config that still pins it is automatically migrated to
 # "pilot-v1" on the next load (the original is backed up next to this file).
@@ -406,6 +410,24 @@ upgrade_to_c3_compaction_enabled = true
 [agentos_router.pilot]
 safety_net_threshold = 0.5
 # pilot_artifact_dir = "/path/to/pilot_v1"
+
+# Jev cloud classifier settings (only used when strategy = "jev"; experimental).
+# CONSENT: this strategy sends the CURRENT turn text (head/tail truncated to
+# input_max_chars) to typesafe.ai on every routed turn. Nothing else leaves the
+# machine (no system prompt, history, or tool list). A missing key, HTTP error
+# or timeout degrades to default_tier with routing_source = "jev_unavailable"
+# unless require_router_runtime is set. api_key is never written to config.toml
+# when it equals $TYPESAFE_API_KEY — prefer the env var (agentos env set).
+# [agentos_router.jev]
+# api_key = ""                        # literal key; leave unset to use api_key_env
+# api_key_env = "TYPESAFE_API_KEY"    # env var consulted when api_key is unset
+# base_url = "https://api.typesafe.ai"
+# model = "jev-latest"
+# input_max_chars = 4000              # min 1000
+# high_risk_threshold = 0.7           # 0..1; high_risk >= this floors the turn at c3
+# timeout_seconds = 8.0               # unset: derived from routing_timeout_seconds
+# short_circuit_enabled = true        # greetings/acks skip the API call
+# agentic_floor_enabled = false       # true: never route a tool-bearing turn below c1
 
 [agentos_router.tiers.c0]
 provider = "openrouter"
