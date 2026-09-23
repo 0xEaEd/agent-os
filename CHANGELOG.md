@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `skill_edit` erased existing YAML frontmatter metadata (`requires`,
+  `install`, `metadata.agentos`, and custom keys) when updating a skill's
+  description or content ([#2426](https://github.com/use-agent-os/agent-os/issues/2426)).
+  Existing frontmatter and unmodified sections are now preserved.
+
 - `skills/pptx`: preserve empty table cell positions in `extract_text` to prevent column misalignment.
 
 - Skills: the non-UTF-8 stdio sweep is finished. 39 bundled scripts still
