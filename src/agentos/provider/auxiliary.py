@@ -39,6 +39,7 @@ from typing import Any
 import structlog
 
 from agentos.provider.failures import ProviderFailureKind, classify_provider_error
+from agentos.provider.registry import UnknownProviderError, get_provider_spec
 from agentos.provider.selector import ProviderConfig, build_provider
 from agentos.provider.types import ChatConfig, Message
 
@@ -216,8 +217,19 @@ class AuxiliaryClient:
                 "OPENROUTER_BASE_URL", _OPENROUTER_DEFAULT_BASE_URL
             )
         else:
-            api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
-            base_url = base_url or os.environ.get("OPENAI_BASE_URL", "")
+            try:
+                spec = None if provider == "openai" else get_provider_spec(provider)
+            except UnknownProviderError:
+                spec = None
+            if spec is None:
+                # ``openai`` itself and unregistered OpenAI-compatible endpoints.
+                api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+                base_url = base_url or os.environ.get("OPENAI_BASE_URL", "")
+            else:
+                # Another registered provider: its own key and endpoint, never OpenAI's.
+                if spec.requires_api_key():
+                    api_key = api_key or os.environ.get(spec.env_key, "")
+                base_url = base_url or spec.default_base_url
 
         return api_key, base_url, proxy or os.environ.get("AGENTOS_LLM_PROXY", ""), routing
 
