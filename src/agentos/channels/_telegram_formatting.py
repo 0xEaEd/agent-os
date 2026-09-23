@@ -5,7 +5,12 @@ from __future__ import annotations
 import html
 import re
 
-_TABLE_DELIMITER_RE = re.compile(r"^:?-{3,}:?$")
+# GFM's delimiter cell is *one or more* hyphens with an optional leading
+# and/or trailing colon, so `-`, `--`, `:-`, `-:` and `:-:` are all valid.
+# Demanding three eliminated the compact spellings, and a table written that
+# way was not recognised as a table at all: the raw pipes and dashes were
+# delivered to the reader as prose.
+_TABLE_DELIMITER_RE = re.compile(r"^:?-+:?$")
 # A fence opens with three or more backticks or tildes followed by an info
 # string, which CommonMark takes to be the rest of the line: its first word is
 # the language, anything after it is attributes this renderer has no use for.
@@ -37,6 +42,32 @@ _BARE_URL_RE = re.compile(r"(https?://(?:[^\s()<]|\([^\s()<]*\))+)")
 _BLOCKQUOTE_RE = re.compile(r"^ {0,3}>[ ]?(?P<text>.*)$")
 
 
+def _find_closing_backtick_run(text: str, start: int, length: int) -> int:
+    """Index of the next backtick run of *exactly* ``length``, at or after ``start``.
+
+    CommonMark closes a code span on a backtick run of the same length as the
+    opener -- not on any run that merely contains one. ``str.find`` cannot
+    express that: searching for a one-backtick marker matches the first
+    backtick of a two-backtick run, which is how ``` ` `` ` ``` (a span quoting
+    a longer run, the ordinary way to show a literal backtick) came out as two
+    empty spans with the quoted backticks deleted. Runs that are the wrong
+    length are content, so they are skipped whole rather than a character at a
+    time -- otherwise the scan would land inside the run it just rejected.
+    """
+    cursor = start
+    while cursor < len(text):
+        if text[cursor] != "`":
+            cursor += 1
+            continue
+        run_end = cursor
+        while run_end < len(text) and text[run_end] == "`":
+            run_end += 1
+        if run_end - cursor == length:
+            return cursor
+        cursor = run_end
+    return -1
+
+
 def _replace_code_spans(text: str) -> tuple[str, list[str]]:
     """Replace balanced Markdown code spans with private placeholders."""
     chunks: list[str] = []
@@ -51,7 +82,7 @@ def _replace_code_spans(text: str) -> tuple[str, list[str]]:
         while marker_end < len(text) and text[marker_end] == "`":
             marker_end += 1
         marker = text[cursor:marker_end]
-        closing = text.find(marker, marker_end)
+        closing = _find_closing_backtick_run(text, marker_end, len(marker))
         if closing < 0:
             output.append(marker)
             cursor = marker_end
@@ -139,6 +170,11 @@ _BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)(.+?)(?<=\S)__")
 #: ``snake_case`` survives the table-label strip too.
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)")
 
+#: Same pattern as the asterisk-italic pass in :func:`_render_inline`. The
+#: lookarounds keep it off ``**bold**``; the ``**`` strip runs first anyway, so
+#: ``***both***`` reaches this as ``*both*``.
+_ITALIC_ASTERISK_RE = re.compile(r"(?<!\*)\*(?=\S)(.+?)(?<=\S)\*(?!\*)")
+
 
 def _is_python_dunder(content: str) -> bool:
     return content in _DUNDER_NAMES
@@ -181,6 +217,18 @@ def _render_inline(text: str) -> str:
 
     rendered = _LINK_RE.sub(_park_href, rendered)
     rendered = _BARE_URL_RE.sub(_park_bare_url, rendered)
+    # `***both***` is one run, not a bold run next to an italic one, and it has
+    # to be consumed before the `**` pass gets to it. Left to the passes below,
+    # the bold pass took the first two markers and handed the capture the third
+    # (`<b>*both</b>*`), then the italic pass paired that stray marker with the
+    # trailing one *across* the closing tag: `<b><i>both</b></i>`. Telegram's
+    # parser requires properly nested entities, so the message was rejected
+    # rather than rendered -- and this adapter sends `parse_mode=HTML` with no
+    # plain-text retry, so the reply never arrived.
+    rendered = re.sub(r"\*\*\*(?=\S)(.+?)(?<=\S)\*\*\*", r"<b><i>\1</i></b>", rendered)
+    rendered = re.sub(
+        r"(?<!\w)___(?=[^\s_])(.+?)(?<=[^\s_])___(?!\w)", r"<b><i>\1</i></b>", rendered
+    )
     rendered = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<b>\1</b>", rendered)
     # Not a blanket sub: `__init__` is a delimiter run with whitespace on both
     # sides, exactly like an intentional single-word `__bold__`, so the content
@@ -227,6 +275,10 @@ def _plain_inline(text: str) -> str:
     # neighbours lost theirs. The sibling of the #1931 fix, which only reached
     # `_render_inline`.
     text = _ITALIC_UNDERSCORE_RE.sub(r"\1", text)
+    # And the other spelling of italic, for the same reason: `*Metric*` kept
+    # its asterisks inside the `<b>` wrapper while `_Metric_` lost its
+    # underscores (#2964).
+    text = _ITALIC_ASTERISK_RE.sub(r"\1", text)
     for index, href in enumerate(hrefs):
         text = text.replace(f"\x00TG_HREF_{index}\x00", href)
     return text.strip()
@@ -380,7 +432,12 @@ def render_telegram_html(markdown: str) -> str:
 
         heading = _HEADING_RE.match(line)
         if heading:
-            rendered.append(f"<b>{_render_inline(heading.group('text'))}</b>")
+            # Telegram HTML forbids nested tags of the same type (<b> inside <b>).
+            # Headings are wrapped in <b>...</b>, so redundant inner bold tags are removed.
+            heading_text = (
+                _render_inline(heading.group("text")).replace("<b>", "").replace("</b>", "")
+            )
+            rendered.append(f"<b>{heading_text}</b>")
             index += 1
             continue
         quote = _BLOCKQUOTE_RE.match(line)

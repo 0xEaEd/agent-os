@@ -566,6 +566,30 @@ def _task_runtime_turn_hard_deadline_s(config: GatewayConfig) -> float | None:
     return float(configured)
 
 
+_USER_MESSAGE_PROVENANCE_KINDS = frozenset({"web_message", "channel_message", "cli_message"})
+
+
+def _end_once_intent_grants_for_user_turn(run: Any) -> None:
+    """Expire the session's ``once`` destructive-intent approvals for a new user turn.
+
+    ``IntentApprovalCache`` documents ``once`` as lasting until the session's next
+    user message. ``sessions.send`` clears them only on its no-runtime fallback,
+    which the gateway never takes; every turn goes through ``TaskRuntime``, so this
+    is the one place a user message from the web UI, a channel or the CLI reaches.
+    """
+    provenance = getattr(run, "input_provenance", None)
+    if not isinstance(provenance, dict) or provenance.get("kind") not in (
+        _USER_MESSAGE_PROVENANCE_KINDS
+    ):
+        return
+    try:
+        from agentos.sandbox.intent_cache import get_intent_cache
+
+        get_intent_cache().clear_scope("once", session_key=run.session_key)
+    except Exception:  # pragma: no cover - never block a turn on the cache
+        log.debug("intent_cache.clear_once_failed", exc_info=True)
+
+
 async def dispatch_task_runtime_turn(
     run: Any,
     *,
@@ -601,6 +625,7 @@ async def dispatch_task_runtime_turn(
     ):
         raise PermissionError("channel pairing was revoked before the turn started")
     tool_context.task_id = run.task_id
+    _end_once_intent_grants_for_user_turn(run)
     session = None
     if session_manager is not None and hasattr(session_manager, "get_session"):
         session = await session_manager.get_session(run.session_key)
@@ -1008,9 +1033,26 @@ def _remove_structlog_tee() -> None:
     _structlog_processors_before_tee = None
 
 
+def _apply_structlog_level(config: GatewayConfig) -> None:
+    """Let structlog through at the gateway's configured level.
+
+    The CLI entry point installs an INFO threshold so a one-shot command does
+    not print every debug event it brushes past (#2896). The gateway is the
+    process those events are *for* -- ``log_level`` defaults to DEBUG and the
+    file tee below copies each event into ``debug.log`` -- so it sets the
+    threshold from its own config before the first event is logged.
+    """
+    import structlog
+
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(_resolve_log_level(config)),
+    )
+
+
 def _setup_file_logging(config: GatewayConfig | None = None) -> None:
     """Configure structlog + stdlib logging to write to a debug.log file."""
     config = config or GatewayConfig()
+    _apply_structlog_level(config)
     root = logging.getLogger()
     _remove_debug_file_handlers(root)
 
@@ -1315,6 +1357,23 @@ def validate_agentos_router_runtime(config: GatewayConfig) -> None:
         return
     if info is not None and info.uses_judge:
         _log_resolved_judge(config, router_cfg)
+        return
+    if info is not None and info.requires_remote_credentials and info.credential_probe is not None:
+        # A remote-credential strategy (Jev) needs no local assets and no
+        # judge; its only preflight is "is there a key?". Missing → warn (every
+        # turn degrades to the default tier) unless require_router_runtime.
+        problem = info.credential_probe(router_cfg)
+        if problem:
+            message = f"{strategy} router credentials missing: {problem}"
+            if getattr(router_cfg, "require_router_runtime", False):
+                raise RuntimeError(message)
+            log.warning(
+                "build_services.agentos_router_credentials_missing",
+                strategy=strategy,
+                problem=problem,
+            )
+            return
+        log.info("build_services.agentos_router_ready", strategy=strategy)
 
 
 def _preload_agentos_router_strategy(router_cfg: Any, llm_cfg: Any = None) -> object:

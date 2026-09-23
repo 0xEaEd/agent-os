@@ -1242,6 +1242,7 @@
     .setup-mini input,
     .setup-mini select,
     .setup-router-toolbar input[type='number'],
+    .setup-router-toolbar input[type='password'],
     .setup-advanced__body input,
     .setup-advanced__body select,
     .setup-tier-table input:not([type='checkbox']),
@@ -1258,6 +1259,12 @@
   min-width: 0;
   box-sizing: border-box;
   padding: 0.58rem 2.65rem 0.58rem 0.75rem;
+}
+.control-surface .setup-router-toolbar input[type='password'] {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.58rem 0.75rem;
 }
 
 .control-surface .setup-extras {

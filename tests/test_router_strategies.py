@@ -17,12 +17,14 @@ from agentos.agentos_router.pilot.strategy import (
     SOURCE_UNAVAILABLE,
 )
 from agentos.router_strategies import (
+    JEV_STRATEGY_ID,
     LLM_JUDGE_STRATEGY_ID,
     PILOT_STRATEGY_ID,
     V4_STRATEGY_ID,
     RouterStrategyInfo,
     get_strategy_info,
     is_known_strategy,
+    jev_credential_probe,
     known_strategy_ids,
     pilot_asset_probe,
     resolve_strategy_id,
@@ -30,10 +32,11 @@ from agentos.router_strategies import (
 from agentos.router_tiers import DEFAULT_ROUTER_STRATEGY
 
 
-def test_registry_knows_both_strategies() -> None:
+def test_registry_knows_all_strategies() -> None:
     assert known_strategy_ids() == {
         LLM_JUDGE_STRATEGY_ID,
         PILOT_STRATEGY_ID,
+        JEV_STRATEGY_ID,
     }
     assert is_known_strategy("pilot-v1")
     # The legacy v4_phase3 engine was removed (Phase C); its id survives only
@@ -58,6 +61,46 @@ def test_judge_registry_entry() -> None:
     assert judge is not None
     assert judge.requires_local_assets is False
     assert judge.uses_judge is True
+    assert judge.requires_remote_credentials is False
+    assert judge.credential_probe is None
+
+
+def test_jev_registry_entry_matches_strategy_source_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from agentos.agentos_router import jev
+
+    info = get_strategy_info(JEV_STRATEGY_ID)
+    assert isinstance(info, RouterStrategyInfo)
+    assert info.source == jev.SOURCE_HEALTHY == "jev"
+    assert info.degraded_source == jev.SOURCE_UNAVAILABLE == "jev_unavailable"
+    assert info.requires_local_assets is False
+    assert info.uses_judge is False
+    assert info.asset_probe is None
+    assert info.requires_remote_credentials is True
+    assert info.credential_probe is jev_credential_probe
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    cfg = SimpleNamespace(jev=SimpleNamespace(api_key=None, api_key_env="TYPESAFE_API_KEY"))
+    problem = info.credential_probe(cfg)
+    assert problem is not None and "TYPESAFE_API_KEY" in problem
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-x")
+    assert info.credential_probe(cfg) is None
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    cfg_literal = SimpleNamespace(jev=SimpleNamespace(api_key="k", api_key_env="TYPESAFE_API_KEY"))
+    assert info.credential_probe(cfg_literal) is None
+
+
+def test_jev_is_never_the_default_strategy() -> None:
+    assert DEFAULT_ROUTER_STRATEGY != JEV_STRATEGY_ID
+
+
+def test_judge_registry_entry_has_no_asset_probe() -> None:
+    judge = get_strategy_info(LLM_JUDGE_STRATEGY_ID)
+    assert judge is not None
     assert judge.asset_probe is None
 
 
@@ -105,9 +148,7 @@ def test_pilot_asset_probe_reports_partial_minilm_dir(
     partial_minilm.mkdir()
     (partial_minilm / "model.onnx").write_bytes(b"")  # tokenizer.json absent
 
-    monkeypatch.setattr(
-        router_strategies, "_minilm_onnx_dir", lambda: partial_minilm
-    )
+    monkeypatch.setattr(router_strategies, "_minilm_onnx_dir", lambda: partial_minilm)
 
     cfg = type("Cfg", (), {"pilot_artifact_dir": str(bundle)})()
     missing = router_strategies.pilot_asset_probe(cfg)
@@ -145,12 +186,7 @@ def test_pilot_asset_probe_passes_for_complete_minilm_dir(
 def test_pilot_asset_probe_passes_for_fixture_bundle() -> None:
     # The committed fixture bundle satisfies the file checks; the MiniLM dir is
     # bundled too, so a healthy tree yields no missing pilot bundle files.
-    fixture = (
-        Path(__file__).parent
-        / "test_agentos_router"
-        / "data"
-        / "pilot_fixture"
-    )
+    fixture = Path(__file__).parent / "test_agentos_router" / "data" / "pilot_fixture"
     cfg = type("Cfg", (), {"pilot_artifact_dir": str(fixture)})()
     missing = pilot_asset_probe(cfg)
     # No bundle file should be missing (MiniLM presence depends on the checkout;
