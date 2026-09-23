@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Security: the sandbox denylist and the terminal-redaction gate kept
+  separate lists of credential directories and had drifted -- `~/.azure`,
+  `~/.config/gh`, `~/.anthropic` and `~/.openai` were blocked for
+  `read_file` but `cat` of the same files skipped the assignment pass, so
+  `~/.azure/service_principal_entries.json` handed the model its
+  `client_secret`. One list (`CREDENTIAL_HOME_DIRS`) now feeds both layers.
+  Seven credential files (`.my.cnf`, `.boto`, `.s3cfg`, `.yarnrc.yml`,
+  `gradle.properties`, `credentials.toml`, `credentials.tfrc.json`) and
+  `service-account*.json` are now masked when read, without being
+  hard-blocked, since they sit among build configuration an agent needs. An unquoted Windows-native path
+  (`type C:\dir\.aws\credentials`) was invisible to the gate because
+  `shlex` ate the backslashes; it is now read literally as well
+  (#2621).
 - `apply_patch`: an `*** Update File:` block with no `@@@ ` hunks — a
   unified-diff `@@ -1,1 +1,1 @@` header, a note, or nothing at all — is refused
   with the offending line named, instead of rewriting the file unchanged and
