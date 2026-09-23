@@ -39,6 +39,14 @@ FEEDS_URL = "https://reference-data-directory.vercel.app/feeds-robinhood-mainnet
 # suffix is the offline signal that separates the two. `uiMultiplier()` is the
 # on-chain confirmation.
 _RH_SUFFIX_RE = re.compile(r"\s*[•·|-]?\s*robinhood token\s*$", re.IGNORECASE)
+# The truncation-tolerant form: a bullet followed by any prefix of the marker.
+# CoinGecko caps `name` at 60 characters, so long listings arrive with the
+# suffix chopped ("... • Robinhood Toke" for IBM, "... • Robinhood T" for SPYD).
+_RH_SUFFIX_LOOSE_RE = re.compile(
+    r"\s*[•·|-]\s*r(?:o(?:b(?:i(?:n(?:h(?:o(?:o(?:d)?)?)?)?)?)?)?)?"
+    r"(?:\s+t(?:o(?:k(?:e(?:n)?)?)?)?)?\s*$",
+    re.IGNORECASE,
+)
 _ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 # Function selectors (first 4 bytes of keccak256 of the signature).
@@ -80,8 +88,46 @@ def _write_stdout(text: str) -> None:
     sys.stdout.flush()
 
 
+# Standard JSON-RPC code for a reverted `eth_call` (EIP-1474 / geth). Some
+# nodes report a revert as -32000 instead, which the message check below
+# catches; a node fault never names one.
+_REVERT_ERROR_CODE = 3
+
+
 class RpcError(RuntimeError):
-    """A JSON-RPC call returned an error or an unusable result."""
+    """A JSON-RPC call returned an error or an unusable result.
+
+    ``answered`` separates the two, because only one of them is evidence about
+    the contract: True when the node reached the contract and the contract's
+    own response is what failed the read (a revert, or a body too short to
+    decode), False when the node itself failed (rate limit, internal error, a
+    response that is not a usable result). Callers that turn a failed read into
+    a verdict must not treat the second as the first -- ``isStockToken: false``
+    accuses a contract of being an impersonator.
+
+    Left to the message when not given, so any raise site that does not care
+    still classifies correctly: a node fault never names a revert.
+    """
+
+    def __init__(self, message: str, *, answered: bool | None = None) -> None:
+        super().__init__(message)
+        self.answered = _names_a_revert(message) if answered is None else answered
+
+
+def _names_a_revert(message: str) -> bool:
+    return "revert" in message.lower()
+
+
+def _is_execution_revert(error_val: Any, message: str) -> bool:
+    """True when a JSON-RPC error object reports a contract revert.
+
+    Code ``3`` is the standard; nodes that report a revert as ``-32000`` say so
+    in the message instead. Everything else -- a rate limit, an internal error,
+    a missing header -- is the node failing before it ever reached the contract.
+    """
+    if isinstance(error_val, dict) and error_val.get("code") == _REVERT_ERROR_CODE:
+        return True
+    return _names_a_revert(message)
 
 
 def _validate_http_url(url: str) -> str:
@@ -136,10 +182,12 @@ def _eth_call(rpc_url: str, to: str, data: str, timeout: float) -> str:
             message = str(error_val.get("message", error_val))
         else:
             message = str(error_val)
-        raise RpcError(message)
+        raise RpcError(message, answered=_is_execution_revert(error_val, message))
     result = body.get("result") if isinstance(body, dict) else None
     if not isinstance(result, str) or not result.startswith("0x"):
-        raise RpcError("malformed RPC result")
+        # The node handed back something that is not a result at all. That is
+        # the node failing, not the contract answering.
+        raise RpcError("malformed RPC result", answered=False)
     return result
 
 
@@ -149,7 +197,7 @@ def _word(raw: str, index: int) -> int:
     start = index * 64
     chunk = body[start : start + 64]
     if len(chunk) < 64:
-        raise RpcError("result too short")
+        raise RpcError("result too short", answered=True)
     return int(chunk, 16)
 
 
@@ -174,13 +222,22 @@ def _encode_address_arg(selector: str, address: str) -> str:
 
 
 def _clean_name(name: str) -> str:
-    """Strip the '- Robinhood Token' suffix so 'Apple' matches cleanly."""
-    return _RH_SUFFIX_RE.sub("", name or "").strip()
+    """Strip the '- Robinhood Token' suffix so 'Apple' matches cleanly.
+
+    Handles the truncated tail too: CoinGecko cuts `name` at 60 characters, so
+    'International Business Machines Corporation • Robinhood Toke' must still
+    display as the company name.
+    """
+    stripped = _RH_SUFFIX_RE.sub("", name or "").strip()
+    if stripped == (name or "").strip():
+        stripped = _RH_SUFFIX_LOOSE_RE.sub("", stripped).strip()
+    return stripped
 
 
 def is_stock_token(token: dict[str, Any]) -> bool:
     """True when the list entry is a Robinhood Stock Token, not a community token."""
-    return bool(_RH_SUFFIX_RE.search(token.get("name", "") or ""))
+    name = token.get("name", "") or ""
+    return bool(_RH_SUFFIX_RE.search(name) or _RH_SUFFIX_LOOSE_RE.search(name))
 
 
 def _norm(text: str) -> str:
@@ -305,7 +362,7 @@ def _try_call(fn: Any, errors: dict[str, str], key: str) -> tuple[Any, bool]:
         return fn(), True
     except RpcError as exc:
         errors[key] = str(exc)
-        return None, True
+        return None, exc.answered
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
         errors[key] = str(exc)
         return None, False

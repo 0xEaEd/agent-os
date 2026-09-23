@@ -23,6 +23,7 @@ import structlog
 from agentos.identity.workspace import BOOTSTRAP_FILENAMES
 from agentos.redact import redact_file_output
 from agentos.sandbox.integration import get_runtime, sandboxed
+from agentos.tools.builtin._lines import split_lines
 from agentos.tools.fuzzy_match import (
     AmbiguousMatchError,
     FuzzyMatchError,
@@ -31,7 +32,12 @@ from agentos.tools.fuzzy_match import (
 )
 from agentos.tools.path_policy import reject_foreign_host_path
 from agentos.tools.registry import tool
-from agentos.tools.types import ToolError, WorkspaceAccessError, current_tool_context
+from agentos.tools.types import (
+    SafeToolError,
+    ToolError,
+    WorkspaceAccessError,
+    current_tool_context,
+)
 from agentos.tools.write_tracking import record_workspace_file_write
 
 log = structlog.get_logger(__name__)
@@ -54,6 +60,7 @@ _XLSX_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _XLSX_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _XLSX_OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _XLSX_MAX_ROWS = 1_048_576
+_XLSX_MAX_COLUMNS = 16_384
 _BOOTSTRAP_SOURCE_FILENAMES = frozenset(BOOTSTRAP_FILENAMES)
 
 
@@ -749,12 +756,27 @@ def _read_xlsx_worksheet(
             row_num = next_implicit
         next_implicit = row_num + 1
         total_rows = max(total_rows, row_num)
-        row: list[str] = []
+        # Keyed by resolved column, not append order: a <c> with an explicit
+        # r="..." can appear out of column order in the XML (#2717), and
+        # appending on sight then displaces every cell after the first
+        # out-of-order one. A <c> with no r inherits the column immediately
+        # after the previous cell, per the OOXML spec -- correct even when
+        # that previous cell's own column came from an out-of-order ref.
+        cells: dict[int, str] = {}
+        next_column = 0
         for cell_el in row_el.findall(f"{{{_XLSX_MAIN_NS}}}c"):
-            column_index = _xlsx_column_index(cell_el.attrib.get("r", ""))
-            while len(row) < column_index:
-                row.append("")
-            row.append(_xlsx_cell_value(cell_el, shared_strings))
+            cell_ref = cell_el.attrib.get("r")
+            column_index = _xlsx_column_index(cell_ref) if cell_ref else next_column
+            # A crafted or corrupt ref can name a column far past the format's
+            # own ceiling. The dict above no longer grows with it, but the row
+            # is materialised below over range(max(cells) + 1), so one such
+            # cell still sizes the list by whatever the document claimed.
+            # Drop it instead, leaving next_column where it was.
+            if column_index >= _XLSX_MAX_COLUMNS:
+                continue
+            cells[column_index] = _xlsx_cell_value(cell_el, shared_strings)
+            next_column = column_index + 1
+        row = [cells.get(i, "") for i in range(max(cells, default=-1) + 1)]
         while row and row[-1] == "":
             row.pop()
         rows[row_num] = row
@@ -765,9 +787,14 @@ def _xlsx_column_index(cell_ref: str) -> int:
     match = re.match(r"([A-Za-z]+)", cell_ref)
     if not match:
         return 0
+    letters = match.group(1).upper()
+    if len(letters) > 3:
+        return _XLSX_MAX_COLUMNS
     index = 0
-    for char in match.group(1).upper():
+    for char in letters:
         index = index * 26 + (ord(char) - ord("A") + 1)
+        if index > _XLSX_MAX_COLUMNS:
+            return _XLSX_MAX_COLUMNS
     return max(0, index - 1)
 
 
@@ -887,18 +914,23 @@ async def write_file(path: str, content: str, approval_id: str | None = None) ->
 
     loop = asyncio.get_running_loop()
 
-    def _write() -> None:
+    def _write() -> int:
         p.parent.mkdir(parents=True, exist_ok=True)
-        # newline="" so the content is the sole authority on line endings;
-        # write_text() would stamp os.linesep onto every line.
-        with p.open("w", encoding="utf-8", newline="") as handle:
-            handle.write(content)
+        # Encode once and write the bytes: no newline translation (the content
+        # is the sole authority on line endings, where write_text() would stamp
+        # os.linesep onto every line), and the count reported is exactly what
+        # reached the disk. len(content) was code points, which under-reported
+        # every multibyte character -- 10 emoji as "10 bytes" for a 40-byte
+        # file -- to callers comparing against byte budgets and limits.
+        data = content.encode("utf-8")
+        p.write_bytes(data)
+        return len(data)
 
-    await loop.run_in_executor(None, _write)
+    written = await loop.run_in_executor(None, _write)
     record_workspace_file_write(p)
     _notify_memory_source_write(p)
     _notify_bootstrap_source_write(p)
-    return f"Written {len(content)} bytes to {p}"
+    return f"Written {written} bytes to {p}"
 
 
 def _read_raw_text(p: Path) -> str:
@@ -965,14 +997,18 @@ def _locate_edit(original: str, old_text: str, new_text: str, *, path: str) -> F
     Exact equality is tried first and costs nothing extra. The fallback chain
     only runs once exact has missed, so the common case is unchanged. Both
     failure modes keep the wording the model already knows, enriched with
-    whatever the matcher learned.
+    whatever the matcher learned -- and raise ``SafeToolError`` so that
+    wording reaches the model: the failure envelope forwards only
+    ``SafeToolUserMessage`` subclasses, and a plain ``ValueError`` arrived as
+    "The tool received an invalid argument" with the line numbers and the
+    closest-match hint discarded (#2888).
     """
 
     try:
         return fuzzy_find_and_replace(original, old_text, new_text)
     except AmbiguousMatchError as exc:
         lines = ", ".join(str(line) for line in exc.lines)
-        raise ValueError(
+        raise SafeToolError(
             f"old_text matches {exc.match_count} locations in {path} (lines {lines});"
             " be more specific"
         ) from exc
@@ -981,7 +1017,7 @@ def _locate_edit(original: str, old_text: str, new_text: str, *, path: str) -> F
         # channel like any other and gets the same mask.
         hint = redact_file_output(exc.hint, path=path) if exc.hint else ""
         detail = f" Closest match: {hint}" if hint else ""
-        raise ValueError(f"old_text not found in {path}.{detail}") from exc
+        raise SafeToolError(f"old_text not found in {path}.{detail}") from exc
 
 
 @tool(
@@ -1230,7 +1266,11 @@ async def grep_search(
         try:
             regex = re.compile(pattern)
         except re.error as e:
-            raise ValueError(f"Invalid regex pattern: {e}") from e
+            # SafeToolError so the parser's diagnostic reaches the model
+            # (#2890). It describes the model's own ``pattern`` argument --
+            # "nothing to repeat at position 0" -- and quotes nothing from the
+            # workspace or the environment.
+            raise SafeToolError(f"Invalid regex pattern: {e}") from e
 
         results: list[str] = []
 
@@ -1240,8 +1280,16 @@ async def grep_search(
             try:
                 if _looks_binary(_read_binary_sample(fp), fp):
                     return
-                text = fp.read_text(encoding="utf-8", errors="replace")
-                for lineno, line in enumerate(text.splitlines(), 1):
+                # newline="" because the default translates a lone CR into
+                # a newline before anything counts lines, and split_lines
+                # because str.splitlines() also breaks on form feed, NEL
+                # and the rest. Either one numbers a hit differently from
+                # read_file, which reads the bytes and breaks on newlines
+                # -- and the model edits the file by the number this tool
+                # reports.
+                with fp.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+                    text = handle.read()
+                for lineno, line in enumerate(split_lines(text), 1):
                     if regex.search(line):
                         shown = redact_file_output(line.rstrip(), path=fp)
                         results.append(f"{fp}:{lineno}: {shown}")
