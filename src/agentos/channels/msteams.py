@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -300,7 +301,34 @@ class MSTeamsChannel:
             "schema_version": _CONVERSATION_CACHE_SCHEMA_VERSION,
             "conversations": serialized,
         }
-        path.write_text(json.dumps(payload), encoding="utf-8")
+        # Temp file + rename: this runs on every turn, and a plain write_text
+        # truncates first, so a kill mid-write would leave a file that loads
+        # as empty and forgets every conversation, not just the latest one.
+        tmp = path.with_name(f".{path.name}.tmp")
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    def _persist_conversation_cache(self) -> None:
+        """Save the cache after a turn, without letting a failed write drop the turn.
+
+        ``stop()`` used to be the only writer, so a crash, OOM kill or redeploy
+        lost every conversation learned -- and the last-activity order the
+        ``reply_to=None`` fallback relies on -- since the previous clean stop.
+        Saving on every turn, not only when a key is new, keeps that order on
+        disk too: otherwise a heartbeat after the restart goes to whichever
+        conversation was *learned* last rather than the one that spoke last.
+        """
+        try:
+            self._save_conversation_cache()
+        except OSError as exc:
+            log.warning("msteams.cache_save_failed", error=str(exc))
 
     # ------------------------------------------------------------------
     # Webhook
@@ -353,6 +381,7 @@ class MSTeamsChannel:
             # spoke" fallback -- tracks last activity, not first insertion.
             self._references.pop(cache_key, None)
             self._references[cache_key] = ref
+            self._persist_conversation_cache()
         if activity.recipient is not None and getattr(activity.recipient, "id", None):
             self._bot_id = activity.recipient.id
 
@@ -597,6 +626,50 @@ class MSTeamsChannel:
         unsupported = False
         last_edit = 0.0
         interval = self.config.edit_interval_s
+        segment_start = 0
+        delivered = 0
+
+        async def _send_activity(text: str) -> str | None:
+            holder: dict[str, str | None] = {"id": None}
+
+            async def _send(
+                turn_context: Any,
+                _holder: dict[str, str | None] = holder,
+                _text: str = text,
+            ) -> None:
+                response = await turn_context.send_activity(_text)
+                if response is not None and getattr(response, "id", None):
+                    _holder["id"] = response.id
+
+            await self._adapter.continue_conversation(ref, _send, bot_id=self._bot_id)
+            new_id = holder["id"]
+            if new_id:
+                self._remember_sent_message(new_id, ref_key)
+            return new_id
+
+        async def _edit_activity(act_id: str, text: str) -> None:
+            async def _edit(
+                turn_context: Any,
+                _id: str = act_id,
+                _text: str = text,
+            ) -> None:
+                updated = Activity(type="message", id=_id, text=_text)
+                await turn_context.update_activity(updated)
+
+            await self._adapter.continue_conversation(ref, _edit, bot_id=self._bot_id)
+
+        async def _post_segments(remaining: str) -> None:
+            nonlocal message_id, segment_start, delivered
+            while True:
+                head, tail = split_text_for_limit(
+                    remaining, _MSTEAMS_MESSAGE_TEXT_LIMIT, measure=_measure_activity_text
+                )
+                message_id = await _send_activity(head)
+                delivered = segment_start + len(head)
+                if not tail:
+                    return
+                segment_start = delivered
+                remaining = tail
 
         async for chunk in chunks:
             if not chunk:
@@ -604,20 +677,7 @@ class MSTeamsChannel:
             accumulated += chunk
 
             if message_id is None:
-                holder: dict[str, str | None] = {"id": None}
-
-                async def _send(
-                    turn_context: Any,
-                    _holder: dict[str, str | None] = holder,
-                    _text: str = accumulated,
-                ) -> None:
-                    response = await turn_context.send_activity(_text)
-                    if response is not None and getattr(response, "id", None):
-                        _holder["id"] = response.id
-
-                await self._adapter.continue_conversation(ref, _send, bot_id=self._bot_id)
-                message_id = holder["id"]
-                self._remember_sent_message(message_id, ref_key)
+                await _post_segments(accumulated)
                 last_edit = time.monotonic()
                 continue
 
@@ -629,17 +689,20 @@ class MSTeamsChannel:
             if now - last_edit < interval:
                 continue
 
-            current_message_id = message_id
-
-            async def _edit(
-                turn_context: Any, _id: str = current_message_id, _text: str = accumulated
-            ) -> None:
-                updated = Activity(type="message", id=_id, text=_text)
-                await turn_context.update_activity(updated)
+            head, tail = split_text_for_limit(
+                accumulated[segment_start:],
+                _MSTEAMS_MESSAGE_TEXT_LIMIT,
+                measure=_measure_activity_text,
+            )
 
             try:
-                await self._adapter.continue_conversation(ref, _edit, bot_id=self._bot_id)
+                if message_id is not None:
+                    await _edit_activity(message_id, head)
+                delivered = segment_start + len(head)
                 last_edit = now
+                if tail:
+                    segment_start = delivered
+                    await _post_segments(tail)
             except Exception as exc:  # noqa: BLE001 — channel may not support edits
                 if _is_update_unsupported(exc):
                     unsupported = True
@@ -653,57 +716,42 @@ class MSTeamsChannel:
                     raise
 
         # Final flush — emit one last full-text update if we have a message
-        # and either the stream produced more content after the first send
+        # and either the stream produced more content after the last send
         # or edits were unsupported and we never updated mid-stream.
         if message_id is not None and accumulated:
-            final_callback: Any
             if unsupported:
                 # Channel doesn't support ``update_activity``. The
                 # first chunk already shipped as a partial message; we
-                # send the **complete** accumulated text as a fresh
-                # message so the user gets the full reply (the partial
-                # first chunk stays in place but is no longer the only
-                # thing visible).
-                async def _final_send(turn_context: Any, _text: str = accumulated) -> None:
-                    await turn_context.send_activity(_text)
-
-                final_callback = _final_send
-            else:
-                final_message_id = message_id
-
-                async def _final_update(
-                    turn_context: Any, _id: str = final_message_id, _text: str = accumulated
-                ) -> None:
-                    updated = Activity(type="message", id=_id, text=_text)
-                    await turn_context.update_activity(updated)
-
-                final_callback = _final_update
-
-            try:
-                await self._adapter.continue_conversation(ref, final_callback, bot_id=self._bot_id)
-            except Exception as exc:  # noqa: BLE001
-                if not _is_update_unsupported(exc):
-                    raise
-                # The final-flush ``update_activity`` was the first edit
-                # attempt of this stream — fast streams skip mid-stream
-                # edits because of ``edit_interval_s`` throttling, so
-                # we don't learn the channel is edit-incapable until
-                # this point. Retry with a fresh ``send_activity`` so
-                # the user receives the full accumulated text instead
-                # of only the first chunk that shipped at stream start.
-                self._streams_unsupported = True
-
-                async def _retry_send(turn_context: Any, _text: str = accumulated) -> None:
-                    await turn_context.send_activity(_text)
-
+                # send the **complete** accumulated text as fresh
+                # messages so the user gets the full reply.
+                for seg in _split_activity_text(accumulated):
+                    message_id = await _send_activity(seg)
+            elif delivered < len(accumulated):
+                head, tail = split_text_for_limit(
+                    accumulated[segment_start:],
+                    _MSTEAMS_MESSAGE_TEXT_LIMIT,
+                    measure=_measure_activity_text,
+                )
                 try:
-                    await self._adapter.continue_conversation(ref, _retry_send, bot_id=self._bot_id)
-                except Exception as retry_exc:  # noqa: BLE001
-                    log.warning(
-                        "msteams.unsupported_retry_failed",
-                        message_id=message_id,
-                        error=str(retry_exc),
-                    )
+                    if message_id is not None:
+                        await _edit_activity(message_id, head)
+                    delivered = segment_start + len(head)
+                    if tail:
+                        segment_start = delivered
+                        await _post_segments(tail)
+                except Exception as exc:  # noqa: BLE001
+                    if not _is_update_unsupported(exc):
+                        raise
+                    self._streams_unsupported = True
+                    try:
+                        for seg in _split_activity_text(accumulated):
+                            message_id = await _send_activity(seg)
+                    except Exception as retry_exc:  # noqa: BLE001
+                        log.warning(
+                            "msteams.unsupported_retry_failed",
+                            message_id=message_id,
+                            error=str(retry_exc),
+                        )
 
         return message_id
 

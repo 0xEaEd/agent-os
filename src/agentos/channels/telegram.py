@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import html
+import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -94,11 +96,22 @@ _ALLOWED_UPDATES = (
 #: Hard ceiling Telegram enforces on ``sendMessage``/``editMessageText`` text.
 #: Measured on the *rendered* HTML, which is longer than the markdown it came from.
 _MESSAGE_TEXT_LIMIT = 4096
+#: Hard ceiling Telegram enforces on media/document captions (``sendDocument``).
+_CAPTION_TEXT_LIMIT = 1024
+
 #: Telegram tolerates roughly one edit per second per chat — well below Slack's
 #: 500ms default, so streaming updates get their own slower cadence.
 _STREAM_UPDATE_INTERVAL_MS = 1200
 _STREAM_FLOOD_STRIKE_CAP = 3
 _STREAM_FLOOD_DECAY_S = 30.0
+
+#: Telegram refuses an edit whose rendered content matches what is already on
+#: screen ("Bad Request: message is not modified: ..."). That is a no-op, not a
+#: failure: the message already says what the edit was going to make it say.
+#: It is easy to reach while streaming, because it is the *rendered* text that
+#: is compared -- a chunk that is only a newline renders to the same HTML as
+#: the text before it, since the renderer works line by line.
+_EDIT_IS_A_NO_OP = "message is not modified"
 
 
 class TelegramApiError(RuntimeError):
@@ -163,6 +176,21 @@ def _coerce_telegram_int(value: Any) -> int | str:
     if isinstance(value, str) and value.lstrip("-").isdigit():
         return int(value)
     return str(value)
+
+
+def _text_mentions_username(text: str, username: str) -> bool:
+    """Whether *text* contains ``@username`` as a whole username.
+
+    The last-resort check when there is no entity to match structurally --
+    and the one that runs after every entity has been checked and none was
+    us. Plain containment is not enough: a Telegram username is word
+    characters after the ``@``, so ``@helper`` is a substring of a different
+    bot's ``@helperbot2`` and of the address ``someone@helperdesk.com``, and
+    ``bob@helper.com`` has the word character on the other side. A word
+    character on either side means the ``@`` belongs to something else.
+    """
+    pattern = r"(?<!\w)@" + re.escape(username.lstrip("@").casefold()) + r"(?!\w)"
+    return re.search(pattern, text.casefold()) is not None
 
 
 def _slice_utf16(text: str, offset: int, length: int) -> str:
@@ -1005,7 +1033,11 @@ class TelegramChannel:
             log.warning("telegram.callback_query_answer_failed", error=str(exc))
 
         message_id = msg.get("message_id")
-        orig_text = msg.get("text", "")
+        # Telegram hands back a message's ``text`` as plain text: whatever the
+        # prompt showed -- ``cat a > b``, ``<done>``, ``&&`` -- arrives with raw
+        # ``<``, ``>`` and ``&``. Spliced into an HTML-mode edit unescaped, those
+        # made Telegram refuse the whole edit ("can't parse entities").
+        orig_text = html.escape(msg.get("text", ""), quote=False)
         decision_text = "Approved ✅" if approved else "Denied ❌"
         new_text = f"{orig_text}\n\n<b>{decision_text}</b>"
 
@@ -1023,6 +1055,22 @@ class TelegramChannel:
                 )
             except Exception as exc:
                 log.warning("telegram.callback_message_edit_failed", error=str(exc))
+                # The request is resolved either way, so its buttons must go
+                # even when the text cannot be rewritten (the edit can still be
+                # refused -- escaping lengthens the text, and it may then pass
+                # the length cap). Left in place, every later tap on them
+                # reports an approval that no longer exists.
+                try:
+                    await self._api(
+                        "editMessageReplyMarkup",
+                        {
+                            "chat_id": str(chat_id),
+                            "message_id": message_id,
+                            "reply_markup": {"inline_keyboard": []},
+                        },
+                    )
+                except Exception as markup_exc:
+                    log.warning("telegram.callback_markup_clear_failed", error=str(markup_exc))
 
         # 5. Enqueue the virtual message
         metadata = {
@@ -1165,7 +1213,7 @@ class TelegramChannel:
                     has_mismatched_bot_command = True
         if has_mismatched_bot_command:
             return False
-        return mention in text.lower()
+        return _text_mentions_username(text, username)
 
     def build_reply_message(self, content: str, inbound: IncomingMessage) -> OutgoingMessage:
         metadata: dict[str, Any] = {"chat_id": inbound.channel_id}
@@ -1280,6 +1328,7 @@ class TelegramChannel:
     def _split_for_limit(
         segment: str,
         *,
+        limit: int = _MESSAGE_TEXT_LIMIT,
         measure: Callable[[str], int] | None = None,
     ) -> tuple[str, str]:
         """Split *segment* into the largest prefix that fits one message, plus the rest.
@@ -1293,7 +1342,7 @@ class TelegramChannel:
         cut-point and fenced-code-block logic.
         """
         length = measure if measure is not None else (lambda text: len(render_telegram_html(text)))
-        return split_text_for_limit(segment, _MESSAGE_TEXT_LIMIT, measure=length)
+        return split_text_for_limit(segment, limit, measure=length)
 
     async def _stream_send(
         self,
@@ -1333,12 +1382,22 @@ class TelegramChannel:
         try:
             await self._api("editMessageText", payload)
         except TelegramApiError as exc:
-            if "parse entities" not in str(exc).lower():
+            reason = str(exc).lower()
+            if _EDIT_IS_A_NO_OP in reason:
+                return
+            if "parse entities" not in reason:
                 raise
             log.warning("telegram.markdown_fallback", error=str(exc))
             payload["text"] = text
             payload.pop("parse_mode", None)
-            await self._api("editMessageText", payload)
+            try:
+                await self._api("editMessageText", payload)
+            except TelegramApiError as fallback_exc:
+                # The plain-text retry can be the no-op just as easily: it is
+                # the *rendered* text Telegram compares, and dropping the
+                # parse mode does not change that it may be unchanged.
+                if _EDIT_IS_A_NO_OP not in str(fallback_exc).lower():
+                    raise
 
     async def send_streaming(
         self,
@@ -1482,9 +1541,13 @@ class TelegramChannel:
         path = Path(file_path)
         check_channel_file_size(path, self.MAX_FILE_BYTES, "Telegram")
         payload = {"chat_id": str(chat_id)}
+        head = ""
+        tail = ""
         if content:
-            payload["caption"] = render_telegram_html(content)
-            payload["parse_mode"] = "HTML"
+            head, tail = self._split_for_limit(content, limit=_CAPTION_TEXT_LIMIT)
+            if head:
+                payload["caption"] = render_telegram_html(head)
+                payload["parse_mode"] = "HTML"
         client = self._get_client()
         try:
             with path.open("rb") as f:
@@ -1499,6 +1562,14 @@ class TelegramChannel:
         result: dict[str, Any] = raw_result if isinstance(raw_result, dict) else {}
         raw_document = result.get("document")
         document: dict[str, Any] = raw_document if isinstance(raw_document, dict) else {}
+        if tail and tail.strip():
+            await self.send(
+                OutgoingMessage(
+                    content=tail,
+                    reply_to=str(chat_id),
+                    metadata={"chat_id": str(chat_id)},
+                )
+            )
         return ChannelSendResult.sent(
             capability=ChannelCapabilities.NATIVE_FILE_UPLOAD,
             target_id=str(chat_id),

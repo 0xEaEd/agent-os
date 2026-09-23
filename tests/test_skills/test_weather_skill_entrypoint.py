@@ -78,6 +78,17 @@ def test_weather_entrypoint_extracts_destination_and_compacts_forecast(
     assert payload["errors"] == []
 
 
+def test_extract_location_falls_back_to_london_when_destination_is_blank() -> None:
+    """A blank ``DESTINATION:`` value must fall back to the same default as
+    no text at all, not to whatever unrelated line happens to be first."""
+    module = _load_module()
+
+    assert (
+        module._extract_location("DATES: next weekend\nTRAVELERS: 2\nDESTINATION:   \n") == "London"
+    )
+    assert module._extract_location("DESTINATION: \nDATES: tomorrow\n") == "London"
+
+
 def test_weather_entrypoint_returns_seasonal_hint_on_network_error(
     monkeypatch,
     capsys,
@@ -97,3 +108,68 @@ def test_weather_entrypoint_returns_seasonal_hint_on_network_error(
     assert payload["forecast"] == []
     assert payload["errors"]
     assert "rainy season" in payload["seasonal_hint"]
+
+
+def test_weather_seasonal_hint_does_not_match_june_in_place_names(
+    monkeypatch,
+    capsys,
+) -> None:
+    module = _load_module()
+
+    def fake_fetch(location: str, timeout: float):
+        return {
+            "current_condition": [
+                {
+                    "weatherDesc": [{"value": "Sunny"}],
+                    "temp_C": "18",
+                    "FeelsLikeC": "18",
+                    "humidity": "50",
+                    "precipMM": "0.0",
+                    "windspeedKmph": "8",
+                },
+            ],
+            "weather": [],
+        }
+
+    monkeypatch.setattr(module, "_fetch_wttr_json", fake_fetch)
+
+    # Place name containing 'june' like Juneau, Alaska should NOT trigger
+    # the month-based out-of-window warning
+    status = module.main(["--location", "DESTINATION: Juneau, Alaska\nDATES: tomorrow"])
+    assert status == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["location"] == "Juneau, Alaska"
+    assert "Requested dates appear outside" not in payload["seasonal_hint"]
+    assert "Short-range forecast only" in payload["seasonal_hint"]
+
+
+def test_weather_seasonal_hint_matches_word_boundary_june(
+    monkeypatch,
+    capsys,
+) -> None:
+    module = _load_module()
+
+    def fake_fetch(location: str, timeout: float):
+        return {
+            "current_condition": [
+                {
+                    "weatherDesc": [{"value": "Sunny"}],
+                    "temp_C": "20",
+                    "FeelsLikeC": "20",
+                    "humidity": "50",
+                    "precipMM": "0.0",
+                    "windspeedKmph": "10",
+                },
+            ],
+            "weather": [],
+        }
+
+    monkeypatch.setattr(module, "_fetch_wttr_json", fake_fetch)
+
+    # Explicit month June should trigger the seasonal date advisory
+    status = module.main(["--location", "DESTINATION: Seattle\nDATES: 15 June"])
+    assert status == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["location"] == "Seattle"
+    hint = payload["seasonal_hint"]
+    assert "Requested dates appear outside the reliable short forecast window" in hint

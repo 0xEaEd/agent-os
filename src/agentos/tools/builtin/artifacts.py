@@ -355,13 +355,17 @@ INLINE_ARTIFACT_MIME_PREFIX = "application/vnd.agentos."
 _MAX_INLINE_ARTIFACTS_PER_CALL = 4
 
 
-async def publish_inline_artifacts(output: str) -> str:
+async def publish_inline_artifacts(output: str, cwd: str | None = None) -> str:
     """Publish inline artifacts announced in ``output`` and replace the markers.
 
     Best-effort by construction: a shell command must never fail, or have its
     output withheld, because a publish did not work out. Anything that goes
     wrong is reported in place of the marker and the command's own output is
     returned untouched otherwise.
+
+    ``cwd`` is the directory the command ran in. A relative marker path names a
+    file relative to it -- that is where the script wrote it -- not relative to
+    the workspace root that ``publish_artifact`` resolves against.
     """
     if not output or "publish_artifact" not in output:
         return output
@@ -387,9 +391,16 @@ async def publish_inline_artifacts(output: str) -> str:
         if published >= _MAX_INLINE_ARTIFACTS_PER_CALL:
             replacements[marker] = "[inline artifact skipped: too many in one command]"
             continue
+        path = match.group("path")
+        if cwd and not Path(path).is_absolute():
+            path = str(Path(cwd) / path)
         try:
-            await publish_artifact(path=match.group("path"), mime=mime)
-        except ToolError as exc:
+            await publish_artifact(path=path, mime=mime)
+        except (ToolError, OSError) as exc:
+            # OSError too: publish_artifact hashes and copies the announced
+            # file, and a file the finished process still holds, or one the
+            # agent cannot read, raises PermissionError there rather than
+            # ToolError (#2892). Anything else is a defect and still surfaces.
             replacements[marker] = f"[inline artifact not published: {exc}]"
             continue
         published += 1

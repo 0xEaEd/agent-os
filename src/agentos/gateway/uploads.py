@@ -398,55 +398,63 @@ def register_upload_routes(
                 {"error": f"multipart/form-data required: {exc}"}, status_code=400
             )
 
-        upload = form.get("file")
-        if upload is None or not hasattr(upload, "read"):
-            return JSONResponse(
-                {"error": "missing 'file' multipart field"}, status_code=400
-            )
-
-        filename = getattr(upload, "filename", None) or "attachment"
-        content_type = getattr(upload, "content_type", None) or form.get("mime") or ""
-        if not isinstance(content_type, str) or not content_type:
-            return JSONResponse(
-                {"error": "missing or invalid 'mime' / content-type"}, status_code=400
-            )
-        normalized_mime = normalize_attachment_mime(content_type)
-        if normalized_mime is None:
-            return JSONResponse(
-                {"error": "missing or invalid 'mime' / content-type"}, status_code=400
-            )
-
-        # Read one byte past the cap: enough to detect an oversize part, never
-        # enough to materialise it. ``store.put`` re-checks as defence in depth.
-        cap = min(
-            store.max_file_bytes,
-            attachment_size_limit_for_mime(normalized_mime, staged=True),
-        )
-        payload = await upload.read(cap + 1)
-        if not isinstance(payload, bytes) or len(payload) == 0:
-            return JSONResponse(
-                {"error": "empty upload"}, status_code=400
-            )
-        if len(payload) > cap:
-            return _too_large(cap, mime=normalized_mime)
-
+        # Starlette spools each uploaded part to a SpooledTemporaryFile.
+        # Nothing closes those for us: the handler owns the parsed form, so
+        # every exit -- oversize, empty, a rejected mime, a store failure --
+        # has to release them or the descriptors and temp files survive the
+        # request and accumulate for the life of the process.
         try:
-            file_uuid = await store.put(filename, normalized_mime, payload)
-        except UploadOversizeError as exc:
-            return JSONResponse({"error": str(exc), "code": "TOO_LARGE"}, status_code=413)
-        except UploadUnsupportedMimeError as exc:
-            return JSONResponse(
-                {"error": str(exc), "code": "UNSUPPORTED_MEDIA_TYPE"}, status_code=415
-            )
+            upload = form.get("file")
+            if upload is None or not hasattr(upload, "read"):
+                return JSONResponse(
+                    {"error": "missing 'file' multipart field"}, status_code=400
+                )
 
-        return JSONResponse(
-            {
-                "file_uuid": file_uuid,
-                "filename": filename,
-                "mime": normalized_mime,
-                "size": len(payload),
-            }
-        )
+            filename = getattr(upload, "filename", None) or "attachment"
+            content_type = getattr(upload, "content_type", None) or form.get("mime") or ""
+            if not isinstance(content_type, str) or not content_type:
+                return JSONResponse(
+                    {"error": "missing or invalid 'mime' / content-type"}, status_code=400
+                )
+            normalized_mime = normalize_attachment_mime(content_type)
+            if normalized_mime is None:
+                return JSONResponse(
+                    {"error": "missing or invalid 'mime' / content-type"}, status_code=400
+                )
+
+            # Read one byte past the cap: enough to detect an oversize part, never
+            # enough to materialise it. ``store.put`` re-checks as defence in depth.
+            cap = min(
+                store.max_file_bytes,
+                attachment_size_limit_for_mime(normalized_mime, staged=True),
+            )
+            payload = await upload.read(cap + 1)
+            if not isinstance(payload, bytes) or len(payload) == 0:
+                return JSONResponse(
+                    {"error": "empty upload"}, status_code=400
+                )
+            if len(payload) > cap:
+                return _too_large(cap, mime=normalized_mime)
+
+            try:
+                file_uuid = await store.put(filename, normalized_mime, payload)
+            except UploadOversizeError as exc:
+                return JSONResponse({"error": str(exc), "code": "TOO_LARGE"}, status_code=413)
+            except UploadUnsupportedMimeError as exc:
+                return JSONResponse(
+                    {"error": str(exc), "code": "UNSUPPORTED_MEDIA_TYPE"}, status_code=415
+                )
+
+            return JSONResponse(
+                {
+                    "file_uuid": file_uuid,
+                    "filename": filename,
+                    "mime": normalized_mime,
+                    "size": len(payload),
+                }
+            )
+        finally:
+            await form.close()
 
     app.router.routes.append(
         Route("/api/v1/files/upload", upload_handler, methods=["POST"])

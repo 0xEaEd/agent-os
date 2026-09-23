@@ -80,6 +80,36 @@ def test_create_then_inspect_round_trip(tmp_path: Path) -> None:
     assert inspected["has_tracked_changes"] is False
 
 
+def test_create_treats_json_null_as_empty_not_the_word_none() -> None:
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import create_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+
+    doc = create_docx.build(
+        {
+            "metadata": {"title": None, "author": None},
+            "body": [
+                {"kind": "heading", "level": 1, "text": None},
+                {"kind": "paragraph", "text": None},
+                {
+                    "kind": "table",
+                    "rows": [["Header", "Notes"], ["Item 1", None], [None, 42], None],
+                },
+            ],
+        }
+    )
+
+    assert doc.core_properties.title == ""
+    assert doc.core_properties.author != "None"
+    assert [p.text for p in doc.paragraphs] == ["", ""]
+    table = doc.tables[0]
+    assert len(table.rows) == 3  # the null row is skipped
+    assert [c.text for c in table.rows[1].cells] == ["Item 1", ""]
+    assert [c.text for c in table.rows[2].cells] == ["", "42"]
+
+
 def test_edit_replace_text(tmp_path: Path) -> None:
     sys.path.insert(0, str(SCRIPTS))
     try:
@@ -123,6 +153,112 @@ def test_inspect_cli_outputs_json(tmp_path: Path) -> None:
     encoded = json.dumps(payload, ensure_ascii=False)
     assert "paragraphs" in encoded
     assert "tables" in encoded
+
+
+def _inspect_docx_module() -> object:
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import inspect_docx  # type: ignore[import-not-found]
+    finally:
+        sys.path.pop(0)
+    return inspect_docx
+
+
+def test_inspect_survives_irregular_vertical_merge(tmp_path: Path) -> None:
+    """`row.cells` resolves a `vMerge=continue` cell against the row above and
+    raises `ValueError` when no cell starts at that grid offset there -- a
+    layout non-Word generators produce. Walking the `<w:tc>` elements directly
+    never enters that path. (#2154)"""
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    inspect_docx = _inspect_docx_module()
+    doc = Document()
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).merge(table.cell(0, 1))
+    table.cell(1, 0).text = "Cell"
+    continue_marker = OxmlElement("w:vMerge")
+    continue_marker.set(qn("w:val"), "continue")
+    table.cell(1, 1)._tc.get_or_add_tcPr().append(continue_marker)
+    src = tmp_path / "irregular.docx"
+    doc.save(str(src))
+
+    tables = inspect_docx.inspect(src)["tables"]
+
+    assert len(tables[0]) == 2
+    assert tables[0][1][0] == "Cell"
+
+
+def test_inspect_visits_a_merged_cell_once(tmp_path: Path) -> None:
+    """`row.cells` repeats a horizontally merged cell once per grid column it
+    spans, triplicating its text in the inspect output. (#2154)"""
+    from docx import Document
+
+    inspect_docx = _inspect_docx_module()
+    doc = Document()
+    table = doc.add_table(rows=1, cols=3)
+    table.cell(0, 0).merge(table.cell(0, 2)).text = "HELLO"
+    src = tmp_path / "merged.docx"
+    doc.save(str(src))
+
+    tables = inspect_docx.inspect(src)["tables"]
+
+    assert tables[0] == [["HELLO"]]
+
+
+def test_inspect_surfaces_nested_table_text(tmp_path: Path) -> None:
+    """Nested tables were silently dropped from inspect output. (#2154)"""
+    from docx import Document
+
+    inspect_docx = _inspect_docx_module()
+    doc = Document()
+    outer = doc.add_table(rows=1, cols=1)
+    outer.cell(0, 0).text = "outer"
+    outer.cell(0, 0).add_table(rows=1, cols=1).cell(0, 0).text = "inner"
+    src = tmp_path / "nested.docx"
+    doc.save(str(src))
+
+    tables = inspect_docx.inspect(src)["tables"]
+
+    assert "inner" in tables[0][0][0]
+
+
+def test_inspect_rejects_non_docx_file(tmp_path: Path) -> None:
+    """A corrupt file raised unhandled `PackageNotFoundError`; it must raise
+    `ValueError` so the CLI can exit 2 with a clean message. (#2154)"""
+    import pytest
+
+    inspect_docx = _inspect_docx_module()
+    bad = tmp_path / "invalid.docx"
+    bad.write_text("invalid")
+
+    with pytest.raises(ValueError, match="not a readable .docx file"):
+        inspect_docx.inspect(bad)
+
+
+def test_inspect_cli_rejects_non_docx_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    inspect_docx = _inspect_docx_module()
+    bad = tmp_path / "invalid.docx"
+    bad.write_text("invalid")
+
+    monkeypatch.setattr(sys, "argv", ["inspect_docx.py", str(bad)])
+    assert inspect_docx.main() == 2
+
+
+def test_inspect_rejects_broken_package_xml(tmp_path: Path) -> None:
+    """A zip that is not a valid OPC package (truncated `[Content_Types].xml`)
+    leaked lxml's `XMLSyntaxError`; it must raise `ValueError` like every other
+    unreadable file. (#2154)"""
+    import zipfile
+
+    inspect_docx = _inspect_docx_module()
+    bad = tmp_path / "broken.docx"
+    with zipfile.ZipFile(bad, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types")
+
+    with pytest.raises(ValueError, match="not a readable .docx file"):
+        inspect_docx.inspect(bad)
 
 
 def test_inspect_docx_creates_parent_directory(
@@ -654,3 +790,443 @@ def test_create_docx_cli_reports_non_object_json_with_exit_code_2(
     assert create_docx.main() == 2
     assert 'must be a JSON object with a "body" array' in capsys.readouterr().err
     assert not out.exists()
+
+
+# ── unusable ops and specs are reported, not swallowed (#2145, #2146) ────────
+
+
+def _one_paragraph_docx(path: Path, text: str) -> None:
+    from docx import Document
+
+    doc = Document()
+    doc.add_paragraph(text)
+    doc.save(str(path))
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("not json at all", "is not valid JSON"),
+        ('{"op": "replace_text", "find": "a", "with": "b"}', "must be a JSON array"),
+        ('["replace_text"]', "op 0 must be an object"),
+        ('[{"op": "replace-text", "find": "a", "with": "b"}]', "unknown kind 'replace-text'"),
+        ('[{"find": "a", "with": "b"}]', "unknown kind None"),
+        (
+            '[{"op": "replace_text", "find": "a", "with": "b"}, {"op": "Replace_Text"}]',
+            "op 1 has unknown kind 'Replace_Text'",
+        ),
+    ],
+)
+def test_edit_docx_reports_an_unusable_ops_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    body: str,
+    expected: str,
+) -> None:
+    """Each of these either crashed with a traceback or was silently dropped,
+    leaving an unmodified copy at --out reported as a successful edit."""
+    edit_docx = _edit_docx_module()
+    src = tmp_path / "in.docx"
+    _one_paragraph_docx(src, "Hello ORIGINAL world")
+    ops = tmp_path / "ops.json"
+    ops.write_text(body, encoding="utf-8")
+    out = tmp_path / "out.docx"
+    monkeypatch.setattr(sys, "argv", ["edit_docx.py", str(src), str(ops), "--out", str(out)])
+
+    assert edit_docx.main() == 2
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert "Traceback" not in captured.err
+    assert expected in captured.err
+    assert captured.out == ""
+    assert not out.exists()
+
+
+def test_edit_docx_reports_an_ops_file_that_is_not_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    edit_docx = _edit_docx_module()
+    src = tmp_path / "in.docx"
+    _one_paragraph_docx(src, "Hello")
+    ops = tmp_path / "ops.json"
+    ops.write_bytes(b"\xff\xfe[]")
+    out = tmp_path / "out.docx"
+    monkeypatch.setattr(sys, "argv", ["edit_docx.py", str(src), str(ops), "--out", str(out)])
+
+    assert edit_docx.main() == 2
+    assert "is not valid JSON" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_edit_docx_leaves_an_existing_output_alone_when_the_ops_are_unusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The destructive case: a typo'd op kind used to replace a document that
+    already held real work with an unmodified copy of the input, and exit 0."""
+    edit_docx = _edit_docx_module()
+    src = tmp_path / "in.docx"
+    _one_paragraph_docx(src, "Hello ORIGINAL world")
+    out = tmp_path / "out.docx"
+    _one_paragraph_docx(out, "PREVIOUSLY EDITED CONTENT")
+    before = out.read_bytes()
+    ops = tmp_path / "ops.json"
+    ops.write_text('[{"op": "replace-text", "find": "a", "with": "b"}]', encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["edit_docx.py", str(src), str(ops), "--out", str(out)])
+
+    assert edit_docx.main() == 2
+    assert out.read_bytes() == before
+
+
+def test_edit_docx_validates_the_ops_before_opening_the_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ops file is checked first, so a bad ops file is named even when the
+    input is not a document python-docx can open."""
+    edit_docx = _edit_docx_module()
+    src = tmp_path / "in.docx"
+    src.write_bytes(b"this is not a docx")
+    ops = tmp_path / "ops.json"
+    ops.write_text('[{"op": "replace-text"}]', encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv", ["edit_docx.py", str(src), str(ops), "--out", str(tmp_path / "o.docx")]
+    )
+
+    assert edit_docx.main() == 2
+
+
+def test_edit_docx_load_ops_returns_the_ops_unchanged(tmp_path: Path) -> None:
+    """Validation only inspects; the ops reach ``apply_ops`` exactly as written."""
+    edit_docx = _edit_docx_module()
+    ops = [{"op": "replace_text", "find": "a", "with": "b", "extra": 1}]
+    path = tmp_path / "ops.json"
+    path.write_text(json.dumps(ops), encoding="utf-8")
+
+    assert edit_docx.load_ops(path) == ops
+
+
+def test_edit_docx_op_kinds_match_what_apply_ops_handles(tmp_path: Path) -> None:
+    """Every advertised kind is applied; the allow-list and the dispatcher
+    cannot drift apart without this failing."""
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    doc.add_paragraph("alpha beta")
+    ops = [
+        {"op": "replace_text", "find": "alpha", "with": "ALPHA"},
+        {"op": "replace_run", "para": 0, "run": 0, "text": "gamma"},
+    ]
+    assert {op["op"] for op in ops} == set(edit_docx.OP_KINDS)
+
+    assert edit_docx.apply_ops(doc, ops) == 2
+
+
+def test_edit_docx_an_empty_ops_array_is_still_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``[]`` is a valid list of zero ops: the document is copied, applied is 0."""
+    edit_docx = _edit_docx_module()
+    src = tmp_path / "in.docx"
+    _one_paragraph_docx(src, "Hello")
+    ops = tmp_path / "ops.json"
+    ops.write_text("[]", encoding="utf-8")
+    out = tmp_path / "out.docx"
+    monkeypatch.setattr(sys, "argv", ["edit_docx.py", str(src), str(ops), "--out", str(out)])
+
+    assert edit_docx.main() == 0
+    assert json.loads(capsys.readouterr().out) == {"applied": 0}
+    assert out.is_file()
+
+
+def test_edit_docx_still_applies_a_valid_ops_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Validation must not disturb the working path."""
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    src = tmp_path / "in.docx"
+    _one_paragraph_docx(src, "Hello ORIGINAL world")
+    ops = tmp_path / "ops.json"
+    ops.write_text(
+        json.dumps([{"op": "replace_text", "find": "ORIGINAL", "with": "PATCHED"}]),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.docx"
+    monkeypatch.setattr(sys, "argv", ["edit_docx.py", str(src), str(ops), "--out", str(out)])
+
+    assert edit_docx.main() == 0
+
+    assert json.loads(capsys.readouterr().out) == {"applied": 1}
+    assert [p.text for p in Document(str(out)).paragraphs] == ["Hello PATCHED world"]
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ('{"body": [{"kind": "paragrpah", "text": "Hi"}]}', "unknown kind 'paragrpah'"),
+        ('{"body": [{"text": "Hi"}]}', "body entry 0 has unknown kind None"),
+        ('{"body": ["paragraph"]}', "body entry 0 must be an object, got str"),
+        (
+            '{"body": [{"kind": "paragraph", "text": "ok"}, {"kind": "Heading", "text": "T"}]}',
+            "body entry 1 has unknown kind 'Heading'",
+        ),
+    ],
+)
+def test_create_docx_reports_an_unrecognised_body_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    body: str,
+    expected: str,
+) -> None:
+    """A typo'd kind fell through ``build`` and produced an empty document at
+    exit 0; now it is named by index, and nothing is written."""
+    create_docx = _create_docx_module()
+    spec = tmp_path / "spec.json"
+    spec.write_text(body, encoding="utf-8")
+    out = tmp_path / "new.docx"
+    monkeypatch.setattr(sys, "argv", ["create_docx.py", str(spec), "--out", str(out)])
+
+    assert create_docx.main() == 2
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert expected in captured.err
+    if "unknown kind" in expected:
+        assert "expected one of heading, paragraph, table, page_break" in captured.err
+    assert captured.out == ""
+    assert not out.exists()
+
+
+def test_create_docx_accepts_an_empty_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``{"body": []}`` is a valid empty document, not an unrecognised entry."""
+    from docx import Document
+
+    create_docx = _create_docx_module()
+    spec = tmp_path / "spec.json"
+    spec.write_text('{"body": []}', encoding="utf-8")
+    out = tmp_path / "new.docx"
+    monkeypatch.setattr(sys, "argv", ["create_docx.py", str(spec), "--out", str(out)])
+
+    assert create_docx.main() == 0
+
+    assert json.loads(capsys.readouterr().out) == {"entries": 0, "out": str(out)}
+    assert Document(str(out)).paragraphs == []
+
+
+def test_create_docx_body_kinds_match_what_build_renders() -> None:
+    """Every advertised kind produces something; the allow-list and ``build``
+    cannot drift apart without this failing."""
+    create_docx = _create_docx_module()
+    entries = [
+        {"kind": "heading", "text": "T", "level": 1},
+        {"kind": "paragraph", "text": "p"},
+        {"kind": "table", "rows": [["a"]]},
+        {"kind": "page_break"},
+    ]
+    assert [e["kind"] for e in entries] == list(create_docx.BODY_KINDS)
+
+    create_docx.check_body_entries({"body": entries})
+    doc = create_docx.build({"body": entries})
+
+    assert [p.text for p in doc.paragraphs][:2] == ["T", "p"]
+    assert len(doc.tables) == 1
+
+
+def test_create_docx_still_builds_a_valid_spec_and_now_reports_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`create_docx` printed nothing at all on success, so a caller had no
+    signal beyond the exit code."""
+    from docx import Document
+
+    create_docx = _create_docx_module()
+    spec = tmp_path / "spec.json"
+    spec.write_text(
+        json.dumps(
+            {"body": [{"kind": "heading", "text": "T"}, {"kind": "paragraph", "text": "Hi"}]}
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "new.docx"
+    monkeypatch.setattr(sys, "argv", ["create_docx.py", str(spec), "--out", str(out)])
+
+    assert create_docx.main() == 0
+
+    assert json.loads(capsys.readouterr().out) == {"entries": 2, "out": str(out)}
+    assert [p.text for p in Document(str(out)).paragraphs] == ["T", "Hi"]
+
+
+_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_V = "urn:schemas-microsoft-com:vml"
+_WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+
+
+def _txbx_content(inner: str) -> str:
+    return f"<w:txbxContent>{inner}</w:txbxContent>"
+
+
+def _paragraph_xml(text: str) -> str:
+    return f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+
+
+def _add_vml_text_box(para: object, inner: str) -> None:
+    """Attach a legacy ``<w:pict>`` text box holding *inner* to *para*."""
+    from lxml import etree
+
+    run = etree.fromstring(
+        f'<w:r xmlns:w="{_W}" xmlns:v="{_V}"><w:pict><v:shape><v:textbox>'
+        f"{_txbx_content(inner)}"
+        "</v:textbox></v:shape></w:pict></w:r>"
+    )
+    para._p.append(run)
+
+
+def _add_drawingml_text_box(para: object, inner: str) -> None:
+    """Attach a modern ``<w:drawing>`` shape text box holding *inner* to *para*."""
+    from lxml import etree
+
+    run = etree.fromstring(
+        f'<w:r xmlns:w="{_W}" xmlns:wps="{_WPS}"><w:drawing><wps:wsp><wps:txbx>'
+        f"{_txbx_content(inner)}"
+        "</wps:txbx></wps:wsp></w:drawing></w:r>"
+    )
+    para._p.append(run)
+
+
+def _document_xml(doc: object, tmp_path: Path) -> str:
+    import zipfile
+
+    out = tmp_path / "saved.docx"
+    doc.save(str(out))
+    return zipfile.ZipFile(out).read("word/document.xml").decode("utf-8")
+
+
+def test_replace_text_reaches_a_vml_text_box(tmp_path: Path) -> None:
+    """A text box's words belong to no paragraph any walk reached.
+
+    Word parks text-box content in a ``<w:txbxContent>`` nested inside a run, so
+    python-docx reports the host paragraph as empty. A `replace_text` that
+    rewrote the body and left the box alone still reported the body hit, which
+    reads as a completed redaction.
+    """
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    doc.add_paragraph("Prepared for ACME-CODENAME under NDA.")
+    _add_vml_text_box(doc.add_paragraph(), _paragraph_xml("Confidential: ACME-CODENAME"))
+
+    applied = edit_docx.apply_ops(
+        doc, [{"op": "replace_text", "find": "ACME-CODENAME", "with": "Project Harbor"}]
+    )
+
+    assert applied == 2
+    xml = _document_xml(doc, tmp_path)
+    assert "ACME-CODENAME" not in xml
+    assert xml.count("Project Harbor") == 2
+
+
+def test_replace_text_reaches_a_drawingml_text_box(tmp_path: Path) -> None:
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    _add_drawingml_text_box(doc.add_paragraph(), _paragraph_xml("Callout: {{NAME}}"))
+
+    applied = edit_docx.apply_ops(doc, [{"op": "replace_text", "find": "{{NAME}}", "with": "Wei"}])
+
+    assert applied == 1
+    xml = _document_xml(doc, tmp_path)
+    assert "{{NAME}}" not in xml
+    assert "Callout: Wei" in xml
+
+
+def test_replace_text_reaches_a_text_box_in_a_header(tmp_path: Path) -> None:
+    """Letterhead banners are text boxes inside a header — two misses at once."""
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    header = doc.sections[0].header
+    header.is_linked_to_previous = False
+    _add_vml_text_box(header.paragraphs[0], _paragraph_xml("DRAFT — {{STATUS}}"))
+
+    applied = edit_docx.apply_ops(
+        doc, [{"op": "replace_text", "find": "{{STATUS}}", "with": "Final"}]
+    )
+
+    assert applied == 1
+    assert "DRAFT — Final" in header.part.blob.decode("utf-8")
+
+
+def test_replace_text_reaches_a_table_inside_a_text_box(tmp_path: Path) -> None:
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    _add_vml_text_box(
+        doc.add_paragraph(),
+        f"<w:tbl><w:tr><w:tc>{_paragraph_xml('Total: {{TOTAL}}')}</w:tc></w:tr></w:tbl>",
+    )
+
+    applied = edit_docx.apply_ops(
+        doc, [{"op": "replace_text", "find": "{{TOTAL}}", "with": "42.00"}]
+    )
+
+    assert applied == 1
+    assert "Total: 42.00" in _document_xml(doc, tmp_path)
+
+
+def test_replace_text_reaches_a_text_box_inside_a_text_box(tmp_path: Path) -> None:
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    inner_box = (
+        f'<w:p><w:r xmlns:v="{_V}"><w:pict><v:shape><v:textbox>'
+        f"{_txbx_content(_paragraph_xml('deep {{X}}'))}"
+        "</v:textbox></v:shape></w:pict></w:r></w:p>"
+    )
+    _add_vml_text_box(doc.add_paragraph(), inner_box)
+
+    applied = edit_docx.apply_ops(doc, [{"op": "replace_text", "find": "{{X}}", "with": "found"}])
+
+    assert applied == 1
+    assert "deep found" in _document_xml(doc, tmp_path)
+
+
+def test_replace_text_visits_a_text_box_paragraph_once(tmp_path: Path) -> None:
+    """A replacement containing its own needle exposes a paragraph visited twice."""
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    _add_vml_text_box(doc.add_paragraph(), _paragraph_xml("{{X}}"))
+
+    applied = edit_docx.apply_ops(doc, [{"op": "replace_text", "find": "{{X}}", "with": "{{X}}!"}])
+
+    assert applied == 1
+    assert "{{X}}!" in _document_xml(doc, tmp_path)
+    assert "{{X}}!!" not in _document_xml(doc, tmp_path)
+
+
+def test_replace_run_still_indexes_only_body_paragraphs() -> None:
+    """Guard: text boxes must not shift the index space `replace_run` addresses."""
+    from docx import Document
+
+    edit_docx = _edit_docx_module()
+    doc = Document()
+    doc.add_paragraph("first")
+    _add_vml_text_box(doc.add_paragraph(), _paragraph_xml("boxed"))
+    doc.add_paragraph("third")
+
+    applied = edit_docx.apply_ops(doc, [{"op": "replace_run", "para": 2, "run": 0, "text": "3rd"}])
+
+    assert applied == 1
+    assert doc.paragraphs[2].text == "3rd"
