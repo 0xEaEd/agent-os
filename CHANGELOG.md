@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- `title-card-image` skill: `render.py`'s auto-shrink only checked the
+  rendered text against the canvas *width*; the stacked headline/subtitle
+  lines' total height was never checked, so text that wrapped into enough
+  lines rendered its top (and/or bottom) lines completely outside the
+  canvas -- invisible -- while the script still reported success. The
+  shrink now also fits the stacked height, to a safe area (88% of the
+  canvas, matching the existing width margin) rather than 100% of it, since
+  a glyph's real drawn extent (descenders like "p"/"g"/"y") can reach below
+  what the nominal font size accounts for. If even the smallest font size
+  (12px) still overflows, the script now prints an `Error:` to stderr,
+  exits non-zero, and writes no file, instead of silently reporting success
+  with lines rendered outside the image. (#3375)
+
 ## [2026.9.29] - 2026-09-29
 
 ### Added
