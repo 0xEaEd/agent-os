@@ -19,6 +19,7 @@ from agentos.result_budget import (
     DEFAULT_TOOL_RUN_BUDGET_POLICY,
     ToolRunBudgetPolicy,
 )
+from agentos.safety.injection_guard import neutralize_untrusted_markers
 from agentos.sandbox.integration import sandboxed
 from agentos.tools.registry import tool
 from agentos.tools.ssrf import validate_http_url_for_fetch
@@ -602,7 +603,7 @@ async def web_fetch(
         "final_url": final_url,
         "status": status,
         "content_type": content_type,
-        "title": title,
+        "title": neutralize_untrusted_markers(title),
         "extract_mode": extract_mode,
         "extractor": extractor_used,
         "truncated": body_truncated,
