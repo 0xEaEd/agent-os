@@ -7,18 +7,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
-- `read_spreadsheet`: a phonetic guide (furigana) stored alongside an xlsx
-  cell's text is no longer appended to the value. The shared-string reader took
-  every `<t>` descendant, including the ones inside `<rPh>`, so a Japanese
-  workbook read back with each reading glued onto the word it annotates
-  ([#2053](https://github.com/use-agent-os/agent-os/issues/2053)).
-  workbook read back with each reading glued onto the word it annotates.
+
 - Ollama provider: an image the user attached now reaches the model.
   `_build_ollama_message` had no branch for image blocks, so the block was
   skipped and the message went out as its text alone — the model answered
   about a picture it was never sent, and nothing reported the loss. Images are
   now carried in Ollama's per-message `images` field as bare base64.
 
+- `skill_edit` erased existing YAML frontmatter metadata (`requires`,
+  `install`, `metadata.agentos`, and custom keys) when updating a skill's
+  description or content ([#2426](https://github.com/use-agent-os/agent-os/issues/2426)).
+  Existing frontmatter and unmodified sections are now preserved.
+
+- `skills/pptx`: preserve empty table cell positions in `extract_text` to prevent column misalignment.
+
+- Skills: the non-UTF-8 stdio sweep is finished. 39 bundled scripts still
+  wrote through the console code page and died with `UnicodeEncodeError` on
+  a cp1252/cp936 console or under `PYTHONIOENCODING=ascii` -- often after
+  the real work had succeeded; the four pipe receivers (`kline_chart` x2,
+  `chain_cards`, `rwa_cards`) decoded their piped payload through it too, and
+  the three gmgn scripts read `gmgn-cli` output through the locale via
+  `subprocess.run(text=True)`. The `_write_stdout` helper earlier batches had
+  copied into nine files now lives once in `agentos.skill_stdio`, beside a
+  `configure_utf8_stdio()` for scripts that print progressively and a
+  `SUBPROCESS_UTF8` for child output; every script imports it, and
+  `tests/test_skill_stdout_utf8.py` is parametrised over the bundled tree so
+  a script added without the convention fails on its own (#2804; supersedes
+  #2783, #2781, #2771, #2713, #2692, #2648, #2643, #2634).
+- Security: the sandbox denylist and the terminal-redaction gate kept
+  separate lists of credential directories and had drifted -- `~/.azure`,
+  `~/.config/gh`, `~/.anthropic` and `~/.openai` were blocked for
+  `read_file` but `cat` of the same files skipped the assignment pass, so
+  `~/.azure/service_principal_entries.json` handed the model its
+  `client_secret`. One list (`CREDENTIAL_HOME_DIRS`) now feeds both layers.
+  Seven credential files (`.my.cnf`, `.boto`, `.s3cfg`, `.yarnrc.yml`,
+  `gradle.properties`, `credentials.toml`, `credentials.tfrc.json`) and
+  `service-account*.json` are now masked when read, without being
+  hard-blocked, since they sit among build configuration an agent needs. An unquoted Windows-native path
+  (`type C:\dir\.aws\credentials`) was invisible to the gate because
+  `shlex` ate the backslashes; it is now read literally as well
+  (#2621).
 - `apply_patch`: an `*** Update File:` block with no `@@@ ` hunks — a
   unified-diff `@@ -1,1 +1,1 @@` header, a note, or nothing at all — is refused
   with the offending line named, instead of rewriting the file unchanged and
