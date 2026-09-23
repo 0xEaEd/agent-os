@@ -13,6 +13,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `Summary1` and counted it as applied, and every later op addressing `Summary`
   then read and wrote the other sheet. A taken name is now refused and
   uncounted; a capitalisation-only rename is applied exactly (#2258).
+
+- `deep-research` skill: a sub-question's coverage counted the same URL once per
+  time it was recorded, so re-submitting a source across rounds -- the normal
+  shape of the documented loop, since `--print-fetches` reports how many sources
+  are missing but never which URLs are already in hand -- reported the
+  sub-question as fully covered, dropped it from the fetch list and from the
+  report's "What this report does not cover" section, and cited the one source
+  once per copy. `iterate.py --record` now counts one source per URL per
+  sub-question and reports a `duplicates` count alongside `added` (#3114).
+
 - CLI: `sessions list --since` read any digit-only value as epoch seconds
   with no plausibility check, so a date typed without separators
   (`20260101`) or a bare year (`2026`) landed in 1970 and the filter
