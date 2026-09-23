@@ -566,6 +566,30 @@ def _task_runtime_turn_hard_deadline_s(config: GatewayConfig) -> float | None:
     return float(configured)
 
 
+_USER_MESSAGE_PROVENANCE_KINDS = frozenset({"web_message", "channel_message", "cli_message"})
+
+
+def _end_once_intent_grants_for_user_turn(run: Any) -> None:
+    """Expire the session's ``once`` destructive-intent approvals for a new user turn.
+
+    ``IntentApprovalCache`` documents ``once`` as lasting until the session's next
+    user message. ``sessions.send`` clears them only on its no-runtime fallback,
+    which the gateway never takes; every turn goes through ``TaskRuntime``, so this
+    is the one place a user message from the web UI, a channel or the CLI reaches.
+    """
+    provenance = getattr(run, "input_provenance", None)
+    if not isinstance(provenance, dict) or provenance.get("kind") not in (
+        _USER_MESSAGE_PROVENANCE_KINDS
+    ):
+        return
+    try:
+        from agentos.sandbox.intent_cache import get_intent_cache
+
+        get_intent_cache().clear_scope("once", session_key=run.session_key)
+    except Exception:  # pragma: no cover - never block a turn on the cache
+        log.debug("intent_cache.clear_once_failed", exc_info=True)
+
+
 async def dispatch_task_runtime_turn(
     run: Any,
     *,
@@ -601,6 +625,7 @@ async def dispatch_task_runtime_turn(
     ):
         raise PermissionError("channel pairing was revoked before the turn started")
     tool_context.task_id = run.task_id
+    _end_once_intent_grants_for_user_turn(run)
     session = None
     if session_manager is not None and hasattr(session_manager, "get_session"):
         session = await session_manager.get_session(run.session_key)
@@ -628,6 +653,7 @@ async def dispatch_task_runtime_turn(
             idle_timeout=stream_idle_timeout,
             heartbeat_interval=heartbeat_interval,
             stream_event_sink=getattr(run, "stream_event_sink", None),
+            show_thinking=bool(getattr(getattr(config, "control_ui", None), "show_thinking", True)),
         )
     except TaskRuntimeStreamError as exc:
         if exc.code in {
@@ -807,8 +833,13 @@ async def _emit_task_runtime_stream_events(
     idle_timeout: float | None = 180.0,
     heartbeat_interval: float | None = None,
     stream_event_sink: Any = None,
+    show_thinking: bool = True,
 ) -> None:
-    """Emit turn events and fail the task if the stream reports an error."""
+    """Emit turn events and fail the task if the stream reports an error.
+
+    ``show_thinking`` mirrors ``control_ui.show_thinking``: when off, model
+    reasoning is neither streamed nor carried on the ``done`` event.
+    """
     from dataclasses import asdict, is_dataclass
 
     from agentos.engine.stream_wrappers import wrap_stream
@@ -843,6 +874,11 @@ async def _emit_task_runtime_stream_events(
                 if not key.startswith("_")
             }
         event_kind = event_dict.pop("kind", getattr(event, "kind", event.__class__.__name__))
+        if not show_thinking:
+            if event_kind == "thinking":
+                continue
+            if event_kind == "done":
+                event_dict.pop("reasoning_content", None)
         if event_kind == "error":
             raw_message = event_dict.get("message")
             error_message = (

@@ -64,6 +64,25 @@ def set_session_epoch(session_manager: object | None, session_key: str, epoch: i
         cache[session_key] = epoch
 
 
+def clear_session_epoch(session_manager: object | None, session_key: str) -> None:
+    """Drop a session's cached epoch through a public surface when available.
+
+    Deletion paths that evict runtime state without going through
+    ``SessionManager.delete()`` (e.g. the ``sessions.delete`` RPC handler)
+    need this so a key deleted here does not hand its epoch to the next
+    session created under the same name.
+    """
+    if session_manager is None:
+        return
+    popper = getattr(session_manager, "pop_cached_epoch", None)
+    if callable(popper):
+        popper(session_key)
+        return
+    cache = getattr(session_manager, "_epoch_cache", None)
+    if isinstance(cache, dict):
+        cache.pop(session_key, None)
+
+
 def get_session_lock(
     turn_runner: object | None,
     session_key: str,

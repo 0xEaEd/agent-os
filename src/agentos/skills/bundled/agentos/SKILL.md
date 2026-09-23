@@ -602,7 +602,7 @@ Full reference: `docs/http-api.md` (https://useagentos.dev/docs/http-api).
     `agentos env set <NAME> --stdin` applies to the running gateway, no
     restart, and the skill becomes eligible on the next turn.
   - `prompt_budget` → the skills block is full. Raise
-    `agentos config set skills.max_skills_prompt_chars <n>` (default 24000)
+    `agentos config set skills.max_skills_prompt_chars 32000` (default 24000)
     and restart the gateway. The gateway also logs
     `skills_filter.budget_truncated` with the dropped names. Truncation goes
     lowest-precedence layer first (`extra`, then `bundled`), so this shows up

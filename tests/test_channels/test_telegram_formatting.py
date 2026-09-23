@@ -791,3 +791,15 @@ def test_plain_inline_consumes_escapes_instead_of_stripping_the_character(
     character the author asked for nor a clean marker strip.
     """
     assert _plain_inline(label) == expected
+
+
+def test_telegram_heading_with_bold_does_not_nest_bold_tags() -> None:
+    """Issue #3049: Telegram Bot API rejects nested identical tags (<b> inside <b>).
+    Headings containing bold markers should not produce nested <b><b>...</b></b> tags."""
+    rendered = render_telegram_html("# **Bold Heading**")
+    assert rendered == "<b>Bold Heading</b>"
+    assert "<b><b>" not in rendered
+
+    rendered_partial = render_telegram_html("## Prefix **Bold** and *Italic* Suffix")
+    assert rendered_partial == "<b>Prefix Bold and <i>Italic</i> Suffix</b>"
+    assert "<b><b>" not in rendered_partial
