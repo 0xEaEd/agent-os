@@ -34,12 +34,8 @@ from agentos.onboarding.search_specs import search_provider_catalog_payload
 from agentos.onboarding.status import OnboardingStatus, get_onboarding_status
 from agentos.onboarding.x_search_specs import x_search_catalog_payload
 
-IMAGE_GENERATION_SECTION_ALIASES = frozenset(
-    {"image", "image-generation", "image_generation"}
-)
-MEMORY_EMBEDDING_SECTION_ALIASES = frozenset(
-    {"memory", "memory-embedding", "memory_embedding"}
-)
+IMAGE_GENERATION_SECTION_ALIASES = frozenset({"image", "image-generation", "image_generation"})
+MEMORY_EMBEDDING_SECTION_ALIASES = frozenset({"memory", "memory-embedding", "memory_embedding"})
 AUDIO_SECTION_ALIASES = frozenset({"audio", "voice-audio", "voice_audio"})
 X_SEARCH_SECTION_ALIASES = frozenset({"x-search", "x_search", "xsearch"})
 
@@ -110,9 +106,12 @@ class SetupEngine:
                 proxy=str(payload.get("proxy", "")),
             )
         elif normalized == "router":
+            strategy = payload.get("strategy")
+            jev_api_key = payload.get("jevApiKey")
             res = upsert_router(
                 self.config,
                 mode=str(payload.get("mode", "recommended")),
+                strategy=strategy,
                 default_tier=payload.get("defaultTier"),
                 tiers=payload.get("tiers"),
                 judge_model=payload.get("judgeModel"),
@@ -124,6 +123,12 @@ class SetupEngine:
                 # rejected here rather than degrading every turn to
                 # judge_unavailable.
                 verify_local_endpoint=bool(payload.get("judgeBaseUrl")),
+                jev_api_key=jev_api_key,
+                jev_api_key_env=payload.get("jevApiKeyEnv"),
+                jev_high_risk_threshold=payload.get("jevHighRiskThreshold"),
+                # Same rule as the RPC: probe typesafe.ai only when Jev is being
+                # selected with a key supplied in this call.
+                verify_jev=strategy == "jev" and jev_api_key is not None,
             )
         elif normalized == "search":
             res = upsert_search_provider(

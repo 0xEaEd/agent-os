@@ -471,7 +471,7 @@ def test_model_config_resolves_object_and_alias_catalog(
     ).migrate()
 
     persisted = tomllib.loads(config_path.read_text(encoding="utf-8"))
-    assert persisted["llm"]["model"] == "anthropic/claude-opus-4-6"
+    assert persisted["llm"]["model"] == "claude-opus-4-6"
     item = next(item for item in report["items"] if item["kind"] == "model-config")
     assert item["details"]["requested_model"] == "Claude Opus 4.6"
     assert item["details"]["resolved_from_alias"] is True
@@ -603,7 +603,7 @@ def test_model_provider_conflict_with_existing_tier_profile_is_reported(
     assert item["details"]["tier_profile_conflict"] == "openrouter"
     assert item["details"]["llm_provider_left_unchanged"] == "openrouter"
     assert item["details"]["llm_model_left_unchanged"] == "deepseek/deepseek-v4-flash"
-    assert item["details"]["skipped_model"] == "anthropic/claude-3-5-sonnet"
+    assert item["details"]["skipped_model"] == "claude-3-5-sonnet"
     assert item["details"]["manual_steps"]
 
 
@@ -644,7 +644,7 @@ def test_model_provider_conflict_with_direct_provider_preserves_model(
     item = next(item for item in report["items"] if item["kind"] == "model-config")
     assert item["details"]["tier_profile_conflict"] == "deepseek"
     assert item["details"]["llm_model_left_unchanged"] == "deepseek-v4-flash"
-    assert item["details"]["skipped_model"] == "anthropic/claude-3-5-sonnet"
+    assert item["details"]["skipped_model"] == "claude-3-5-sonnet"
 
 
 def test_env_secret_migration_preserves_existing_lines_and_dedupes_keys(
