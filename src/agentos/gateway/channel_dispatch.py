@@ -68,6 +68,7 @@ from agentos.permissions import configured_default_elevated
 from agentos.plan_mode import format_plan_as_text, plan_from_tool_result
 from agentos.session.keys import canonicalize_session_key as _canonicalize_session_key
 from agentos.session.terminal_reply import build_terminal_reply
+from agentos.util.bounded_registry import BoundedRegistry
 
 if TYPE_CHECKING:
     from agentos.gateway.event_bridge import EventBridge
@@ -385,10 +386,24 @@ class ChannelSessionPointers:
     In-memory by design: a gateway restart clears the pointers, after which each
     chat deterministically falls back to its derived base key. This is the same
     best-effort semantics as the WebUI (whose pointer is ``localStorage``).
+
+    Bounded (#1561/#1131): nothing notifies this map when a chat stops being
+    used, so without a ceiling it grows one entry per chat that has ever run
+    ``/new``, for the life of the process. An entry belongs to the session it
+    points at (the value), not the base key it is filed under: the base
+    session is the one the chat has already left, and archiving or deleting it
+    must not reroute the chat away from its live ``/new`` conversation. When
+    the *current* session ends, or the entry is evicted under the size cap,
+    the chat falls back to its deterministic base key on its next message --
+    the same graceful degradation the docstring above already describes for
+    a full restart.
     """
 
     def __init__(self) -> None:
-        self._map: dict[str, str] = {}
+        self._map: BoundedRegistry[str, str] = BoundedRegistry(
+            name="ChannelSessionPointers._map",
+            session_of=lambda _key, value: value,
+        )
 
     @staticmethod
     def _canon(key: str) -> str:
@@ -2431,14 +2446,19 @@ async def _deliver_runtime_channel_reply(
 
     if content:
         content, artifacts = _split_assistant_artifact_content(content)
+        content = _strip_artifact_markers_from_channel_text(content)
+        # Strip inline references for every artifact named in this text, not
+        # just the ones still pending delivery below -- one already delivered
+        # natively by the stream relay is just as stale a reference as one
+        # about to be delivered here, and dropping it from `artifacts` first
+        # left its "![name](name)" markdown sitting in the fallback text.
+        content = _strip_delivered_artifact_image_references(content, artifacts)
         if stream_relay is not None and stream_relay.delivered_artifact_keys:
             artifacts = [
                 artifact
                 for artifact in artifacts
                 if _artifact_delivery_key(artifact) not in stream_relay.delivered_artifact_keys
             ]
-        content = _strip_artifact_markers_from_channel_text(content)
-        content = _strip_delivered_artifact_image_references(content, artifacts)
         if _can_deliver_channel_files(channel):
             if content:
                 await channel.send(

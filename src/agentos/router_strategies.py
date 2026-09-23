@@ -32,8 +32,10 @@ __all__ = [
     "is_known_strategy",
     "known_strategy_ids",
     "pilot_asset_probe",
+    "jev_credential_probe",
     "PILOT_STRATEGY_ID",
     "LLM_JUDGE_STRATEGY_ID",
+    "JEV_STRATEGY_ID",
 ]
 
 #: Legacy strategy id. The v4_phase3 engine and its model bundle were removed
@@ -43,6 +45,9 @@ __all__ = [
 V4_STRATEGY_ID = "v4_phase3"
 LLM_JUDGE_STRATEGY_ID = "llm_judge"
 PILOT_STRATEGY_ID = "pilot-v1"
+#: Experimental cloud classifier (typesafe.ai Jev). Opt-in only — it sends the
+#: current turn text off-machine — and never the default.
+JEV_STRATEGY_ID = "jev"
 
 #: Retired ids and the live strategy each one resolves to. The single source
 #: of truth consulted by both config validation and runtime resolution, so a
@@ -79,6 +84,12 @@ class RouterStrategyInfo:
         asset_probe: callable returning the list of missing asset paths (empty
             when everything the strategy needs is present); ``None`` for
             strategies with no local assets.
+        requires_remote_credentials: whether the strategy calls a remote
+            service with its own credential (not the ``llm.*`` ones), so boot
+            preflight and doctor must run ``credential_probe``.
+        credential_probe: callable returning a human-readable problem string
+            when the credential is missing/unusable, or ``None`` when it is
+            present. Must never touch the network.
     """
 
     strategy_id: str
@@ -87,6 +98,8 @@ class RouterStrategyInfo:
     requires_local_assets: bool
     uses_judge: bool
     asset_probe: Callable[..., list[str]] | None
+    requires_remote_credentials: bool = False
+    credential_probe: Callable[[object], str | None] | None = None
 
 
 def _pilot_default_artifact_dir() -> Path:
@@ -151,6 +164,17 @@ def _resolve_pilot_artifact_dir(config: object | None) -> Path:
     return _pilot_default_artifact_dir()
 
 
+def jev_credential_probe(config: object | None = None) -> str | None:
+    """Return a problem string when the Jev API key is missing, else ``None``.
+
+    Lazy import: ``agentos_router.jev`` pulls in the judge module (for
+    ``compute_flags``), which has no business loading at registry import time.
+    """
+    from agentos.agentos_router.jev import jev_credential_probe as _probe
+
+    return _probe(config)
+
+
 _REGISTRY: dict[str, RouterStrategyInfo] = {
     LLM_JUDGE_STRATEGY_ID: RouterStrategyInfo(
         strategy_id=LLM_JUDGE_STRATEGY_ID,
@@ -167,6 +191,16 @@ _REGISTRY: dict[str, RouterStrategyInfo] = {
         requires_local_assets=True,
         uses_judge=False,
         asset_probe=pilot_asset_probe,
+    ),
+    JEV_STRATEGY_ID: RouterStrategyInfo(
+        strategy_id=JEV_STRATEGY_ID,
+        source="jev",
+        degraded_source="jev_unavailable",
+        requires_local_assets=False,
+        uses_judge=False,
+        asset_probe=None,
+        requires_remote_credentials=True,
+        credential_probe=jev_credential_probe,
     ),
 }
 

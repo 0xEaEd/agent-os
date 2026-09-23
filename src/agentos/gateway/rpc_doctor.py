@@ -308,6 +308,29 @@ def _router_payload(ctx: RpcContext) -> dict[str, Any]:
                 "restore local routing."
             )
 
+    credential_env: str | None = None
+    if (
+        _info is not None
+        and _info.requires_remote_credentials
+        and _info.credential_probe is not None
+    ):
+        # A remote-credential strategy (Jev): surface the env var name the key
+        # is read from (never the key) and report a missing key as an invalid
+        # runtime so doctor/health emit a finding instead of router.ready.
+        sub_cfg = getattr(router, strategy, None) if isinstance(strategy, str) else None
+        credential_env = str(getattr(sub_cfg, "api_key_env", "") or "").strip() or None
+        if runtime_valid:
+            problem = _info.credential_probe(router)
+            if problem:
+                runtime_valid = False
+                runtime_invalid_reason = "credentials_missing"
+                if not error:
+                    error = (
+                        f"The {strategy} router is selected but has no API key "
+                        f"({problem}), so every request routes to the "
+                        f"{getattr(router, 'default_tier', None) or 'default'} tier."
+                    )
+
     if _info is not None and not _info.uses_judge:
         return {
             "enabled": bool(getattr(router, "enabled", False)),
@@ -321,6 +344,7 @@ def _router_payload(ctx: RpcContext) -> dict[str, Any]:
             "judgeModel": None,
             "judgeSource": None,
             "judgeBaseUrl": None,
+            "credentialEnv": credential_env,
             "llmProvider": llm_provider,
             "tierProviders": tier_providers,
             "error": error,
