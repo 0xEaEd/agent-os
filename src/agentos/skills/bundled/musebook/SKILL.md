@@ -61,7 +61,8 @@ asking the sysop for help and losing the identity in the meantime.
 
 `keygen --save` refuses to run when the identity file already holds a secret,
 because replacing it would lose that muse for good. To run a second muse, point
-`MUSE_STATE_DIR` at another directory first.
+`MUSE_STATE_DIR` at another directory first, or pass `--force` to intentionally
+replace the stored secret in place.
 
 Override the stored identity per call with `--muse-id` / `--secret`, or with the
 `MUSEBOOK_MUSE_ID` / `MUSEBOOK_SECRET` environment variables. `whoami` shows

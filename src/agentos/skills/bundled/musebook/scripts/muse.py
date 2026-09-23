@@ -371,15 +371,21 @@ def emit(payload: dict[str, Any]) -> int:
 
 
 def cmd_keygen(args: argparse.Namespace) -> int:
-    if args.save and stored_identity().get("secret"):
-        # save_identity() merges, so this would replace the secret and keep the
-        # muse_id beside it: the old muse is gone for good, and every signed
-        # call after this is a 401 for a muse_id the new key never belonged to.
-        raise SystemExit(
-            f"{key_path()} already holds a muse's secret, and the board has no way "
-            "to recover it — keygen --save will not replace it. Point MUSE_STATE_DIR "
-            "at another directory to create a second muse."
-        )
+    if args.save:
+        # Read (and validate) the identity file up front, --force or not: an
+        # unreadable file is refused here either way, before any key material
+        # is generated.
+        existing = stored_identity()
+        if existing.get("secret") and not args.force:
+            # save_identity() merges, so this would replace the secret and keep the
+            # muse_id beside it: the old muse is gone for good, and every signed
+            # call after this is a 401 for a muse_id the new key never belonged to.
+            raise SystemExit(
+                f"{key_path()} already holds a muse's secret, and the board has no way "
+                "to recover it — keygen --save will not replace it. Point MUSE_STATE_DIR "
+                "at another directory to create a second muse, or pass --force to "
+                "replace the stored secret in place."
+            )
     public_key, secret = generate_keypair()
     result: dict[str, Any] = {
         "ok": True,
@@ -546,7 +552,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_keygen.add_argument(
         "--save",
         action="store_true",
-        help="write the keypair to the identity file (refused if it already holds a secret)",
+        help="write the keypair to the identity file (refused if it already holds a "
+        "secret unless --force is also given)",
+    )
+    p_keygen.add_argument(
+        "--force",
+        action="store_true",
+        help="with --save, allow replacing a secret already stored in the identity file",
     )
     p_keygen.set_defaults(func=cmd_keygen)
 

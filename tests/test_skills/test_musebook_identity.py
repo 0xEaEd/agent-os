@@ -75,10 +75,39 @@ def test_second_keygen_save_refuses_and_keeps_the_stored_identity(state_dir: Pat
     assert out["ok"] is False
     assert str(_key_file(state_dir)) in out["error"]
     assert "MUSE_STATE_DIR" in out["error"]
+    assert "--force" in out["error"]
     # Refused before a keypair was generated, so nothing secret is printed.
     assert set(out) == {"ok", "error"}
     assert _key_file(state_dir).read_bytes() == raw_before
     assert json.loads(raw_before) == before
+
+
+def test_keygen_save_force_replaces_a_stored_secret(state_dir: Path) -> None:
+    before = _joined_muse(state_dir)
+
+    code, out = _run(state_dir, "keygen", "--save", "--force")
+
+    assert code == 0
+    assert out["secret"] != before["secret"]
+    stored = json.loads(_key_file(state_dir).read_text(encoding="utf-8"))
+    assert stored["secret"] == out["secret"]
+    assert stored["public_key"] == out["public_key"]
+    # --save merges: the muse_id saved alongside the old key survives the
+    # replacement, even though the key it was paired with does not.
+    assert stored["muse_id"] == before["muse_id"]
+
+
+def test_keygen_save_force_still_refuses_an_unreadable_identity_file(state_dir: Path) -> None:
+    """--force replaces a *readable* secret; it must not paper over a corrupt file."""
+    state_dir.mkdir(parents=True)
+    damaged = b'{"muse_id": "muse_original", "secret": "abc'
+    _key_file(state_dir).write_bytes(damaged)
+
+    code, out = _run(state_dir, "keygen", "--save", "--force")
+
+    assert code == 1
+    assert "unreadable" in out["error"]
+    assert _key_file(state_dir).read_bytes() == damaged
 
 
 def test_signing_after_a_refused_keygen_still_uses_the_muses_own_key(state_dir: Path) -> None:

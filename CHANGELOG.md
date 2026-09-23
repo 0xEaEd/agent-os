@@ -321,6 +321,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `agentos gateway run` / `start` report an invalid setting as one line per
   error, naming the environment variable that supplies it, instead of a
   pydantic traceback (#3100)
+- `musebook` skill: `keygen --save` refuses to run when the identity file
+  already holds a secret, since replacing it in place would lose that muse
+  for good with no recovery. `--force` now offers a supported way to
+  intentionally replace the stored secret, named alongside `MUSE_STATE_DIR`
+  in the refusal message; it still refuses on an identity file that exists
+  but cannot be read as JSON. (#2668)
 - Router task-type detection: a code-port request naming Go, C, Objective-C,
   F#, Visual Basic, VBA or Node.js is no longer read as a translation and
   capped to the cheapest tier. The guard already covered `golang`, `c++`,
