@@ -199,3 +199,56 @@ def test_setup_engine_catalog_includes_memory_embedding():
     provider_ids = {p["providerId"] for p in payload["memoryEmbeddingProviders"]}
     assert {"auto", "local", "openai", "ollama", "none"} <= provider_ids
     assert all("whatYouNeed" in p for p in payload["memoryEmbeddingProviders"])
+
+
+def test_setup_engine_forwards_jev_fields_and_verifies_the_key(tmp_path, monkeypatch):
+    import agentos.agentos_router.jev as jev_mod
+
+    probed: list[str] = []
+
+    def _fake_probe(api_key, **_kwargs):
+        probed.append(api_key)
+        return None
+
+    monkeypatch.setattr(jev_mod, "probe_jev", _fake_probe)
+    target = tmp_path / "config.toml"
+    engine = SetupEngine(path=target)
+
+    engine.apply("provider", {"providerId": "deepseek", "apiKeyEnv": "DEEPSEEK_API_KEY"})
+    res = engine.apply(
+        "router",
+        {
+            "mode": "recommended",
+            "strategy": "jev",
+            "jevApiKey": "tsk-secret",
+            "jevApiKeyEnv": "MY_TYPESAFE_KEY",
+            "jevHighRiskThreshold": 0.9,
+        },
+    )
+    engine.persist()
+
+    assert probed == ["tsk-secret"]
+    assert res.public_payload["jev"] == {
+        "api_key_configured": True,
+        "api_key_env": "MY_TYPESAFE_KEY",
+    }
+    data = tomllib.loads(target.read_text())
+    assert data["agentos_router"]["strategy"] == "jev"
+    assert data["agentos_router"]["jev"]["api_key"] == "tsk-secret"
+    assert data["agentos_router"]["jev"]["api_key_env"] == "MY_TYPESAFE_KEY"
+    assert data["agentos_router"]["jev"]["high_risk_threshold"] == 0.9
+
+
+def test_setup_engine_jev_without_a_new_key_does_not_probe(tmp_path, monkeypatch):
+    import agentos.agentos_router.jev as jev_mod
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("probe_jev must not run when no key is supplied")
+
+    monkeypatch.setattr(jev_mod, "probe_jev", _boom)
+    engine = SetupEngine(path=tmp_path / "config.toml")
+
+    engine.apply("provider", {"providerId": "deepseek", "apiKeyEnv": "DEEPSEEK_API_KEY"})
+    res = engine.apply("router", {"mode": "recommended", "strategy": "jev"})
+
+    assert res.config.agentos_router.strategy == "jev"

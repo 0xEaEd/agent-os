@@ -148,6 +148,55 @@ class TestGet:
         assert result.exit_code != 0
 
 
+class TestRevealIsCopyable:
+    """A revealed value is pasted into a shell, a file or another tool.
+
+    ``COLUMNS`` is pinned so the width the renderer would use is the same on
+    every machine and in CI; the command must not consult it at all.
+    """
+
+    @pytest.fixture(autouse=True)
+    def fixed_width(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("COLUMNS", "80")
+
+    def test_a_long_key_is_one_line(self) -> None:
+        # Shorter than a current OpenAI project key; long enough to wrap.
+        key = "sk-proj-" + "A" * 120
+        env_store.set_env_var("OPENAI_API_KEY", key)
+        result = runner.invoke(app, ["env", "get", "OPENAI_API_KEY", "--reveal", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert result.output.splitlines() == [key]
+
+    def test_a_bracketed_span_survives(self) -> None:
+        # Rich would read "[ass]" as a markup tag and drop it.
+        env_store.set_env_var("DB_PASSWORD", "p[ass]w0rd")
+        result = runner.invoke(app, ["env", "get", "DB_PASSWORD", "--reveal", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert result.output.splitlines() == ["p[ass]w0rd"]
+
+    def test_a_closing_tag_does_not_abort_the_command(self) -> None:
+        # Rich raises MarkupError on a "[/]" with nothing open.
+        env_store.set_env_var("DB_PASSWORD", "sec[/]ret")
+        result = runner.invoke(app, ["env", "get", "DB_PASSWORD", "--reveal", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert result.exception is None
+        assert result.output.splitlines() == ["sec[/]ret"]
+
+    def test_non_ascii_is_not_mangled(self) -> None:
+        # Control: the ordinary path still prints the value it was given.
+        env_store.set_env_var("DB_PASSWORD", "sesamo—übrigens")
+        result = runner.invoke(app, ["env", "get", "DB_PASSWORD", "--reveal", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert result.output.splitlines() == ["sesamo—übrigens"]
+
+    def test_json_output_is_unchanged(self) -> None:
+        key = "sk-proj-" + "A" * 120
+        env_store.set_env_var("OPENAI_API_KEY", key)
+        result = runner.invoke(app, ["env", "get", "OPENAI_API_KEY", "--reveal", "--json"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["value"] == key
+
+
 class TestUnset:
     def test_removes_after_confirmation(self) -> None:
         env_store.set_env_var("MY_OWN_VARIABLE", "v")

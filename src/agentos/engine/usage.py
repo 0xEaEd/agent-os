@@ -429,7 +429,15 @@ class UsageTracker:
         inside a migration-managed database.
         """
         global _global_usage_tracker
-        self._sessions: dict[str, SessionUsage] = {}
+        # Cache-shaped, not session-shaped: ``rpc_usage._append_tracker_only_rows``
+        # reads these to give a session its per-model breakdown, which disk
+        # persistence does not record, so dropping a session the moment it ends
+        # is the regression that helper exists to prevent. A TTL keeps a
+        # recently-ended session reportable and still bounds the map.
+        self._sessions: BoundedRegistry[str, SessionUsage] = BoundedRegistry(
+            shape="cache",
+            name="UsageTracker._sessions",
+        )
         self._scopes: BoundedRegistry[tuple[str, str], SessionUsage] = BoundedRegistry(
             name="UsageTracker._scopes",
             session_of=lambda key, _value: key[0],
@@ -447,8 +455,21 @@ class UsageTracker:
         # under-report spend and silently retire a ceiling.
         self._daily_spend: dict[tuple[str, str, str], float] = {}
         self._daily_spend_day = ""
-        self._session_spend: dict[str, float] = {}
-        self._session_active_skill: dict[str, str] = {}
+        # Session-shaped: both describe a session while it is live. An ended
+        # session cannot accrue more spend, so its ceiling is moot and the
+        # terminal event is the right moment to drop the mirror; the in-memory
+        # copy guards a dropped ledger write only for as long as the session can
+        # still spend.
+        self._session_spend: BoundedRegistry[str, float] = BoundedRegistry(
+            shape="session",
+            name="UsageTracker._session_spend",
+            session_of=lambda key, _value: key,
+        )
+        self._session_active_skill: BoundedRegistry[str, str] = BoundedRegistry(
+            shape="session",
+            name="UsageTracker._session_active_skill",
+            session_of=lambda key, _value: key,
+        )
         # Headroom held for turns that have been admitted but have not yet
         # recorded their spend. Without it every member of a concurrent
         # fan-out reads the same pre-fan-out snapshot and clears the same
@@ -901,7 +922,6 @@ class UsageTracker:
         usage = self._sessions.get(session_key)
         if usage is None:
             usage = SessionUsage(model_id=model_id, provider_id=effective_provider_id)
-            self._sessions[session_key] = usage
         usage.add(
             input_tokens,
             output_tokens,
@@ -911,6 +931,11 @@ class UsageTracker:
             billed_cost=billed_cost,
             provider_id=effective_provider_id,
         )
+        # Re-set on every write, not just the first: BoundedRegistry stamps the
+        # TTL in `set()` only, so a session that never re-triggers this would
+        # have its cache_ttl_seconds measured from the first turn, not the last
+        # -- a continuously active session would lose its SessionUsage mid-run.
+        self._sessions[session_key] = usage
         if model_id:
             usage.model_id = model_id
         scope_key = _current_usage_scope.get()
