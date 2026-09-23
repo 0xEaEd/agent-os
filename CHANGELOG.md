@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Tools: `grep_search` and `apply_patch` counted lines with `str.splitlines()`,
+  which breaks on eleven characters rather than the newline alone. A file
+  carrying a lone carriage return or a form feed was numbered differently by
+  different tools: `grep_search` reported a hit at a line `read_file`
+  disagreed with, and `apply_patch` shifted every later line against the hunk
+  headers, rejecting a correct patch as a context mismatch. Both now split on
+  newlines only, and `grep_search` reads with `newline=""` so the default
+  translation of a lone carriage return cannot renumber a file either
+  (#3176).
+
 - `subtitle-burner` skill: a subtitle path containing an apostrophe failed the
   burn outright (`No option name near ''s_cues.srt`). A `-vf` argument is
   tokenised twice -- by the filtergraph parser, then by the option parser --

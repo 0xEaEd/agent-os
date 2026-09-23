@@ -23,6 +23,7 @@ import structlog
 from agentos.identity.workspace import BOOTSTRAP_FILENAMES
 from agentos.redact import redact_file_output
 from agentos.sandbox.integration import get_runtime, sandboxed
+from agentos.tools.builtin._lines import split_lines
 from agentos.tools.fuzzy_match import (
     AmbiguousMatchError,
     FuzzyMatchError,
@@ -1279,8 +1280,16 @@ async def grep_search(
             try:
                 if _looks_binary(_read_binary_sample(fp), fp):
                     return
-                text = fp.read_text(encoding="utf-8", errors="replace")
-                for lineno, line in enumerate(text.splitlines(), 1):
+                # newline="" because the default translates a lone CR into
+                # a newline before anything counts lines, and split_lines
+                # because str.splitlines() also breaks on form feed, NEL
+                # and the rest. Either one numbers a hit differently from
+                # read_file, which reads the bytes and breaks on newlines
+                # -- and the model edits the file by the number this tool
+                # reports.
+                with fp.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+                    text = handle.read()
+                for lineno, line in enumerate(split_lines(text), 1):
                     if regex.search(line):
                         shown = redact_file_output(line.rstrip(), path=fp)
                         results.append(f"{fp}:{lineno}: {shown}")
