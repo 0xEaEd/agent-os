@@ -193,8 +193,15 @@ cur_mc = total_supply * cur_price
 
 burn_pct = sum(_f(h.get("amount_percentage")) for h in burn)
 dex_pct = sum(_f(h.get("amount_percentage")) for h in dex)
-top10 = sum(_f(h.get("amount_percentage")) for h in holders[:10])
-top20 = sum(_f(h.get("amount_percentage")) for h in holders[:20])
+# Concentration is about supply that can be sold. ``holders`` is the raw
+# top-100, which includes the burn address and the DEX pools -- on any
+# tradable token those hold the largest balances and sit in the first slots,
+# so counting them made a token read 🔴 over supply that is destroyed or owned
+# by the AMM. The report already says so itself: the burn line calls that
+# balance "permanently locked, non-circulating" and the footer prints DEX as
+# "excluded from eval". Every other aggregate here sums over ``normal``.
+top10 = sum(_f(h.get("amount_percentage")) for h in normal[:10])
+top20 = sum(_f(h.get("amount_percentage")) for h in normal[:20])
 
 airdrop = [h for h in normal if _f(h.get("buy_tx_count_cur")) == 0 and _f(h.get("balance")) > 0]
 bundlers = [h for h in normal if "bundler" in (h.get("maker_token_tags") or [])]

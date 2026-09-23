@@ -15,6 +15,340 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `minimax/` prefixes, the ones `_provider_from_model` already reads the
   provider from, are now stripped the same way. The migration report's
   `skipped_model` shows the native id too.
+
+- `session_search`: a short query in a non-Latin script now matches whichever
+  case the user typed. #2897 answers terms below the three-character trigram
+  floor (`go`, `db`, a two-character CJK word) with a `LIKE` scan "instead of
+  by nothing", but SQLite's `LIKE` folds case for ASCII only -- so `db` found
+  `DB` while `бд` did not find `БД` and `är` did not find `ÄRGER`, and the tool
+  reported "No matches found." for a transcript it holds. Each short term is
+  expanded to its per-character case forms before escaping; the expansion is
+  bounded at four patterns and collapses to one for a caseless script such as
+  CJK. The indexed path is unchanged -- `trigram` already folds the full
+  Unicode range.
+
+- Migration: `agentos migrate openclaw` and `agentos migrate hermes` no longer
+  turn every remote MCP server into an SSE server with no headers. A server
+  with a `url` was always written as `transport = "sse"` and its `headers`
+  were dropped, so a hosted streamable-HTTP server that authenticates with an
+  `Authorization` header arrived unable to connect, while OpenClaw's report
+  called `headers`/`transport` "unsupported" although `MCPServerEntry` has both.
+  An explicit `transport` (`streamable-http`, `streamable_http`, `http`, `sse`)
+  is now kept, `headers` are carried over, and a URL server that names no
+  transport stays on `sse` as before. Like the server's `env`, `headers` are
+  migrated without `--migrate-secrets`.
+
+- Migration: `agentos migrate openclaw` and `agentos migrate hermes` no longer
+  copy a trailing inline comment into a migrated `.env` value. Both source
+  runtimes read `.env` with a dotenv loader, so `OPENAI_API_KEY=sk-1 # work`
+  is `sk-1` there, but the migrators only trimmed quote characters off the two
+  ends and wrote `sk-1 # work` (or `sk-1'  # work` for a quoted value) into the
+  new `.env`, where AgentOS reads it literally and the provider answers 401.
+  A quoted value now ends at its closing quote and an unquoted one at the
+  first whitespace followed by `#`; values without a comment are unchanged.
+
+- `robinhood-chain-stocks` skill: a fetch of the Chainlink reference-data
+  directory that failed at the network level (DNS, timeout, 5xx, a non-JSON
+  body) aborted the entire run with `{"query": ..., "error": ...}`, discarding
+  the on-chain reading the RPC had already answered (address, symbol, supply,
+  the `uiMultiplier()` Stock-Token check, holder balance). The note the script
+  keeps for this case -- "could not fetch the Chainlink feed directory; price
+  unavailable, not disproven" -- was reachable only when the fetch *succeeded*
+  with a non-list body. The directory is an optional price source: a fetch
+  fault now degrades to that note with the cause recorded in
+  `readErrors.feedDirectory`, so one unreachable host costs the price read
+  instead of the whole dossier (#3290).
+
+- Web UI: `control_ui.show_thinking = false` now stops the live reasoning
+  stream. `chat.history` and `chat.thinking` honoured it, but every turn runs
+  through `TaskRuntime`, whose event path forwarded each `session.event.thinking`
+  and the `reasoning_content` on `session.event.done` to subscribed WebSockets
+  regardless; the only check lived in the no-runtime fallback of
+  `sessions.send`. With the flag off the gateway now drops thinking events and
+  strips `reasoning_content` from `done`, as docs/web-ui.md describes (#3276).
+
+- `agentos config set --config` (and `agents add`, onboarding and the
+  hermes/openclaw migrations, which share `onboarding.config_store.load_config`)
+  no longer copies a gateway auth token/password or the LLM API key that was
+  supplied only through `AGENTOS_AUTH_TOKEN` / `AGENTOS_AUTH_PASSWORD` /
+  `AGENTOS_LLM_API_KEY` into `config.toml`. Because the file beats the
+  environment, the copy made a later rotation of the environment value a silent
+  no-op. Setting `auth.token` or `llm.api_key` explicitly still writes it. If an
+  earlier run already wrote such a value, it stays in the file until you remove
+  it (#3269).
+
+- Channel message splitting: a long fenced code block no longer arrives with a
+  statement broken in two across the seam. `split_text_for_limit` documents
+  that its cut is "nudged back to the nearest line/word boundary so a chunk
+  doesn't end mid-word", but `_rebalance_open_fence` -- the branch taken for
+  every chunk after the first of a long block -- used its binary-search cut
+  raw, so `line_17 = compute(17)` was delivered as `line_17 ` and
+  `= compute(17)` on separate lines of two separate Discord/Telegram messages.
+  The cut is now nudged the same way, and the head no longer gains a blank line
+  before the synthesized closing fence. The non-advancing-split guard from
+  #2127 is preserved: the nudge only moves the cut forward of the fence, must
+  keep at least half the span the search found, and falls back to the raw cut
+  rather than failing.
+
+- Memory search: MMR diversity re-ranking no longer collapses results written
+  in a non-Latin, non-CJK script. `_jaccard_similarity` tokenized snippets with
+  `[a-zA-Z0-9]+` plus a CJK pass, so a Cyrillic, Greek, Hangul, Arabic, Hebrew,
+  Devanagari or Thai snippet yielded no tokens at all and any two of them
+  scored a perfect 1.0 -- the penalty reserved for an exact duplicate, which
+  pushed genuinely different results out of the top-k with nothing logged. The
+  word class is now `[^\W_]+`, the same widening
+  `memory_tools._memory_search_query_terms` already applies. ASCII and CJK
+  tokenize exactly as before.
+
+- Approvals: a destructive command approved with **once** no longer answers the
+  same command in the session's later turns. `IntentApprovalCache` documents
+  `once` as ending at the session's next user message, but the only
+  `clear_scope("once", ...)` call was in the no-runtime fallback of
+  `sessions.send`; the gateway always runs turns through `TaskRuntime`, so the
+  grant lived for its full 30-minute TTL and the shell gate skipped the prompt
+  (and elevated the call). A web, channel or CLI user message now ends the
+  session's `once` grants when its turn starts. `always` grants, other
+  sessions' grants and cron / subagent turns are untouched (#3274).
+
+- Skills (video-still-animator): `resolve_ffmpeg` had drifted from the copies
+  in video-merger and subtitle-burner -- it did not probe `C:\ffmpeg\bin` and
+  returned early (skipping every fixed location) whenever `LOCALAPPDATA` was
+  unset -- so an ffmpeg the other two skills found, this one reported as
+  `not found`. The three resolvers now probe the same locations in the same
+  order, and a test runs all three under one environment to keep it that way
+  (#2435).
+
+- `SubagentRegistry` retained completed, errored, and aborted subagent runs and
+  their result text in `_runs` for the life of the agent because `archive()` was
+  never called on task completion, leaving the bounded `_archived` cache empty;
+  `SubagentManager.spawn` now moves finished subagents to `_archived` on completion
+  and registry queries search both active and archived runs
+  ([#2424](https://github.com/use-agent-os/agent-os/issues/2424)).
+
+- `create_xlsx` bypassed zip timestamp and `docProps/core.xml` normalization,
+  causing identical workbooks across turns to produce non-deterministic
+  hashes that silently broke artifact session deduplication.
+
+- Tools: `grep_search` and `apply_patch` counted lines with `str.splitlines()`,
+  which breaks on eleven characters rather than the newline alone. A file
+  carrying a lone carriage return or a form feed was numbered differently by
+  different tools: `grep_search` reported a hit at a line `read_file`
+  disagreed with, and `apply_patch` shifted every later line against the hunk
+  headers, rejecting a correct patch as a context mismatch. Both now split on
+  newlines only, and `grep_search` reads with `newline=""` so the default
+  translation of a lone carriage return cannot renumber a file either
+  (#3176).
+
+- `subtitle-burner` skill: a subtitle path containing an apostrophe failed the
+  burn outright (`No option name near ''s_cues.srt`). A `-vf` argument is
+  tokenised twice -- by the filtergraph parser, then by the option parser --
+  and the quote was escaped for only the first, so the second met a bare quote
+  and swallowed the rest of the argument, taking `:force_style=...` into the
+  filename on an odd quote count. The quote is now escaped at both levels
+  (#3162).
+
+- Observability: the log retention sweeper's family list named `agentos.log*`, a
+  filename nothing in AgentOS writes, and matched no pattern against the gateway
+  daemon's own `~/.agentos/logs/gateway.log` -- opened append-only by
+  `agentos gateway start` and rotated by nothing. The one unbounded log was
+  therefore never aged out, never counted against
+  `observability.log_retention_max_total_mb`, and never tripped the sweep's
+  `capped` flag. The stale pattern is replaced with `gateway.log*`, and that
+  family is reclaimed by truncating in place rather than `unlink`, so the
+  running daemon's inherited descriptor is not left appending into an orphaned
+  inode (#3116).
+
+- `xlsx` `edit_xlsx.py`: a `rename_sheet` lands on exactly the name asked for,
+  or does nothing. openpyxl routes an assigned title through
+  `avoid_duplicate_name`, so renaming onto a name another sheet held wrote
+  `Summary1` and counted it as applied, and every later op addressing `Summary`
+  then read and wrote the other sheet. A taken name is now refused and
+  uncounted; a capitalisation-only rename is applied exactly (#2258).
+
+- `deep-research` skill: the compiled report dropped every source's `relevance`
+  and never named the source count, two of the five output elements SKILL.md
+  enumerates. Relevance is the entire output of the five-axis rubric in
+  `references/sources.md`, whose bar calls anything below 0.40 a dead end and
+  which tells the host to record a paywalled page with `relevance: 0` -- so a
+  dead end was cited in the same shape, with the same weight, as a primary
+  source. `compile.py` now prints `[relevance N.NN]` on every reference line and
+  the recorded source count in the Methodology block (#3115).
+
+- `deep-research` skill: a sub-question's coverage counted the same URL once per
+  time it was recorded, so re-submitting a source across rounds -- the normal
+  shape of the documented loop, since `--print-fetches` reports how many sources
+  are missing but never which URLs are already in hand -- reported the
+  sub-question as fully covered, dropped it from the fetch list and from the
+  report's "What this report does not cover" section, and cited the one source
+  once per copy. `iterate.py --record` now counts one source per URL per
+  sub-question and reports a `duplicates` count alongside `added` (#3114).
+
+- CLI: `sessions list --since` read any digit-only value as epoch seconds
+  with no plausibility check, so a date typed without separators
+  (`20260101`) or a bare year (`2026`) landed in 1970 and the filter
+  silently matched every session -- a full table, exit 0, no warning.
+  Digit-only input is now read by its length: 8 digits is a compact
+  `YYYYMMDD` date, 10 is epoch seconds, 13 is epoch milliseconds; anything
+  else is rejected with `--since must be an ISO date/datetime, a compact
+  date (YYYYMMDD), or an epoch timestamp in seconds (10 digits) or
+  milliseconds (13 digits)`. An out-of-range value (e.g. a 14-digit
+  string) previously reached `datetime.fromtimestamp`, whose range check
+  is platform-dependent -- it raised on Windows but not on Linux, where it
+  silently produced a valid-looking date thousands of years out -- so
+  epoch-timestamp conversion now goes through plain `timedelta` arithmetic
+  instead, which raises the same way on every platform (#2132).
+- CLI: `agentos config set KEY VALUE` now validates the value before printing
+  the `export AGENTOS_GATEWAY_…` line, the way it already did with `--config`;
+  `agentos gateway run` / `start` report an invalid setting as one line per
+  error, naming the environment variable that supplies it, instead of a
+  pydantic traceback (#3100)
+- Router task-type detection: a code-port request naming Go, C, Objective-C,
+  F#, Visual Basic, VBA or Node.js is no longer read as a translation and
+  capped to the cheapest tier. The guard already covered `golang`, `c++`,
+  `c#` and `.net`, so each of these families was in scope but one of its
+  members was missing — the same defect #1198 fixed for `c++`/`c#`/`.NET`.
+  `go`, `c` and `r` are matched only in target position, since they are
+  ordinary English words as well as language names. (#2968)
+- CLI: a copy-pasteable hint whose path holds `$` or a backtick is now escaped
+  for PowerShell inside its double quotes; `"C:\home\Jo$hn\config.toml"`
+  pasted into PowerShell used to expand `$hn` and open the wrong path (#2978)
+- Telegram: a Markdown table header or row label written as `*italic*` (or
+  `***bold italic***`) no longer leaks its asterisks into the rendered
+  `<b>…</b>`; the label path strips single-asterisk italics the way it already
+  stripped `_italic_` (#2964)
+
+## [2026.9.22.post1] - 2026-09-22
+
+### Added
+- Pilot Router: new opt-in, experimental `jev` strategy (typesafe.ai Jev
+  System One) — one `/v1/systemone` call with a `route` choice (R0–R3,
+  criteria derived from the tier descriptions) and a `high_risk` noul that
+  floors destructive/production requests at c3; the calibrated confidence
+  passes through the engine's confidence gate; selectable from the CLI and
+  Web UI setup wizards (`agentos configure router`, `agentos onboard`);
+  degrades to `jev_unavailable` on a missing key, HTTP error or timeout.
+  Sends the current turn text to typesafe.ai; requires `TYPESAFE_API_KEY`
+  (`[agentos_router.jev]`)
+
+### Fixed
+- Pilot Router `jev` strategy: sharpened the R2/R3 criteria so whole-system
+  architecture design and end-to-end incident-triage process design land on
+  R3 while single-service log diagnosis stays R2. On the labeled router
+  corpus (121 cases, vi/zh/en) classifier accuracy rises from 0.760 to 0.901
+  and R3 recall from 0.56 to 0.91.
+
+- `scripts/router_eval.py`: the strategy-engaged probe compared
+  `routing_source` against the raw strategy id, so `--strategy pilot-v1`
+  (tag `pilot_v1`) always aborted with "strategy did not engage". It now
+  resolves the expected tag through the strategy registry.
+
+- `weather` skill: a planner contract whose `DESTINATION:` field is present
+  but blank no longer silently forwards an unrelated field (e.g. `DATES:
+  next weekend`) to wttr.in as the city name. `_extract_location` now
+  treats a blank destination the same as no text at all and falls back to
+  `"London"`, instead of falling through to the contract's first line.
+
+- `session_search`: transcripts are now indexed with FTS5's `trigram`
+  tokenizer, query terms are joined with `OR` and ranked by `bm25`, and terms
+  shorter than three characters are answered by a scan. A query could not
+  match inside a run of CJK characters (`迁移计划` never found
+  `数据库迁移计划`) and every term had to be present (`migration plan for
+  postgres` found nothing in a transcript that lacked only `for`). An existing
+  index is rebuilt once, at the first open after upgrading (#2897)
+
+- `http-fetch` skill: `--max-bytes` now bounds what is *read*, not just what is
+  printed. The whole body used to be downloaded and held in memory before the
+  cap was applied, and a slow or endless stream (SSE, a log tail) was waited on
+  until the skill runner's timeout killed the process with no output; the read
+  now stops one byte past the cap and closes the connection (#2895)
+
+- Gateway channel dispatch: the batch-fallback reply sent after a streaming
+  turn no longer leaves a stale markdown image reference (e.g.
+  `![chart](chart.png)`) in the text for an artifact the stream relay
+  already delivered as a native file. `_deliver_runtime_channel_reply`
+  stripped that artifact out of the list *before* stripping its inline
+  reference from the re-fetched transcript text, so
+  `_strip_delivered_artifact_image_references` never saw its name and left
+  the dead reference sitting right after the real attachment.
+
+- `exec_command`: an inline artifact marker naming a file the finished
+  process still holds, or one the agent cannot read, no longer fails the whole
+  command and withholds its output. `publish_inline_artifacts` reports an
+  `OSError` from the publish in place of the marker, as it already did for a
+  `ToolError` (#2892)
+
+- CLI: commands no longer print structlog debug events to stderr — `agentos
+  context` put ~190 `tool_filtered` lines on the terminal on top of its tables.
+  The CLI filters at `INFO` (`AGENTOS_LOG_LEVEL` overrides); the gateway keeps
+  its own configured `log_level` for the console and `debug.log` (#2896)
+
+- Tools: the reasons `edit_file`, `grep_search`, `projects_create` and
+  `projects_update` refuse a call now reach the model instead of "The tool
+  received an invalid argument" — the closest-match hint and ambiguous line
+  numbers, the regex diagnostic, and the project-name rule; and `web_fetch`
+  reports an unresolvable hostname in its result's `error` field like every
+  other unreachable URL (#2888, #2889, #2890, #2891)
+
+- Tools: `read_spreadsheet` sized a row from whatever column a `.xlsx` cell
+  reference claimed, so a crafted or corrupt `r="..."` far past the format's
+  16,384-column ceiling drove a very large allocation. Such a cell is now
+  dropped (#2867).
+
+- `poolsdotfun-token-launcher` and `senior-unilp-manager` skills: a boolean flag
+  before the subcommand (`--json pools`) consumed the subcommand as its value,
+  so the command ran without one. Flags that take no argument no longer
+  swallow the positional (#2863, #2864).
+
+- `video-merger` skill: merging to an output path whose parent directory did
+  not exist failed with `No such file or directory` after the concat and
+  encode work had already been done. The parent directory is now created
+  before ffmpeg writes (#2858).
+
+- Channels: `split_text_for_limit` recognises a `~~~` fence without breaking a
+  closed backtick one -- a stray `~~~` inside an already-closed ``` ``` ```
+  body (a pasted example, a divider, a conflict marker) no longer pairs with
+  an unrelated one further down and rebalances the wrong block (#2954).
+- MSTeams: `send_streaming` chunks at the 40 KB activity payload limit and
+  rolls over into a fresh activity like the Telegram and Discord adapters,
+  remembering every activity id it creates, instead of failing with HTTP 413
+  (#2876).
+- Gateway: an attachment a channel turn (Telegram, Discord, Slack, ...) staged
+  under the session *key* was unreachable through the download route
+  `chat.history` links to, which only looked under the session *id*; both
+  directories are consulted now (#2944).
+- Artifacts: `strip_artifact_markers_from_text` stopped at the first `]`, so a
+  name with its own brackets (`Q3 Report [Draft].pdf`) left the marker's tail
+  in the reply; it now matches the marker's own closing bracket without
+  swallowing the text around it (#2942).
+- Gateway: `logs.tail` kept only the newest `limit` lines of everything unread
+  and then advanced the cursor to end-of-file, so a burst larger than `limit`
+  between two polls lost its older lines for good despite `has_more: true`.
+  The cursor now resumes through the burst while the first poll still opens
+  on the live tail (#2938).
+- Engine: a silent-reply sentinel the model wrapped in Markdown (`**NO_REPLY**`,
+  `` `HEARTBEAT_OK` ``) is treated as the bare sentinel instead of being
+  delivered as a message (#2945).
+- Scheduler: a cron script that closes the `{"wakeAgent": false}` gate keeps
+  its output on the run record instead of a fixed "silent" string (#2922), and
+  the gate is still honoured when the output before it pushes stdout past the
+  16k clip -- the clip previously cut the gate off and the run was treated as
+  news (#2921).
+- CLI: `agentos cost --csv` and `cost savings --csv` print through plain
+  stdout instead of Rich, so a long row redirected to a file is no longer
+  wrapped at 80 columns into two records (#2946). `agentos memory …` and
+  `agentos cron …` print stored text, job names and run output verbatim
+  instead of interpreting `[word]` as Rich markup and `:name:` as an emoji
+  (#2820), and the interactive chat's tool status line shows tool arguments
+  literally, where a `[/]` in a shell command or URL previously raised
+  `MarkupError` and killed the REPL (#2823).
+- `pptx` skill: `render_thumbs.sh` prints only the slide images the current
+  run wrote, and documents pdftoppm's page-number padding, instead of globbing
+  whatever an earlier run left in the directory (#2817).
+
+## [2026.9.22] - 2026-09-22
+
+### Fixed
+- Memory notes containing ZWJ emoji sequences, ZWNJ-shaped Persian/Hindi text or a leading BOM are no longer refused on write or silently replaced with a `[BLOCKED: ...]` placeholder on load; `memory_tools` now takes its invisible-character verdict from `injection_guard` (which already exempts the joiners) instead of a private list that had drifted (#2966).
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.

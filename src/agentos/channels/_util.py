@@ -395,32 +395,92 @@ async def retry_request(
 # ---------------------------------------------------------------------------
 
 
+_FENCE_MARKERS: tuple[str, ...] = ("```", "~~~")
+
+
+def _open_fence_before(segment: str, cut: int) -> tuple[str, int] | None:
+    """The fence marker left open before *cut*, and where that fence starts.
+
+    ``~~~`` is the other CommonMark fence, and the one a body containing
+    backticks has to use; the Telegram renderer has treated it as a fence
+    since #2022, so a cut landing inside one leaves the same half-open block
+    a stray ``` would.
+
+    Counting each marker's occurrences independently gets this wrong: a
+    ``` fence whose content happens to contain a literal ``~~~`` -- a pasted
+    example, a divider line, a git conflict marker -- is not a second,
+    nested fence, but an independent count of "```" vs "~~~" reads it as
+    "0 backticks open, 1 tilde open" and sends the cut into the middle of a
+    block that was never unbalanced at all. This walks the markers in the
+    order they actually appear in *segment* and tracks which one, if any, is
+    currently open, so a marker found while a *different* one is already
+    open is content, not a toggle -- matching how a renderer treats it (a
+    ``` fence's body is verbatim; a ``~~~`` inside it is not markdown).
+    Restricted to one marker type at a time, this reduces to the same
+    even/odd count as before.
+    """
+    open_marker: str | None = None
+    open_at = -1
+    pos = 0
+    while pos < cut:
+        next_at: int | None = None
+        next_marker = ""
+        for marker in _FENCE_MARKERS:
+            found = segment.find(marker, pos, cut)
+            if found != -1 and (next_at is None or found < next_at):
+                next_at, next_marker = found, marker
+        if next_at is None:
+            break
+        if open_marker is None:
+            open_marker, open_at = next_marker, next_at
+        elif open_marker == next_marker:
+            open_marker = None
+        # else: a different marker while one is already open is content.
+        pos = next_at + len(next_marker)
+    if open_marker is not None:
+        return open_marker, open_at
+    return None
+
+
 def _rebalance_open_fence(
     segment: str,
     limit: int,
     length: Callable[[str], int],
     fence_start: int,
+    marker: str,
 ) -> tuple[str, str] | None:
     """Close the fence at *fence_start* on the head and reopen it on the tail.
 
     Used only when there is no earlier line to back the cut up to instead
     (see the ``candidate`` cases in :func:`split_text_for_limit`) — the
     fence opens the segment itself, so the only way to keep both halves
-    balanced is to synthesize a closing ``` on the head and a matching
+    balanced is to synthesize a closing *marker* on the head and a matching
     reopener on the tail.
 
-    The cut is a fresh binary search bounded below by ``fence_start + 3``
-    (past the opening backticks), not a reuse of the caller's word/line-
-    boundary cut: reusing it let a stray early newline right after a bare
-    fence send the cut snapping back to almost the same place on the next
-    call, reproducing the same input again — an infinite loop in any caller
-    that splits until the tail is empty. Returns ``None`` when no cut makes
-    both the closed head fit within *limit* and the tail strictly shorter
-    than *segment*, so the caller can fall back to a plain, unbalanced cut
-    rather than loop forever chasing a balance that cannot fit.
+    The cut is a fresh binary search bounded below by the end of the opening
+    marker, not a reuse of the caller's word/line-boundary cut: reusing it
+    let a stray early newline right after a bare fence send the cut snapping
+    back to almost the same place on the next call, reproducing the same
+    input again — an infinite loop in any caller that splits until the tail
+    is empty. Returns ``None`` when no cut makes both the closed head fit
+    within *limit* and the tail strictly shorter than *segment*, so the
+    caller can fall back to a plain, unbalanced cut rather than loop forever
+    chasing a balance that cannot fit.
+
+    The search result is then nudged back to a line or word boundary, the
+    same way :func:`split_text_for_limit` nudges its own — a fenced block is
+    the one place a mid-word cut is *most* visible, since code is rendered
+    verbatim and the seam puts a synthetic closing marker between the two
+    halves, so ``line_17 = compute(17)`` arrived as ``line_17 `` and
+    ``= compute(17)`` on separate lines of two separate messages. The nudge
+    cannot reintroduce the loop above: it only ever moves the cut *forward*
+    of the opening marker, it is required to keep at least half the span the
+    binary search found, and a nudged cut that would fail either guard below
+    is discarded in favour of the raw one rather than returning ``None``.
     """
-    closer = "\n```"
-    low, high, cut = fence_start + 3, len(segment) - 1, fence_start + 3
+    closer = f"\n{marker}"
+    opening_end = fence_start + len(marker)
+    low, high, cut = opening_end, len(segment) - 1, opening_end
     while low <= high:
         mid = (low + high) // 2
         if length(segment[:mid] + closer) <= limit:
@@ -430,18 +490,38 @@ def _rebalance_open_fence(
             high = mid - 1
     if length(segment[:cut] + closer) > limit:
         return None
-    # The reopener carries the fence's info string (its language tag, e.g.
-    # ```python) only when that string's own line actually ends before the
-    # cut -- otherwise the next newline in the segment could be arbitrarily
-    # far away (a bare fence with no early line break of its own) and
-    # everything up to it would be mistaken for the info string.
-    line_end = segment.find("\n", fence_start)
-    reopen = f"{segment[fence_start:line_end]}\n" if 0 <= line_end < cut else "```\n"
-    head = segment[:cut] + closer
-    tail = reopen + segment[cut:].lstrip("\n")
-    if not tail or len(tail) >= len(segment):
-        return None
-    return head, tail
+
+    def _build(at: int) -> tuple[str, str] | None:
+        # The reopener carries the fence's info string (its language tag, e.g.
+        # ```python) only when that string's own line actually ends before the
+        # cut -- otherwise the next newline in the segment could be arbitrarily
+        # far away (a bare fence with no early line break of its own) and
+        # everything up to it would be mistaken for the info string.
+        line_end = segment.find("\n", fence_start)
+        reopen = f"{segment[fence_start:line_end]}\n" if 0 <= line_end < at else f"{marker}\n"
+        # The closing marker needs its own line, but a head that already ends
+        # on a newline must not gain a blank one -- that blank renders inside
+        # the delivered code block. Dropping the "\n" only shortens the head,
+        # so the limit the binary search cleared above still holds.
+        head = segment[:at] + (closer if not segment[:at].endswith("\n") else marker)
+        tail = reopen + segment[at:].lstrip("\n")
+        if not tail or len(tail) >= len(segment) or length(head) > limit:
+            return None
+        return head, tail
+
+    for boundary in ("\n", " "):
+        found = segment.rfind(boundary, opening_end, cut)
+        # Halfway through the span the search actually won, mirroring the
+        # ``found >= best // 2`` floor the caller applies to its own nudge:
+        # a boundary further back than that costs more of the message than
+        # the tidier seam is worth.
+        if found >= opening_end + (cut - opening_end) // 2:
+            nudged = _build(found + 1)
+            if nudged is not None:
+                return nudged
+            break
+
+    return _build(cut)
 
 
 def split_text_for_limit(
@@ -461,10 +541,11 @@ def split_text_for_limit(
 
     The cut point is found by binary search and then nudged back to the
     nearest line/word boundary so a chunk doesn't end mid-word. A fenced
-    code block (```...```) split mid-fence would leave each half with an
-    unbalanced fence — some platforms reject a message whose Markdown
-    entities don't parse, turning a length problem into a delivery failure —
-    so if an odd number of fences precede the cut, one is open:
+    code block (```...``` or ~~~...~~~) split mid-fence would leave each
+    half with an unbalanced fence — some platforms reject a message whose
+    Markdown entities don't parse, turning a length problem into a delivery
+    failure — so if a fence marker precedes the cut with no matching close
+    of its own type before it, one is open (:func:`_open_fence_before`):
 
     * if there is a line before the fence, the cut backs up to the start of
       that line, keeping the whole fence (and everything after it) for the
@@ -495,15 +576,16 @@ def split_text_for_limit(
         if found >= best // 2:
             cut = found + 1
             break
-    if segment.count("```", 0, cut) % 2 == 1:
-        fence_start = segment.rfind("```", 0, cut)
+    open_fence = _open_fence_before(segment, cut)
+    if open_fence is not None:
+        marker, fence_start = open_fence
         newline_before_fence = segment.rfind("\n", 0, fence_start)
         if newline_before_fence >= 0:
             cut = newline_before_fence + 1
         elif fence_start > 0:
             cut = fence_start
         else:
-            rebalanced = _rebalance_open_fence(segment, limit, length, fence_start)
+            rebalanced = _rebalance_open_fence(segment, limit, length, fence_start, marker)
             if rebalanced is not None:
                 return rebalanced
     return segment[:cut], segment[cut:]

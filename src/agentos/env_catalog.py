@@ -181,6 +181,18 @@ def _builtin_tool_specs() -> list[EnvVarSpec]:
             owner="web_fetch",
             required=False,
         ),
+        EnvVarSpec(
+            name="TYPESAFE_API_KEY",
+            description=(
+                'API key for typesafe.ai Jev (Pilot Router strategy "jev", experimental). '
+                "Sends the current turn text to typesafe.ai for classification."
+            ),
+            url="https://typesafe.ai",
+            secret=True,
+            category=CATEGORY_PROVIDER,
+            owner="agentos_router",
+            required=False,
+        ),
     ]
 
 
