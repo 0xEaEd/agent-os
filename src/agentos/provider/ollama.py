@@ -300,6 +300,11 @@ class OllamaProvider:
         }
         if cfg.temperature is not None:
             payload["options"]["temperature"] = cfg.temperature
+        if cfg.stop_sequences:
+            # Ollama takes stop strings under options, where OpenAI uses payload["stop"]
+            # and Anthropic payload["stop_sequences"]. Dropping them let the model run
+            # past a prompt boundary and hallucinate the next turn (#3033).
+            payload["options"]["stop"] = list(cfg.stop_sequences)
         if tools:
             payload["tools"] = [_build_ollama_tool(t) for t in tools]
             # Ollama's native /api/chat exposes no forced tool_choice parameter,
