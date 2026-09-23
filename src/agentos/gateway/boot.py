@@ -566,6 +566,30 @@ def _task_runtime_turn_hard_deadline_s(config: GatewayConfig) -> float | None:
     return float(configured)
 
 
+_USER_MESSAGE_PROVENANCE_KINDS = frozenset({"web_message", "channel_message", "cli_message"})
+
+
+def _end_once_intent_grants_for_user_turn(run: Any) -> None:
+    """Expire the session's ``once`` destructive-intent approvals for a new user turn.
+
+    ``IntentApprovalCache`` documents ``once`` as lasting until the session's next
+    user message. ``sessions.send`` clears them only on its no-runtime fallback,
+    which the gateway never takes; every turn goes through ``TaskRuntime``, so this
+    is the one place a user message from the web UI, a channel or the CLI reaches.
+    """
+    provenance = getattr(run, "input_provenance", None)
+    if not isinstance(provenance, dict) or provenance.get("kind") not in (
+        _USER_MESSAGE_PROVENANCE_KINDS
+    ):
+        return
+    try:
+        from agentos.sandbox.intent_cache import get_intent_cache
+
+        get_intent_cache().clear_scope("once", session_key=run.session_key)
+    except Exception:  # pragma: no cover - never block a turn on the cache
+        log.debug("intent_cache.clear_once_failed", exc_info=True)
+
+
 async def dispatch_task_runtime_turn(
     run: Any,
     *,
@@ -601,6 +625,7 @@ async def dispatch_task_runtime_turn(
     ):
         raise PermissionError("channel pairing was revoked before the turn started")
     tool_context.task_id = run.task_id
+    _end_once_intent_grants_for_user_turn(run)
     session = None
     if session_manager is not None and hasattr(session_manager, "get_session"):
         session = await session_manager.get_session(run.session_key)
