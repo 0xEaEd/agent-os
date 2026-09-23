@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Migration: `agentos migrate openclaw` and `agentos migrate hermes` no longer
+  copy a trailing inline comment into a migrated `.env` value. Both source
+  runtimes read `.env` with a dotenv loader, so `OPENAI_API_KEY=sk-1 # work`
+  is `sk-1` there, but the migrators only trimmed quote characters off the two
+  ends and wrote `sk-1 # work` (or `sk-1'  # work` for a quoted value) into the
+  new `.env`, where AgentOS reads it literally and the provider answers 401.
+  A quoted value now ends at its closing quote and an unquoted one at the
+  first whitespace followed by `#`; values without a comment are unchanged.
+
 - `robinhood-chain-stocks` skill: a fetch of the Chainlink reference-data
   directory that failed at the network level (DNS, timeout, 5xx, a non-JSON
   body) aborted the entire run with `{"query": ..., "error": ...}`, discarding
