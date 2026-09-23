@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `subtitle-burner` skill: a subtitle path containing an apostrophe failed the
+  burn outright (`No option name near ''s_cues.srt`). A `-vf` argument is
+  tokenised twice -- by the filtergraph parser, then by the option parser --
+  and the quote was escaped for only the first, so the second met a bare quote
+  and swallowed the rest of the argument, taking `:force_style=...` into the
+  filename on an odd quote count. The quote is now escaped at both levels
+  (#3162).
+
 - Observability: the log retention sweeper's family list named `agentos.log*`, a
   filename nothing in AgentOS writes, and matched no pattern against the gateway
   daemon's own `~/.agentos/logs/gateway.log` -- opened append-only by
