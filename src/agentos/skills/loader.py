@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import re
 from pathlib import Path
 from typing import Any, cast
@@ -43,6 +44,23 @@ def _string_list(value: object) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _read_skill_md(skill_file: Path) -> str:
+    """Read a SKILL.md, honouring a byte-order mark if the file starts with one.
+
+    Windows tools write one by default: PowerShell 5.1's ``Set-Content
+    -Encoding UTF8`` prefixes a UTF-8 BOM, and its ``>`` / ``Out-File`` write
+    UTF-16. Read as plain ``utf-8``, the first put ``\ufeff`` in front of
+    ``---`` so the frontmatter did not match and the skill was dropped without
+    a word; the second failed to decode. ``utf-8-sig`` reads a BOM-less file
+    exactly as ``utf-8`` does.
+    """
+    with skill_file.open("rb") as handle:
+        head = handle.read(2)
+    if head in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
+        return skill_file.read_text(encoding="utf-16")
+    return skill_file.read_text(encoding="utf-8-sig")
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -545,7 +563,7 @@ class SkillLoader:
             return None
 
         try:
-            text = skill_file.read_text(encoding="utf-8")
+            text = _read_skill_md(skill_file)
             frontmatter, body = _parse_frontmatter(text)
 
             if not frontmatter or "name" not in frontmatter:
@@ -558,9 +576,18 @@ class SkillLoader:
             always_raw = frontmatter.get("always", False)
             always = bool(always_raw) if always_raw is not None else False
 
-            triggers = frontmatter.get("triggers", [])
-            if not isinstance(triggers, list):
-                triggers = [str(triggers)]
+            raw_triggers = frontmatter.get("triggers", [])
+            if not isinstance(raw_triggers, list):
+                raw_triggers = [raw_triggers]
+            # A blank entry -- "", a whitespace string, or the None a trailing "-" in the
+            # YAML list produces -- is dropped here: an empty trigger is a substring of
+            # every message, so it would fire the skill on every turn (#2999). Non-string
+            # scalars are coerced rather than left to crash the .lower() in the matcher.
+            triggers = [
+                text
+                for text in (str(item).strip() for item in raw_triggers if item is not None)
+                if text
+            ]
 
             # Platform metadata fields
             metadata = _resolve_metadata(frontmatter)
@@ -630,7 +657,11 @@ class SkillLoader:
         matches: list[SkillSpec] = []
         for skill in self.load_all():
             for trigger in skill.triggers:
-                if trigger.lower() in text_lower:
+                # Loading drops blank triggers, but a SkillSpec can also be built from a
+                # cached manifest, so the matcher refuses an empty one on its own too.
+                if not isinstance(trigger, str) or not trigger.strip():
+                    continue
+                if trigger.strip().lower() in text_lower:
                     matches.append(skill)
                     break
         return matches

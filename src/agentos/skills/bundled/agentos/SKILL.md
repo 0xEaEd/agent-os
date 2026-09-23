@@ -225,7 +225,7 @@ Main `agentos.toml` sections (full commented reference:
 | `[x_search]` | xAI-backed X (Twitter) search: `enabled`, `model` (default `grok-4.5`), `api_key`/`api_key_env` (`XAI_API_KEY`), `reasoning_effort`, `timeout_seconds`, `total_timeout_seconds`, `retries`. The `x_search` tool is hidden until a credential resolves |
 | `[browser]` | Browser automation via `agent-browser`: `enabled`, `headless`, `cdp_port` (0=managed; >0 attaches to your Chrome, localhost only) + `attach_confirmed`, `allowed_domains`, `persist_profile`, `dialog_policy`, `restrict_evaluate`. The `browser` tool is hidden until the binary is installed (`npm install -g agent-browser && agent-browser install`). See docs/features/browser.md |
 | `[llm]` | `provider`, `model`, `api_key`, `base_url`, `proxy`, `[llm.provider_routing]` |
-| `[agentos_router]` | router on/off, `strategy` (`pilot-v1`), tier settings under `[agentos_router.tiers.c0..c3]` |
+| `[agentos_router]` | router on/off, `strategy` (`pilot-v1` \| `llm_judge` \| `jev`), tier settings under `[agentos_router.tiers.c0..c3]`; `jev` (experimental) reads its key from `TYPESAFE_API_KEY` and is tuned under `[agentos_router.jev]` |
 | `[skills]` | skill filtering/injection: `filter_strategy`, `filter_top_k`, `injection_mode`, `max_skills_prompt_chars` (default 24000), `max_skill_view_chars` (default 10000, 0 disables) |
 | `[tools]` | model-visible tools and policy; `enabled = false` runs providers in plain-text mode; `profile` (`full` \| `coding` \| `messaging` \| `memory_only` \| `minimal`) sets the base allowlist — `agentos context` prices each one |
 | `[memory]` | memory source and embedding model, `[memory.nudge]` (periodic memory review) |
@@ -602,7 +602,7 @@ Full reference: `docs/http-api.md` (https://useagentos.dev/docs/http-api).
     `agentos env set <NAME> --stdin` applies to the running gateway, no
     restart, and the skill becomes eligible on the next turn.
   - `prompt_budget` → the skills block is full. Raise
-    `agentos config set skills.max_skills_prompt_chars <n>` (default 24000)
+    `agentos config set skills.max_skills_prompt_chars 32000` (default 24000)
     and restart the gateway. The gateway also logs
     `skills_filter.budget_truncated` with the dropped names. Truncation goes
     lowest-precedence layer first (`extra`, then `bundled`), so this shows up

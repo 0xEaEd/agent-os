@@ -17,6 +17,7 @@ from agentos.application.intent_cache import IntentApprovalCache
 from agentos.engine.cache_break_monitor import CacheBreakMonitor
 from agentos.engine.progress_watchdog import ProgressWatchdog
 from agentos.engine.subagent import SubagentRegistry
+from agentos.gateway.channel_dispatch import ChannelSessionPointers
 from agentos.gateway.session_streams import SessionStreamRegistry
 from agentos.plan_mode import PlanModeStore
 from agentos.sandbox.governance import DenialLedger
@@ -42,6 +43,7 @@ def _field(owner: object, name: str) -> BoundedRegistry:
         (ProgressWatchdog, ["_repeat_counts", "_repeat_results"]),
         (CacheBreakMonitor, ["_baselines"]),
         (IntentApprovalCache, ["_entries"]),
+        (ChannelSessionPointers, ["_map"]),
     ],
 )
 def test_named_sites_are_bounded(factory, fields: list[str]) -> None:
@@ -104,7 +106,12 @@ def test_turn_runner_snapshot_fields_are_bounded() -> None:
     source = runtime.__file__
     with open(source, encoding="utf-8") as handle:
         text = handle.read()
-    for field in ("_memory_snapshots", "_bootstrap_snapshots"):
+    for field in (
+        "_memory_snapshots",
+        "_bootstrap_snapshots",
+        "_compaction_failures",
+        "_emergency_compaction_overrides",
+    ):
         assert f"self.{field}: BoundedRegistry" in text or f"self.{field}: dict" not in text
 
 
@@ -153,6 +160,67 @@ def test_evict_session_runtime_state_drops_bounded_registry_entries() -> None:
     assert "doomed" not in monitor._baselines
     assert "kept" in monitor._baselines
     assert monitor._baselines["kept"].reset_pending is True
+
+
+def test_turn_runner_compaction_state_is_dropped_on_teardown() -> None:
+    """#2399: these two leaked one entry per abandoned session forever.
+
+    Unlike ``_memory_snapshots``/``_bootstrap_snapshots`` (already
+    ``BoundedRegistry`` before this fix), neither dict's only removal path
+    (compaction success, or the session's next turn) ever fires for a
+    session that fails once and is never revisited -- proven here via the
+    same terminal-event sweep every other session-scoped registry answers.
+    """
+    from agentos.engine.runtime import (
+        TurnRunner,
+        _CompactionFailureState,
+        _EmergencyCompactionOverride,
+    )
+
+    runner = TurnRunner(provider_selector=object())
+    runner._compaction_failures["doomed"] = _CompactionFailureState(count=1)
+    runner._compaction_failures["kept"] = _CompactionFailureState(count=1)
+    runner._emergency_compaction_overrides["doomed"] = _EmergencyCompactionOverride(
+        summary="s",
+        kept_entries=[],
+        reason="test",
+        compaction_id="c1",
+    )
+    runner._emergency_compaction_overrides["kept"] = _EmergencyCompactionOverride(
+        summary="s",
+        kept_entries=[],
+        reason="test",
+        compaction_id="c2",
+    )
+
+    drop_session_state("doomed")
+
+    assert "doomed" not in runner._compaction_failures
+    assert "kept" in runner._compaction_failures
+    assert "doomed" not in runner._emergency_compaction_overrides
+    assert "kept" in runner._emergency_compaction_overrides
+
+
+def test_channel_session_pointers_are_dropped_on_teardown() -> None:
+    """#1561: ``_map`` grew one entry per chat that ever ran ``/new``, forever."""
+    pointers = ChannelSessionPointers()
+    pointers.set("doomed", "doomed-new")
+    pointers.set("kept", "kept-new")
+
+    drop_session_state("doomed-new")
+
+    assert pointers.resolve("doomed") == "doomed"
+    assert pointers.resolve("kept") == "kept-new"
+
+
+def test_channel_session_pointers_survive_teardown_of_the_base_session() -> None:
+    """Archiving/deleting the abandoned base session must not reroute the chat."""
+    pointers = ChannelSessionPointers()
+    pointers.set("base", "fresh")
+
+    drop_session_state("base")
+
+    assert pointers.resolve("base") == "fresh"
 
 
 def test_denial_ledger_session_state_is_dropped_on_teardown() -> None:

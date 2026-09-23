@@ -20,7 +20,9 @@ from agentos.provider.types import (
     TextDeltaEvent,
     ToolDefinition,
     ToolInputSchema,
+    ToolUseDeltaEvent,
     ToolUseEndEvent,
+    ToolUseStartEvent,
 )
 
 
@@ -1486,6 +1488,145 @@ def test_gemini_stream_multiple_tool_calls_without_indexes_stay_separate(
         ("call_lookup", "lookup", {"q": "hi"}),
         ("call_save", "save", {"value": 1}),
     ]
+
+
+def _tool_stream_events(monkeypatch: Any, chunks: list[dict[str, Any]]) -> list[Any]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = b"".join(f"data: {json.dumps(chunk)}\n\n".encode() for chunk in chunks)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=body + b"data: [DONE]\n\n",
+        )
+
+    transport = httpx.MockTransport(handler)
+    real_async_client = httpx.AsyncClient
+
+    def patched_async_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr("agentos.provider.openai.httpx.AsyncClient", patched_async_client)
+    provider = OpenAIProvider(api_key="test", model="gpt-4o", base_url="https://example.test/v1")
+    tool = ToolDefinition(
+        name="lookup",
+        description="Lookup a value.",
+        input_schema=ToolInputSchema(properties={"q": {"type": "string"}}, required=["q"]),
+    )
+
+    return _collect_events(provider, ChatConfig(), tools=[tool])
+
+
+def test_stream_tool_use_id_stays_stable_when_id_arrives_after_start(
+    monkeypatch: Any,
+) -> None:
+    events = _tool_stream_events(
+        monkeypatch,
+        [
+            {"choices": [{"delta": {"tool_calls": [{"index": 0}]}, "finish_reason": None}]},
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_123",
+                                    "function": {"name": "lookup", "arguments": '{"q":"hi"}'},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            },
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ],
+    )
+
+    started = [e.tool_use_id for e in events if isinstance(e, ToolUseStartEvent)]
+    streamed = [e.tool_use_id for e in events if isinstance(e, ToolUseDeltaEvent | ToolUseEndEvent)]
+    assert started == ["call_123"]
+    assert streamed == ["call_123", "call_123"]
+
+
+def test_stream_tool_use_id_stays_stable_when_an_argument_fragment_precedes_the_id(
+    monkeypatch: Any,
+) -> None:
+    events = _tool_stream_events(
+        monkeypatch,
+        [
+            {
+                "choices": [
+                    {
+                        "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"q":'}}]},
+                        "finish_reason": None,
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_123",
+                                    "function": {"name": "lookup", "arguments": '"hi"}'},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            },
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ],
+    )
+
+    ids = [
+        e.tool_use_id
+        for e in events
+        if isinstance(e, ToolUseStartEvent | ToolUseDeltaEvent | ToolUseEndEvent)
+    ]
+    assert len(ids) == 4
+    assert len(set(ids)) == 1
+    assert [e.arguments for e in events if isinstance(e, ToolUseEndEvent)] == [{"q": "hi"}]
+
+
+def test_stream_tool_use_synthetic_id_is_consistent_when_no_id_ever_arrives(
+    monkeypatch: Any,
+) -> None:
+    events = _tool_stream_events(
+        monkeypatch,
+        [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"name": "lookup", "arguments": '{"q":"hi"}'},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            },
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ],
+    )
+
+    ids = [
+        e.tool_use_id
+        for e in events
+        if isinstance(e, ToolUseStartEvent | ToolUseDeltaEvent | ToolUseEndEvent)
+    ]
+    assert len(ids) == 3
+    assert len(set(ids)) == 1
+    assert ids[0].startswith("call_")
 
 
 # --- Null-valued streaming fields -------------------------------------------
