@@ -576,9 +576,18 @@ class SkillLoader:
             always_raw = frontmatter.get("always", False)
             always = bool(always_raw) if always_raw is not None else False
 
-            triggers = frontmatter.get("triggers", [])
-            if not isinstance(triggers, list):
-                triggers = [str(triggers)]
+            raw_triggers = frontmatter.get("triggers", [])
+            if not isinstance(raw_triggers, list):
+                raw_triggers = [raw_triggers]
+            # A blank entry -- "", a whitespace string, or the None a trailing "-" in the
+            # YAML list produces -- is dropped here: an empty trigger is a substring of
+            # every message, so it would fire the skill on every turn (#2999). Non-string
+            # scalars are coerced rather than left to crash the .lower() in the matcher.
+            triggers = [
+                text
+                for text in (str(item).strip() for item in raw_triggers if item is not None)
+                if text
+            ]
 
             # Platform metadata fields
             metadata = _resolve_metadata(frontmatter)
@@ -648,7 +657,11 @@ class SkillLoader:
         matches: list[SkillSpec] = []
         for skill in self.load_all():
             for trigger in skill.triggers:
-                if trigger.lower() in text_lower:
+                # Loading drops blank triggers, but a SkillSpec can also be built from a
+                # cached manifest, so the matcher refuses an empty one on its own too.
+                if not isinstance(trigger, str) or not trigger.strip():
+                    continue
+                if trigger.strip().lower() in text_lower:
                     matches.append(skill)
                     break
         return matches

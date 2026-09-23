@@ -30,6 +30,7 @@ from agentos.gateway.rpc import (
 )
 from agentos.gateway.session_events import build_sessions_changed_payload
 from agentos.gateway.session_services import (
+    clear_session_epoch,
     get_session_epoch,
     get_session_lock,
     get_session_storage,
@@ -2014,6 +2015,7 @@ async def _handle_sessions_delete(params: dict | None, ctx: RpcContext) -> dict:
                 except Exception:
                     log.warning("sessions.delete.task_cancel_failed", session_key=canonical)
             evict_session_runtime_state(canonical)
+            clear_session_epoch(ctx.session_manager, canonical)
             await storage.delete_session(canonical)
             deleted.append(k)
         except Exception as exc:

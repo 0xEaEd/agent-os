@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 
 from agentos.env import load_env, warn_if_proxy_ignored
+
+if TYPE_CHECKING:
+    from rich.console import Console
+    from rich.text import Text
 
 
 class _CurrentStderr:
@@ -30,8 +35,29 @@ class _CurrentStderr:
         sys.stderr.flush()
 
 
+#: What the CLI shows on stderr unless ``AGENTOS_LOG_LEVEL`` says otherwise.
+#: Debug events are diagnostics for the gateway log, not terminal output for
+#: a command someone ran to read its result.
+_CLI_DEFAULT_LOG_LEVEL = "INFO"
+
+
+def _cli_log_level() -> int:
+    """The structlog threshold for a CLI process, from ``AGENTOS_LOG_LEVEL``.
+
+    Same variable the gateway and the chat REPL honour, so one setting
+    controls all three; an unknown name falls back to the default rather
+    than to "everything".
+    """
+    import logging
+    import os
+
+    name = (os.environ.get("AGENTOS_LOG_LEVEL") or _CLI_DEFAULT_LOG_LEVEL).strip().upper()
+    level = logging.getLevelName(name)
+    return level if isinstance(level, int) else logging.INFO
+
+
 def _route_logs_to_stderr() -> None:
-    """Send structlog output to stderr before anything can log.
+    """Send structlog output to stderr before anything can log, above a level.
 
     structlog's unconfigured default prints to stdout, and the first thing the
     CLI does is load .env files — which log. That put log lines in front of
@@ -39,6 +65,12 @@ def _route_logs_to_stderr() -> None:
     ``agentos <anything> --json | jq`` failed on a real install while working
     in a clean one. Logs are diagnostics; stdout belongs to the command's
     output.
+
+    The level filter is the other half of that: with none, every
+    ``log.debug`` in the code a command happens to touch reaches the terminal.
+    ``agentos context`` resolves five tool profiles and got ~190
+    ``tool_filtered`` lines on top of its tables (#2896). The gateway raises
+    the threshold back to its own configured level when it boots.
     """
     from typing import TextIO, cast
 
@@ -48,7 +80,10 @@ def _route_logs_to_stderr() -> None:
     # whole contract _CurrentStderr implements — the annotation asks for a full
     # TextIO that structlog does not actually use.
     stream = cast("TextIO", _CurrentStderr())
-    structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=stream))
+    structlog.configure(
+        logger_factory=structlog.PrintLoggerFactory(file=stream),
+        wrapper_class=structlog.make_filtering_bound_logger(_cli_log_level()),
+    )
 
 
 _route_logs_to_stderr()
@@ -154,6 +189,24 @@ memory_app = typer.Typer(help="Memory subsystem commands.")
 app.add_typer(memory_app, name="memory")
 raw_fallbacks_app = typer.Typer(help="Raw fallback receipt commands.")
 memory_app.add_typer(raw_fallbacks_app, name="raw-fallbacks")
+
+
+def _print_stored_text(console: Console, text: str) -> None:
+    """Print memory text exactly as it is stored.
+
+    Rich reads ``[...]`` as markup and ``:name:`` as an emoji code, so a
+    Markdown checkbox ``- [x]``, a link label ``[docs](url)`` or a type such
+    as ``list[int]`` lost its brackets, ``[/]`` raised ``MarkupError``, and a
+    non-terminal stdout hard-wrapped long lines at 80 columns.
+    """
+    console.print(text, markup=False, emoji=False, soft_wrap=True)
+
+
+def _stored_cell(value: object) -> Text:
+    """A table cell holding stored text, rendered without markup or emoji codes."""
+    from rich.text import Text
+
+    return Text(str(value))
 
 
 @memory_app.command("status")
@@ -273,7 +326,7 @@ def memory_curated_get_cmd(
 
     console.print(f"[bold]{target.upper()}.md[/bold] ({payload.get('usage', '')})")
     for i, entry in enumerate(payload.get("entries", []), 1):
-        console.print(f"  {i}. {entry}")
+        _print_stored_text(console, f"  {i}. {entry}")
 
 
 @curated_app.command("add")
@@ -365,11 +418,11 @@ def memory_ingest_cmd(
     table.add_column("Error")
     for r in results:
         table.add_row(
-            str(r.get("path") or ""),
+            _stored_cell(r.get("path") or ""),
             str(r.get("chunksIndexed") or 0),
             str(r.get("sizeBytes") or 0),
             str(r.get("status") or ""),
-            str(r.get("error") or ""),
+            _stored_cell(r.get("error") or ""),
         )
     console.print(table)
 
@@ -409,7 +462,7 @@ def memory_list_cmd(
     table.add_column("Modified")
     for row in payload.get("files", []):
         table.add_row(
-            str(row.get("path") or ""),
+            _stored_cell(row.get("path") or ""),
             str(row.get("source") or "memory"),
             "" if row.get("lineCount") is None else str(row.get("lineCount")),
             "" if row.get("sizeBytes") is None else str(row.get("sizeBytes")),
@@ -458,10 +511,10 @@ def memory_search_cmd(
     for row in payload.get("results", []):
         table.add_row(
             str(row.get("source") or "memory"),
-            str(row.get("path") or ""),
+            _stored_cell(row.get("path") or ""),
             f"{row.get('startLine', '')}-{row.get('endLine', '')}",
             f"{float(row.get('score') or 0.0):.3f}",
-            str(row.get("snippet") or "")[:120],
+            _stored_cell(str(row.get("snippet") or "")[:120]),
         )
     console.print(table)
 
@@ -492,7 +545,7 @@ def memory_show_cmd(
     if json_output:
         print_json(payload)
         return
-    console.print(str(payload.get("content") or ""))
+    _print_stored_text(console, str(payload.get("content") or ""))
     if payload.get("truncated"):
         console.print("[dim]... truncated[/dim]")
 
@@ -582,9 +635,9 @@ def memory_raw_fallbacks_list_cmd(
     table.add_column("Modified")
     for row in payload.get("files", []):
         table.add_row(
-            str(row.get("path") or ""),
+            _stored_cell(row.get("path") or ""),
             "" if row.get("sizeBytes") is None else str(row.get("sizeBytes")),
-            str(row.get("reason") or ""),
+            _stored_cell(row.get("reason") or ""),
             str(row.get("modifiedAt") or ""),
         )
     console.print(table)
@@ -616,7 +669,7 @@ def memory_raw_fallbacks_show_cmd(
     if json_output:
         print_json(payload)
         return
-    console.print(str(payload.get("content") or ""))
+    _print_stored_text(console, str(payload.get("content") or ""))
     if payload.get("truncated"):
         console.print("[dim]... truncated[/dim]")
 

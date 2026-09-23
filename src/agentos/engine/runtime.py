@@ -713,6 +713,9 @@ _TOOL_RESULT_METADATA_KEYS: Final[frozenset[str]] = frozenset(
 )
 _SENTINELS: Final[frozenset[str]] = frozenset({"NO_REPLY", "HEARTBEAT_OK"})
 _HEARTBEAT_ACK_TOKEN: Final[str] = "HEARTBEAT_OK"
+# Markdown a model puts around a bare token. The system prompt itself shows the
+# sentinels as code spans, so `NO_REPLY` and **HEARTBEAT_OK** are ordinary replies.
+_SENTINEL_WRAPPERS: Final[str] = "`*_~"
 _THINKING_ALIASES: Final[dict[str, str]] = {
     "x-high": "xhigh",
     "x_high": "xhigh",
@@ -1046,13 +1049,23 @@ def _should_use_selector_fallback(provider_name: str, event: ProviderErrorEvent)
     return _kind_uses_selector_fallback(_classify_provider_event(provider_name, event))
 
 
+def _unwrap_sentinel(text: str) -> str:
+    """Return *text* without the Markdown and closing full stop around it.
+
+    A code span around NO_REPLY, ``**HEARTBEAT_OK**`` and ``NO_REPLY.`` all mean
+    the bare token. Compared as written, each went out to the channel verbatim.
+    """
+    unwrapped = text.strip().strip(_SENTINEL_WRAPPERS)
+    return unwrapped.rstrip(".!").strip(_SENTINEL_WRAPPERS).strip()
+
+
 def _normalize_heartbeat_text(
     text: str,
     *,
     run_kind: str,
     heartbeat_ack_max_chars: int,
 ) -> str:
-    stripped = text.strip()
+    stripped = _unwrap_sentinel(text)
     if stripped in _SENTINELS:
         log.debug("turn_runner.sentinel_suppressed", sentinel=stripped)
         return ""
@@ -1060,7 +1073,7 @@ def _normalize_heartbeat_text(
         return text
 
     def _suppressed(payload: str) -> bool:
-        return len(payload.strip()) <= heartbeat_ack_max_chars
+        return len(_unwrap_sentinel(payload)) <= heartbeat_ack_max_chars
 
     if stripped.startswith(_HEARTBEAT_ACK_TOKEN):
         remainder = stripped[len(_HEARTBEAT_ACK_TOKEN) :].strip()
@@ -6391,7 +6404,12 @@ class TurnRunner:
             Message,
         )
 
-        prompt_block = ContentBlockText(text=message)
+        # An attachment sent with no text -- a photo with no caption, a file
+        # dropped into the web chat with an empty box -- arrives as message "".
+        # An empty text block is not "no text": Anthropic rejects it outright
+        # (text content blocks must be non-empty), failing the whole turn. A
+        # user turn made only of attachments is valid for every provider.
+        prompt_blocks: list[Any] = [ContentBlockText(text=message)] if message.strip() else []
         attachment_blocks: list[Any] = []
         for index, att in enumerate(attachments, start=1):
             att_type = att.get("type")
@@ -6477,6 +6495,6 @@ class TurnRunner:
         return [
             Message(
                 role="user",
-                content=[prompt_block] + attachment_blocks,  # type: ignore[arg-type]
+                content=prompt_blocks + attachment_blocks,  # type: ignore[arg-type]
             )
         ]
