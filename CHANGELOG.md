@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `session_search`: a short query in a non-Latin script now matches whichever
+  case the user typed. #2897 answers terms below the three-character trigram
+  floor (`go`, `db`, a two-character CJK word) with a `LIKE` scan "instead of
+  by nothing", but SQLite's `LIKE` folds case for ASCII only -- so `db` found
+  `DB` while `бд` did not find `БД` and `är` did not find `ÄRGER`, and the tool
+  reported "No matches found." for a transcript it holds. Each short term is
+  expanded to its per-character case forms before escaping; the expansion is
+  bounded at four patterns and collapses to one for a caseless script such as
+  CJK. The indexed path is unchanged -- `trigram` already folds the full
+  Unicode range.
 
 - Migration: `agentos migrate openclaw` and `agentos migrate hermes` no longer
   turn every remote MCP server into an SSE server with no headers. A server
