@@ -136,82 +136,89 @@ def register_audio_transcription_routes(
                 )
             return JSONResponse({"error": "multipart/form-data required"}, status_code=400)
 
-        upload = form.get("file")
-        if upload is None or not hasattr(upload, "read"):
-            return JSONResponse({"error": "missing 'file' multipart field"}, status_code=400)
-
-        filename = getattr(upload, "filename", None) or "voice.webm"
-        mime_type = getattr(upload, "content_type", None) or form.get("mime") or "audio/webm"
-        if not isinstance(mime_type, str) or not mime_type.startswith(("audio/", "video/")):
-            return JSONResponse(
-                {"error": "audio or video upload required", "code": "UNSUPPORTED_MEDIA_TYPE"},
-                status_code=415,
-            )
-
-        # One byte past the cap is enough to detect an oversize upload without
-        # ever buffering it whole.
-        payload = await upload.read(_MAX_TRANSCRIPTION_BYTES + 1)
-        if not isinstance(payload, bytes) or len(payload) == 0:
-            return JSONResponse({"error": "empty upload"}, status_code=400)
-        if len(payload) > _MAX_TRANSCRIPTION_BYTES:
-            return _transcription_too_large()
-
-        provider_cfg = config.audio.providers.elevenlabs
-        model_id = str(
-            form.get("model_id")
-            or getattr(provider_cfg, "speech_to_text_model", "scribe_v2")
-            or "scribe_v2"
-        )
-        language_code_value = form.get("language_code")
-        language_code = language_code_value if isinstance(language_code_value, str) else None
-
+        # Starlette spools the uploaded audio to a SpooledTemporaryFile and
+        # nothing closes it for us. Every exit below -- a rejected mime, an
+        # empty or oversize upload, a provider failure -- has to release it,
+        # or a descriptor and a temp file outlive each transcription request.
         try:
-            result = await transcribe_audio_bytes(
-                config=config,
-                payload=payload,
-                filename=str(filename),
-                mime_type=mime_type,
-                model_id=model_id,
-                language_code=language_code,
-                provider_factory=provider_factory,
-            )
-        except Exception as exc:
-            error_id = secrets.token_hex(6)
-            log.error(
-                "audio.transcription_failed",
-                error_id=error_id,
-                error=str(exc),
-                exc_info=True,
-            )
-            from agentos.redact import redact_sensitive_text
+            upload = form.get("file")
+            if upload is None or not hasattr(upload, "read"):
+                return JSONResponse({"error": "missing 'file' multipart field"}, status_code=400)
 
-            if config.debug:
+            filename = getattr(upload, "filename", None) or "voice.webm"
+            mime_type = getattr(upload, "content_type", None) or form.get("mime") or "audio/webm"
+            if not isinstance(mime_type, str) or not mime_type.startswith(("audio/", "video/")):
+                return JSONResponse(
+                    {"error": "audio or video upload required", "code": "UNSUPPORTED_MEDIA_TYPE"},
+                    status_code=415,
+                )
+
+            # One byte past the cap is enough to detect an oversize upload without
+            # ever buffering it whole.
+            payload = await upload.read(_MAX_TRANSCRIPTION_BYTES + 1)
+            if not isinstance(payload, bytes) or len(payload) == 0:
+                return JSONResponse({"error": "empty upload"}, status_code=400)
+            if len(payload) > _MAX_TRANSCRIPTION_BYTES:
+                return _transcription_too_large()
+
+            provider_cfg = config.audio.providers.elevenlabs
+            model_id = str(
+                form.get("model_id")
+                or getattr(provider_cfg, "speech_to_text_model", "scribe_v2")
+                or "scribe_v2"
+            )
+            language_code_value = form.get("language_code")
+            language_code = language_code_value if isinstance(language_code_value, str) else None
+
+            try:
+                result = await transcribe_audio_bytes(
+                    config=config,
+                    payload=payload,
+                    filename=str(filename),
+                    mime_type=mime_type,
+                    model_id=model_id,
+                    language_code=language_code,
+                    provider_factory=provider_factory,
+                )
+            except Exception as exc:
+                error_id = secrets.token_hex(6)
+                log.error(
+                    "audio.transcription_failed",
+                    error_id=error_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                from agentos.redact import redact_sensitive_text
+
+                if config.debug:
+                    return JSONResponse(
+                        {
+                            "error": redact_sensitive_text(str(exc)),
+                            "code": "PROVIDER_ERROR",
+                            "error_id": error_id,
+                        },
+                        status_code=502,
+                    )
                 return JSONResponse(
                     {
-                        "error": redact_sensitive_text(str(exc)),
+                        "error": "Audio transcription failed",
                         "code": "PROVIDER_ERROR",
                         "error_id": error_id,
                     },
                     status_code=502,
                 )
-            return JSONResponse(
-                {
-                    "error": "Audio transcription failed",
-                    "code": "PROVIDER_ERROR",
-                    "error_id": error_id,
-                },
-                status_code=502,
-            )
 
-        response: dict[str, Any] = {
-            "text": result.text,
-            "provider": result.provider,
-            "model": result.model,
-        }
-        if result.language_code is not None:
-            response["language_code"] = result.language_code
-        if result.language_probability is not None:
-            response["language_probability"] = result.language_probability
-        return JSONResponse(response)
+            response: dict[str, Any] = {
+                "text": result.text,
+                "provider": result.provider,
+                "model": result.model,
+            }
+            if result.language_code is not None:
+                response["language_code"] = result.language_code
+            if result.language_probability is not None:
+                response["language_probability"] = result.language_probability
+            return JSONResponse(response)
+        finally:
+            await form.close()
 
     app.router.routes.append(Route("/api/audio/transcribe", transcribe_handler, methods=["POST"]))

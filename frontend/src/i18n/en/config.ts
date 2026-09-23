@@ -112,7 +112,7 @@ export const config = defineNamespace('config', {
   helpAgentosRouterRolloutPhase:
     'Rollout stage for new router model versions. Higher phases enable more aggressive routing decisions.',
   helpAgentosRouterStrategy:
-    '"pilot-v1" (default) classifies each turn with the local Pilot ML router (MiniLM+ONNX bundle, no LLM call); "llm_judge" classifies via a small LLM call instead. The pilot bundle ships in the wheel and degrades to the default tier if absent.',
+    '"pilot-v1" (default) classifies each turn with the local Pilot ML router (MiniLM+ONNX bundle, no LLM call); "llm_judge" classifies via a small LLM call instead; "jev" (experimental) sends the turn text to the typesafe.ai Jev cloud classifier and needs a TypeSafe API key. The pilot bundle ships in the wheel and degrades to the default tier if absent.',
   helpAgentosRouterJudgeModel:
     'Explicit LLM-judge model. Leave unset for Auto: the judge follows the tier profile’s cheapest text tier (c0 first), so profile switches auto-update it.',
   helpAgentosRouterJudgeProvider:
@@ -127,6 +127,24 @@ export const config = defineNamespace('config', {
     'Skip the judge call for trivial short greetings/acknowledgements (exact allowlist match) and route them to the cheapest tier directly.',
   helpAgentosRouterJudgeShortCircuitAllowlist:
     'Extra exact greeting/ack phrases (case-insensitive) that skip the judge. These are ADDED to the built-in default allowlist (en/vi/zh), not a replacement — leave empty to use just the defaults.',
+  helpAgentosRouterJevApiKey:
+    'TypeSafe API key for the Jev cloud classifier (strategy = "jev"). Leave unset to read it from the environment variable named by api_key_env. Redacted in logs and never written to TOML when it equals the env value.',
+  helpAgentosRouterJevApiKeyEnv:
+    'Environment variable the Jev key is read from when api_key is unset (default TYPESAFE_API_KEY, e.g. from ~/.agentos/.env).',
+  helpAgentosRouterJevBaseUrl:
+    'typesafe.ai API root the Jev classifier is called at. Only change this for a proxy or a self-hosted deployment.',
+  helpAgentosRouterJevModel:
+    'Jev classifier model id sent with each request. Leave the default unless typesafe.ai publishes a newer model.',
+  helpAgentosRouterJevInputMaxChars:
+    'Character budget for the turn text sent to typesafe.ai (head/tail truncation with an elision marker). Smaller values send less of the conversation off-box.',
+  helpAgentosRouterJevHighRiskThreshold:
+    'Destructive-action probability (0..1, default 0.7) at or above which a request is floored at tier c3 regardless of its complexity class.',
+  helpAgentosRouterJevTimeoutSeconds:
+    'Per-request timeout for the typesafe.ai call. On timeout the turn falls back to the default tier and the decision is logged as jev_unavailable.',
+  helpAgentosRouterJevShortCircuitEnabled:
+    'Skip the typesafe.ai call for trivial short greetings/acknowledgements (exact allowlist match) and route them to the cheapest tier directly.',
+  helpAgentosRouterJevAgenticFloorEnabled:
+    "When on, a turn that carries tool definitions is never routed below tier c1 (LLM-judge parity). Off by default: Jev's calibrated confidence already lets the engine gate handle an unsure c0, and the floor would make c0 unreachable in every tool-bearing chat.",
   helpMemoryEmbedding:
     'Long-term memory embedding provider. Auto mode prefers a downloaded EmbeddingGemma model, then the bundled BGE ONNX, then a configured remote key, then FTS-only. Run `agentos memory embedding-download` to fetch the EmbeddingGemma upgrade; switching the local model triggers a full reindex. Remote embeddings require explicit memory embedding configuration.',
   helpMemoryEmbeddingProvider:

@@ -630,7 +630,8 @@ def _resolve_generated_image_path(filename: str | None, output_format: str) -> P
     if not candidate.suffix:
         candidate = candidate.with_suffix(f".{ext}")
 
-    target = candidate if candidate.is_absolute() else root / candidate
+    alias = resolve_workspace_alias(candidate, root if ctx and ctx.workspace_dir else None)
+    target = alias or (candidate if candidate.is_absolute() else root / candidate)
     resolved = target.resolve(strict=False)
     try:
         resolved.relative_to(root)
@@ -1061,7 +1062,8 @@ def _resolve_generated_audio_path(
     candidate = Path(raw).expanduser()
     if not candidate.suffix:
         candidate = candidate.with_suffix(f".{ext}")
-    target = candidate if candidate.is_absolute() else root / candidate
+    alias = resolve_workspace_alias(candidate, root if ctx and ctx.workspace_dir else None)
+    target = alias or (candidate if candidate.is_absolute() else root / candidate)
     resolved = target.resolve(strict=False)
     try:
         resolved.relative_to(root)

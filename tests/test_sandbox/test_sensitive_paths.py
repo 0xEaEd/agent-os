@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agentos.redact import CREDENTIAL_FILE_NAMES
+from agentos.redact import CREDENTIAL_FILE_NAMES, reads_credential_file
 from agentos.sandbox.sensitive_paths import (
     _HOST_CREDENTIAL_FILES,
     _is_root_target,
@@ -646,3 +646,112 @@ def test_cwd_alone_still_anchors_relative_targets(fixed_home: Path) -> None:
     assert (
         sensitive_target_in_command("rm scratch.txt", cwd=Path("/root/.agentos/workspace")) is None
     )
+
+
+# --- ~/.docker (#2623) ------------------------------------------------------
+#
+# The entry used to read ``~/.docker/config``. Matching is anchored at a path
+# segment boundary, so it matched only a file or directory literally named
+# ``config`` -- and ``docker login`` writes ``config.json``. The entry guarded
+# a path Docker never creates while ``read_file`` on the registry credentials
+# beside it returned the base64 ``user:password`` of every logged-in registry.
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        # What ``docker login`` actually writes: {"auths": {"…": {"auth": …}}}.
+        ".docker/config.json",
+        # The credential-helper and context state beside it names registries
+        # and endpoints, and is the reason the neighbouring entries (~/.aws,
+        # ~/.kube, ~/.azure) are directories rather than single files.
+        ".docker/contexts/meta.json",
+        ".docker/plaintext-passwords.json",
+    ],
+)
+def test_docker_credential_files_are_sensitive(fixed_home: Path, relative: str) -> None:
+    """The files that exist under ``~/.docker`` are blocked, not just ``config``."""
+    target = fixed_home
+    for part in relative.split("/"):
+        target = target / part
+
+    assert is_sensitive_path(str(target)) == "~/.docker"
+
+
+def test_docker_config_without_a_suffix_stays_blocked(fixed_home: Path) -> None:
+    """The one path the old entry did match must stay blocked.
+
+    Widening ``~/.docker/config`` to ``~/.docker`` must not drop what the
+    narrower entry already covered. Only the marker changes, which is what
+    this asserts -- the block itself held before the fix too.
+    """
+    assert is_sensitive_path(str(fixed_home / ".docker" / "config")) == "~/.docker"
+
+
+def test_docker_registry_credentials_are_blocked_through_the_text_scanner(
+    fixed_home: Path,
+) -> None:
+    """The shell reaches the sandbox as free-form text, not a resolved path.
+
+    Blocking only :func:`is_sensitive_path` would leave ``cat`` of the same
+    file open, which is the disclosure the entry exists to stop.
+    """
+    config = fixed_home / ".docker" / "config.json"
+
+    assert sensitive_path_in_text(f"cat {config}") == "~/.docker"
+    assert sensitive_path_in_text("cat ~/.docker/config.json") == "~/.docker"
+    assert sensitive_target_in_command(f"rm -f {config}") == "~/.docker"
+
+
+def test_docker_entry_matches_the_redaction_layer(fixed_home: Path) -> None:
+    """Both layers must name the same directory.
+
+    ``redact`` has carried ``.docker`` as a whole credential directory since
+    it was written, so ``cat ~/.docker/config.json`` already got the
+    assignment pass while the sandbox let ``read_file`` return the file
+    unmasked -- the two layers disagreeing about one entry is what the
+    narrower spelling caused.
+
+    Spelled with forward slashes on both sides: ``reads_credential_file``
+    splits its command with POSIX ``shlex``, which consumes the separators of
+    a Windows-native path, so a backslash spelling would prove nothing about
+    the entry. That gap belongs to the redaction gate, not to this denylist
+    entry, and is left alone here.
+    """
+    assert reads_credential_file("cat ~/.docker/config.json") is True
+    assert is_sensitive_path("~/.docker/config.json") == "~/.docker"
+    assert is_sensitive_path(str(fixed_home / ".docker" / "config.json")) == "~/.docker"
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        ".dockerignore",
+        ".docker-compose/stack.yml",
+        ".dockerfiles/base",
+    ],
+)
+def test_widening_to_the_docker_directory_stays_segment_anchored(
+    fixed_home: Path, relative: str
+) -> None:
+    """The direction the issue did not report.
+
+    ``~/.docker`` is a prefix of ``~/.dockerignore`` as a string. Only the
+    segment anchoring keeps the wider entry from blocking ordinary files that
+    merely start with the same characters.
+    """
+    target = fixed_home
+    for part in relative.split("/"):
+        target = target / part
+
+    assert is_sensitive_path(str(target)) is None
+
+
+def test_dockercfg_still_reports_its_own_file_entry(fixed_home: Path) -> None:
+    """``~/.dockercfg`` is a credential *file*, carried by its own entry.
+
+    Guard: it must keep reporting ``~/.dockercfg`` rather than being absorbed
+    into the widened directory entry, or the marker an operator sees would
+    name a directory the file does not live in.
+    """
+    assert is_sensitive_path(str(fixed_home / ".dockercfg")) == "~/.dockercfg"

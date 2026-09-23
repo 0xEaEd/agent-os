@@ -5,11 +5,30 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
+import sys
 from typing import Any, cast
 
 from agentos import __version__
 from agentos.mcp.client import MCPClient
 from agentos.mcp.types import MCPServerConfig, MCPToolDef, MCPToolResult
+
+
+def _path_of(env: dict[str, str] | None) -> str | None:
+    """Return the ``PATH`` *env* gives the child, or ``None`` for this process's.
+
+    Windows environment names are case-insensitive, so a server config is free
+    to spell the variable ``Path``. The merged environment is built as
+    ``{**os.environ, **config.env}``, which leaves both spellings in the dict
+    with the config's own last — so the scan runs backwards and the override
+    the operator wrote is the one that wins.
+    """
+    if env is None:
+        return None
+    for name, value in reversed(list(env.items())):
+        if name.upper() == "PATH":
+            return value
+    return None
 
 
 class MCPStdioClient(MCPClient):
@@ -99,6 +118,41 @@ class MCPStdioClient(MCPClient):
         self._request_id += 1
         return self._request_id
 
+    def _launchable_command(self, env: dict[str, str] | None) -> str:
+        """Return the command to hand ``create_subprocess_exec``.
+
+        On Windows the bare name is not enough. ``create_subprocess_exec``
+        goes to ``CreateProcessW``, which appends ``.exe`` to an extensionless
+        name and stops there — it never walks ``PATHEXT`` the way a shell
+        does. ``npx``, ``npm``, ``uvx`` and ``pipx`` all ship as ``.cmd``
+        wrappers, which is what essentially every published MCP server config
+        names, so every one of them fails with ``WinError 2`` before a byte of
+        MCP traffic. ``shutil.which`` performs the ``PATHEXT`` search and
+        hands back the real ``npx.cmd``; CPython's own launcher knows how to
+        pass a resolved ``.cmd`` to ``cmd.exe`` safely, so no extra shell
+        wrapping belongs here.
+
+        The lookup uses the ``PATH`` the child will actually get, so a server
+        that pins its own ``PATH`` in ``env`` is resolved against that and not
+        against this process's.
+
+        POSIX is left alone: ``exec`` already searches ``PATH`` for a bare
+        command, and substituting the resolved path would replace a program's
+        own ``argv[0]`` with it for no gain.
+        """
+        command = self.config.command
+        assert command is not None
+        if sys.platform != "win32":
+            return command
+        resolved = shutil.which(command, path=_path_of(env))
+        if resolved is None:
+            raise FileNotFoundError(
+                f"MCP server {self.config.name!r}: command {command!r} was not "
+                f"found on PATH (searched with PATHEXT). Install it, or give "
+                f"the server config an absolute path."
+            )
+        return resolved
+
     async def connect(self) -> None:
         """Spawn the subprocess and perform MCP initialization handshake."""
         assert self.config.command is not None, "stdio transport requires command"
@@ -108,7 +162,7 @@ class MCPStdioClient(MCPClient):
             env = {**os.environ, **self.config.env}
 
         self._process = await asyncio.create_subprocess_exec(
-            self.config.command,
+            self._launchable_command(env),
             *self.config.args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,

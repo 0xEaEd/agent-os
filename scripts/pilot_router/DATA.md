@@ -632,3 +632,32 @@ exactly the four approved names, locks the two new levers
 proxy added to `evaluate`, and drives **each config** through the real
 train→export→`PilotModel`-load path on the same synthetic stub-encoder fixture
 as the v1 smoke. It `importorskip`s the `pilot-train` group like the v1 smoke.
+
+## 9. Jev eval (classifier-only, experimental `jev` strategy)
+
+`scripts/pilot_router/evaluate_jev.py` scores the opt-in `jev` strategy
+(typesafe.ai Jev System One) on the committed labeled set
+`tests/data/router_eval/cases.jsonl` by calling `JevStrategy.classify`
+directly — no engine guards, no history — so the numbers are the classifier's
+own. It reports the §6.4 metrics via `eval_lib` (accuracy, under/over-routing,
+severity-weighted under-routing, macro-F1, per-class recall, confusion) over
+all rows and over healthy rows, plus ECE (10 bins on the top-1 probability)
+and NLL from Jev's calibrated `probabilities`, per-`lang` slices, the
+`high_risk_floor_applied` count, `jev_unavailable` counts by reason, and total
+usage tokens with the estimated cost at $0.042 / 1M input tokens.
+
+```sh
+# inspect the first request body, no key and no network
+uv run python scripts/pilot_router/evaluate_jev.py --dry-run --limit 1
+# full run: one paid call per case (~120 cases)
+TYPESAFE_API_KEY=... uv run python scripts/pilot_router/evaluate_jev.py \
+  --concurrency 4 --out scripts/pilot_router/data/jev_eval.json
+```
+
+Flags: `--cases`, `--limit`, `--concurrency` (default 4), `--out` (default
+`scripts/pilot_router/data/jev_eval.json`, gitignored), `--model`,
+`--high-risk-threshold`. The script exits 2 with a hint when
+`TYPESAFE_API_KEY` is unset. The pure reducer (`summarize`) is pinned offline
+in `tests/test_scripts/test_evaluate_jev.py`. For the engine-level view
+(guards, history, `routing_source` assertion) use
+`uv run python scripts/router_eval.py --strategy jev`.
