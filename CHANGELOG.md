@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Security: `.pgpass` and `.netrc` are named credential files, the gate
+  fired for `cat ~/.pgpass`, and the password still reached the model --
+  the assignment pass only understands `name=value`, and neither format
+  has one (`.pgpass` is positional `host:port:db:user:password`; `.netrc`
+  is `machine H login U password P`). Each now gets a format rule keyed on
+  the file's basename, on both the terminal and the file-read surface,
+  masking the password whole rather than with the head/tail reveal meant
+  for identifying vendor keys (#2620).
+
 - Security: `is_env_dump_command` judged a shell segment by its first token
   alone, so `sudo printenv` and `/usr/bin/env` were not dumps -- the
   environment reached the model with only shape matching, and an opaque
