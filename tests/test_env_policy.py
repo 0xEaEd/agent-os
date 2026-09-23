@@ -160,6 +160,55 @@ class TestSanitizeValue:
         with pytest.raises(EnvPolicyError, match="control character"):
             env_policy.sanitize_value("K", value)
 
+    @pytest.mark.parametrize(
+        "value",
+        ["head\u0085tail", "head\u2028tail", "head\u2029tail"],
+        ids=["next-line", "line-separator", "paragraph-separator"],
+    )
+    def test_rejects_the_invisible_separators_the_reader_splits_on(self, value: str) -> None:
+        # U+0085, U+2028 and U+2029 are not C0, so the control-character gate
+        # never saw them, and the reader's splitlines() breaks on all three:
+        # the value was written whole and read back truncated at the separator.
+        with pytest.raises(EnvPolicyError, match="line break"):
+            env_policy.sanitize_value("K", value)
+
+    @pytest.mark.parametrize(
+        "char",
+        list("\n\r\v\f\x1c\x1d\x1e\u0085\u2028\u2029"),
+        ids=[
+            "lf",
+            "cr",
+            "vt",
+            "ff",
+            "fs",
+            "gs",
+            "rs",
+            "nel",
+            "line-separator",
+            "paragraph-separator",
+        ],
+    )
+    def test_every_character_the_reader_splits_on_is_refused(self, char: str) -> None:
+        """The refused set is derived from the reader, not kept by hand.
+
+        ``agentos.env._parse_env_file`` reads with ``str.splitlines()``, so a
+        value holding any character it breaks on cannot survive a write/read
+        cycle whatever this module's message says.
+        """
+        assert len(f"a{char}b".splitlines()) == 2
+        with pytest.raises(EnvPolicyError):
+            env_policy.sanitize_value("K", f"a{char}b")
+
+    @pytest.mark.parametrize(
+        "value",
+        ["a\u00a0b", "a\u2007b", "a\u200bb", "a\u3000b"],
+        ids=["nbsp", "figure-space", "zero-width-space", "ideographic-space"],
+    )
+    def test_still_accepts_invisible_characters_that_are_not_line_breaks(self, value: str) -> None:
+        # The gate is about what splits a line, not about what is invisible:
+        # a non-breaking space inside a passphrase is still storable.
+        assert env_policy.sanitize_value("K", value) == value
+
     def test_rejects_non_string(self) -> None:
         with pytest.raises(EnvPolicyError, match="must be a string"):
             env_policy.sanitize_value("K", 42)  # type: ignore[arg-type]

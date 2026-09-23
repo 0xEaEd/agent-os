@@ -191,6 +191,9 @@ export interface SetupConfig {
     judge_base_url?: string
     tiers?: Record<string, TierSpec>
     pilot?: { safety_net_threshold?: number | null }
+    // The public config never carries jev.api_key; only its env name and the
+    // tunables are exposed (config.py to_public).
+    jev?: { api_key_env?: string; high_risk_threshold?: number | null; model?: string }
     translate_ceiling_enabled?: boolean | null
     translate_ceiling_tier?: string | null
     [key: string]: unknown
@@ -793,9 +796,9 @@ export function memoryControlFlags(
 
 // ── router derivation (setup.js:550-635,1767-1855) ──────────────────────────
 
-/** setup.js:566 — the two human-selectable router strategies. */
-export const ROUTER_STRATEGIES = ['pilot-v1', 'llm_judge'] as const
-export type RouterMode = 'pilot-v1' | 'llm_judge' | 'disabled'
+/** setup.js:566 — the human-selectable router strategies (jev is experimental, opt-in). */
+export const ROUTER_STRATEGIES = ['pilot-v1', 'llm_judge', 'jev'] as const
+export type RouterMode = 'pilot-v1' | 'llm_judge' | 'jev' | 'disabled'
 
 /**
  * setup.js:567-569 — the Mode value: 'disabled' when router.enabled === false,
@@ -856,6 +859,10 @@ export interface RouterConfigureParams {
   defaultTier: string
   judgeModel: string | null
   safetyNetThreshold?: number
+  // jev only: null preserves the persisted key (or the TYPESAFE_API_KEY env
+  // fallback), '' clears it. Never present for the other strategies.
+  jevApiKey?: string | null
+  jevHighRiskThreshold?: number
   translateCeilingEnabled: boolean
   translateCeilingTier: string
   tiers: Record<string, Record<string, unknown>>
@@ -865,13 +872,17 @@ export interface RouterConfigureParams {
  * setup.js:1801-1846 — assemble the onboarding.router.configure payload from the
  * collected tier rows + mode/default/judge/threshold. `sel` is the Mode value.
  * The pilot threshold is forwarded ONLY for pilot-v1 with a finite value; the
- * image_model row is stamped supportsImage+image_only.
+ * jev key/threshold ONLY for jev (blank key → null = preserve, threshold only
+ * when finite and within 0..1); the image_model row is stamped
+ * supportsImage+image_only.
  */
 export function buildRouterConfigureParams(input: {
   sel: RouterMode
   defaultTier: string
   judgeModel: string | null
   pilotThresholdRaw: string | undefined
+  jevApiKeyRaw?: string
+  jevHighRiskThresholdRaw?: string
   translateCeilingEnabled: boolean
   translateCeilingTier: string
   tiers: RouterTierInput[]
@@ -895,7 +906,7 @@ export function buildRouterConfigureParams(input: {
   const pilotThresholdNum = Number.parseFloat(input.pilotThresholdRaw ?? '')
   const safetyNetThreshold =
     input.sel === 'pilot-v1' && Number.isFinite(pilotThresholdNum) ? pilotThresholdNum : undefined
-  return {
+  const params: RouterConfigureParams = {
     mode,
     strategy,
     defaultTier: input.defaultTier,
@@ -907,6 +918,15 @@ export function buildRouterConfigureParams(input: {
     translateCeilingTier: input.translateCeilingTier,
     tiers,
   }
+  if (input.sel === 'jev') {
+    const key = (input.jevApiKeyRaw ?? '').trim()
+    params.jevApiKey = key ? key : null
+    const threshold = Number.parseFloat(input.jevHighRiskThresholdRaw ?? '')
+    if (Number.isFinite(threshold) && threshold >= 0 && threshold <= 1) {
+      params.jevHighRiskThreshold = threshold
+    }
+  }
+  return params
 }
 
 // ── scoped-field read + required validation (setup.js:1705-1741) ────────────
