@@ -31,7 +31,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the rollover Telegram, Discord and Teams already do. The final flush is also
   skipped when nothing arrived after the last edit, as in those adapters, so a
   short stream no longer ends with a `chat.update` that repeats the previous
-  one verbatim (#3068).
+  one verbatim. A rollover inside a fenced code block keeps the block's text
+  intact: the splitter closes the fence on one message and reopens it on the
+  next, so the watermark advances by the source characters consumed rather
+  than by the closed head's length, and the reopener travels with the message
+  that continues the block (#3068).
 
 - Pricing: the live OpenRouter price for a model now comes from the owner's
   standard endpoint rather than whichever of its service tiers is listed

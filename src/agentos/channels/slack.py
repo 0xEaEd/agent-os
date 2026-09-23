@@ -102,6 +102,34 @@ class SlackManifestError(Exception):
     """Raised when Slack rejects a native-command manifest operation."""
 
 
+#: What ``split_text_for_limit`` appends to a head whose fence it had to close.
+_FENCE_CLOSER = "\n```"
+
+
+def _split_stream_segment(text: str, limit: int) -> tuple[str, int, str]:
+    """``(text to send, source characters consumed, reopener for the rest)``.
+
+    ``split_text_for_limit`` keeps a fenced code block balanced by closing it
+    on the head and reopening it on the tail, so the head carries characters
+    the source does not and the tail starts with a reopener. Advancing a
+    stream's watermark by ``len(head)`` therefore skips that many source
+    characters -- four per rollover -- and drops the reopening fence, which
+    for a long code block loses text and leaves the next message unbalanced.
+    The watermark has to move by the source the head really consumed, and the
+    reopener has to travel with the message that continues the block.
+    """
+    head, tail = split_text_for_limit(text, limit)
+    if not tail or text.startswith(head):
+        return head, len(head), ""
+    body = head[: -len(_FENCE_CLOSER)] if head.endswith(_FENCE_CLOSER) else head
+    consumed = len(body)
+    # The tail is built from ``segment[cut:].lstrip()``, so the newlines it
+    # dropped are consumed too.
+    rest = text[consumed:]
+    consumed += len(rest) - len(rest.lstrip("\n"))
+    return head, consumed, tail[: len(tail) - (len(text) - consumed)]
+
+
 @dataclass
 class SlackChannel:
     """Channel adapter for Slack Web API.
@@ -630,8 +658,12 @@ class SlackChannel:
             raise RuntimeError("Slack stream has no target channel")
         throttle = StreamThrottle(interval_s=update_interval_ms / 1000.0)
         message_ts: str | None = None
+        # Watermarks in *source* characters, so a fence the splitter had to
+        # rebalance cannot shift them; ``carry`` is the reopening fence the
+        # open message starts with when it continues a code block.
         segment_start = 0
         delivered = 0
+        carry = ""
 
         async def _stream_post(text: str) -> str:
             payload: dict[str, Any] = {
@@ -675,28 +707,38 @@ class SlackChannel:
             ``delivered`` advances after each successful post, so a failure
             part way through never resends text that is already visible.
             """
-            nonlocal message_ts, segment_start, delivered
+            nonlocal message_ts, segment_start, delivered, carry
             while True:
-                head, tail = split_text_for_limit(remaining, _SLACK_MESSAGE_TEXT_LIMIT)
+                head, consumed, reopener = _split_stream_segment(
+                    carry + remaining, _SLACK_MESSAGE_TEXT_LIMIT
+                )
                 message_ts = await _stream_post(head)
-                delivered = segment_start + len(head)
-                if not tail:
+                used = consumed - len(carry)
+                delivered = segment_start + used
+                if used >= len(remaining):
                     return
                 segment_start = delivered
-                remaining = tail
+                carry = reopener
+                remaining = remaining[used:]
 
         async def _post(text: str) -> None:
             await _post_segments(text[segment_start:])
 
         async def _edit(text: str) -> None:
-            nonlocal segment_start, delivered
-            head, tail = split_text_for_limit(text[segment_start:], _SLACK_MESSAGE_TEXT_LIMIT)
+            nonlocal segment_start, delivered, carry
+            pending = text[segment_start:]
+            head, consumed, reopener = _split_stream_segment(
+                carry + pending, _SLACK_MESSAGE_TEXT_LIMIT
+            )
             await _stream_edit(head)
-            delivered = segment_start + len(head)
-            if tail:
-                # This message is full: freeze it and roll over into a new one.
+            used = consumed - len(carry)
+            delivered = segment_start + used
+            if used < len(pending):
+                # This message is full: freeze it and roll over into a new one,
+                # reopening the code block it was in the middle of.
                 segment_start = delivered
-                await _post_segments(tail)
+                carry = reopener
+                await _post_segments(text[delivered:])
 
         async for chunk in chunks:
             throttle.add(chunk)

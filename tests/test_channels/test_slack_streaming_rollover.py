@@ -11,6 +11,7 @@ that the text the user sees is the whole stream, in order, exactly once.
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock
@@ -236,3 +237,93 @@ async def test_a_slack_level_error_on_a_rollover_post_still_surfaces() -> None:
 
     with pytest.raises(RuntimeError, match="msg_too_long"):
         await channel.send_streaming(_stream("a" * 1000, "b" * (LIMIT + 100)), update_interval_ms=0)
+
+
+# ── a fenced code block across a rollover ──────────────────────────────────
+
+
+#: The closing fence one message ends with, glued to the reopening fence the
+#: next one starts with. Removing each junction leaves the source the stream
+#: carried, except for the single line break the splitter drops there -- the
+#: message boundary shows it instead -- which is what the check below allows.
+_JUNCTION = re.compile(r"\n```(?=```)```[^\n]*\n")
+
+
+def _assert_carries_the_whole_source(fake: FakeSlack, source: str) -> None:
+    """No character of *source* is lost across the rollovers.
+
+    Line breaks are counted separately: the splitter drops the one at a cut it
+    made on a line boundary, because the closing fence it appends supplies
+    one, so at most one per junction may be missing. Everything else must
+    survive exactly -- the bug this guards against dropped four characters per
+    rollover, mid-identifier.
+    """
+    rejoined = _JUNCTION.sub("", fake.rendered)
+    assert rejoined.replace("\n", "") == source.replace("\n", "")
+    dropped = source.count("\n") - rejoined.count("\n")
+    assert 0 <= dropped <= len(fake.messages) - 1, f"{dropped} line breaks lost"
+
+
+def _code_stream(lines: int = 5000) -> str:
+    body = "".join(f"x_{i} = compute({i})\n" for i in range(lines))
+    return "```python\n" + body + "```"
+
+
+def _chunks_of(text: str, size: int) -> list[str]:
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+async def test_a_long_fenced_block_loses_no_source_text() -> None:
+    """The reviewer's repro: the splitter closes the fence on the head and
+    reopens it on the tail, so `len(head)` is four characters longer than the
+    source it consumed. Advancing the watermark by it skipped those four and
+    dropped the reopener -- `x_1748` vanished mid-identifier."""
+    source = _code_stream()
+    fake = FakeSlack()
+
+    await _channel(fake).send_streaming(_stream(*_chunks_of(source, 997)), update_interval_ms=0)
+
+    _assert_within_limit(fake)
+    assert len(fake.messages) >= 2, "the block must actually roll over"
+    _assert_carries_the_whole_source(fake, source)
+
+
+async def test_every_message_of_a_fenced_block_is_balanced() -> None:
+    """A message left with an odd number of fences renders the rest of the
+    conversation as code on some clients."""
+    fake = FakeSlack()
+
+    await _channel(fake).send_streaming(
+        _stream(*_chunks_of(_code_stream(), 997)), update_interval_ms=0
+    )
+
+    assert len(fake.messages) >= 2, "the block must actually roll over"
+    for ts, text in fake.messages.items():
+        assert text.count("```") % 2 == 0, f"message {ts} has an unbalanced fence"
+
+
+async def test_a_continuation_message_reopens_the_block_with_its_language() -> None:
+    fake = FakeSlack()
+
+    await _channel(fake).send_streaming(
+        _stream(*_chunks_of(_code_stream(), 997)), update_interval_ms=0
+    )
+
+    later = [fake.messages[ts] for ts in sorted(fake.messages, key=FakeSlack._order)][1:]
+    assert later, "expected at least one continuation message"
+    assert all(text.startswith("```") for text in later)
+
+
+async def test_prose_after_a_fenced_block_is_not_treated_as_code() -> None:
+    """The carried reopener belongs to the message that continues the block,
+    not to every later message."""
+    source = _code_stream(2000) + "\n\nThat is the whole script.\n" + "tail " * 6000
+    fake = FakeSlack()
+
+    await _channel(fake).send_streaming(_stream(*_chunks_of(source, 997)), update_interval_ms=0)
+
+    _assert_within_limit(fake)
+    _assert_carries_the_whole_source(fake, source)
+    assert fake.rendered.count("tail ") == 6000
+    for text in fake.messages.values():
+        assert text.count("```") % 2 == 0
