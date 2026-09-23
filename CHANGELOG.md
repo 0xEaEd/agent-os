@@ -21,6 +21,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   silently produced a valid-looking date thousands of years out -- so
   epoch-timestamp conversion now goes through plain `timedelta` arithmetic
   instead, which raises the same way on every platform (#2132).
+- CLI: `agentos config set KEY VALUE` now validates the value before printing
+  the `export AGENTOS_GATEWAY_…` line, the way it already did with `--config`;
+  `agentos gateway run` / `start` report an invalid setting as one line per
+  error, naming the environment variable that supplies it, instead of a
+  pydantic traceback (#3100)
 - Router task-type detection: a code-port request naming Go, C, Objective-C,
   F#, Visual Basic, VBA or Node.js is no longer read as a translation and
   capped to the cheapest tier. The guard already covered `golang`, `c++`,
