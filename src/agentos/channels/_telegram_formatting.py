@@ -170,6 +170,11 @@ _BOLD_UNDERSCORE_RE = re.compile(r"__(?=\S)(.+?)(?<=\S)__")
 #: ``snake_case`` survives the table-label strip too.
 _ITALIC_UNDERSCORE_RE = re.compile(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)")
 
+#: Same pattern as the asterisk-italic pass in :func:`_render_inline`. The
+#: lookarounds keep it off ``**bold**``; the ``**`` strip runs first anyway, so
+#: ``***both***`` reaches this as ``*both*``.
+_ITALIC_ASTERISK_RE = re.compile(r"(?<!\*)\*(?=\S)(.+?)(?<=\S)\*(?!\*)")
+
 
 def _is_python_dunder(content: str) -> bool:
     return content in _DUNDER_NAMES
@@ -270,6 +275,10 @@ def _plain_inline(text: str) -> str:
     # neighbours lost theirs. The sibling of the #1931 fix, which only reached
     # `_render_inline`.
     text = _ITALIC_UNDERSCORE_RE.sub(r"\1", text)
+    # And the other spelling of italic, for the same reason: `*Metric*` kept
+    # its asterisks inside the `<b>` wrapper while `_Metric_` lost its
+    # underscores (#2964).
+    text = _ITALIC_ASTERISK_RE.sub(r"\1", text)
     for index, href in enumerate(hrefs):
         text = text.replace(f"\x00TG_HREF_{index}\x00", href)
     return text.strip()
@@ -423,7 +432,12 @@ def render_telegram_html(markdown: str) -> str:
 
         heading = _HEADING_RE.match(line)
         if heading:
-            rendered.append(f"<b>{_render_inline(heading.group('text'))}</b>")
+            # Telegram HTML forbids nested tags of the same type (<b> inside <b>).
+            # Headings are wrapped in <b>...</b>, so redundant inner bold tags are removed.
+            heading_text = (
+                _render_inline(heading.group("text")).replace("<b>", "").replace("</b>", "")
+            )
+            rendered.append(f"<b>{heading_text}</b>")
             index += 1
             continue
         quote = _BLOCKQUOTE_RE.match(line)

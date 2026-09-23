@@ -161,6 +161,39 @@ class TestPolicyIsEnforcedAtTheStore:
         with pytest.raises(EnvPolicyError):
             env_store.unset_env_var("PATH")
 
+    @pytest.mark.parametrize(
+        "separator",
+        ["\u0085", "\u2028", "\u2029"],
+        ids=["next-line", "line-separator", "paragraph-separator"],
+    )
+    def test_an_invisible_separator_cannot_split_a_value_either(
+        self, env_home: Path, separator: str
+    ) -> None:
+        # Same guarantee as the newline case above: these three are what the
+        # reader's splitlines() also breaks on, so storing one would leave the
+        # file holding a value the parser no longer returns whole.
+        env_store.set_env_var("K", "safe")
+        with pytest.raises(EnvPolicyError, match="line break"):
+            env_store.set_env_var("K", f"value{separator}INJECTED=pwned")
+        assert read_back(env_home) == {"K": "safe"}
+
+    @pytest.mark.parametrize(
+        "separator",
+        ["\u0085", "\u2028", "\u2029"],
+        ids=["next-line", "line-separator", "paragraph-separator"],
+    )
+    def test_a_refused_separator_is_not_applied_to_the_process_either(
+        self, env_home: Path, monkeypatch: pytest.MonkeyPatch, separator: str
+    ) -> None:
+        # set_env_var writes the file first and only then updates os.environ,
+        # so a refusal must leave neither behind -- otherwise the value works
+        # for this session and turns wrong at the next start.
+        monkeypatch.delenv("PASTED_TOKEN", raising=False)
+        with pytest.raises(EnvPolicyError, match="line break"):
+            env_store.set_env_var("PASTED_TOKEN", f"sk-live-abc{separator}def-xyz")
+        assert "PASTED_TOKEN" not in os.environ
+        assert not (env_home / ".env").exists()
+
 
 @pytest.mark.skipif(WINDOWS, reason="POSIX file modes are a no-op on Windows")
 class TestPermissions:

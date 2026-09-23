@@ -17,6 +17,7 @@ from agentos.application.intent_cache import IntentApprovalCache
 from agentos.engine.cache_break_monitor import CacheBreakMonitor
 from agentos.engine.progress_watchdog import ProgressWatchdog
 from agentos.engine.subagent import SubagentRegistry
+from agentos.gateway.channel_dispatch import ChannelSessionPointers
 from agentos.gateway.session_streams import SessionStreamRegistry
 from agentos.plan_mode import PlanModeStore
 from agentos.sandbox.governance import DenialLedger
@@ -42,6 +43,7 @@ def _field(owner: object, name: str) -> BoundedRegistry:
         (ProgressWatchdog, ["_repeat_counts", "_repeat_results"]),
         (CacheBreakMonitor, ["_baselines"]),
         (IntentApprovalCache, ["_entries"]),
+        (ChannelSessionPointers, ["_map"]),
     ],
 )
 def test_named_sites_are_bounded(factory, fields: list[str]) -> None:
@@ -197,6 +199,28 @@ def test_turn_runner_compaction_state_is_dropped_on_teardown() -> None:
     assert "kept" in runner._compaction_failures
     assert "doomed" not in runner._emergency_compaction_overrides
     assert "kept" in runner._emergency_compaction_overrides
+
+
+def test_channel_session_pointers_are_dropped_on_teardown() -> None:
+    """#1561: ``_map`` grew one entry per chat that ever ran ``/new``, forever."""
+    pointers = ChannelSessionPointers()
+    pointers.set("doomed", "doomed-new")
+    pointers.set("kept", "kept-new")
+
+    drop_session_state("doomed-new")
+
+    assert pointers.resolve("doomed") == "doomed"
+    assert pointers.resolve("kept") == "kept-new"
+
+
+def test_channel_session_pointers_survive_teardown_of_the_base_session() -> None:
+    """Archiving/deleting the abandoned base session must not reroute the chat."""
+    pointers = ChannelSessionPointers()
+    pointers.set("base", "fresh")
+
+    drop_session_state("base")
+
+    assert pointers.resolve("base") == "fresh"
 
 
 def test_denial_ledger_session_state_is_dropped_on_teardown() -> None:

@@ -29,8 +29,9 @@ def test_prune_expired_log_files_by_ttl(tmp_path: Path) -> None:
     _touch_log_file(log_dir / "traces-20260101.jsonl", age_seconds=25 * 86400, size_bytes=500)
     # 3. Fresh decision log (2 days old)
     _touch_log_file(log_dir / "decisions-20260215.jsonl", age_seconds=2 * 86400, size_bytes=500)
-    # 4. Very fresh active log (30 seconds old)
-    _touch_log_file(log_dir / "agentos.log", age_seconds=30, size_bytes=500)
+    # 4. Very fresh active log (30 seconds old). The gateway's own stdout/stderr
+    #    sink is the real one; "agentos.log" was a filename nothing ever wrote.
+    _touch_log_file(log_dir / "gateway.log", age_seconds=30, size_bytes=500)
 
     result = prune_expired_log_files(
         log_dir=log_dir,
@@ -45,7 +46,7 @@ def test_prune_expired_log_files_by_ttl(tmp_path: Path) -> None:
     assert not (log_dir / "decisions-20260101.jsonl").exists()
     assert not (log_dir / "traces-20260101.jsonl").exists()
     assert (log_dir / "decisions-20260215.jsonl").exists()
-    assert (log_dir / "agentos.log").exists()
+    assert (log_dir / "gateway.log").exists()
 
 
 def test_prune_expired_log_files_by_size_budget(tmp_path: Path) -> None:

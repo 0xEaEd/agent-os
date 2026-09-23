@@ -26,6 +26,8 @@ _ENV_KEYS = (
     "OPENAI_BASE_URL",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
+    "DEEPSEEK_API_KEY",
+    "GROQ_API_KEY",
 )
 
 
@@ -198,6 +200,47 @@ def test_openrouter_falls_back_to_the_openai_key(monkeypatch: pytest.MonkeyPatch
     assert cfg.provider == "openrouter"
     assert cfg.api_key == "sk-openai"
     assert cfg.base_url == "https://openrouter.ai/api/v1"
+
+
+def test_registered_provider_reads_its_own_key_and_default_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTOS_VISION_PROVIDER", "deepseek")
+    monkeypatch.setenv("AGENTOS_VISION_MODEL", "deepseek-chat")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openai.example/v1")
+
+    cfg = AuxiliaryClient().provider_config("vision")
+
+    assert cfg.provider == "deepseek"
+    assert cfg.api_key == "sk-deepseek"
+    assert cfg.base_url == "https://api.deepseek.com"
+
+
+def test_registered_provider_never_borrows_the_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTOS_VISION_PROVIDER", "groq")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+
+    cfg = AuxiliaryClient().provider_config("vision")
+
+    assert cfg.api_key == ""
+    assert cfg.base_url != "https://openai.example/v1"
+
+
+def test_unregistered_provider_keeps_the_openai_compatible_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTOS_VISION_PROVIDER", "my-gateway")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gw.example/v1")
+
+    cfg = AuxiliaryClient().provider_config("vision")
+
+    assert cfg.api_key == "sk-openai"
+    assert cfg.base_url == "https://gw.example/v1"
 
 
 # ---------------------------------------------------------------------------
