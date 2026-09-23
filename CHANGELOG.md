@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `apply_patch`: an `*** Update File:` block with no `@@@ ` hunks — a
+  unified-diff `@@ -1,1 +1,1 @@` header, a note, or nothing at all — is refused
+  with the offending line named, instead of rewriting the file unchanged and
+  reporting `1 file(s) modified` (#2837)
 - `code_exec` destructive check: a delete wrapped in a Unix shell
   (`bash -c 'rm -rf /x'`, `sh -c`, `zsh`/`dash`/`ksh`/`fish`/`csh`, path-prefixed
   or with `-o pipefail`) or behind a value-taking PowerShell flag
