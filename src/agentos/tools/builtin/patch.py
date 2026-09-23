@@ -249,12 +249,12 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
                         if hunk_line.startswith("@@ ")
                         else ""
                     )
-                    raise ValueError(
+                    raise PatchError(
                         f"Invalid line in '*** Update File: {path}' block "
                         f"(expected a '@@@ ' hunk header): {hunk_line!r}{hint}"
                     )
             if not hunks:
-                raise ValueError(
+                raise PatchError(
                     f"No hunks found in '*** Update File: {path}' block: expected at "
                     "least one '@@@ -old_start,count +new_start,count @@@' hunk header"
                 )
