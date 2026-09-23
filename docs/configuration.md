@@ -503,11 +503,32 @@ classifies each turn:
 | --- | --- | --- |
 | `pilot-v1` | Yes | English-optimized local ML router: an AgentOS-native, self-trained model (MiniLM embeddings + ONNX inference). Decides on-device with no LLM call and nothing leaves the machine. The bundle ships in the wheel under `src/agentos/agentos_router/models/pilot_v1/`; when it's missing (e.g. a source checkout without `git lfs pull`) the strategy tags the decision `pilot_unavailable` and routes the turn to the default tier (c1). Runtime deps are `numpy`/`onnxruntime`/`tokenizers` (in the `recommended` and `ml-router` extras); a minimal install without them degrades the same graceful way. Tunable via the `[agentos_router.pilot]` sub-table below. See [`features/agentos-router.md`](features/agentos-router.md#the-pilot-strategy) for status and upgrade notes. |
 | `llm_judge` | No | Each turn is classified by a small LLM judge call instead of the local ML bundle. See "Local judge" below. |
+| `jev` | No (experimental) | Each turn is classified by one call to typesafe.ai's Jev "System One" classifier. Sends the current turn text to typesafe.ai; returns a calibrated probability that feeds the confidence gate plus a `high_risk` score that floors destructive / production requests at c3. Requires `TYPESAFE_API_KEY`; a missing key, HTTP error or timeout degrades to the default tier with `jev_unavailable` telemetry. Tunable via the `[agentos_router.jev]` sub-table below. See [`features/agentos-router.md`](features/agentos-router.md#the-jev-strategy). |
 
 ```toml
 [agentos_router]
-strategy = "pilot-v1"   # default; or "llm_judge"
+strategy = "pilot-v1"   # default; or "llm_judge", or "jev" (experimental)
 ```
+
+Jev settings live in their own sub-table (all fields optional; defaults shown):
+
+```toml
+[agentos_router.jev]
+# api_key = "..."                   # literal key; prefer the env var below
+api_key_env = "TYPESAFE_API_KEY"    # env var consulted when api_key is unset
+base_url = "https://api.typesafe.ai"
+model = "jev-latest"
+input_max_chars = 4000              # min 1000; the turn is head/tail truncated
+high_risk_threshold = 0.7           # 0..1; high_risk >= this floors the turn at c3
+# timeout_seconds = 8.0             # unset: derived from routing_timeout_seconds
+short_circuit_enabled = true        # greetings/acks skip the API call
+agentic_floor_enabled = false       # true: tool-bearing turns never go below c1
+```
+
+`api_key` is redacted on every public surface (`agentos config get`, the Web
+UI, RPC) and is **never written to `config.toml` when it equals
+`$TYPESAFE_API_KEY`** — the wizard stores the key in the env store and leaves
+the config pointing at `api_key_env`.
 
 Router runtime dependencies (`onnxruntime`, `numpy`, `tokenizers`) stay in the
 `recommended` / `ml-router` extras rather than the core install: a minimal
@@ -515,12 +536,13 @@ install without them does not fail — the router degrades to the default tier
 and emits `pilot_unavailable` telemetry.
 
 The supported strategies are also selectable from the Mode dropdown in
-onboarding (Web UI wizard and CLI), a three-option selector: **Local ML —
+onboarding (Web UI wizard and CLI), a four-option selector: **Local ML —
 English-optimized (Pilot)** (`pilot-v1`, the default), **Smart routing
-(LLM-based)** (`llm_judge`), or **Off**. The legacy **Smart routing
-(on-device)** (`v4_phase3`) option is no longer offered. The "Judge model" field
-only appears for the LLM-based strategy; the "Pilot safety net" field only
-appears for the Pilot strategy.
+(LLM-based)** (`llm_judge`), **Jev cloud classifier (typesafe.ai,
+experimental)** (`jev`), or **Off**. The legacy **Smart routing (on-device)**
+(`v4_phase3`) option is no longer offered. The "Judge model" field only appears
+for the LLM-based strategy; the "Pilot safety net" field only appears for the
+Pilot strategy; the "TypeSafe API key" field only appears for the Jev strategy.
 
 #### Provider-switch profiles
 

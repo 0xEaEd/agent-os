@@ -40,19 +40,25 @@ def resolve_ffmpeg(explicit: str) -> str:
     found = shutil.which(explicit)
     if found:
         return found
+    if os.path.isabs(explicit) and os.path.isfile(explicit):
+        return explicit
     if os.name != "nt":
         return explicit  # let subprocess fail with the canonical error
+    # The same probe order as video-merger and subtitle-burner, so that an
+    # ffmpeg one of them finds, this one finds too (#2435). A missing
+    # LOCALAPPDATA only skips the winget glob; the fixed locations below do
+    # not depend on it and used to be skipped along with it.
     local_app = os.environ.get("LOCALAPPDATA", "")
-    if not local_app:
-        return explicit
-    from glob import glob
-    for hit in glob(os.path.join(local_app, WINGET_FFMPEG_GLOB)):
-        if os.path.isfile(hit):
-            return hit
+    if local_app:
+        from glob import glob
+        for hit in glob(os.path.join(local_app, WINGET_FFMPEG_GLOB)):
+            if os.path.isfile(hit):
+                return hit
     candidates = [
         os.path.join(os.environ.get("USERPROFILE", ""), "scoop", "apps", "ffmpeg", "current", "bin", "ffmpeg.exe"),
         r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        r"C:\ffmpeg\bin\ffmpeg.exe",
     ]
     for p in candidates:
         if p and os.path.isfile(p):
@@ -87,11 +93,17 @@ def main() -> int:
     ffmpeg_bin = resolve_ffmpeg(args.ffmpeg_path)
 
     # Two-step pipeline inside one filter_complex:
-    #   [0:v] scale to cover, then zoompan over N frames at fps.
+    #   [0:v] scale to cover (force_original_aspect_ratio=increase keeps the
+    #     source's own aspect ratio during the scale-up, so a landscape
+    #     still isn't stretched to fit a vertical target; crop then trims
+    #     the overflow on whichever axis overshot), then zoompan over N
+    #     frames at fps.
     #   [1:a] anullsrc gives a silent stereo track at 44.1kHz.
     # -shortest cuts the audio to match video length.
+    scale_w, scale_h = args.width * 4, args.height * 4
     vf = (
-        f"[0:v]scale={args.width * 4}:{args.height * 4}:flags=lanczos,"
+        f"[0:v]scale={scale_w}:{scale_h}:force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop={scale_w}:{scale_h},"
         f"zoompan=z='min(zoom+{args.zoom_rate},1.2)':"
         f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
         f"d={total_frames}:s={args.width}x{args.height}:fps={args.fps}[v]"

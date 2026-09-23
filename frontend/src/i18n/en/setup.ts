@@ -146,6 +146,7 @@ export const setup = defineNamespace('setup', {
   routerModeAria: 'Router mode',
   routerModePilot: 'Local ML - English-optimized (Pilot)',
   routerModeJudge: 'Smart routing (LLM-based)',
+  routerModeJev: 'Jev cloud classifier (typesafe.ai, experimental)',
   routerModeOff: 'Off',
   routerPilotHint:
     'English-optimized local ML router; runs offline with the self-trained AgentOS model.',
@@ -155,6 +156,15 @@ export const setup = defineNamespace('setup', {
   routerPilotThresholdAria: 'Pilot safety-net threshold',
   routerPilotThresholdHint:
     'Under-routing floor (default 0.5). The effective cutoff is the max of this and the router confidence threshold.',
+  routerJevHint:
+    'Experimental. Sends the current turn text to typesafe.ai. Leave the key blank to use TYPESAFE_API_KEY from ~/.agentos/.env.',
+  routerJevApiKey: 'TypeSafe API key',
+  routerJevApiKeyAria: 'TypeSafe API key',
+  routerJevApiKeyPlaceholder: 'Blank keeps the saved key or TYPESAFE_API_KEY',
+  routerJevHighRisk: 'High-risk floor',
+  routerJevHighRiskAria: 'High-risk floor threshold',
+  routerJevHighRiskHint:
+    'Requests whose destructive-action probability is at or above this value are floored at c3 (default 0.7).',
   routerTranslateCap: 'Translation cap',
   routerTranslateCapAria: 'Translation cap tier',
   routerTranslateOff: 'Off - route translations normally',

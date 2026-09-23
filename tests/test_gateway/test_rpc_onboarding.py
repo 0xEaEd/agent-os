@@ -1606,3 +1606,171 @@ async def test_router_configure_local_endpoint_rejects_unusable_with_invalid_req
     assert "not usable" in res.error.message
     assert ctx.config.agentos_router.judge_base_url is None
     assert not (tmp_path / "c.toml").exists()
+
+
+@pytest.mark.asyncio
+async def test_router_configure_forwards_jev_fields_and_verifies_off_event_loop(
+    tmp_path, monkeypatch
+):
+    """strategy="jev" with a fresh jevApiKey runs the typesafe.ai probe, which
+    is blocking: it must go through the same asyncio.to_thread hop as the local
+    judge verify, and the key must be forwarded but never echoed."""
+    import asyncio
+    import threading
+
+    monkeypatch.setenv("AGENTOS_GATEWAY_CONFIG_PATH", str(tmp_path / "c.toml"))
+    import agentos.agentos_router.jev as jev_mod
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import mutations as mutations_mod
+
+    monkeypatch.setattr(jev_mod, "probe_jev", lambda api_key, **_kw: None)
+    ctx = _admin_ctx()
+    ctx.config = GatewayConfig(llm={"provider": "deepseek", "model": "deepseek-chat"})
+    ctx.config.config_path = str(tmp_path / "c.toml")
+
+    loop_thread = threading.get_ident()
+    observed: dict[str, object] = {}
+    real_upsert = mutations_mod.upsert_router
+
+    def _spy_upsert(config, **kwargs):
+        observed["thread"] = threading.get_ident()
+        try:
+            observed["running_loop"] = asyncio.get_running_loop()
+        except RuntimeError:
+            observed["running_loop"] = None
+        observed["kwargs"] = kwargs
+        return real_upsert(config, **kwargs)
+
+    monkeypatch.setattr(mutations_mod, "upsert_router", _spy_upsert)
+
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "onboarding.router.configure",
+        {
+            "mode": "recommended",
+            "strategy": "jev",
+            "jevApiKey": "tsk-secret",
+            "jevApiKeyEnv": "MY_TYPESAFE_KEY",
+            "jevHighRiskThreshold": 0.8,
+        },
+        ctx,
+    )
+
+    assert res.error is None, res.error
+    kwargs = observed["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["verify_jev"] is True
+    assert kwargs["verify_local_endpoint"] is False
+    assert kwargs["jev_api_key"] == "tsk-secret"
+    assert kwargs["jev_api_key_env"] == "MY_TYPESAFE_KEY"
+    assert kwargs["jev_high_risk_threshold"] == 0.8
+    assert observed["thread"] != loop_thread
+    assert observed["running_loop"] is None
+    jev = ctx.config.agentos_router.jev
+    assert ctx.config.agentos_router.strategy == "jev"
+    assert jev.api_key == "tsk-secret"
+    assert jev.api_key_env == "MY_TYPESAFE_KEY"
+    assert jev.high_risk_threshold == 0.8
+    assert res.payload["entry"]["jev"] == {
+        "api_key_configured": True,
+        "api_key_env": "MY_TYPESAFE_KEY",
+    }
+    assert "tsk-secret" not in json.dumps(res.payload)
+
+
+@pytest.mark.asyncio
+async def test_router_configure_jev_without_new_key_stays_on_loop(tmp_path, monkeypatch):
+    """No new key means nothing to verify: no probe, no thread hop."""
+    import threading
+
+    monkeypatch.setenv("AGENTOS_GATEWAY_CONFIG_PATH", str(tmp_path / "c.toml"))
+    import agentos.agentos_router.jev as jev_mod
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import mutations as mutations_mod
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("probe_jev must not run without a new key")
+
+    monkeypatch.setattr(jev_mod, "probe_jev", _boom)
+    ctx = _admin_ctx()
+    ctx.config = GatewayConfig(llm={"provider": "deepseek", "model": "deepseek-chat"})
+    ctx.config.config_path = str(tmp_path / "c.toml")
+
+    loop_thread = threading.get_ident()
+    observed: dict[str, object] = {}
+    real_upsert = mutations_mod.upsert_router
+
+    def _spy_upsert(config, **kwargs):
+        observed["thread"] = threading.get_ident()
+        observed["verify_jev"] = kwargs.get("verify_jev")
+        return real_upsert(config, **kwargs)
+
+    monkeypatch.setattr(mutations_mod, "upsert_router", _spy_upsert)
+
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "onboarding.router.configure",
+        {"mode": "recommended", "strategy": "jev"},
+        ctx,
+    )
+
+    assert res.error is None, res.error
+    assert observed["verify_jev"] is False
+    assert observed["thread"] == loop_thread
+    assert ctx.config.agentos_router.strategy == "jev"
+
+
+@pytest.mark.asyncio
+async def test_router_configure_jev_key_is_not_verified_under_another_strategy(
+    tmp_path, monkeypatch
+):
+    """A jevApiKey sent while pilot stays selected is stored (so the operator
+    can switch later) but not probed."""
+    monkeypatch.setenv("AGENTOS_GATEWAY_CONFIG_PATH", str(tmp_path / "c.toml"))
+    import agentos.agentos_router.jev as jev_mod
+    from agentos.gateway.config import GatewayConfig
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("probe_jev must not run for strategy=pilot-v1")
+
+    monkeypatch.setattr(jev_mod, "probe_jev", _boom)
+    ctx = _admin_ctx()
+    ctx.config = GatewayConfig(llm={"provider": "deepseek", "model": "deepseek-chat"})
+    ctx.config.config_path = str(tmp_path / "c.toml")
+
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "onboarding.router.configure",
+        {"mode": "recommended", "strategy": "pilot-v1", "jevApiKey": "tsk-later"},
+        ctx,
+    )
+
+    assert res.error is None, res.error
+    assert ctx.config.agentos_router.strategy == "pilot-v1"
+    assert ctx.config.agentos_router.jev.api_key == "tsk-later"
+
+
+@pytest.mark.asyncio
+async def test_router_configure_jev_rejects_a_key_the_probe_refuses(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTOS_GATEWAY_CONFIG_PATH", str(tmp_path / "c.toml"))
+    import agentos.agentos_router.jev as jev_mod
+    from agentos.gateway.config import GatewayConfig
+
+    monkeypatch.setattr(jev_mod, "probe_jev", lambda api_key, **_kw: "HTTP 401: invalid api key")
+    ctx = _admin_ctx()
+    ctx.config = GatewayConfig(llm={"provider": "deepseek", "model": "deepseek-chat"})
+    ctx.config.config_path = str(tmp_path / "c.toml")
+
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "onboarding.router.configure",
+        {"mode": "recommended", "strategy": "jev", "jevApiKey": "tsk-bad"},
+        ctx,
+    )
+
+    assert res.error is not None
+    assert res.error.code == "INVALID_REQUEST"
+    assert "HTTP 401" in res.error.message
+    assert "tsk-bad" not in res.error.message
+    assert ctx.config.agentos_router.jev.api_key is None
+    assert not (tmp_path / "c.toml").exists()
