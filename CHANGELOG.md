@@ -7,10 +7,257 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+
 - `apply_patch`: an `*** Update File:` block with no `@@@ ` hunks — a
   unified-diff `@@ -1,1 +1,1 @@` header, a note, or nothing at all — is refused
   with the offending line named, instead of rewriting the file unchanged and
   reporting `1 file(s) modified` (#2837)
+- `code_exec` destructive check: a delete wrapped in a Unix shell
+  (`bash -c 'rm -rf /x'`, `sh -c`, `zsh`/`dash`/`ksh`/`fish`/`csh`, path-prefixed
+  or with `-o pipefail`) or behind a value-taking PowerShell flag
+  (`powershell -ExecutionPolicy Bypass -c Remove-Item …`, `-ep`, `-wd`) is now
+  flagged in both the argv and the string form. Flag values are matched per flag,
+  so `bash -c 'git rm --cached x'` and `pwsh -File build.ps1 rm` stay allowed, and
+  a long run of `sudo -x` flags no longer backtracks exponentially (#2096).
+- Security: `.pgpass` and `.netrc` are named credential files, the gate
+  fired for `cat ~/.pgpass`, and the password still reached the model --
+  the assignment pass only understands `name=value`, and neither format
+  has one (`.pgpass` is positional `host:port:db:user:password`; `.netrc`
+  is `machine H login U password P`). Each now gets a format rule keyed on
+  the file's basename, on both the terminal and the file-read surface,
+  masking the password whole rather than with the head/tail reveal meant
+  for identifying vendor keys (#2620).
+
+- Security: `is_env_dump_command` judged a shell segment by its first token
+  alone, so `sudo printenv` and `/usr/bin/env` were not dumps -- the
+  environment reached the model with only shape matching, and an opaque
+  `DATABASE_PASSWORD` went straight through -- while `set -e`,
+  `export X=y && ...` and `env python3 build.py` *were* dumps, so the output
+  of whatever followed got the assignment pass and `secret_key =
+  self._secret_key` in a `cat` of source came back masked. The command is
+  now found under any wrapper that runs it and by its basename, and its
+  arguments decide what it does; redirections such as `env 2>&1` are not
+  operands, and `env -i printenv` is judged as the `printenv` it runs (#2617).
+
+- Tools: `exec_command` leaked its process tree. On Windows a timeout called
+  `proc.kill()` -- `TerminateProcess` on the `cmd.exe` asyncio tracks -- and
+  whatever `cmd.exe` had spawned ran on orphaned for the life of the gateway;
+  the timeout now goes through `taskkill /T /F`, the same fix `agentos
+  upgrade` got in #541. On every platform an outer cancellation (a turn
+  deadline, a session kill, a cancelled tool call) raised `CancelledError`,
+  a `BaseException` the `except Exception` around the exec block never saw,
+  so nothing was cleaned up at all; the cancellation path now runs the same
+  tree kill, shielded so a second cancellation cannot interrupt it, and then
+  propagates (#2507).
+
+- Scheduler: a cron job with a `tz` mis-fired across daylight-saving
+  transitions. `_next_run` walked UTC minute by minute and matched the cron
+  fields against the converted wall time — but a wall-clock time is not unique.
+  On the fall-back night the hour repeats, so two UTC minutes both rendered as
+  the scheduled local time and a *daily* job fired twice; on spring-forward the
+  hour is skipped, so nothing rendered as the scheduled time and the job was
+  silently skipped for that day. A fixed-hour schedule now fires on the first
+  occurrence of an ambiguous local time only, while an interval schedule with a
+  wildcard hour (`*/15 * * * *`, `0 * * * *`) keeps running through the
+  repeated hour as standard cron does; a local time that does not exist fires
+  once at the first instant after the gap. UTC-scheduled jobs are unchanged
+  (#2472).
+
+- Migration: `agentos migrate openclaw` writes the provider's own model id into
+  `llm.model`. An OpenClaw reference such as `anthropic/claude-sonnet-4-5` was
+  stored verbatim next to `llm.provider = "anthropic"`, so the Anthropic API was
+  asked for a model with that literal name; only the `openrouter/` and `zai/`
+  prefixes were being stripped. The `anthropic/`, `openai/`, `deepseek/` and
+  `minimax/` prefixes, the ones `_provider_from_model` already reads the
+  provider from, are now stripped the same way. The migration report's
+  `skipped_model` shows the native id too.
+
+- `session_search`: a short query in a non-Latin script now matches whichever
+  case the user typed. #2897 answers terms below the three-character trigram
+  floor (`go`, `db`, a two-character CJK word) with a `LIKE` scan "instead of
+  by nothing", but SQLite's `LIKE` folds case for ASCII only -- so `db` found
+  `DB` while `бд` did not find `БД` and `är` did not find `ÄRGER`, and the tool
+  reported "No matches found." for a transcript it holds. Each short term is
+  expanded to its per-character case forms before escaping; the expansion is
+  bounded at four patterns and collapses to one for a caseless script such as
+  CJK. The indexed path is unchanged -- `trigram` already folds the full
+  Unicode range.
+
+- Migration: `agentos migrate openclaw` and `agentos migrate hermes` no longer
+  turn every remote MCP server into an SSE server with no headers. A server
+  with a `url` was always written as `transport = "sse"` and its `headers`
+  were dropped, so a hosted streamable-HTTP server that authenticates with an
+  `Authorization` header arrived unable to connect, while OpenClaw's report
+  called `headers`/`transport` "unsupported" although `MCPServerEntry` has both.
+  An explicit `transport` (`streamable-http`, `streamable_http`, `http`, `sse`)
+  is now kept, `headers` are carried over, and a URL server that names no
+  transport stays on `sse` as before. Like the server's `env`, `headers` are
+  migrated without `--migrate-secrets`.
+
+- Migration: `agentos migrate openclaw` and `agentos migrate hermes` no longer
+  copy a trailing inline comment into a migrated `.env` value. Both source
+  runtimes read `.env` with a dotenv loader, so `OPENAI_API_KEY=sk-1 # work`
+  is `sk-1` there, but the migrators only trimmed quote characters off the two
+  ends and wrote `sk-1 # work` (or `sk-1'  # work` for a quoted value) into the
+  new `.env`, where AgentOS reads it literally and the provider answers 401.
+  A quoted value now ends at its closing quote and an unquoted one at the
+  first whitespace followed by `#`; values without a comment are unchanged.
+
+- `robinhood-chain-stocks` skill: a fetch of the Chainlink reference-data
+  directory that failed at the network level (DNS, timeout, 5xx, a non-JSON
+  body) aborted the entire run with `{"query": ..., "error": ...}`, discarding
+  the on-chain reading the RPC had already answered (address, symbol, supply,
+  the `uiMultiplier()` Stock-Token check, holder balance). The note the script
+  keeps for this case -- "could not fetch the Chainlink feed directory; price
+  unavailable, not disproven" -- was reachable only when the fetch *succeeded*
+  with a non-list body. The directory is an optional price source: a fetch
+  fault now degrades to that note with the cause recorded in
+  `readErrors.feedDirectory`, so one unreachable host costs the price read
+  instead of the whole dossier (#3290).
+
+- Web UI: `control_ui.show_thinking = false` now stops the live reasoning
+  stream. `chat.history` and `chat.thinking` honoured it, but every turn runs
+  through `TaskRuntime`, whose event path forwarded each `session.event.thinking`
+  and the `reasoning_content` on `session.event.done` to subscribed WebSockets
+  regardless; the only check lived in the no-runtime fallback of
+  `sessions.send`. With the flag off the gateway now drops thinking events and
+  strips `reasoning_content` from `done`, as docs/web-ui.md describes (#3276).
+
+- `agentos config set --config` (and `agents add`, onboarding and the
+  hermes/openclaw migrations, which share `onboarding.config_store.load_config`)
+  no longer copies a gateway auth token/password or the LLM API key that was
+  supplied only through `AGENTOS_AUTH_TOKEN` / `AGENTOS_AUTH_PASSWORD` /
+  `AGENTOS_LLM_API_KEY` into `config.toml`. Because the file beats the
+  environment, the copy made a later rotation of the environment value a silent
+  no-op. Setting `auth.token` or `llm.api_key` explicitly still writes it. If an
+  earlier run already wrote such a value, it stays in the file until you remove
+  it (#3269).
+
+- Channel message splitting: a long fenced code block no longer arrives with a
+  statement broken in two across the seam. `split_text_for_limit` documents
+  that its cut is "nudged back to the nearest line/word boundary so a chunk
+  doesn't end mid-word", but `_rebalance_open_fence` -- the branch taken for
+  every chunk after the first of a long block -- used its binary-search cut
+  raw, so `line_17 = compute(17)` was delivered as `line_17 ` and
+  `= compute(17)` on separate lines of two separate Discord/Telegram messages.
+  The cut is now nudged the same way, and the head no longer gains a blank line
+  before the synthesized closing fence. The non-advancing-split guard from
+  #2127 is preserved: the nudge only moves the cut forward of the fence, must
+  keep at least half the span the search found, and falls back to the raw cut
+  rather than failing.
+
+- Memory search: MMR diversity re-ranking no longer collapses results written
+  in a non-Latin, non-CJK script. `_jaccard_similarity` tokenized snippets with
+  `[a-zA-Z0-9]+` plus a CJK pass, so a Cyrillic, Greek, Hangul, Arabic, Hebrew,
+  Devanagari or Thai snippet yielded no tokens at all and any two of them
+  scored a perfect 1.0 -- the penalty reserved for an exact duplicate, which
+  pushed genuinely different results out of the top-k with nothing logged. The
+  word class is now `[^\W_]+`, the same widening
+  `memory_tools._memory_search_query_terms` already applies. ASCII and CJK
+  tokenize exactly as before.
+
+- Approvals: a destructive command approved with **once** no longer answers the
+  same command in the session's later turns. `IntentApprovalCache` documents
+  `once` as ending at the session's next user message, but the only
+  `clear_scope("once", ...)` call was in the no-runtime fallback of
+  `sessions.send`; the gateway always runs turns through `TaskRuntime`, so the
+  grant lived for its full 30-minute TTL and the shell gate skipped the prompt
+  (and elevated the call). A web, channel or CLI user message now ends the
+  session's `once` grants when its turn starts. `always` grants, other
+  sessions' grants and cron / subagent turns are untouched (#3274).
+
+- Skills (video-still-animator): `resolve_ffmpeg` had drifted from the copies
+  in video-merger and subtitle-burner -- it did not probe `C:\ffmpeg\bin` and
+  returned early (skipping every fixed location) whenever `LOCALAPPDATA` was
+  unset -- so an ffmpeg the other two skills found, this one reported as
+  `not found`. The three resolvers now probe the same locations in the same
+  order, and a test runs all three under one environment to keep it that way
+  (#2435).
+
+- `SubagentRegistry` retained completed, errored, and aborted subagent runs and
+  their result text in `_runs` for the life of the agent because `archive()` was
+  never called on task completion, leaving the bounded `_archived` cache empty;
+  `SubagentManager.spawn` now moves finished subagents to `_archived` on completion
+  and registry queries search both active and archived runs
+  ([#2424](https://github.com/use-agent-os/agent-os/issues/2424)).
+
+- `create_xlsx` bypassed zip timestamp and `docProps/core.xml` normalization,
+  causing identical workbooks across turns to produce non-deterministic
+  hashes that silently broke artifact session deduplication.
+
+- Tools: `grep_search` and `apply_patch` counted lines with `str.splitlines()`,
+  which breaks on eleven characters rather than the newline alone. A file
+  carrying a lone carriage return or a form feed was numbered differently by
+  different tools: `grep_search` reported a hit at a line `read_file`
+  disagreed with, and `apply_patch` shifted every later line against the hunk
+  headers, rejecting a correct patch as a context mismatch. Both now split on
+  newlines only, and `grep_search` reads with `newline=""` so the default
+  translation of a lone carriage return cannot renumber a file either
+  (#3176).
+
+- `subtitle-burner` skill: a subtitle path containing an apostrophe failed the
+  burn outright (`No option name near ''s_cues.srt`). A `-vf` argument is
+  tokenised twice -- by the filtergraph parser, then by the option parser --
+  and the quote was escaped for only the first, so the second met a bare quote
+  and swallowed the rest of the argument, taking `:force_style=...` into the
+  filename on an odd quote count. The quote is now escaped at both levels
+  (#3162).
+
+- Observability: the log retention sweeper's family list named `agentos.log*`, a
+  filename nothing in AgentOS writes, and matched no pattern against the gateway
+  daemon's own `~/.agentos/logs/gateway.log` -- opened append-only by
+  `agentos gateway start` and rotated by nothing. The one unbounded log was
+  therefore never aged out, never counted against
+  `observability.log_retention_max_total_mb`, and never tripped the sweep's
+  `capped` flag. The stale pattern is replaced with `gateway.log*`, and that
+  family is reclaimed by truncating in place rather than `unlink`, so the
+  running daemon's inherited descriptor is not left appending into an orphaned
+  inode (#3116).
+
+- `xlsx` `edit_xlsx.py`: a `rename_sheet` lands on exactly the name asked for,
+  or does nothing. openpyxl routes an assigned title through
+  `avoid_duplicate_name`, so renaming onto a name another sheet held wrote
+  `Summary1` and counted it as applied, and every later op addressing `Summary`
+  then read and wrote the other sheet. A taken name is now refused and
+  uncounted; a capitalisation-only rename is applied exactly (#2258).
+
+- `deep-research` skill: the compiled report dropped every source's `relevance`
+  and never named the source count, two of the five output elements SKILL.md
+  enumerates. Relevance is the entire output of the five-axis rubric in
+  `references/sources.md`, whose bar calls anything below 0.40 a dead end and
+  which tells the host to record a paywalled page with `relevance: 0` -- so a
+  dead end was cited in the same shape, with the same weight, as a primary
+  source. `compile.py` now prints `[relevance N.NN]` on every reference line and
+  the recorded source count in the Methodology block (#3115).
+
+- `deep-research` skill: a sub-question's coverage counted the same URL once per
+  time it was recorded, so re-submitting a source across rounds -- the normal
+  shape of the documented loop, since `--print-fetches` reports how many sources
+  are missing but never which URLs are already in hand -- reported the
+  sub-question as fully covered, dropped it from the fetch list and from the
+  report's "What this report does not cover" section, and cited the one source
+  once per copy. `iterate.py --record` now counts one source per URL per
+  sub-question and reports a `duplicates` count alongside `added` (#3114).
+
+- CLI: `sessions list --since` read any digit-only value as epoch seconds
+  with no plausibility check, so a date typed without separators
+  (`20260101`) or a bare year (`2026`) landed in 1970 and the filter
+  silently matched every session -- a full table, exit 0, no warning.
+  Digit-only input is now read by its length: 8 digits is a compact
+  `YYYYMMDD` date, 10 is epoch seconds, 13 is epoch milliseconds; anything
+  else is rejected with `--since must be an ISO date/datetime, a compact
+  date (YYYYMMDD), or an epoch timestamp in seconds (10 digits) or
+  milliseconds (13 digits)`. An out-of-range value (e.g. a 14-digit
+  string) previously reached `datetime.fromtimestamp`, whose range check
+  is platform-dependent -- it raised on Windows but not on Linux, where it
+  silently produced a valid-looking date thousands of years out -- so
+  epoch-timestamp conversion now goes through plain `timedelta` arithmetic
+  instead, which raises the same way on every platform (#2132).
+- CLI: `agentos config set KEY VALUE` now validates the value before printing
+  the `export AGENTOS_GATEWAY_…` line, the way it already did with `--config`;
+  `agentos gateway run` / `start` report an invalid setting as one line per
+  error, naming the environment variable that supplies it, instead of a
+  pydantic traceback (#3100)
 - Router task-type detection: a code-port request naming Go, C, Objective-C,
   F#, Visual Basic, VBA or Node.js is no longer read as a translation and
   capped to the cheapest tier. The guard already covered `golang`, `c++`,
@@ -25,6 +272,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `***bold italic***`) no longer leaks its asterisks into the rendered
   `<b>…</b>`; the label path strips single-asterisk italics the way it already
   stripped `_italic_` (#2964)
+- Channels (Telegram): a backslash-escaped Markdown character was printed to
+  the reader *and* the formatting it was meant to suppress was applied anyway.
+  `_render_inline` ran its emphasis passes as plain regex substitutions over
+  the escaped text, with no notion of a preceding backslash, and
+  `_replace_code_spans` treated a backslash-escaped backtick as a delimiter --
+  so `\*not italic\*` reached the reader as `\<i>not italic\</i>` and a
+  backslash-escaped backtick pair opened a real `<code>` span. The table
+  label strip had the same defect with a different outcome: `\*x\*` in a
+  header or row label came out as `\x\`. CommonMark consumes the backslash
+  and makes the character literal: the code-span scan now skips an escaped
+  backtick as an opener, and inline escapes are parked before the URL and
+  emphasis passes and before the label strip, restored afterwards as the
+  bare character (HTML-escaped on the way out).
 
 ## [2026.9.22.post1] - 2026-09-22
 

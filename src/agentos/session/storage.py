@@ -10,6 +10,7 @@ import sqlite3
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from functools import wraps
+from itertools import product
 from typing import Any, Concatenate
 
 from agentos.compat import aiosqlite
@@ -432,6 +433,24 @@ def _fts_tokenizer_of(ddl: str) -> str:
 def _escape_like(term: str) -> str:
     """Make *term* literal inside a ``LIKE ... ESCAPE '\\'`` pattern."""
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _like_case_forms(term: str) -> list[str]:
+    """Every case form of a short *term*, because ``LIKE`` folds only ASCII.
+
+    SQLite's ``LIKE`` is case-insensitive for ASCII and case-*sensitive* for
+    every other character, so the scan that answers terms below the trigram
+    floor found ``БД`` only when the user typed those exact capitals, while
+    the index path folds the whole Unicode range -- #2897's own ``db`` example
+    works in either case precisely because it is ASCII. Terms reach here only
+    when they are shorter than ``_FTS_MIN_INDEXED_TERM_CHARS``, so enumerating
+    the per-character forms is bounded at four patterns, and collapses to one
+    for a caseless script.
+    """
+    if not term:
+        return []
+    per_char = [list(dict.fromkeys((ch, ch.lower(), ch.upper()))) for ch in term]
+    return list(dict.fromkeys("".join(combo) for combo in product(*per_char)))
 
 
 def _snippet_around(content: str, terms: list[str], radius: int = _SNIPPET_RADIUS) -> str:
@@ -1993,7 +2012,10 @@ class SessionStorage:
         query made only of terms below the tokenizer's floor (``go``, ``db``,
         a two-character CJK word) is answered by a ``LIKE`` scan over the
         entries instead of by nothing: the transcript store is small enough
-        that a scan for a rare query beats a silent miss. Snippets are cut
+        that a scan for a rare query beats a silent miss. That scan matches
+        every case form of the term (:func:`_like_case_forms`), because
+        SQLite's ``LIKE`` folds only ASCII while the index path folds the
+        whole Unicode range. Snippets are cut
         in Python around the first matching term for both paths, so they are
         the same shape whichever answered.
         """
@@ -2011,9 +2033,12 @@ class SessionStorage:
             order = "ORDER BY f.rank"
         else:
             source = "FROM transcript_entries t "
-            likes = " OR ".join("t.content LIKE ? ESCAPE '\\'" for _ in short)
+            patterns = [
+                f"%{_escape_like(form)}%" for term in short for form in _like_case_forms(term)
+            ]
+            likes = " OR ".join("t.content LIKE ? ESCAPE '\\'" for _ in patterns)
             clauses.append(f"({likes})")
-            params.extend(f"%{_escape_like(term)}%" for term in short)
+            params.extend(patterns)
             order = "ORDER BY t.created_at DESC, t.id DESC"
         if session_id:
             clauses.append("(t.session_id = ? OR t.session_key = ?)")
