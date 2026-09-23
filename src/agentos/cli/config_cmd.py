@@ -12,6 +12,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from agentos.cli.ui import ACCENT_HEADER, ACCENT_MARKUP, console
+from agentos.cli_quoting import quote_cli_arg
 
 app = typer.Typer(help="Manage AgentOS configuration.")
 
@@ -94,7 +95,15 @@ def config_set(
 
     env_key = "AGENTOS_GATEWAY_" + key.upper().replace(".", "__")
     console.print("[dim]To persist this setting, export:[/dim]")
-    console.print(f"  [bold]export {env_key}={value}[/bold]")
+    # This line is the whole output of the command: it is meant to be pasted
+    # back into a shell. So the value is quoted for that shell (a path with a
+    # space is one argument), escaped so Rich does not read "[...]" in it as
+    # markup, and printed with soft_wrap so a long value is not folded mid-token
+    # when stdout is redirected.
+    console.print(
+        f"  [bold]export {env_key}={escape(quote_cli_arg(value))}[/bold]",
+        soft_wrap=True,
+    )
 
 
 def _parse_config_value(value: str) -> Any:
