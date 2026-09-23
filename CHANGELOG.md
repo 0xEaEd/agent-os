@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Migration: `agentos migrate openclaw` writes the provider's own model id into
+  `llm.model`. An OpenClaw reference such as `anthropic/claude-sonnet-4-5` was
+  stored verbatim next to `llm.provider = "anthropic"`, so the Anthropic API was
+  asked for a model with that literal name; only the `openrouter/` and `zai/`
+  prefixes were being stripped. The `anthropic/`, `openai/`, `deepseek/` and
+  `minimax/` prefixes, the ones `_provider_from_model` already reads the
+  provider from, are now stripped the same way. The migration report's
+  `skipped_model` shows the native id too.
+
 - `session_search`: a short query in a non-Latin script now matches whichever
   case the user typed. #2897 answers terms below the three-character trigram
   floor (`go`, `db`, a two-character CJK word) with a `LIKE` scan "instead of
