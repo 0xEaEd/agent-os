@@ -181,6 +181,19 @@ class TestCatalog:
         assert entry.required is False
         assert entry.url
 
+    def test_typesafe_key_is_listed_for_the_jev_router_strategy(self) -> None:
+        # The Jev strategy reads TYPESAFE_API_KEY straight from os.environ
+        # (jev.api_key_env); no provider spec derives it.
+        catalog = env_catalog.build_catalog()
+        entry = catalog["TYPESAFE_API_KEY"]
+        assert entry.category == CATEGORY_PROVIDER
+        assert entry.owner == "agentos_router"
+        assert entry.secret is True
+        assert entry.required is False
+        assert entry.url == "https://typesafe.ai"
+        assert "typesafe.ai" in entry.description
+        assert "jev" in entry.description.lower()
+
     def test_metadata_only_providers_do_not_contribute_a_key(self) -> None:
         # Exa and Perplexity are catalogued for the setup UI with
         # runtime_supported=False and have no provider class; offering their
