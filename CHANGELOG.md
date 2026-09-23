@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Channel message splitting: a long fenced code block no longer arrives with a
+  statement broken in two across the seam. `split_text_for_limit` documents
+  that its cut is "nudged back to the nearest line/word boundary so a chunk
+  doesn't end mid-word", but `_rebalance_open_fence` -- the branch taken for
+  every chunk after the first of a long block -- used its binary-search cut
+  raw, so `line_17 = compute(17)` was delivered as `line_17 ` and
+  `= compute(17)` on separate lines of two separate Discord/Telegram messages.
+  The cut is now nudged the same way, and the head no longer gains a blank line
+  before the synthesized closing fence. The non-advancing-split guard from
+  #2127 is preserved: the nudge only moves the cut forward of the fence, must
+  keep at least half the span the search found, and falls back to the raw cut
+  rather than failing.
+
 - Memory search: MMR diversity re-ranking no longer collapses results written
   in a non-Latin, non-CJK script. `_jaccard_similarity` tokenized snippets with
   `[a-zA-Z0-9]+` plus a CJK pass, so a Cyrillic, Greek, Hangul, Arabic, Hebrew,
