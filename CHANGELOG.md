@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `create_xlsx` bypassed zip timestamp and `docProps/core.xml` normalization,
+  causing identical workbooks across turns to produce non-deterministic
+  hashes that silently broke artifact session deduplication.
+
 - Tools: `grep_search` and `apply_patch` counted lines with `str.splitlines()`,
   which breaks on eleven characters rather than the newline alone. A file
   carrying a lone carriage return or a form feed was numbered differently by
