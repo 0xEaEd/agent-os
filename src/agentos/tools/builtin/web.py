@@ -302,7 +302,15 @@ async def http_request(
             # downstream consumers don't depend on the closed transport.
             status_code = response.status_code
             response_url = str(response.url)
-            response_headers = dict(response.headers)
+            from agentos.safety.injection_guard import neutralize_untrusted_markers
+
+            # Header values are chosen by the remote server, so they are
+            # external content like the body. They are returned as data
+            # rather than prose, so the envelope markers are made inert
+            # instead of the whole value being wrapped.
+            response_headers = {
+                key: neutralize_untrusted_markers(value) for key, value in response.headers.items()
+            }
             response_encoding = response.encoding or "utf-8"
             content_type = response_headers.get("content-type", "")
         finally:
@@ -315,9 +323,16 @@ async def http_request(
 
     if should_save:
         saved_path, digest = _save_http_response_body(raw_body, output_path)
+        # Decode first, then cut: ``_TEXT_BODY_LIMIT`` counts characters where
+        # the no-``output_path`` branch below applies it, and cutting the bytes
+        # instead made the same cap mean a third as much text on a page that is
+        # not Latin-1 -- and split whatever character straddled the boundary
+        # into a ``\ufffd`` that was never in the document. ``raw_body`` is
+        # already bounded by the download cap, and that branch decodes it whole
+        # too, so there is nothing extra to hold here.
         preview = (
             wrap_untrusted_boundary(
-                raw_body[:_TEXT_BODY_LIMIT].decode(response_encoding, "replace"),
+                raw_body.decode(response_encoding, "replace")[:_TEXT_BODY_LIMIT],
                 response_url,
             )
             if is_text

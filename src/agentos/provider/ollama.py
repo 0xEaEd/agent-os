@@ -56,10 +56,23 @@ def _build_ollama_message(
 
     tool_names = tool_names_by_id if tool_names_by_id is not None else {}
     parts: list[str] = []
+    images: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     for block in msg.content:
         if block.type == "text":
             parts.append(block.text)
+        elif block.type == "image" and block.source_type == "base64":
+            # Ollama carries images per message, in its own ``images`` field,
+            # as bare base64 -- no data: prefix, which is why the OpenAI
+            # adapter has to add one and this must not. Without this branch the
+            # block was skipped and the message went out as its text alone, so
+            # the model answered about a picture it was never sent.
+            #
+            # ``source_type == "url"`` is not handled: Ollama's field takes
+            # base64 only, and no writer in this tree produces a url image --
+            # both ``runtime.py`` (channel attachments) and the vision tool
+            # build base64 blocks.
+            images.append(block.data)
         elif block.type == "tool_use":
             tool_names[block.id] = block.name
             tool_calls.append(
@@ -85,6 +98,8 @@ def _build_ollama_message(
     result: dict[str, Any] = {"role": msg.role, "content": " ".join(parts)}
     if tool_calls:
         result["tool_calls"] = tool_calls
+    if images:
+        result["images"] = images
     return result
 
 
@@ -300,6 +315,11 @@ class OllamaProvider:
         }
         if cfg.temperature is not None:
             payload["options"]["temperature"] = cfg.temperature
+        if cfg.stop_sequences:
+            # Ollama takes stop strings under options, where OpenAI uses payload["stop"]
+            # and Anthropic payload["stop_sequences"]. Dropping them let the model run
+            # past a prompt boundary and hallucinate the next turn (#3033).
+            payload["options"]["stop"] = list(cfg.stop_sequences)
         if tools:
             payload["tools"] = [_build_ollama_tool(t) for t in tools]
             # Ollama's native /api/chat exposes no forced tool_choice parameter,

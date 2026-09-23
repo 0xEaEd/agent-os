@@ -225,56 +225,53 @@ async def _router_configure(params: Any, ctx: RpcContext) -> dict[str, Any]:
     judge_provider = params.get("judgeProvider") if isinstance(params, dict) else None
     judge_base_url = params.get("judgeBaseUrl") if isinstance(params, dict) else None
     judge_api_key = params.get("judgeApiKey") if isinstance(params, dict) else None
-    safety_net_threshold = (
-        params.get("safetyNetThreshold") if isinstance(params, dict) else None
-    )
+    safety_net_threshold = params.get("safetyNetThreshold") if isinstance(params, dict) else None
     translate_ceiling_enabled = (
         params.get("translateCeilingEnabled") if isinstance(params, dict) else None
     )
     translate_ceiling_tier = (
         params.get("translateCeilingTier") if isinstance(params, dict) else None
     )
+    jev_api_key = params.get("jevApiKey") if isinstance(params, dict) else None
+    jev_api_key_env = params.get("jevApiKeyEnv") if isinstance(params, dict) else None
+    jev_high_risk_threshold = (
+        params.get("jevHighRiskThreshold") if isinstance(params, dict) else None
+    )
     verify_local_endpoint = bool(judge_base_url)
-    # ``upsert_router`` is synchronous, and with ``verify_local_endpoint=True`` it
-    # runs a full test classification against the local judge endpoint (up to the
-    # probe's ~13.5s inner timeout). Awaiting it inline would block the gateway
-    # event loop — freezing every other in-flight RPC, WebSocket stream, and
-    # heartbeat — for the whole probe duration when the endpoint is slow or
-    # unreachable-but-accepting-TCP. Run the probing call off the event loop on a
-    # worker thread so the blocking connectivity check never stalls the loop.
-    if verify_local_endpoint:
-        res = await asyncio.to_thread(
-            upsert_router,
-            cfg,
-            mode=mode,
-            strategy=strategy,
-            default_tier=default_tier,
-            tiers=tiers,
-            judge_model=judge_model,
-            judge_provider=judge_provider,
-            judge_base_url=judge_base_url,
-            judge_api_key=judge_api_key,
-            safety_net_threshold=safety_net_threshold,
-            translate_ceiling_enabled=translate_ceiling_enabled,
-            translate_ceiling_tier=translate_ceiling_tier,
-            verify_local_endpoint=True,
-        )
+    # Probe typesafe.ai only when the operator is selecting Jev AND supplying a
+    # key in this call; a key stored under another strategy is kept for a later
+    # switch without a network round-trip.
+    verify_jev = strategy == "jev" and jev_api_key is not None
+    kwargs: dict[str, Any] = {
+        "mode": mode,
+        "strategy": strategy,
+        "default_tier": default_tier,
+        "tiers": tiers,
+        "judge_model": judge_model,
+        "judge_provider": judge_provider,
+        "judge_base_url": judge_base_url,
+        "judge_api_key": judge_api_key,
+        "safety_net_threshold": safety_net_threshold,
+        "translate_ceiling_enabled": translate_ceiling_enabled,
+        "translate_ceiling_tier": translate_ceiling_tier,
+        "verify_local_endpoint": verify_local_endpoint,
+        "jev_api_key": jev_api_key,
+        "jev_api_key_env": jev_api_key_env,
+        "jev_high_risk_threshold": jev_high_risk_threshold,
+        "verify_jev": verify_jev,
+    }
+    # ``upsert_router`` is synchronous, and with a verify flag set it runs a
+    # full test classification against the local judge endpoint or typesafe.ai
+    # (up to the probe's ~13.5s inner timeout). Awaiting it inline would block
+    # the gateway event loop — freezing every other in-flight RPC, WebSocket
+    # stream, and heartbeat — for the whole probe duration when the endpoint is
+    # slow or unreachable-but-accepting-TCP. Run the probing call off the event
+    # loop on a worker thread so the blocking connectivity check never stalls
+    # the loop.
+    if verify_local_endpoint or verify_jev:
+        res = await asyncio.to_thread(upsert_router, cfg, **kwargs)
     else:
-        res = upsert_router(
-            cfg,
-            mode=mode,
-            strategy=strategy,
-            default_tier=default_tier,
-            tiers=tiers,
-            judge_model=judge_model,
-            judge_provider=judge_provider,
-            judge_base_url=judge_base_url,
-            judge_api_key=judge_api_key,
-            safety_net_threshold=safety_net_threshold,
-            translate_ceiling_enabled=translate_ceiling_enabled,
-            translate_ceiling_tier=translate_ceiling_tier,
-            verify_local_endpoint=False,
-        )
+        res = upsert_router(cfg, **kwargs)
     commit = _commit_mutation(
         ctx,
         cfg,

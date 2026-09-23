@@ -13,6 +13,7 @@ import structlog
 
 from agentos.identity.workspace import BOOTSTRAP_FILENAMES
 from agentos.sandbox.integration import sandboxed
+from agentos.tools.builtin._lines import split_lines_keepends
 from agentos.tools.path_policy import reject_foreign_host_path
 from agentos.tools.registry import tool
 from agentos.tools.types import ToolError, current_tool_context
@@ -213,8 +214,30 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
                         i += 1
                     _trim_trailing_separators(hunk)
                     hunks.append(hunk)
-                else:
+                elif hunk_line.strip() == "":
+                    # A bare blank between the directive and its first hunk is
+                    # formatting; blanks after a hunk belong to that hunk and
+                    # were consumed above.
                     i += 1
+                else:
+                    # Skipping this line used to leave an update with no hunks,
+                    # which was then "applied" by rewriting the file unchanged
+                    # and reported as modified (#2837). The unified-diff header
+                    # is the usual shape, so it gets named.
+                    hint = (
+                        " (that is a unified-diff header; hunks here open with '@@@')"
+                        if hunk_line.startswith("@@ ")
+                        else ""
+                    )
+                    raise ValueError(
+                        f"Invalid line in '*** Update File: {path}' block "
+                        f"(expected a '@@@ ' hunk header): {hunk_line!r}{hint}"
+                    )
+            if not hunks:
+                raise ValueError(
+                    f"No hunks found in '*** Update File: {path}' block: expected at "
+                    "least one '@@@ -old_start,count +new_start,count @@@' hunk header"
+                )
             ops.append(UpdateFile(path=path, hunks=hunks))
 
         elif line.startswith("*** Delete File: "):
@@ -602,9 +625,12 @@ def _gate_patch_ops(
 # ---------------------------------------------------------------------------
 
 
-# Every character str.splitlines() treats as a line boundary. A line produced
-# by splitlines(keepends=True) is unterminated only if it ends in none of them.
-_LINE_BOUNDARIES = ("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
+# A line is terminated by a newline, and by nothing else. This used to list
+# every character str.splitlines() breaks on, which disagreed with the
+# splitter below once that moved to newlines only: a last line ending in a
+# form feed counted as terminated, so a hunk appending after it produced a
+# file whose line count differed from read_file's. One rule, one place.
+_LINE_BOUNDARIES = ("\n",)
 
 
 def _detect_newline(file_lines: list[str]) -> str:
@@ -691,7 +717,13 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk, newline: str = "\n") -> list[
 
 def _updated_text(text: str, hunks: list[Hunk]) -> str:
     """Return *text* with every hunk applied, without touching the filesystem."""
-    lines = text.splitlines(keepends=True)
+    # Newlines only. `str.splitlines()` also breaks on \f, a lone \r, \x85 and
+    # the rest of _LINE_BOUNDARIES, but a hunk header counts the lines `git
+    # diff` counted -- newline-terminated ones. Splitting on the wider set
+    # shifted every line after the first such character against the header, so
+    # a correct patch was rejected with a context mismatch, or spliced at the
+    # wrong offset when the shifted context happened to match.
+    lines = split_lines_keepends(text)
     newline = _detect_newline(lines)
     # Apply hunks in reverse order so earlier line numbers stay valid
     for hunk in sorted(hunks, key=lambda h: h.old_start, reverse=True):

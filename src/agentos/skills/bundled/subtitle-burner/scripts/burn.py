@@ -30,6 +30,13 @@ import sys
 from glob import glob
 from pathlib import Path
 
+# Bundled scripts run under AgentOS's own interpreter; the path insert only
+# matters in a source checkout where the package is not installed (#2804).
+_SRC_ROOT = str(Path(__file__).resolve().parents[5])
+if _SRC_ROOT not in sys.path:
+    sys.path.insert(0, _SRC_ROOT)
+from agentos.skill_stdio import configure_utf8_stdio  # noqa: E402
+
 _WINGET_FFMPEG_GLOB = (
     "Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_*/"
     "ffmpeg-*-full_build/bin"
@@ -134,12 +141,27 @@ def _escape_subtitle_path(path: str) -> str:
     rest = normalised[3:] if len(normalised) >= 3 else ""
     if ":" in rest:
         normalised = normalised[:3] + rest.replace(":", r"\:")
-    # Escape single quotes inside the path (rare on Windows but possible).
-    normalised = normalised.replace("'", r"\'")
+    # A -vf argument is tokenised twice: once by the filtergraph parser,
+    # which strips the outer quotes, and again by the option parser -- the
+    # pass the drive-colon escape above already relies on. A quote therefore
+    # has to survive both.
+    #
+    # The shell and concat-demuxer spelling (close, backslash-quote, reopen)
+    # survives only the first pass. The second then meets a bare quote, opens
+    # a section that never closes, and swallows the rest of the argument:
+    # ffmpeg reports `Unable to open tests_cues.srt`, and on an odd quote
+    # count it eats `:force_style=...` into the filename.
+    #
+    # Two levels instead: close the quote, emit an escaped backslash and an
+    # escaped quote, reopen. The graph pass leaves a backslash-quote behind
+    # and the option pass reads that as a literal quote. Equivalent to
+    # `ffescape -m quote -l 2`.
+    normalised = normalised.replace("'", r"'\\\''")
     return normalised
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", "-i", required=True, help="Input MP4 path")
     parser.add_argument("--subtitles", "-s", required=True, help="SRT file path")

@@ -15,6 +15,11 @@ Operations:
 * A **missing** ``value`` key is a malformed operation: it is skipped and not
   counted in ``applied``, so a typo cannot silently wipe data.
 * ``0``, ``false`` and ``""`` are values, not absence, and are written as given.
+
+``rename_sheet`` lands the sheet on exactly the name asked for, or does nothing.
+A name another sheet already holds -- Excel compares sheet names without regard
+to case -- is refused and not counted in ``applied``, because openpyxl would
+otherwise store ``Summary1`` and report success.
 """
 
 from __future__ import annotations
@@ -28,37 +33,17 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+# Bundled scripts run under AgentOS's own interpreter; the path insert only
+# matters in a source checkout where the package is not installed (#2804).
+_SRC_ROOT = str(Path(__file__).resolve().parents[5])
+if _SRC_ROOT not in sys.path:
+    sys.path.insert(0, _SRC_ROOT)
+from agentos.skill_stdio import write_stdout as _write_stdout  # noqa: E402
+
 # Distinguishes {"value": null} from an op with no "value" key at all.
 # ``op.get("value")`` collapses both to None, which would make a malformed
 # operation indistinguishable from a deliberate clear.
 _MISSING = object()
-
-
-def _write_stdout(text: str) -> None:
-    """Write *text* to stdout as UTF-8, surviving a non-UTF-8 stdout encoding.
-
-    ``print`` encodes through ``sys.stdout.encoding``, which on Windows is the
-    console code page (cp1252, cp936, cp932) and not UTF-8, so a character
-    outside that page raises ``UnicodeEncodeError`` before a byte is written —
-    the document decides whether the skill runs. The binary buffer is therefore
-    the primary path, matching the ``--out`` branch, which already passes
-    ``encoding="utf-8"``. A stream without a usable ``buffer`` — a wrapper, or a
-    captured stdout — still gets the text, escaped rather than lost.
-    """
-    buffer = getattr(sys.stdout, "buffer", None)
-    if buffer is not None:
-        try:
-            buffer.write(text.encode("utf-8"))
-            buffer.flush()
-            return
-        except (AttributeError, OSError, ValueError):
-            # Buffer closed or not writable — fall through to the text layer.
-            pass
-
-    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-    # Lossless: unencodable chars become \\uXXXX escapes, not "?".
-    sys.stdout.write(text.encode(encoding, errors="backslashreplace").decode(encoding))
-    sys.stdout.flush()
 
 
 def _coerce(value: Any, as_text: bool) -> Any:
@@ -125,6 +110,45 @@ def load_ops(path: Path) -> list[dict[str, Any]]:
     return raw
 
 
+def _free_temp_title(wb: Any) -> str:
+    """A sheet title no sheet in *wb* currently holds, in any capitalisation."""
+    taken = {name.casefold() for name in wb.sheetnames}
+    index = 0
+    while True:
+        candidate = f"_rename_{index}"
+        if candidate.casefold() not in taken:
+            return candidate
+        index += 1
+
+
+def _rename_sheet(wb: Any, old: str, new: str) -> bool:
+    """Rename *old* to exactly *new*; return whether that happened.
+
+    openpyxl runs an assigned title through ``avoid_duplicate_name``, which
+    compares case-insensitively against **every** sheet name -- the renamed
+    sheet's own included -- and on a hit stores *new* with a number glued on
+    rather than refusing. So renaming onto a name another sheet already held
+    wrote ``Summary1``, and merely correcting a sheet's own capitalisation
+    (``data`` -> ``Data``) wrote ``Data1``. Both reported ``applied``, and every
+    later op addressing ``Summary`` then read and wrote the *other* sheet.
+
+    A name another sheet holds is refused here, uncounted, the way this op list
+    already treats a ``set_cell`` with no ``value``. A name only the renamed
+    sheet itself holds is a legitimate request, so it goes through a free
+    intermediate title: that clears the old spelling before the new one is
+    claimed, leaving the title exactly as asked.
+    """
+    sheet = wb[old]
+    if any(name != old and name.casefold() == new.casefold() for name in wb.sheetnames):
+        return False
+    if new == old:
+        return True
+    if new.casefold() == old.casefold():
+        sheet.title = _free_temp_title(wb)
+    sheet.title = new
+    return True
+
+
 def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
     applied = 0
     for op in ops:
@@ -163,8 +187,7 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
         elif kind == "rename_sheet":
             old = op.get("old")
             new = op.get("new")
-            if old in wb.sheetnames and isinstance(new, str):
-                wb[old].title = new
+            if old in wb.sheetnames and isinstance(new, str) and _rename_sheet(wb, old, new):
                 applied += 1
         elif kind == "merge_cells":
             sheet_name = op.get("sheet")
