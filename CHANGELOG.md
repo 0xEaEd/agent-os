@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `code_exec` destructive check: a delete wrapped in a Unix shell
+  (`bash -c 'rm -rf /x'`, `sh -c`, `zsh`/`dash`/`ksh`/`fish`/`csh`, path-prefixed
+  or with `-o pipefail`) or behind a value-taking PowerShell flag
+  (`powershell -ExecutionPolicy Bypass -c Remove-Item …`, `-ep`, `-wd`) is now
+  flagged in both the argv and the string form. Flag values are matched per flag,
+  so `bash -c 'git rm --cached x'` and `pwsh -File build.ps1 rm` stay allowed, and
+  a long run of `sudo -x` flags no longer backtracks exponentially (#2096).
 - Security: `.pgpass` and `.netrc` are named credential files, the gate
   fired for `cat ~/.pgpass`, and the password still reached the model --
   the assignment pass only understands `name=value`, and neither format
