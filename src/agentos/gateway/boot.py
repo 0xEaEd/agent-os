@@ -653,9 +653,7 @@ async def dispatch_task_runtime_turn(
             idle_timeout=stream_idle_timeout,
             heartbeat_interval=heartbeat_interval,
             stream_event_sink=getattr(run, "stream_event_sink", None),
-            show_thinking=bool(
-                getattr(getattr(config, "control_ui", None), "show_thinking", True)
-            ),
+            show_thinking=bool(getattr(getattr(config, "control_ui", None), "show_thinking", True)),
         )
     except TaskRuntimeStreamError as exc:
         if exc.code in {
