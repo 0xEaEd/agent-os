@@ -614,3 +614,46 @@ def test_streaming_renderer_flushes_trailing_partial_on_finalize(
     # line was terminated before the footer meta line.
     assert "\x1b[1m" in joined
     assert "no newline \x1b[1mb\x1b[0m\n" in joined
+
+
+# ---------------------------------------------------------------------------
+# Table pipe parsing (code spans and escaped pipes)
+# ---------------------------------------------------------------------------
+
+
+def test_table_row_with_code_span_containing_pipe() -> None:
+    from agentos.cli.tui.terminal.markdown_stream import _split_table_row
+
+    row = "| `a | b` | Union expression |"
+    assert _split_table_row(row) == ["`a | b`", "Union expression"]
+
+    out = _render_all(["| Syntax | Meaning |\n|---|---|\n| `a | b` | Union expression |\n"])
+    lines = _display_lines(out)
+    assert any("Syntax" in ln and "Meaning" in ln for ln in lines)
+    assert any("Union expression" in ln for ln in lines)
+
+
+def test_table_row_with_escaped_pipe() -> None:
+    from agentos.cli.tui.terminal.markdown_stream import _split_table_row
+
+    row = r"| -v \| --verbose | Enable verbose output |"
+    assert _split_table_row(row) == ["-v | --verbose", "Enable verbose output"]
+
+    out = _render_all(
+        ["| Option | Meaning |\n|---|---|\n| -v \\| --verbose | Enable verbose output |\n"]
+    )
+    lines = _display_lines(out)
+    assert any("Option" in ln and "Meaning" in ln for ln in lines)
+    assert any("Enable verbose output" in ln for ln in lines)
+
+
+def test_table_header_with_escaped_pipe() -> None:
+    from agentos.cli.tui.terminal.markdown_stream import _split_table_row
+
+    header = r"| Option \| Flag | Meaning |"
+    assert _split_table_row(header) == ["Option | Flag", "Meaning"]
+
+    out = _render_all(["| Option \\| Flag | Meaning |\n|---|---|\n| -h | Show help |\n"])
+    lines = _display_lines(out)
+    assert any("Option | Flag" in ln and "Meaning" in ln for ln in lines)
+    assert any("-h" in ln and "Show help" in ln for ln in lines)

@@ -219,11 +219,23 @@ def assert_writable(key: str) -> None:
         raise EnvPolicyError(_DENY_MESSAGE.format(key=key))
 
 
+#: Every character the ``.env`` reader breaks a line on that the control-character
+#: check below would not already refuse. ``agentos.env._parse_env_file`` splits with
+#: ``str.splitlines()``, which is wider than ``\n``/``\r``: it also breaks on U+0085
+#: NEXT LINE, U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR. Those three are
+#: invisible and non-C0, so they arrive unnoticed in text pasted out of a PDF, a Word
+#: document or a web page. The remaining ``splitlines()`` characters — U+000B, U+000C
+#: and U+001C-U+001E — are C0 and are refused one gate below, with their own message.
+_LINE_BREAK_CHARS: tuple[str, ...] = ("\n", "\r", "\u0085", "\u2028", "\u2029")
+
+
 def sanitize_value(key: str, value: str) -> str:
     """Return *value* validated for storage, or raise :class:`EnvPolicyError`.
 
-    Line breaks are **rejected rather than stripped**. A ``.env`` entry is one
-    line, so a value containing a newline can only be stored by escaping it —
+    Line breaks are **rejected rather than stripped**, and a line break is
+    whatever the reader splits on — see :data:`_LINE_BREAK_CHARS`, which is
+    why the invisible separators count as well. A ``.env`` entry is one line,
+    so a value containing one can only be stored by escaping it —
     and adding escape semantics to the reader would change how existing
     hand-written files parse (a Windows path like ``C:\\new`` would suddenly
     grow a line break). Silently truncating instead, as some writers do, turns
@@ -235,7 +247,7 @@ def sanitize_value(key: str, value: str) -> str:
     """
     if not isinstance(value, str):
         raise EnvPolicyError(f"Value for {key!r} must be a string, got {type(value).__name__}")
-    if "\n" in value or "\r" in value:
+    if any(char in value for char in _LINE_BREAK_CHARS):
         raise EnvPolicyError(
             f"Value for {key!r} contains a line break. A .env entry is a single "
             "line — store the value base64-encoded, or point the variable at a "

@@ -24,6 +24,19 @@ from agentos.agentos_router.controller import (
     normalize_decisions,
     synthetic_one_hot,
 )
+from agentos.agentos_router.strategy_common import (
+    DEFAULT_ROUTING_TIMEOUT_SECONDS,  # noqa: F401 - re-exported for engine/runtime.py
+    DEFAULT_SHORT_CIRCUIT_ALLOWLIST,
+    ELISION_MARKER,
+    SHORT_CIRCUIT_MAX_CHARS,
+    TRUNCATION_HEAD_CHARS,
+    TRUNCATION_TAIL_CHARS,
+    find_valid_tier_prefer_higher,
+    match_short_circuit,
+    resolve_inner_timeout,
+    run_coro_blocking,
+    truncate_body,
+)
 from agentos.provider.selector import build_provider
 from agentos.provider.types import ChatConfig, Message, ToolDefinition, ToolInputSchema
 from agentos.router_tiers import (
@@ -38,13 +51,6 @@ log = structlog.get_logger(__name__)
 
 _ROUTE_CLASSES: tuple[str, ...] = tuple(ROUTE_CLASS_TO_TIER)
 
-# Fallback for ``routing_timeout_seconds`` when a duck-typed/partial router_cfg
-# omits it (real AgentOSRouterConfig always carries the attribute, defaulting to
-# 10.0 — gateway/config.py). Both the judge's internal-timeout derivation
-# (_resolve_timeout) and the outer router-step budget (engine/runtime.py) MUST
-# read this same fallback: the "inner timeout must win over the un-cancellable
-# outer wait_for" guarantee depends on the two sites agreeing on the budget.
-DEFAULT_ROUTING_TIMEOUT_SECONDS = 10.0
 
 # ---------------------------------------------------------------------------
 # Routing flags (pure-Python port of the v4 bundle's rule-based compute_flags,
@@ -161,8 +167,7 @@ def compute_flags(text: str) -> dict[str, bool]:
     lc = _FLAG_RULES["long_context"]
     long_context = (
         len(text) >= lc["char_threshold"]
-        or sum(len(m.group()) for m in _CODE_BLOCK_RE.finditer(text))
-        >= lc["code_block_threshold"]
+        or sum(len(m.group()) for m in _CODE_BLOCK_RE.finditer(text)) >= lc["code_block_threshold"]
         or sum(len(m.group()) for m in _LOG_BLOCK_RE.finditer(text)) >= lc["log_block_threshold"]
         or len(_FILE_PATH_RE.findall(text)) >= lc["file_ref_threshold"]
     )
@@ -215,9 +220,7 @@ def resolve_judge_target(
         # ``source`` is "local" for observability.
         if judge_base_url:
             return LOCAL_JUDGE_PROVIDER_ID, str(judge_model).strip(), "local"
-        judge_provider = (
-            str(getattr(router_cfg, "judge_provider", None) or "").strip().casefold()
-        )
+        judge_provider = str(getattr(router_cfg, "judge_provider", None) or "").strip().casefold()
         return judge_provider or llm_provider, str(judge_model).strip(), "explicit"
 
     tiers = getattr(router_cfg, "tiers", None)
@@ -259,35 +262,8 @@ def judge_provider_has_credentials(
     return bool(llm_provider) and judge_provider.strip().casefold() == llm_provider
 
 
-def _run_coro_blocking(coro: Any) -> Any:
-    """Run ``coro`` to completion from either sync or async context.
-
-    ``probe_local_judge`` keeps a synchronous signature (both the interactive CLI
-    prompt code and the WebUI/RPC ``upsert_router`` path call it as a plain
-    function). Both callers now reach it with NO running loop in the calling
-    thread: the CLI runs it from synchronous questionary code, and the RPC
-    handler ``onboarding.router.configure`` dispatches ``upsert_router`` onto a
-    worker thread via ``asyncio.to_thread`` (so the blocking probe never stalls
-    the gateway event loop). ``asyncio.run`` therefore drives the coroutine
-    inline in the common case. The already-running-loop branch is retained as a
-    defensive fallback for any future in-loop caller: it dispatches the coroutine
-    onto a dedicated worker thread with its own event loop rather than letting a
-    bare ``asyncio.run`` raise ``RuntimeError`` — but note it still blocks the
-    calling thread, so callers on a live event loop must reach it via
-    ``asyncio.to_thread`` rather than relying on this branch.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop in this thread — safe to drive one inline.
-        return asyncio.run(coro)
-
-    # A loop is already running here (WebUI/RPC path). ``asyncio.run`` would raise,
-    # so run the coroutine on its own loop in a separate thread and wait for it.
-    from concurrent.futures import ThreadPoolExecutor
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(lambda: asyncio.run(coro)).result()
+# Back-compat alias: the sync bridge now lives in strategy_common.
+_run_coro_blocking = run_coro_blocking
 
 
 def probe_local_judge(base_url: str, model: str, api_key: str | None) -> str | None:
@@ -321,9 +297,7 @@ def probe_local_judge(base_url: str, model: str, api_key: str | None) -> str | N
     strategy = LLMJudgeStrategy(router_cfg=router_cfg, llm_cfg=llm_cfg)
     try:
         _tier, _confidence, source, _extra = _run_coro_blocking(
-            strategy.classify(
-                "hello, please classify this test turn", ["c0", "c1", "c2", "c3"]
-            )
+            strategy.classify("hello, please classify this test turn", ["c0", "c1", "c2", "c3"])
         )
     except Exception as exc:  # noqa: BLE001 - surface any connectivity failure
         return str(exc) or exc.__class__.__name__
@@ -336,9 +310,9 @@ def probe_local_judge(base_url: str, model: str, api_key: str | None) -> str | N
 # Prompt construction
 # ---------------------------------------------------------------------------
 
-_ELISION_MARKER = "\n[... {omitted} chars omitted ...]\n"
-_TRUNCATION_HEAD_CHARS = 800
-_TRUNCATION_TAIL_CHARS = 1200
+_ELISION_MARKER = ELISION_MARKER
+_TRUNCATION_HEAD_CHARS = TRUNCATION_HEAD_CHARS
+_TRUNCATION_TAIL_CHARS = TRUNCATION_TAIL_CHARS
 _DEFAULT_INPUT_MAX_CHARS = 4000
 _MAX_RECENT_DECISIONS = 5
 
@@ -373,52 +347,8 @@ _VIETNAMESE_EXAMPLES = (
     "→ R2 (nontrivial debugging)"
 )
 
-_DEFAULT_SHORT_CIRCUIT_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        "hi",
-        "hello",
-        "hey",
-        "yo",
-        "thanks",
-        "thank you",
-        "thx",
-        "ty",
-        "ok",
-        "okay",
-        "k",
-        "yes",
-        "no",
-        "cool",
-        "nice",
-        "great",
-        "good morning",
-        "good night",
-        "bye",
-        "goodbye",
-        # Vietnamese
-        "chào",
-        "chào bạn",
-        "xin chào",
-        "cảm ơn",
-        "cám ơn",
-        "cảm ơn nhé",
-        "cảm ơn bạn",
-        "ừ",
-        "ừm",
-        "vâng",
-        "dạ",
-        "được",
-        "ok cảm ơn",
-        "tạm biệt",
-        # Chinese
-        "你好",
-        "谢谢",
-        "好的",
-        "嗯",
-        "再见",
-    }
-)
-_SHORT_CIRCUIT_MAX_CHARS = 20
+_DEFAULT_SHORT_CIRCUIT_ALLOWLIST = DEFAULT_SHORT_CIRCUIT_ALLOWLIST
+_SHORT_CIRCUIT_MAX_CHARS = SHORT_CIRCUIT_MAX_CHARS
 
 # Providers whose chat backend cannot honor a forced ``cfg.tool_choice`` (the
 # judge's structured-output mechanism, spec D1). On these the judge degrades to
@@ -458,6 +388,7 @@ _REPAIR_PROMPT = (
     'no prose, no code fences: {"route_class": "R0"|"R1"|"R2"|"R3", '
     '"confidence": <number 0-1>, "reason": "<short string>"}'
 )
+
 
 def _iter_json_object_candidates(text: str, *, string_aware: bool = True):
     """Yield candidate ``{...}`` spans, brace-balanced and string-aware.
@@ -524,39 +455,11 @@ def _iter_json_object_candidates(text: str, *, string_aware: bool = True):
                     start = -1
 
 
-def _truncate_body(text: str, max_chars: int) -> str:
-    if len(text) <= max_chars:
-        return text
-    # ``max_chars`` may be configured below HEAD+TAIL (its floor is 1000, but the
-    # fixed head/tail budget is 2000). Splitting unconditionally would overlap the
-    # head and tail slices — duplicating the middle and yielding a negative
-    # ``omitted`` count. When the budget is too small to fit a head+tail split
-    # plus the elision marker, just hard-truncate to ``max_chars``.
-    marker_len = len(_ELISION_MARKER.format(omitted=len(text)))
-    if max_chars < _TRUNCATION_HEAD_CHARS + _TRUNCATION_TAIL_CHARS + marker_len:
-        return text[:max_chars]
-    head = text[:_TRUNCATION_HEAD_CHARS]
-    tail = text[-_TRUNCATION_TAIL_CHARS:]
-    omitted = len(text) - len(head) - len(tail)
-    return head + _ELISION_MARKER.format(omitted=omitted) + tail
+_truncate_body = truncate_body
 
 
-def _find_valid_tier(start_tier: str, valid_tiers: list[str]) -> str:
-    if not valid_tiers:
-        return DEFAULT_TEXT_TIER
-    tiers = list(TEXT_TIERS)
-    start_idx = tiers.index(start_tier) if start_tier in tiers else 1
-    # Prefer the nearest valid tier at or above the desired tier.
-    for idx in range(start_idx, len(tiers)):
-        if tiers[idx] in valid_tiers:
-            return tiers[idx]
-    # The desired tier is above every valid tier: clamp to the HIGHEST valid
-    # tier (scan downward), never down to the cheapest — a high-risk/hard turn
-    # must not silently collapse to the cheapest available model.
-    for tier in reversed(tiers):
-        if tier in valid_tiers:
-            return tier
-    return valid_tiers[0]
+# Judge-specific clamp (prefers higher, never collapses downward); shared now.
+_find_valid_tier = find_valid_tier_prefer_higher
 
 
 def _iter_json_dicts(text: str, *, string_aware: bool = True):
@@ -678,42 +581,12 @@ class LLMJudgeStrategy:
 
     @staticmethod
     def _resolve_timeout(router_cfg: object | None) -> float:
-        # The outer router step (runtime.py) bounds the whole call with
-        # asyncio.wait_for(routing_timeout_seconds) on a NON-cancellable
-        # to_thread worker. The judge's own internal timeout must therefore be
-        # provably below that outer budget so it — not the un-cancellable outer
-        # wait_for — is the operative timeout; otherwise the worker thread (and
-        # its in-flight provider HTTP call + shared-state mutation) is orphaned
-        # and keeps running after the step gives up. Both sites read the same
-        # DEFAULT_ROUTING_TIMEOUT_SECONDS fallback so a duck-typed router_cfg
-        # missing the attribute can never desync the two budgets.
-        budget = float(
-            getattr(router_cfg, "routing_timeout_seconds", None)
-            or DEFAULT_ROUTING_TIMEOUT_SECONDS
+        # Shared derivation (strategy_common.resolve_inner_timeout): the result
+        # is strictly below routing_timeout_seconds so the judge's own timeout
+        # — not the un-cancellable outer wait_for — is the operative one.
+        return resolve_inner_timeout(
+            router_cfg, explicit=getattr(router_cfg, "judge_timeout_seconds", None)
         )
-        # Aim ~0.5s / 20% below budget, but for tiny budgets the 0.5s floor
-        # could meet or exceed budget; the final min() with budget*0.9 keeps the
-        # ceiling STRICTLY below the outer budget so the inner timeout always
-        # wins even at small configured values.
-        ceiling = min(max(0.5, min(budget * 0.8, budget - 0.5)), budget * 0.9)
-        explicit = getattr(router_cfg, "judge_timeout_seconds", None)
-        if explicit:
-            # Clamp an operator-supplied timeout under the outer budget even
-            # when they set judge_timeout_seconds >= routing_timeout_seconds
-            # (config only validates gt=0.0), so the inner timeout always wins.
-            # Apply the 0.1s lower bound only when it does not exceed the
-            # ceiling: for a tiny budget the ceiling can be < 0.1s, so a fixed
-            # 0.1 floor would push the inner timeout back up to == budget and
-            # orphan the worker thread (finding #3). Clamp the floor to the
-            # ceiling so the result always stays strictly below the outer budget.
-            floor = min(0.1, ceiling)
-            timeout = min(max(floor, float(explicit)), ceiling)
-        else:
-            timeout = ceiling
-        # Defensive invariant: the inner timeout must stay strictly below the
-        # outer budget or the orphaned-worker guarantee is void.
-        assert timeout < budget, (timeout, budget)
-        return timeout
 
     @staticmethod
     def _default_provider_factory(provider: str, model: str, api_key: str, base_url: str) -> Any:
@@ -846,9 +719,7 @@ class LLMJudgeStrategy:
             return self._unavailable_classify(valid_tiers, flags, reason=str(exc))
 
         if verdict is None:
-            return self._unavailable_classify(
-                valid_tiers, flags, reason="unparseable judge output"
-            )
+            return self._unavailable_classify(valid_tiers, flags, reason="unparseable judge output")
 
         tier = ROUTE_CLASS_TO_TIER.get(verdict.route_class, DEFAULT_TEXT_TIER)
         if tier not in valid_tiers:
@@ -881,11 +752,7 @@ class LLMJudgeStrategy:
             # mid-workstream would violate that floor — defer to the judge,
             # whose "agentic workstream → not below R1" rubric rule holds it.
             return None
-        stripped = message.strip()
-        if not stripped or len(stripped) > _SHORT_CIRCUIT_MAX_CHARS:
-            return None
-        normalized = stripped.casefold().rstrip("!.?~ ")
-        if normalized not in self._short_circuit_allowlist:
+        if not match_short_circuit(message, self._short_circuit_allowlist):
             return None
         tier = _find_valid_tier(ROUTE_CLASS_TO_TIER["R0"], valid_tiers)
         final_route_class = TIER_TO_ROUTE_CLASS.get(tier, "R0")

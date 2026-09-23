@@ -22,9 +22,12 @@ def render(plan: Plan) -> str:
         f"Overall coverage: {plan.overall_coverage():.0%}.\n"
     )
 
+    source_count = sum(len(sq.sources) for sq in plan.subquestions)
+
     lines.append("## Methodology\n")
     lines.append(
-        f"This report was assembled across {plan.rounds} research rounds. "
+        f"This report was assembled across {plan.rounds} research rounds "
+        f"over {source_count} recorded sources. "
         f"Each sub-question was investigated until reaching its target source "
         f"count or the iteration budget was exhausted. Source assessments "
         f"applied a five-axis filter: authority, recency, evidence, bias, and "
@@ -32,7 +35,7 @@ def render(plan: Plan) -> str:
     )
 
     citation_index = 0
-    references: list[tuple[int, str, str, str]] = []
+    references: list[tuple[int, str, str, str, float]] = []
 
     lines.append("## Findings\n")
     for sq in plan.subquestions:
@@ -43,7 +46,7 @@ def render(plan: Plan) -> str:
             continue
         for src in sq.sources:
             citation_index += 1
-            references.append((citation_index, src.url, src.title, src.fetched_at))
+            references.append((citation_index, src.url, src.title, src.fetched_at, src.relevance))
             excerpt = (src.excerpt or "").strip()
             if excerpt:
                 lines.append(f"- {excerpt} [^{citation_index}]\n")
@@ -62,10 +65,15 @@ def render(plan: Plan) -> str:
             )
 
     lines.append("## References\n")
-    for idx, url, title, fetched in references:
+    for idx, url, title, fetched, relevance in references:
         title_part = f" — {title}" if title else ""
         date_part = f" (fetched {fetched})" if fetched else ""
-        lines.append(f"[^{idx}]: <{url}>{title_part}{date_part}\n")
+        # Relevance is the whole output of the five-axis rubric in
+        # references/sources.md, whose bar says below 0.40 is a dead end. Printed
+        # unconditionally, including 0.00: a reader who cannot see the score
+        # cannot tell a primary filing from a paywalled page recorded as one.
+        relevance_part = f" [relevance {relevance:.2f}]"
+        lines.append(f"[^{idx}]: <{url}>{title_part}{date_part}{relevance_part}\n")
 
     return "".join(lines)
 
