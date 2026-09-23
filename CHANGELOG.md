@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `robinhood-chain-stocks` skill: a fetch of the Chainlink reference-data
+  directory that failed at the network level (DNS, timeout, 5xx, a non-JSON
+  body) aborted the entire run with `{"query": ..., "error": ...}`, discarding
+  the on-chain reading the RPC had already answered (address, symbol, supply,
+  the `uiMultiplier()` Stock-Token check, holder balance). The note the script
+  keeps for this case -- "could not fetch the Chainlink feed directory; price
+  unavailable, not disproven" -- was reachable only when the fetch *succeeded*
+  with a non-list body. The directory is an optional price source: a fetch
+  fault now degrades to that note with the cause recorded in
+  `readErrors.feedDirectory`, so one unreachable host costs the price read
+  instead of the whole dossier (#3290).
+
 - Web UI: `control_ui.show_thinking = false` now stops the live reasoning
   stream. `chat.history` and `chat.thinking` honoured it, but every turn runs
   through `TaskRuntime`, whose event path forwarded each `session.event.thinking`
