@@ -9,6 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Migration: `agentos migrate openclaw` and `agentos migrate hermes` no longer
+  turn every remote MCP server into an SSE server with no headers. A server
+  with a `url` was always written as `transport = "sse"` and its `headers`
+  were dropped, so a hosted streamable-HTTP server that authenticates with an
+  `Authorization` header arrived unable to connect, while OpenClaw's report
+  called `headers`/`transport` "unsupported" although `MCPServerEntry` has both.
+  An explicit `transport` (`streamable-http`, `streamable_http`, `http`, `sse`)
+  is now kept, `headers` are carried over, and a URL server that names no
+  transport stays on `sse` as before. Like the server's `env`, `headers` are
+  migrated without `--migrate-secrets`.
+
+- Migration: `agentos migrate openclaw` and `agentos migrate hermes` no longer
   copy a trailing inline comment into a migrated `.env` value. Both source
   runtimes read `.env` with a dotenv loader, so `OPENAI_API_KEY=sk-1 # work`
   is `sk-1` there, but the migrators only trimmed quote characters off the two

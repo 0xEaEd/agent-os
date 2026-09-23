@@ -27,6 +27,8 @@ from agentos.gateway.config import (
     MCPServerEntry,
 )
 from agentos.migration._dotenv import parse_env_value
+from agentos.migration._mcp import headers as mcp_headers
+from agentos.migration._mcp import remote_transport
 from agentos.onboarding.config_store import load_config, persist_config
 from agentos.paths import default_agentos_home
 
@@ -1436,7 +1438,15 @@ class OpenClawMigrator:
         for name, raw in servers.items():
             if not isinstance(raw, dict):
                 continue
-            supported = {"url", "command", "args", "env", "tool_timeout_seconds"}
+            supported = {
+                "url",
+                "command",
+                "args",
+                "env",
+                "headers",
+                "transport",
+                "tool_timeout_seconds",
+            }
             extra = sorted(str(key) for key in raw if str(key) not in supported)
             if extra:
                 unsupported_fields[str(name)] = extra
@@ -1449,7 +1459,9 @@ class OpenClawMigrator:
                 )
             url = raw.get("url")
             command = raw.get("command")
-            transport: Literal["stdio", "sse"] = "sse" if url else "stdio"
+            transport: Literal["stdio", "sse", "streamable_http"] = (
+                remote_transport(raw) if url else "stdio"
+            )
             entries.append(
                 MCPServerEntry(
                     name=str(name),
@@ -1457,6 +1469,7 @@ class OpenClawMigrator:
                     command=str(command) if command else None,
                     args=[str(item) for item in raw.get("args", []) if item is not None],
                     url=str(url) if url else None,
+                    headers=mcp_headers(raw) if url else {},
                     env={
                         str(k): str(v) for k, v in (raw.get("env") or {}).items() if v is not None
                     },
