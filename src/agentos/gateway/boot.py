@@ -653,6 +653,7 @@ async def dispatch_task_runtime_turn(
             idle_timeout=stream_idle_timeout,
             heartbeat_interval=heartbeat_interval,
             stream_event_sink=getattr(run, "stream_event_sink", None),
+            show_thinking=bool(getattr(getattr(config, "control_ui", None), "show_thinking", True)),
         )
     except TaskRuntimeStreamError as exc:
         if exc.code in {
@@ -832,8 +833,13 @@ async def _emit_task_runtime_stream_events(
     idle_timeout: float | None = 180.0,
     heartbeat_interval: float | None = None,
     stream_event_sink: Any = None,
+    show_thinking: bool = True,
 ) -> None:
-    """Emit turn events and fail the task if the stream reports an error."""
+    """Emit turn events and fail the task if the stream reports an error.
+
+    ``show_thinking`` mirrors ``control_ui.show_thinking``: when off, model
+    reasoning is neither streamed nor carried on the ``done`` event.
+    """
     from dataclasses import asdict, is_dataclass
 
     from agentos.engine.stream_wrappers import wrap_stream
@@ -868,6 +874,11 @@ async def _emit_task_runtime_stream_events(
                 if not key.startswith("_")
             }
         event_kind = event_dict.pop("kind", getattr(event, "kind", event.__class__.__name__))
+        if not show_thinking:
+            if event_kind == "thinking":
+                continue
+            if event_kind == "done":
+                event_dict.pop("reasoning_content", None)
         if event_kind == "error":
             raw_message = event_dict.get("message")
             error_message = (

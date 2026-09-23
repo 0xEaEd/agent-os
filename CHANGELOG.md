@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Web UI: `control_ui.show_thinking = false` now stops the live reasoning
+  stream. `chat.history` and `chat.thinking` honoured it, but every turn runs
+  through `TaskRuntime`, whose event path forwarded each `session.event.thinking`
+  and the `reasoning_content` on `session.event.done` to subscribed WebSockets
+  regardless; the only check lived in the no-runtime fallback of
+  `sessions.send`. With the flag off the gateway now drops thinking events and
+  strips `reasoning_content` from `done`, as docs/web-ui.md describes (#3276).
+
 - `agentos config set --config` (and `agents add`, onboarding and the
   hermes/openclaw migrations, which share `onboarding.config_store.load_config`)
   no longer copies a gateway auth token/password or the LLM API key that was
