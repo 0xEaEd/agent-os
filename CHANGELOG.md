@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `skills/pptx`: preserve empty table cell positions in `extract_text` to prevent column misalignment.
+
 - Skills: the non-UTF-8 stdio sweep is finished. 39 bundled scripts still
   wrote through the console code page and died with `UnicodeEncodeError` on
   a cp1252/cp936 console or under `PYTHONIOENCODING=ascii` -- often after
