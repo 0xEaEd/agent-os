@@ -328,7 +328,7 @@ class LlmProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AGENTOS_LLM_")
 
     provider: str = "openrouter"
-    model: str = "openai/gpt-5.6-luna"
+    model: str = "openai/gpt-6-luna"
     api_key: str = ""
     api_key_env: str = ""
     base_url: str = "https://openrouter.ai/api/v1"
@@ -352,6 +352,7 @@ class LlmProviderConfig(BaseSettings):
             "deepseek/deepseek-v4-flash": "deepseek-v4-flash",
             "deepseek/deepseek-v4-pro": "deepseek-v4-pro",
             "openai/gpt-5.6-luna": "gpt-5.6-luna",
+            "openai/gpt-6-luna": "gpt-6-luna",
         }
         model = str(self.model or "").strip()
         if model in aliases:
@@ -765,7 +766,7 @@ def _bankr_tiers() -> dict:
         ),
         "c1": _tier(
             provider="bankr",
-            model="gpt-5.6-luna",
+            model="gpt-6-luna",
             description=(
                 "default balanced text model for normal agent work, coding assistance, debugging, "
                 "and moderate analysis"
@@ -774,7 +775,7 @@ def _bankr_tiers() -> dict:
         ),
         "c2": _tier(
             provider="bankr",
-            model="glm-5.2",
+            model="glm-5.3",
             description=(
                 "stronger text model for multi-step coding, structured reasoning, larger context "
                 "synthesis, and harder analysis"
@@ -783,7 +784,7 @@ def _bankr_tiers() -> dict:
         ),
         "c3": _tier(
             provider="bankr",
-            model="claude-opus-5",
+            model="claude-opus-5.5",
             description=(
                 "Highest-quality text reasoning model for difficult planning, deep review, complex "
                 "debugging, and high-stakes synthesis"
@@ -827,7 +828,7 @@ def _opencap_tiers() -> dict:
         ),
         "c1": _tier(
             provider="opencap",
-            model="gpt-5.6-luna",
+            model="gpt-6-luna",
             description=(
                 "default balanced text model for normal agent work, coding assistance, debugging, "
                 "and moderate analysis"
@@ -845,7 +846,7 @@ def _opencap_tiers() -> dict:
         ),
         "c3": _tier(
             provider="opencap",
-            model="claude-opus-5",
+            model="claude-opus-5.5",
             description=(
                 "Highest-quality text reasoning model for difficult planning, deep review, complex "
                 "debugging, and high-stakes synthesis"
@@ -890,7 +891,7 @@ def _surplus_tiers() -> dict:
         ),
         "c1": _tier(
             provider="surplus",
-            model="gpt-5.6-luna",
+            model="gpt-6-luna",
             description=(
                 "default balanced text model for normal agent work, coding assistance, debugging, "
                 "and moderate analysis"
@@ -908,7 +909,7 @@ def _surplus_tiers() -> dict:
         ),
         "c3": _tier(
             provider="surplus",
-            model="claude-opus-5",
+            model="claude-opus-5.5",
             description=(
                 "Highest-quality text reasoning model for difficult planning, deep review, complex "
                 "debugging, and high-stakes synthesis"
@@ -942,7 +943,7 @@ def _openrouter_tiers() -> dict:
         ),
         "c1": _tier(
             provider="openrouter",
-            model="openai/gpt-5.6-luna",
+            model="openai/gpt-6-luna",
             description=(
                 "default balanced text model for normal agent work, coding assistance, debugging, "
                 "and moderate analysis"
@@ -951,7 +952,7 @@ def _openrouter_tiers() -> dict:
         ),
         "c2": _tier(
             provider="openrouter",
-            model="z-ai/glm-5.2",
+            model="z-ai/glm-5.3",
             description=(
                 "stronger text model for multi-step coding, structured reasoning, larger context "
                 "synthesis, and harder analysis"
@@ -960,7 +961,7 @@ def _openrouter_tiers() -> dict:
         ),
         "c3": _tier(
             provider="openrouter",
-            model="anthropic/claude-opus-5",
+            model="anthropic/claude-opus-5.5",
             description=(
                 "Highest-quality text reasoning model for difficult planning, deep review, complex "
                 "debugging, and high-stakes synthesis"

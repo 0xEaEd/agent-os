@@ -95,9 +95,9 @@ LEGACY_GATEWAY_MODEL_IDS: dict[str, str] = {
     "virtuals/minimax-m3": "minimax-m3",
     "virtuals/deepseek-v4-flash": "deepseek-v4-flash",
     "virtuals/qwen3.7-max": "qwen3.7-max",
-    "virtuals/claude-opus-4.8": "claude-opus-5",
+    "virtuals/claude-opus-4.8": "claude-opus-5.5",
     "virtuals/kimi-k2.6": "minimax-m3",
-    "claude-opus-4.8": "claude-opus-5",
+    "claude-opus-4.8": "claude-opus-5.5",
 }
 
 # Prior OpenRouter tier defaults, mapped to the defaults that replaced them.
@@ -106,9 +106,9 @@ LEGACY_GATEWAY_MODEL_IDS: dict[str, str] = {
 # "virtuals/kimi-k2.6" got when minimax-m3 replaced it as the gateway default.
 LEGACY_OPENROUTER_MODEL_IDS: dict[str, str] = {
     "deepseek/deepseek-v4-pro": "minimax/minimax-m3",
-    "z-ai/glm-5.1": "z-ai/glm-5.2",
-    "anthropic/claude-opus-4.7": "anthropic/claude-opus-5",
-    "anthropic/claude-opus-4.8": "anthropic/claude-opus-5",
+    "z-ai/glm-5.1": "z-ai/glm-5.3",
+    "anthropic/claude-opus-4.7": "anthropic/claude-opus-5.5",
+    "anthropic/claude-opus-4.8": "anthropic/claude-opus-5.5",
     "moonshotai/kimi-k2.6": "minimax/minimax-m3",
 }
 

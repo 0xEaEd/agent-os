@@ -76,6 +76,8 @@ def test_openrouter_runtime_uses_default_provider_routing() -> None:
     assert runtime.provider_routing == {
         "deepseek/deepseek-v4-flash": "deepseek",
         "minimax/minimax-m3": "minimax",
+        "z-ai/glm-5.3": "z-ai",
+        "anthropic/claude-opus-5.5": "anthropic",
         "z-ai/glm-5.2": "z-ai",
         "anthropic/claude-opus-5": "anthropic",
         "anthropic/claude-opus-4.8": "anthropic",
