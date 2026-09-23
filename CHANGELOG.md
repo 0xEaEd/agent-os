@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+
 - Memory search: MMR diversity re-ranking no longer collapses results written
   in a non-Latin, non-CJK script. `_jaccard_similarity` tokenized snippets with
   `[a-zA-Z0-9]+` plus a CJK pass, so a Cyrillic, Greek, Hangul, Arabic, Hebrew,
@@ -16,6 +17,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   word class is now `[^\W_]+`, the same widening
   `memory_tools._memory_search_query_terms` already applies. ASCII and CJK
   tokenize exactly as before.
+
+- Approvals: a destructive command approved with **once** no longer answers the
+  same command in the session's later turns. `IntentApprovalCache` documents
+  `once` as ending at the session's next user message, but the only
+  `clear_scope("once", ...)` call was in the no-runtime fallback of
+  `sessions.send`; the gateway always runs turns through `TaskRuntime`, so the
+  grant lived for its full 30-minute TTL and the shell gate skipped the prompt
+  (and elevated the call). A web, channel or CLI user message now ends the
+  session's `once` grants when its turn starts. `always` grants, other
+  sessions' grants and cron / subagent turns are untouched (#3274).
+
+- Skills (video-still-animator): `resolve_ffmpeg` had drifted from the copies
+  in video-merger and subtitle-burner -- it did not probe `C:\ffmpeg\bin` and
+  returned early (skipping every fixed location) whenever `LOCALAPPDATA` was
+  unset -- so an ffmpeg the other two skills found, this one reported as
+  `not found`. The three resolvers now probe the same locations in the same
+  order, and a test runs all three under one environment to keep it that way
+  (#2435).
+
+- `SubagentRegistry` retained completed, errored, and aborted subagent runs and
+  their result text in `_runs` for the life of the agent because `archive()` was
+  never called on task completion, leaving the bounded `_archived` cache empty;
+  `SubagentManager.spawn` now moves finished subagents to `_archived` on completion
+  and registry queries search both active and archived runs
+  ([#2424](https://github.com/use-agent-os/agent-os/issues/2424)).
+
+- `create_xlsx` bypassed zip timestamp and `docProps/core.xml` normalization,
+  causing identical workbooks across turns to produce non-deterministic
+  hashes that silently broke artifact session deduplication.
 
 - Tools: `grep_search` and `apply_patch` counted lines with `str.splitlines()`,
   which breaks on eleven characters rather than the newline alone. A file
