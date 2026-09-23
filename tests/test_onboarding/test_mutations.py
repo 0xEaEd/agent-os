@@ -744,9 +744,7 @@ def test_ollama_opencap_ollama_switch_restores_provider_model_and_router_profile
 
 
 def test_provider_switch_restores_smart_routing_settings_without_judge_secret():
-    ollama = upsert_llm_provider(
-        GatewayConfig(), provider_id="ollama", model="qwen3.5:9b"
-    ).config
+    ollama = upsert_llm_provider(GatewayConfig(), provider_id="ollama", model="qwen3.5:9b").config
     smart_routing = upsert_router(
         ollama,
         mode="recommended",
@@ -1045,9 +1043,7 @@ def test_upsert_router_accepts_pilot_v1_strategy():
 def test_upsert_router_persists_pilot_safety_net_threshold():
     cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
 
-    res = upsert_router(
-        cfg, mode="recommended", strategy="pilot-v1", safety_net_threshold=0.65
-    )
+    res = upsert_router(cfg, mode="recommended", strategy="pilot-v1", safety_net_threshold=0.65)
 
     assert res.config.agentos_router.pilot.safety_net_threshold == 0.65
     assert res.public_payload["pilot"]["safety_net_threshold"] == 0.65
@@ -1069,17 +1065,14 @@ def test_upsert_router_rejects_out_of_range_safety_net_threshold():
     cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
 
     with pytest.raises(ValueError):
-        upsert_router(
-            cfg, mode="recommended", strategy="pilot-v1", safety_net_threshold=1.5
-        )
+        upsert_router(cfg, mode="recommended", strategy="pilot-v1", safety_net_threshold=1.5)
 
 
 def test_upsert_router_still_accepts_judge_strategy():
     cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
 
     assert (
-        upsert_router(cfg, mode="recommended", strategy="llm_judge")
-        .config.agentos_router.strategy
+        upsert_router(cfg, mode="recommended", strategy="llm_judge").config.agentos_router.strategy
         == "llm_judge"
     )
 
@@ -1811,3 +1804,214 @@ def test_upsert_channel_replaces_secret_when_provided():
     raw = [e.model_dump(mode="python") for e in second.config.channels.channels]
     entry = next(e for e in raw if e["name"] == "w")
     assert entry["token"] == "xoxb-new"
+
+
+# --- Jev cloud classifier (strategy="jev") --------------------------------
+
+
+def _no_jev_probe(monkeypatch) -> None:
+    import agentos.agentos_router.jev as jev_mod
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("probe_jev must not run without verify_jev")
+
+    monkeypatch.setattr(jev_mod, "probe_jev", _boom)
+
+
+def test_upsert_router_persists_jev_fields_and_never_echoes_the_key(monkeypatch):
+    _no_jev_probe(monkeypatch)
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+
+    res = upsert_router(
+        cfg,
+        mode="recommended",
+        strategy="jev",
+        jev_api_key="tsk-secret-value",
+        jev_api_key_env="MY_TYPESAFE_KEY",
+        jev_high_risk_threshold=0.8,
+    )
+
+    jev = res.config.agentos_router.jev
+    assert res.config.agentos_router.strategy == "jev"
+    assert jev.api_key == "tsk-secret-value"
+    assert jev.api_key_env == "MY_TYPESAFE_KEY"
+    assert jev.high_risk_threshold == 0.8
+    assert res.public_payload["jev"] == {
+        "api_key_configured": True,
+        "api_key_env": "MY_TYPESAFE_KEY",
+    }
+    assert "tsk-secret-value" not in json.dumps(res.public_payload)
+
+
+def test_upsert_router_omitted_jev_params_preserve_existing_values(monkeypatch):
+    _no_jev_probe(monkeypatch)
+    cfg = GatewayConfig(
+        llm={"provider": "openrouter", "model": "deepseek/x"},
+        agentos_router={
+            "strategy": "jev",
+            "jev": {
+                "api_key": "tsk-old",
+                "api_key_env": "OLD_ENV",
+                "high_risk_threshold": 0.9,
+            },
+        },
+    )
+
+    res = upsert_router(cfg, mode="recommended", strategy="jev")
+
+    jev = res.config.agentos_router.jev
+    assert jev.api_key == "tsk-old"
+    assert jev.api_key_env == "OLD_ENV"
+    assert jev.high_risk_threshold == 0.9
+
+
+def test_upsert_router_empty_jev_api_key_clears_it(monkeypatch):
+    _no_jev_probe(monkeypatch)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    cfg = GatewayConfig(
+        llm={"provider": "openrouter", "model": "deepseek/x"},
+        agentos_router={"strategy": "jev", "jev": {"api_key": "tsk-old"}},
+    )
+
+    res = upsert_router(cfg, mode="recommended", strategy="jev", jev_api_key="")
+
+    assert res.config.agentos_router.jev.api_key is None
+    assert res.public_payload["jev"]["api_key_configured"] is False
+
+
+def test_upsert_router_jev_env_key_counts_as_configured(monkeypatch):
+    _no_jev_probe(monkeypatch)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "tsk-from-env")
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+
+    res = upsert_router(cfg, mode="recommended", strategy="jev")
+
+    assert res.config.agentos_router.jev.api_key is None
+    assert res.public_payload["jev"] == {
+        "api_key_configured": True,
+        "api_key_env": "TYPESAFE_API_KEY",
+    }
+    assert "tsk-from-env" not in json.dumps(res.public_payload)
+
+
+@pytest.mark.parametrize("threshold", [-0.1, 1.5])
+def test_upsert_router_rejects_out_of_range_jev_high_risk_threshold(monkeypatch, threshold):
+    _no_jev_probe(monkeypatch)
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+
+    with pytest.raises(ValueError, match="high_risk_threshold"):
+        upsert_router(cfg, mode="recommended", strategy="jev", jev_high_risk_threshold=threshold)
+
+
+def test_upsert_router_switching_strategy_leaves_jev_intact(monkeypatch):
+    _no_jev_probe(monkeypatch)
+    cfg = GatewayConfig(
+        llm={"provider": "openrouter", "model": "deepseek/x"},
+        agentos_router={
+            "strategy": "jev",
+            "jev": {"api_key": "tsk-old", "high_risk_threshold": 0.85},
+        },
+    )
+
+    res = upsert_router(cfg, mode="recommended", strategy="pilot-v1")
+
+    assert res.config.agentos_router.strategy == "pilot-v1"
+    assert res.config.agentos_router.jev.api_key == "tsk-old"
+    assert res.config.agentos_router.jev.high_risk_threshold == 0.85
+    # ...and the pilot->jev direction too.
+    back = upsert_router(res.config, mode="recommended", strategy="jev")
+    assert back.config.agentos_router.jev.api_key == "tsk-old"
+
+
+def test_upsert_router_disabled_mode_still_records_jev_fields(monkeypatch):
+    _no_jev_probe(monkeypatch)
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+
+    res = upsert_router(cfg, mode="disabled", strategy="jev", jev_api_key="tsk-1")
+
+    assert res.config.agentos_router.enabled is False
+    assert res.config.agentos_router.strategy == "jev"
+    assert res.config.agentos_router.jev.api_key == "tsk-1"
+
+
+def test_upsert_router_verify_jev_rejects_failed_probe(monkeypatch):
+    import agentos.agentos_router.jev as jev_mod
+
+    calls: list[tuple[str, str, str]] = []
+
+    def _fake_probe(api_key, *, base_url, model, **_kwargs):
+        calls.append((api_key, base_url, model))
+        return "HTTP 401: invalid api key"
+
+    monkeypatch.setattr(jev_mod, "probe_jev", _fake_probe)
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+
+    with pytest.raises(ValueError, match="HTTP 401: invalid api key"):
+        upsert_router(
+            cfg, mode="recommended", strategy="jev", jev_api_key="tsk-bad", verify_jev=True
+        )
+
+    assert calls == [("tsk-bad", "https://api.typesafe.ai", "jev-latest")]
+
+
+def test_upsert_router_verify_jev_persists_when_probe_succeeds(monkeypatch):
+    import agentos.agentos_router.jev as jev_mod
+
+    monkeypatch.setattr(jev_mod, "probe_jev", lambda api_key, **_kw: None)
+    cfg = GatewayConfig(
+        llm={"provider": "openrouter", "model": "deepseek/x"},
+        agentos_router={"jev": {"base_url": "https://jev.example.test", "model": "jev-x"}},
+    )
+
+    res = upsert_router(
+        cfg, mode="recommended", strategy="jev", jev_api_key="tsk-ok", verify_jev=True
+    )
+
+    assert res.config.agentos_router.jev.api_key == "tsk-ok"
+    assert res.public_payload["jev"]["api_key_configured"] is True
+
+
+def test_upsert_router_verify_jev_probes_the_persisted_or_env_key(monkeypatch):
+    import agentos.agentos_router.jev as jev_mod
+
+    probed: list[str] = []
+
+    def _fake_probe(api_key, **_kwargs):
+        probed.append(api_key)
+        return None
+
+    monkeypatch.setattr(jev_mod, "probe_jev", _fake_probe)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    persisted = GatewayConfig(
+        llm={"provider": "openrouter", "model": "deepseek/x"},
+        agentos_router={"jev": {"api_key": "tsk-persisted"}},
+    )
+    upsert_router(persisted, mode="recommended", strategy="jev", verify_jev=True)
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "tsk-env")
+    fresh = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+    upsert_router(fresh, mode="recommended", strategy="jev", verify_jev=True)
+
+    assert probed == ["tsk-persisted", "tsk-env"]
+
+
+def test_upsert_router_verify_jev_without_any_key_skips_the_probe(monkeypatch):
+    # No key anywhere: nothing to verify; boot preflight reports the missing
+    # credential instead. A probe here would only fail with "no API key".
+    _no_jev_probe(monkeypatch)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+
+    res = upsert_router(cfg, mode="recommended", strategy="jev", verify_jev=True)
+
+    assert res.config.agentos_router.strategy == "jev"
+    assert res.public_payload["jev"]["api_key_configured"] is False
+
+
+def test_upsert_router_jev_does_not_probe_by_default(monkeypatch):
+    _no_jev_probe(monkeypatch)
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+
+    res = upsert_router(cfg, mode="recommended", strategy="jev", jev_api_key="tsk-1")
+
+    assert res.config.agentos_router.jev.api_key == "tsk-1"

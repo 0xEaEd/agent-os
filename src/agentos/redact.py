@@ -689,7 +689,36 @@ def _has_known_prefix(text: str) -> bool:
 
 # ── Terminal output ─────────────────────────────────────────────────────────
 
-_ENV_DUMP_COMMANDS = frozenset({"env", "printenv", "set", "export", "declare"})
+#: Commands that print the environment whatever their arguments: ``printenv``
+#: with names prints those names' values, which is still environment output.
+_ALWAYS_ENV_DUMP_COMMANDS = frozenset({"printenv"})
+
+#: Shell builtins that print the environment only when given nothing to do.
+#: ``set -e`` sets an option, ``export X=y`` assigns, ``declare -A m``
+#: declares -- none of them print anything, and treating them as dumps runs
+#: the assignment pass over whatever the *next* command prints, which for a
+#: ``set -euo pipefail`` script is the whole script's output.
+_BARE_ENV_DUMP_BUILTINS = frozenset({"set", "export", "declare", "typeset"})
+
+#: Commands that run their operand, so ``sudo printenv`` is ``printenv``. Each
+#: maps to the options of its own that take a separate argument, so that
+#: ``sudo -u root printenv`` skips ``root`` and finds the command -- the
+#: option lists differ per wrapper (``sudo -n`` takes nothing, ``nice -n``
+#: takes a number), so they cannot be one shared set.
+_COMMAND_WRAPPERS: Mapping[str, frozenset[str]] = {
+    "sudo": frozenset({"-u", "-g", "-p", "-C", "-D", "-h", "-r", "-t", "-T", "-U"}),
+    "doas": frozenset({"-u", "-C"}),
+    "command": frozenset(),
+    "exec": frozenset({"-a"}),
+    "nohup": frozenset(),
+    "nice": frozenset({"-n"}),
+    "time": frozenset({"-f", "-o"}),
+    "busybox": frozenset(),
+}
+
+#: ``env`` options that take a separate argument. ``-S``/``--split-string``
+#: is deliberately absent: its argument *is* a command, handled below.
+_ENV_OPTIONS_WITH_ARGUMENT = frozenset({"-u", "--unset", "-C", "--chdir"})
 
 #: The separators that end one command and start the next. A newline is one of
 #: them — in POSIX shell it does the same job as ``;`` — and ``exec_command``
@@ -703,14 +732,125 @@ _SEGMENT_SEPARATOR_RE = re.compile(r"[|;&\n\r]+")
 #: to the command by the time ``shlex`` is done with them.
 _SHELL_GROUPING_CHARS = "(){}"
 
+#: A redirection is not an operand: ``env 2>&1`` still prints the environment
+#: and ``set >vars.txt`` is still a bare ``set``. Matches the operator at the
+#: front of a token (``2>&1``, ``2>/dev/null``, ``>out``, ``&>log``, ``<in``).
+_REDIRECTION_RE = re.compile(r"^(\d+|&)?(>>?|<<?<?)")
+
+#: The operator alone (``2>``, ``>``, ``>>``, ``<``): the target is the token
+#: after it, and neither is an operand.
+_BARE_REDIRECTION_RE = re.compile(r"^(\d+|&)?(>>?|<<?<?)$")
+
+
+def _unwrap_command(tokens: list[str]) -> list[str]:
+    """Peel ``sudo -E``, ``command``, ``exec`` ... off the front of *tokens*.
+
+    Returns the tokens of the command the wrapper actually runs, or an empty
+    list when the wrapper had nothing to run.
+    """
+    while tokens:
+        options_with_argument = _COMMAND_WRAPPERS.get(os.path.basename(tokens[0]).lower())
+        if options_with_argument is None:
+            return tokens
+        rest = tokens[1:]
+        while rest and rest[0].startswith("-"):
+            option = rest.pop(0)
+            if option == "--":
+                break
+            if option in options_with_argument and rest:
+                rest.pop(0)
+        tokens = rest
+    return tokens
+
+
+def _without_redirections(tokens: list[str]) -> list[str]:
+    """Drop redirections and their targets, which are never operands."""
+    kept: list[str] = []
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if _BARE_REDIRECTION_RE.match(token):
+            skip_next = True
+            continue
+        if _REDIRECTION_RE.match(token):
+            continue
+        kept.append(token)
+    return kept
+
+
+def _env_operand(arguments: list[str]) -> list[str] | None:
+    """The command ``env`` runs with *arguments*, as its own token list.
+
+    Empty when nothing remains after ``env``'s options and ``NAME=value``
+    assignments, which is when ``env`` prints the environment. ``None`` for
+    ``-S``, whose argument carries a command this parser does not split.
+    """
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            return arguments[index + 1 :]
+        if argument.startswith("-"):
+            if argument in ("-S", "--split-string") or argument.startswith("--split-string="):
+                return None
+            if argument in _ENV_OPTIONS_WITH_ARGUMENT:
+                index += 1
+            index += 1
+            continue
+        if "=" in argument:
+            index += 1
+            continue
+        return arguments[index:]
+    return []
+
+
+def _segment_dumps_environment(tokens: list[str]) -> bool:
+    """Whether one pipeline or sequence segment prints the environment."""
+    tokens = _unwrap_command(tokens)
+    if not tokens:
+        return False
+    name = os.path.basename(tokens[0]).lower()
+    arguments = tokens[1:]
+    if name in _ALWAYS_ENV_DUMP_COMMANDS:
+        return True
+    if name == "env":
+        # ``env`` with nothing to run prints; with something to run it is
+        # whatever that is, so ``env -i printenv`` and ``env sudo printenv``
+        # are judged as the command they run.
+        operand = _env_operand(arguments)
+        if operand is None:
+            return False
+        return not operand or _segment_dumps_environment(operand)
+    if name == "set":
+        # ``set -o`` lists options and ``set -- a b`` sets the positionals;
+        # only a bare ``set`` prints variables.
+        return not arguments
+    if name in _BARE_ENV_DUMP_BUILTINS:
+        # ``export`` / ``declare -p`` with no names print everything; a name
+        # or an assignment means the builtin is being used to *set* one.
+        # ``declare -p NAME`` prints that variable's value and stays a dump.
+        if all(argument.startswith("-") for argument in arguments):
+            return True
+        return name in ("declare", "typeset") and any(
+            argument.startswith("-") and not argument.startswith("--") and "p" in argument[1:]
+            for argument in arguments
+        )
+    return False
+
 
 def is_env_dump_command(command: str | None) -> bool:
     """Return whether *command* prints the environment to stdout.
 
-    Checks the first token of every pipeline or sequence segment, with shell
-    grouping characters stripped off. Conservative: anything it cannot parse is
-    reported as not-a-dump, and the caller falls back to the pass that has
-    fewer false positives.
+    Looks at every pipeline or sequence segment, with shell grouping characters
+    stripped off. The command is found under any wrapper that runs it
+    (``sudo printenv``) and by its basename (``/usr/bin/env``), and its
+    arguments decide what it does: ``env python3 build.py`` runs Python and
+    ``set -e`` sets an option, so neither is a dump.
+
+    Conservative: anything it cannot parse is reported as not-a-dump, and the
+    caller falls back to the pass that has fewer false positives.
     """
     if not command or not isinstance(command, str):
         return False
@@ -727,7 +867,7 @@ def is_env_dump_command(command: str | None) -> bool:
             for stripped in (token.strip(_SHELL_GROUPING_CHARS) for token in tokens)
             if stripped
         ]
-        if tokens and tokens[0] in _ENV_DUMP_COMMANDS:
+        if _segment_dumps_environment(_without_redirections(tokens)):
             return True
     return False
 
@@ -742,20 +882,145 @@ def reads_credential_file(command: str | None) -> bool:
     """
     if not command or not isinstance(command, str):
         return False
+    for token in _command_operands(command):
+        if token.startswith("-"):
+            continue
+        # ``basename`` on a POSIX host does not split on ``\``; normalise so a
+        # Windows-native operand is judged by its real name.
+        name = os.path.basename(token.replace("\\", "/"))
+        if _is_credential_file_name(name) or _in_credential_dir(token):
+            return True
+    return False
+
+
+def _command_operands(command: str) -> list[str]:
+    """Split *command* into tokens, keeping Windows-native paths intact.
+
+    ``shlex`` in POSIX mode reads ``\\`` as an escape, so an unquoted
+    ``C:\\Users\\u\\.aws\\credentials`` came out as ``C:Usersu.awscredentials``
+    and matched nothing. On a Windows host that spelling is the natural one
+    for ``type`` or ``Get-Content``, so a command carrying a backslash is
+    also split with escapes off, and both readings are checked.
+    """
     try:
         tokens = shlex.split(command)
     except ValueError:
         tokens = command.split()
+    if "\\" in command:
+        try:
+            literal = shlex.split(command, posix=False)
+        except ValueError:
+            literal = command.split()
+        tokens.extend(token.strip("'\"") for token in literal)
+    return tokens
+
+
+#: Credential files whose secret is positional or keyword-introduced rather
+#: than ``name=value``. The assignment pass cannot see a secret it cannot
+#: name, so these get a rule of their own, keyed by basename. Both are in
+#: :data:`_CREDENTIAL_FILE_NAMES` -- the gate fired for them all along; what
+#: ran behind it could not read the file.
+_CREDENTIAL_FILE_FORMATS: Mapping[str, str] = {
+    ".pgpass": "pgpass",
+    ".netrc": "netrc",
+    "_netrc": "netrc",
+}
+
+#: ``.netrc`` introduces each value with a keyword: ``machine H login U
+#: password P``. ``account`` is a second password in the same format, and a
+#: value may be quoted (curl reads quotes; ftp does not).
+#: ``\s+`` rather than blanks only: ``.netrc`` tokens are whitespace-separated,
+#: so the value may sit on the line after its keyword (``password\n  secret``).
+_NETRC_SECRET_RE = re.compile(r'(?i)\b(password|passwd|account)(\s+)("(?:[^"\\]|\\.)*"|\S+)')
+
+
+def _mask_whole(_token: str) -> str:
+    """Mask a password entirely.
+
+    The head/tail reveal in :func:`mask_secret` exists so an agent can tell
+    *which* vendor key it is looking at. A positional password has no such
+    prefix, so showing six characters of it shows six characters of a password.
+    """
+    return _MASK
+
+
+def _mask_whole_nonreusable(_token: str) -> str:
+    return _mask_nonreusable("")
+
+
+def _credential_file_format(path: str | os.PathLike[str] | None) -> str | None:
+    if path is None:
+        return None
+    # Normalise separators first: a Windows path handed to a POSIX host has
+    # no ``/`` for ``basename`` to split on, as ``_is_source_code_path`` knows.
+    name = os.path.basename(os.fspath(path).replace("\\", "/")).lower()
+    return _CREDENTIAL_FILE_FORMATS.get(name)
+
+
+def _credential_file_formats_in(command: str) -> set[str]:
+    """The formats of every credential file *command* names as an operand."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    formats: set[str] = set()
     for token in tokens:
         if token.startswith("-"):
             continue
-        name = os.path.basename(token).lower()
-        parts = {part.lower() for part in token.replace("\\", "/").split("/")[:-1]}
-        if name in _CREDENTIAL_FILE_NAMES or name.startswith(".env"):
-            return True
-        if parts & _CREDENTIAL_DIR_NAMES:
-            return True
-    return False
+        file_format = _credential_file_format(token)
+        if file_format is not None:
+            formats.add(file_format)
+    return formats
+
+
+def _pgpass_password_start(line: str) -> int | None:
+    """Offset of the fifth ``:``-field, honouring ``\\:`` and ``\\\\`` escapes.
+
+    ``.pgpass`` is ``hostname:port:database:username:password``; the password
+    is everything after the fourth unescaped colon, escapes included.
+    """
+    colons = 0
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == ":":
+            colons += 1
+            if colons == 4:
+                return index + 1
+        index += 1
+    return None
+
+
+def _redact_pgpass(text: str, *, mask: Callable[[str], str]) -> str:
+    masked: list[str] = []
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        ending = line[len(body) :]
+        start = None if body.lstrip().startswith("#") else _pgpass_password_start(body)
+        if start is None or start >= len(body):
+            masked.append(line)
+            continue
+        masked.append(body[:start] + mask(body[start:]) + ending)
+    return "".join(masked)
+
+
+def _redact_netrc(text: str, *, mask: Callable[[str], str]) -> str:
+    return _NETRC_SECRET_RE.sub(
+        lambda match: match.group(1) + match.group(2) + mask(match.group(3)), text
+    )
+
+
+def _redact_credential_file_format(
+    text: str, file_format: str, *, mask: Callable[[str], str]
+) -> str:
+    if file_format == "pgpass":
+        return _redact_pgpass(text, mask=mask)
+    if file_format == "netrc":
+        return _redact_netrc(text, mask=mask)
+    return text
 
 
 def redact_terminal_output(output: str, command: str | None = None, *, force: bool = False) -> str:
@@ -768,9 +1033,16 @@ def redact_terminal_output(output: str, command: str | None = None, *, force: bo
     output is that file. Everything else skips it, because ordinary output is
     source code and config dumps where the assignment pass is mostly false
     positives.
+
+    A credential file whose secret is positional (``.pgpass``) or
+    keyword-introduced (``.netrc``) gets its own format rule first: the
+    assignment pass cannot name a value that has no name.
     """
     if not output:
         return output
+    if command and (force or _REDACT_ENABLED):
+        for file_format in sorted(_credential_file_formats_in(command)):
+            output = _redact_credential_file_format(output, file_format, mask=_mask_whole)
     assignments = is_env_dump_command(command or "") or reads_credential_file(command)
     redacted = redact_sensitive_text(output, force=force, code_file=not assignments)
     return redacted if redacted is not None else output
@@ -851,11 +1123,87 @@ _CREDENTIAL_FILE_NAMES: frozenset[str] = frozenset(
 #: private name stays as-is for this module's own callers.
 CREDENTIAL_FILE_NAMES: frozenset[str] = _CREDENTIAL_FILE_NAMES
 
-#: Directories whose every file is credential material, for the ones that name
-#: their config plainly (``~/.kube/config``, ``~/.docker/config.json``).
-_CREDENTIAL_DIR_NAMES: frozenset[str] = frozenset(
-    {".aws", ".docker", ".gnupg", ".kube", ".ssh", "gcloud"}
+#: Home-relative directories whose every file is credential material. This is
+#: the one list for both layers: the sandbox denylist blocks ``read_file``
+#: under ``~/<entry>``, and :func:`reads_credential_file` gates ``cat`` of the
+#: same path. It used to be two lists, and they drifted -- #1138 added
+#: ``~/.azure`` to the sandbox and nothing to redaction, so ``read_file`` on
+#: ``~/.azure/service_principal_entries.json`` was blocked while ``cat`` of
+#: it handed the model ``client_secret`` intact (#2621). An entry may be more
+#: than one segment (``.config/gh``), and matches as a contiguous run of
+#: segments anywhere in a path, so a single-segment entry like ``.aws``
+#: matches under any parent.
+#:
+#: ``.docker`` is the directory, not ``.docker/config`` as the sandbox once
+#: had it: Docker writes ``config.json``, and a prefix match anchored at a
+#: segment boundary never matched the file that exists (#2623).
+#: ``AppData/Roaming/gcloud`` is where the Cloud SDK keeps its credentials
+#: on Windows, so the same entry covers both platforms.
+CREDENTIAL_HOME_DIRS: tuple[str, ...] = (
+    ".ssh",
+    ".aws",
+    ".azure",
+    ".config/gcloud",
+    "AppData/Roaming/gcloud",
+    ".config/gh",
+    ".anthropic",
+    ".openai",
+    ".docker",
+    ".kube",
+    ".gnupg",
+    ".password-store",
 )
+
+#: Files masked when read but **not** blocked by the sandbox. Each holds a
+#: credential often enough to deserve the assignment pass, and build or tool
+#: configuration often enough that hard-blocking ``read_file`` on it would
+#: break ordinary work -- ``gradle.properties`` sits in every Gradle project,
+#: usually with nothing secret in it, and sometimes with ``signing.password``.
+#: Files, not directories: gating all of ``~/.cargo`` or ``~/.gradle`` would
+#: strip the source-code exemption from every crate and JVM source under
+#: their caches, and the one file that would have gained from it,
+#: ``~/.m2/settings.xml``, holds its password in XML the pass cannot read.
+_REDACT_ONLY_CREDENTIAL_FILE_NAMES: frozenset[str] = frozenset(
+    {
+        ".boto",
+        ".my.cnf",
+        ".s3cfg",
+        ".yarnrc.yml",
+        "credentials.tfrc.json",
+        "credentials.toml",
+        "gradle.properties",
+    }
+)
+
+#: ``service-account.json``, ``my-project-service_account-key.json`` -- a GCP
+#: service-account key by any of its usual names.
+_SERVICE_ACCOUNT_FILE_RE = re.compile(r"service[-_]?account.*\.json$", re.IGNORECASE)
+
+
+def _is_credential_file_name(name: str) -> bool:
+    lowered = name.lower()
+    return (
+        lowered in _CREDENTIAL_FILE_NAMES
+        or lowered in _REDACT_ONLY_CREDENTIAL_FILE_NAMES
+        or lowered.startswith(".env")
+        or _SERVICE_ACCOUNT_FILE_RE.search(lowered) is not None
+    )
+
+
+def _in_credential_dir(path: str) -> bool:
+    """Whether *path* sits under one of the credential directories.
+
+    An entry's segments must appear as a contiguous run in the path's
+    directory segments, so ``.config/gh`` matches ``~/.config/gh/hosts.yml``
+    and not ``~/.config/other/gh/x``.
+    """
+    segments = [part.lower() for part in path.replace("\\", "/").split("/")[:-1]]
+    for entry in CREDENTIAL_HOME_DIRS:
+        wanted = entry.lower().split("/")
+        width = len(wanted)
+        if any(segments[i : i + width] == wanted for i in range(len(segments) - width + 1)):
+            return True
+    return False
 
 
 def _is_source_code_path(path: str | os.PathLike[str] | None) -> bool:
@@ -863,13 +1211,10 @@ def _is_source_code_path(path: str | os.PathLike[str] | None) -> bool:
     if path is None:
         return False
     text = os.fspath(path)
-    name = os.path.basename(text).lower()
-    if name in _CREDENTIAL_FILE_NAMES or name.startswith(".env"):
+    name = os.path.basename(text)
+    if _is_credential_file_name(name) or _in_credential_dir(text):
         return False
-    parts = {part.lower() for part in text.replace("\\", "/").split("/")[:-1]}
-    if parts & _CREDENTIAL_DIR_NAMES:
-        return False
-    return os.path.splitext(name)[1] in _SOURCE_CODE_SUFFIXES
+    return os.path.splitext(name.lower())[1] in _SOURCE_CODE_SUFFIXES
 
 
 def redact_file_output(text: str, *, path: str | os.PathLike[str] | None = None) -> str:
@@ -895,6 +1240,9 @@ def redact_file_output(text: str, *, path: str | os.PathLike[str] | None = None)
     """
     if not text or not _REDACT_ENABLED:
         return text
+    file_format = _credential_file_format(path)
+    if file_format is not None:
+        text = _redact_credential_file_format(text, file_format, mask=_mask_whole_nonreusable)
     masked = _redact_value_shapes(text, mask=_mask_nonreusable, line_safe=True)
     if _is_source_code_path(path) or path is None:
         return masked

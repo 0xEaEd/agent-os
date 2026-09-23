@@ -302,7 +302,15 @@ async def http_request(
             # downstream consumers don't depend on the closed transport.
             status_code = response.status_code
             response_url = str(response.url)
-            response_headers = dict(response.headers)
+            from agentos.safety.injection_guard import neutralize_untrusted_markers
+
+            # Header values are chosen by the remote server, so they are
+            # external content like the body. They are returned as data
+            # rather than prose, so the envelope markers are made inert
+            # instead of the whole value being wrapped.
+            response_headers = {
+                key: neutralize_untrusted_markers(value) for key, value in response.headers.items()
+            }
             response_encoding = response.encoding or "utf-8"
             content_type = response_headers.get("content-type", "")
         finally:

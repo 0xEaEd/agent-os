@@ -141,8 +141,22 @@ def _escape_subtitle_path(path: str) -> str:
     rest = normalised[3:] if len(normalised) >= 3 else ""
     if ":" in rest:
         normalised = normalised[:3] + rest.replace(":", r"\:")
-    # Escape single quotes inside the path (rare on Windows but possible).
-    normalised = normalised.replace("'", r"\'")
+    # A -vf argument is tokenised twice: once by the filtergraph parser,
+    # which strips the outer quotes, and again by the option parser -- the
+    # pass the drive-colon escape above already relies on. A quote therefore
+    # has to survive both.
+    #
+    # The shell and concat-demuxer spelling (close, backslash-quote, reopen)
+    # survives only the first pass. The second then meets a bare quote, opens
+    # a section that never closes, and swallows the rest of the argument:
+    # ffmpeg reports `Unable to open tests_cues.srt`, and on an odd quote
+    # count it eats `:force_style=...` into the filename.
+    #
+    # Two levels instead: close the quote, emit an escaped backslash and an
+    # escaped quote, reopen. The graph pass leaves a backslash-quote behind
+    # and the option pass reads that as a literal quote. Equivalent to
+    # `ffescape -m quote -l 2`.
+    normalised = normalised.replace("'", r"'\\\''")
     return normalised
 
 
