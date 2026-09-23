@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Approvals: a destructive command approved with **once** no longer answers the
+  same command in the session's later turns. `IntentApprovalCache` documents
+  `once` as ending at the session's next user message, but the only
+  `clear_scope("once", ...)` call was in the no-runtime fallback of
+  `sessions.send`; the gateway always runs turns through `TaskRuntime`, so the
+  grant lived for its full 30-minute TTL and the shell gate skipped the prompt
+  (and elevated the call). A web, channel or CLI user message now ends the
+  session's `once` grants when its turn starts. `always` grants, other
+  sessions' grants and cron / subagent turns are untouched (#3274).
+
 - Skills (video-still-animator): `resolve_ffmpeg` had drifted from the copies
   in video-merger and subtitle-burner -- it did not probe `C:\ffmpeg\bin` and
   returned early (skipping every fixed location) whenever `LOCALAPPDATA` was
