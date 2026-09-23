@@ -52,7 +52,7 @@ def test_surplus_onboarding_spec() -> None:
     assert spec.deployment == "cloud"
     assert spec.requires_api_key is True
     assert spec.default_base_url == "https://api.surplusintelligence.ai/v1"
-    assert spec.default_direct_model == "gpt-5.6-luna"
+    assert spec.default_direct_model == "gpt-6-luna"
     assert any(field.name == "api_key" and field.required for field in spec.fields)
 
 
@@ -81,9 +81,9 @@ def test_surplus_router_profile_contract() -> None:
 
     assert {tier["provider"] for tier in tiers.values()} == {"surplus"}
     assert tiers["c0"]["model"] == "deepseek-v4.1-flash"
-    assert tiers["c1"]["model"] == "gpt-5.6-luna"
+    assert tiers["c1"]["model"] == "gpt-6-luna"
     assert tiers["c2"]["model"] == "glm-5.3"
-    assert tiers["c3"]["model"] == "claude-opus-5"
+    assert tiers["c3"]["model"] == "claude-opus-5.5"
     assert tiers["image_model"]["model"] == "glm-5.3-flash"
     assert tiers["image_model"]["supports_image"] is True
     assert tiers["image_model"]["image_only"] is True
@@ -113,9 +113,11 @@ def test_surplus_tier_models_are_all_served_by_the_live_catalog() -> None:
         "gpt-5.6-luna",
         "gpt-5.6-terra",
         "gpt-5.6-sol",
+        "gpt-6-luna",
         "glm-5.3",
         "glm-5.3-flash",
         "claude-opus-5",
+        "claude-opus-5.5",
         "claude-sonnet-5",
         "gemini-3.1-pro",
         "grok-4.6",

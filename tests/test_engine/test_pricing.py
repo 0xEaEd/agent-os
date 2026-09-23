@@ -36,6 +36,33 @@ def test_deepseek_v4_pro_uses_non_discount_price_when_live_pricing_is_off(
     assert price.output_per_m == pytest.approx(3.48)
 
 
+def test_openrouter_endpoint_price_skips_the_owners_service_tiers() -> None:
+    # Order as OpenRouter serves openai/gpt-6-luna: the flex tier comes first.
+    def _endpoint(provider: str, tag: str, prompt: str, completion: str) -> dict:
+        return {
+            "provider_name": provider,
+            "tag": tag,
+            "pricing": {"prompt": prompt, "completion": completion},
+        }
+
+    payload = {
+        "data": {
+            "endpoints": [
+                _endpoint("OpenAI", "openai/flex", "0.00000005", "0.00000025"),
+                _endpoint("OpenAI", "openai", "0.0000001", "0.0000005"),
+                _endpoint("Azure", "azure", "0.0000001", "0.0000005"),
+                _endpoint("OpenAI", "openai/fast", "0.0000002", "0.000001"),
+            ]
+        }
+    }
+
+    price = pricing._select_official_endpoint_price(payload, "openai/gpt-6-luna")
+
+    assert price is not None
+    assert price.input_per_m == pytest.approx(0.1)
+    assert price.output_per_m == pytest.approx(0.5)
+
+
 def test_opencap_unseeded_lookup_uses_static_fallback_without_outbound_io() -> None:
     with patch.object(
         pricing.httpx,

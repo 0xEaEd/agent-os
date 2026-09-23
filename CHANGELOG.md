@@ -6,7 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Router: the recommended tier profiles for Surplus, OpenCAP, OpenRouter and
+  Bankr move `c1`, `c2` and `c3` up a generation. `c1` is now `gpt-6-luna`
+  (`openai/gpt-6-luna` on OpenRouter), `c2` is `glm-5.3` (`z-ai/glm-5.3`), and
+  `c3` is `claude-opus-5.5` (`anthropic/claude-opus-5.5`). `c0` and
+  `image_model` are unchanged. The default `llm.model` and the `agentos init`
+  wizard default follow `c1`, and the legacy Opus 4.7/4.8 and GLM 5.1
+  migrations now land on the new ids. The new ids are registered with the
+  prices and windows their live catalogs publish. On the three gateway
+  profiles `gpt-6-luna` (0.10/0.50 per 1M) costs less than the `c0`
+  `deepseek-v4.1-flash` (0.15/0.60), so with `cost_aware` on (the default)
+  turns routed to `c0` there run on `c1` instead. Configs that pin tiers
+  explicitly are not rewritten.
+
 ### Fixed
+
+- Pricing: the live OpenRouter price for a model now comes from the owner's
+  standard endpoint rather than whichever of its service tiers is listed
+  first. OpenRouter lists `openai/gpt-6-luna`'s `openai/flex` tier (0.05/0.25)
+  ahead of `openai` (0.10/0.50), and taking it made the cost-aware router
+  treat `c1` as cheaper than `c0` on the OpenRouter profile.
 
 - Provider: a genuinely failed tool result could reach the model as a bare
   digest with no failure information. `_final_hard_cap_payload_once` asked

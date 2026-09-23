@@ -49,7 +49,7 @@ def test_openrouter_sorts_first_in_setup_list() -> None:
 def test_llm_defaults_are_openrouter() -> None:
     cfg = LlmProviderConfig()
     assert cfg.provider == "openrouter"
-    assert cfg.model == "openai/gpt-5.6-luna"
+    assert cfg.model == "openai/gpt-6-luna"
     assert cfg.base_url == "https://openrouter.ai/api/v1"
 
 
@@ -58,9 +58,9 @@ def test_default_tiers_route_through_openrouter() -> None:
     assert tiers == _openrouter_tiers()
     assert tiers["c0"]["provider"] == "openrouter"
     assert tiers["c0"]["model"] == "deepseek/deepseek-v4-flash"
-    assert tiers["c1"]["model"] == "openai/gpt-5.6-luna"
-    assert tiers["c2"]["model"] == "z-ai/glm-5.2"
-    assert tiers["c3"]["model"] == "anthropic/claude-opus-5"
+    assert tiers["c1"]["model"] == "openai/gpt-6-luna"
+    assert tiers["c2"]["model"] == "z-ai/glm-5.3"
+    assert tiers["c3"]["model"] == "anthropic/claude-opus-5.5"
     assert tiers["image_model"]["supports_image"] is True
 
 
@@ -76,9 +76,9 @@ def test_bankr_is_a_tier_profile() -> None:
     assert tiers == _bankr_tiers()
     assert tiers["c0"]["provider"] == "bankr"
     assert tiers["c0"]["model"] == "deepseek-v4.1-flash"
-    assert tiers["c1"]["model"] == "gpt-5.6-luna"
-    assert tiers["c2"]["model"] == "glm-5.2"
-    assert tiers["c3"]["model"] == "claude-opus-5"
+    assert tiers["c1"]["model"] == "gpt-6-luna"
+    assert tiers["c2"]["model"] == "glm-5.3"
+    assert tiers["c3"]["model"] == "claude-opus-5.5"
     assert tiers["image_model"]["model"] == "minimax-m3"
     assert tiers["image_model"]["supports_image"] is True
 

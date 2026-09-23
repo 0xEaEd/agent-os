@@ -180,6 +180,12 @@ MODEL_FACTS: tuple[ModelFacts, ...] = (
         price=PriceFacts(0.2, 1.25),
     ),
     ModelFacts(
+        "openai/gpt-6-luna",
+        max_output_tokens=128_000,
+        context_window=1_050_000,
+        price=PriceFacts(0.1, 0.5, cached_input_per_m=0.01),
+    ),
+    ModelFacts(
         "deepseek/deepseek-v4-flash",
         max_output_tokens=16_384,
         context_window=1_048_576,
@@ -270,6 +276,12 @@ MODEL_FACTS: tuple[ModelFacts, ...] = (
         max_output_tokens=131_072,
         context_window=1_048_576,
         price=PriceFacts(0.132, 0.429),
+    ),
+    ModelFacts(
+        "z-ai/glm-5.3",
+        max_output_tokens=131_072,
+        context_window=1_310_720,
+        price=PriceFacts(1.54, 4.84),
     ),
     ModelFacts(
         "moonshot-v1-8k",
@@ -391,6 +403,23 @@ MODEL_FACTS: tuple[ModelFacts, ...] = (
         price=PriceFacts(5.0, 25.0),
     ),
     ModelFacts(
+        "claude-opus-5.5",
+        max_output_tokens=128_000,
+        context_window=1_000_000,
+        price=PriceFacts(4.0, 20.0, cached_input_per_m=0.2),
+        note=(
+            "Anthropic's published rate, as the Surplus and OpenCAP catalogs list it "
+            "on 2026-09-23. Unlike claude-opus-5 this is not a gateway discount: "
+            "Bankr's catalog needs an API key, so no Bankr rate has been checked."
+        ),
+    ),
+    ModelFacts(
+        "anthropic/claude-opus-5.5",
+        max_output_tokens=128_000,
+        context_window=1_000_000,
+        price=PriceFacts(4.0, 20.0, cached_input_per_m=0.2),
+    ),
+    ModelFacts(
         "claude-opus-4.8",
         max_output_tokens=128_000,
         context_window=1_000_000,
@@ -488,6 +517,18 @@ MODEL_FACTS: tuple[ModelFacts, ...] = (
         max_output_tokens=128_000,
         context_window=1_050_000,
         price=PriceFacts(0.2, 1.25),
+    ),
+    ModelFacts(
+        "gpt-6-luna",
+        max_output_tokens=128_000,
+        context_window=1_050_000,
+        price=PriceFacts(0.1, 0.5, cached_input_per_m=0.01),
+        note=(
+            "Vision-capable upstream; supports_image stays False for the same "
+            "reason as gpt-5.6-luna (see deepseek-v4.1-flash). At 0.10/0.50 it "
+            "is cheaper than the gateways' c0 deepseek-v4.1-flash, so with "
+            "cost_aware on, the gateway profiles route c0 turns to it."
+        ),
     ),
     ModelFacts(
         "gpt-5.6-terra",
