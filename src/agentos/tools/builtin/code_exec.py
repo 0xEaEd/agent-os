@@ -48,7 +48,7 @@ _POWERSHELL_PARAMS: dict[str, bool] = {
     "encodedarguments": True,
     "encodedcommand": True,
     "executionpolicy": True,
-    "file": True,
+    "file": False,
     "help": False,
     "inputformat": True,
     "interactive": False,
@@ -117,7 +117,11 @@ def _flag_group(value_flags: set[str], flag_re: str) -> str:
     A flag outside *value_flags* gets no value: ``bash -c 'git rm x'`` must not
     read ``git`` as the value of ``-c`` and ``rm`` as the command it runs.
     """
-    names = "|".join(re.escape(flag) for flag in sorted(value_flags, key=len, reverse=True))
+    # The patterns using this are case-insensitive, so ``-o`` and ``-O`` must
+    # collapse to one branch: two branches matching the same token double the
+    # backtracking on every repeated flag.
+    unique = sorted({flag.lower() for flag in value_flags}, key=len, reverse=True)
+    names = "|".join(re.escape(flag) for flag in unique)
     value_flag = r"(?:" + names + r")(?![\w-])"
     return r"(?:\s+(?:" + value_flag + _FLAG_VALUE + r"|(?!" + value_flag + r")" + flag_re + r"))"
 

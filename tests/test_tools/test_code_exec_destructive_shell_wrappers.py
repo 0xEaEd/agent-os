@@ -124,6 +124,10 @@ def test_wrapped_delete_commands_are_detected(code: str, expected_keyword: str) 
         'import os; os.system("powershell -NoProfile Write-Host rm")',
         'import os; os.system("pwsh -c Get-Item rd")',
         "import os; os.system(\"bash -o pipefail -c 'ls rm'\")",
+        # ``-File`` must come last: every token after the script path is an
+        # argument to that script, not a command.
+        'import os; os.system("powershell -ExecutionPolicy Bypass -File build.ps1 rm")',
+        _argv("pwsh", "-ep", "Bypass", "-File", "x.ps1", "rm"),
     ],
 )
 def test_wrapped_benign_commands_do_not_trigger(code: str) -> None:
@@ -144,6 +148,17 @@ def test_a_long_run_of_flags_is_checked_in_linear_time(wrapper: str) -> None:
     assert time.perf_counter() - started < 1.0
 
 
+@pytest.mark.parametrize("flags", ["-o x " * 40, "-o " * 30])
+def test_a_long_run_of_shell_value_flags_is_checked_in_linear_time(flags: str) -> None:
+    # The patterns are case-insensitive, so ``-o`` and ``-O`` as separate
+    # alternation branches both matched every ``-o`` and doubled the work per flag.
+    code = f'import os; os.system("bash {flags}ls")'
+
+    started = time.perf_counter()
+    assert _check_code_destructive(code) is None
+    assert time.perf_counter() - started < 1.0
+
+
 @pytest.mark.parametrize(
     ("flag", "takes_value"),
     [
@@ -152,8 +167,9 @@ def test_a_long_run_of_flags_is_checked_in_linear_time(wrapper: str) -> None:
         ("-exec", True),
         ("-ep", True),
         ("-ex", True),
-        ("-File", True),
-        ("-f", True),
+        # Everything after ``-File <script>`` is an argument to the script.
+        ("-File", False),
+        ("-f", False),
         ("-WindowStyle", True),
         ("-w", True),
         ("-EncodedCommand", True),
