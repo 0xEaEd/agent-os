@@ -8,7 +8,9 @@ corrupt and repairs on open -- while the run reported ``{"applied": 1}``.
 
 A malformed range already failed loudly and left nothing written (#1993). An
 overlapping one now fails the same way, before anything is written, with a
-message naming both ranges. The malformed path is pinned unchanged.
+message naming both ranges. The malformed path is pinned unchanged, and so is
+the no-op an *identical* re-merge has always been -- it produces the same
+workbook, so it is not an overlap.
 """
 
 from __future__ import annotations
@@ -68,7 +70,6 @@ def _merge_op(rng: str, sheet: str = "Form") -> dict[str, Any]:
 # Targets that intersect an existing A1:B1 merge, in every way a range can.
 OVERLAPS = [
     pytest.param("B1:C1", id="shares_an_edge_cell"),
-    pytest.param("A1:B1", id="identical"),
     pytest.param("A1:D1", id="encloses"),
     pytest.param("B1", id="single_cell_inside"),
     pytest.param("B1:B3", id="crosses_vertically"),
@@ -202,6 +203,79 @@ def test_a_merge_op_naming_a_missing_sheet_is_still_skipped_not_refused(
     assert rc == 0
     assert json.loads(capsys.readouterr().out) == {"applied": 0}
     assert _merged(out) == ["A1:B1"]
+
+
+# ── an identical range is a no-op, not an overlap ──────────────────────────
+
+
+@pytest.mark.parametrize("rng", ["A1:B1", "a1:b1", "A1:b1"])
+def test_re_merging_the_same_range_is_a_no_op(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], rng: str
+) -> None:
+    """Re-applying an ops file to a workbook that already has the merge is
+    what it has always been: applied, with the workbook unchanged. openpyxl
+    dedupes it and ``CellRange`` equality normalises the spelling."""
+    src = _source(tmp_path, ["A1:B1"])
+
+    rc, out = _edit_cli(monkeypatch, tmp_path, src, [_merge_op(rng)])
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {"applied": 1}
+    assert _merged(out) == ["A1:B1"]
+
+
+def test_the_same_ops_file_can_be_applied_twice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The shape the regression was found in: run, then run again on the
+    output."""
+    src = _source(tmp_path, [])
+    ops = [_merge_op("A1:B1")]
+
+    rc, first = _edit_cli(monkeypatch, tmp_path, src, ops)
+    assert rc == 0
+    capsys.readouterr()
+
+    rc, second = _edit_cli(monkeypatch, tmp_path, first, ops)
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {"applied": 1}
+    assert _merged(second) == ["A1:B1"]
+
+
+def test_a_duplicate_entry_in_one_ops_batch_is_a_no_op(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    src = _source(tmp_path, [])
+
+    rc, out = _edit_cli(monkeypatch, tmp_path, src, [_merge_op("A1:B1"), _merge_op("A1:B1")])
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {"applied": 2}
+    assert _merged(out) == ["A1:B1"]
+
+
+@pytest.mark.parametrize("second", ["A1:B1", "a1:b1"])
+def test_create_accepts_a_duplicate_merged_entry(tmp_path: Path, second: str) -> None:
+    create_xlsx, _ = _scripts()
+    out = tmp_path / "c.xlsx"
+
+    create_xlsx.build({"sheets": [{"name": "Form", "merged": ["A1:B1", second]}]}).save(str(out))
+
+    assert _merged(out) == ["A1:B1"]
+
+
+def test_an_identical_range_does_not_mask_a_real_overlap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Scope guard: the no-op is only for the exact range. A second op that
+    genuinely overlaps is still refused."""
+    src = _source(tmp_path, ["A1:B1"])
+
+    with pytest.raises(ValueError, match=r"B1:C1.*overlaps.*A1:B1"):
+        _edit_cli(monkeypatch, tmp_path, src, [_merge_op("A1:B1"), _merge_op("B1:C1")])
+
+    assert not (tmp_path / "out.xlsx").exists()
 
 
 # ── create_xlsx: the merged spec ────────────────────────────────────────────

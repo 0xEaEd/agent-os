@@ -98,9 +98,17 @@ def _merge_checked(ws: Any, rng: str) -> None:
     fails the same way, naming both ranges so the caller can correct it.
     ``CellRange`` raises the very error ``merge_cells`` would for a malformed
     range, so that path is unchanged.
+
+    An *identical* range is not an overlap: it produces the same workbook,
+    openpyxl already dedupes it, and re-applying an ops file to a workbook
+    that has the merge must stay the no-op it has always been. ``CellRange``
+    equality normalises the spelling, so ``a1:b1`` matches ``A1:B1``.
     """
     target = CellRange(rng)
-    for existing in ws.merged_cells.ranges:
+    existing_ranges = list(ws.merged_cells.ranges)
+    if any(target == existing for existing in existing_ranges):
+        return
+    for existing in existing_ranges:
         if not target.isdisjoint(existing):
             raise ValueError(
                 f"cannot merge {rng} on sheet {ws.title!r}: it overlaps the existing "
