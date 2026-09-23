@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `execute_code`: a delete behind a prefix command no longer skips the approval
+  prompt. `_check_code_destructive` gates the approval flow -- when it returns
+  nothing the tool runs the code without asking -- and `_PREFIX_CMD_PATTERN`
+  missed two cases. It matched only the bare spelling, so `env rm -rf /data` was
+  caught but `/usr/bin/env rm -rf /data` was not, although the shell branch
+  beside it already allows a path (`/bin/bash -c ...` was handled). And `exec`,
+  `command`, `builtin`, `setsid`, `stdbuf`, `ionice`, `chroot` and `busybox`
+  were not modelled at all. All are now recognised, with a test that a long run
+  of prefixes with no delete behind it still cannot backtrack.
 
 - Skills: the non-UTF-8 stdio sweep is finished. 39 bundled scripts still
   wrote through the console code page and died with `UnicodeEncodeError` on
