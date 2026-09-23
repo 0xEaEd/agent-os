@@ -8,16 +8,23 @@ from io import StringIO
 from rich.console import Console
 
 
-def test_router_mode_selector_is_three_way_with_pilot_label():
+def test_router_mode_selector_is_four_way_with_pilot_and_jev_labels():
     from agentos.onboarding import flow
 
     choices = flow._router_mode_choices("openrouter")
 
-    # 3-way: Pilot, LLM-judge, off. The legacy on-device v4 strategy is dropped
-    # from the human-facing selector (it is force-migrated to pilot-v1 on load).
-    assert len(choices) == 3
+    # 4-way: Pilot, LLM-judge, Jev (experimental), off. The legacy on-device v4
+    # strategy is dropped from the human-facing selector (it is force-migrated
+    # to pilot-v1 on load).
+    assert len(choices) == 4
     assert flow._ROUTER_PILOT_LABEL == "Local ML — English-optimized (Pilot)"
-    assert flow._ROUTER_PILOT_LABEL in choices
+    assert flow._ROUTER_JEV_LABEL == "Jev cloud classifier (typesafe.ai, experimental)"
+    assert choices == [
+        flow._ROUTER_PILOT_LABEL,
+        flow._ROUTER_LLM_JUDGE_LABEL,
+        flow._ROUTER_JEV_LABEL,
+        flow._ROUTER_DISABLED_LABEL,
+    ]
     assert "Smart routing (on-device)" not in choices
 
 
@@ -26,18 +33,23 @@ def test_router_mode_to_strategy_maps_pilot_choice():
 
     assert flow._router_mode_to_strategy(flow._ROUTER_PILOT_LABEL) == "pilot-v1"
     assert flow._router_mode_to_strategy(flow._ROUTER_LLM_JUDGE_LABEL) == "llm_judge"
+    assert flow._router_mode_to_strategy(flow._ROUTER_JEV_LABEL) == "jev"
     assert flow._router_mode_to_strategy(flow._ROUTER_DISABLED_LABEL) is None
     # A pilot choice keeps the router enabled (mode="recommended").
     assert flow._router_mode_to_internal(flow._ROUTER_PILOT_LABEL) == "recommended"
+    assert flow._router_mode_to_internal(flow._ROUTER_JEV_LABEL) == "recommended"
+
+
+def test_router_mode_default_selects_jev_for_existing_jev_config():
+    from agentos.onboarding import flow
+
+    assert flow._router_mode_default("openrouter", "jev") == flow._ROUTER_JEV_LABEL
 
 
 def test_router_mode_default_selects_pilot_for_existing_pilot_config():
     from agentos.onboarding import flow
 
-    assert (
-        flow._router_mode_default("openrouter", "pilot-v1")
-        == flow._ROUTER_PILOT_LABEL
-    )
+    assert flow._router_mode_default("openrouter", "pilot-v1") == flow._ROUTER_PILOT_LABEL
 
 
 def test_router_mode_default_maps_legacy_v4_request_to_pilot():
@@ -45,10 +57,7 @@ def test_router_mode_default_maps_legacy_v4_request_to_pilot():
     # to the Pilot label (the strategy it force-migrates to).
     from agentos.onboarding import flow
 
-    assert (
-        flow._router_mode_default("openrouter", "v4_phase3")
-        == flow._ROUTER_PILOT_LABEL
-    )
+    assert flow._router_mode_default("openrouter", "v4_phase3") == flow._ROUTER_PILOT_LABEL
 
 
 def test_wait_for_setup_start_flushes_visible_prompt_before_accepting_enter(monkeypatch):
@@ -368,6 +377,7 @@ def test_interactive_onboard_prompts_router_defaults_before_persist(tmp_path, mo
                 assert kwargs.get("choices") == [
                     "Local ML — English-optimized (Pilot)",
                     "Smart routing (LLM-based)",
+                    "Jev cloud classifier (typesafe.ai, experimental)",
                     "Off",
                 ]
                 assert kwargs.get("default") == "Local ML — English-optimized (Pilot)"
@@ -495,9 +505,7 @@ def test_interactive_onboard_migration_defaults_to_all_sources_and_keeps_importe
         def checkbox(self, message: str, choices, **kwargs):
             calls.append(message)
             assert message == "Select sources to import"
-            assert kwargs.get("instruction") == (
-                "Space select | Enter continue | A toggle all"
-            )
+            assert kwargs.get("instruction") == ("Space select | Enter continue | A toggle all")
             assert [choice.value for choice in choices] == ["openclaw", "hermes"]
             assert [choice.title for choice in choices] == ["OpenClaw", "Hermes Agent"]
             assert [choice.description for choice in choices] == [
@@ -568,9 +576,7 @@ def test_interactive_onboard_migration_defaults_to_all_sources_and_keeps_importe
     assert "api_key" not in data["llm"]
 
 
-def test_interactive_onboard_imported_provider_prefers_inline_key_over_env(
-    tmp_path, monkeypatch
-):
+def test_interactive_onboard_imported_provider_prefers_inline_key_over_env(tmp_path, monkeypatch):
     import sys
     import tomllib
     import types
@@ -1069,9 +1075,7 @@ def test_interactive_onboard_migration_prompts_for_missing_imported_provider_key
                 assert "Use environment variable IMPORTED_OPENROUTER_KEY" in kwargs.get(
                     "choices", []
                 )
-                assert "Use environment variable OPENROUTER_API_KEY" in kwargs.get(
-                    "choices", []
-                )
+                assert "Use environment variable OPENROUTER_API_KEY" in kwargs.get("choices", [])
                 assert kwargs.get("default") == "Paste API key now"
                 return _Answer("Paste API key now")
             if message == "Router mode":
@@ -1147,10 +1151,7 @@ def test_interactive_onboard_can_enable_image_generation(tmp_path, monkeypatch):
                 assert kwargs.get("default") == "openrouter (OpenRouter Images)"
                 return _Answer("openrouter (OpenRouter Images)")
             if message == "Image API key source":
-                assert (
-                    "Use environment variable OPENROUTER_API_KEY"
-                    in kwargs.get("choices", [])
-                )
+                assert "Use environment variable OPENROUTER_API_KEY" in kwargs.get("choices", [])
                 assert "Reuse matching LLM provider key" not in kwargs.get("choices", [])
                 assert kwargs.get("default") == "Use environment variable OPENROUTER_API_KEY"
                 return _Answer("Use environment variable OPENROUTER_API_KEY")
@@ -1191,10 +1192,7 @@ def test_interactive_onboard_can_enable_image_generation(tmp_path, monkeypatch):
     assert calls.index("Enable image generation now?") > calls.index("Configure web search now?")
     data = tomllib.loads(target.read_text())
     assert data["image_generation"]["enabled"] is True
-    assert (
-        data["image_generation"]["primary"]
-        == "openrouter/google/gemini-3.1-flash-image-preview"
-    )
+    assert data["image_generation"]["primary"] == "openrouter/google/gemini-3.1-flash-image-preview"
 
 
 def test_onboard_if_needed_core_ready_repairs_memory_embedding_without_provider_setup(
@@ -1234,10 +1232,9 @@ def test_onboard_if_needed_core_ready_repairs_memory_embedding_without_provider_
     monkeypatch.setattr(
         flow,
         "setup_cockpit_panel",
-        lambda *, title, subtitle, steps, config_path=None: banner_calls.append(
-            (title, subtitle)
-        )
-        or title,
+        lambda *, title, subtitle, steps, config_path=None: (
+            banner_calls.append((title, subtitle)) or title
+        ),
     )
 
     class _Answer:
@@ -1288,8 +1285,7 @@ def test_onboard_if_needed_core_ready_repairs_memory_embedding_without_provider_
     assert banner_calls == [
         (
             "Onboarding cockpit",
-            "Build a usable agent runtime: model routing first, "
-            "channels and tools next.",
+            "Build a usable agent runtime: model routing first, channels and tools next.",
         )
     ]
     data = tomllib.loads(target.read_text())
@@ -2129,9 +2125,7 @@ def test_interactive_configure_provider_receives_explicit_config_path(
     assert seen["config_path"] == target
 
 
-def test_interactive_configure_without_tty_does_not_create_config(
-    tmp_path, monkeypatch, capsys
-):
+def test_interactive_configure_without_tty_does_not_create_config(tmp_path, monkeypatch, capsys):
     target = tmp_path / "c.toml"
     monkeypatch.setenv("AGENTOS_GATEWAY_CONFIG_PATH", str(target))
     from agentos.onboarding import flow
@@ -2181,3 +2175,312 @@ def test_interactive_router_configure_persists_local_judge_endpoint(tmp_path, mo
     assert router.judge_model == "llama3"
     assert router.judge_base_url == "http://localhost:11434/v1"
     assert router.judge_api_key == "sk-local"
+
+
+# --- Jev cloud classifier prompts ------------------------------------------
+
+
+class _JevAnswer:
+    def __init__(self, value):
+        self.value = value
+
+    def ask(self):
+        return self.value
+
+
+class _JevQuestionary:
+    """Scripted questionary: ``passwords`` and ``confirms`` are consumed in order."""
+
+    def __init__(self, passwords: list[str], confirms: list[bool] | None = None):
+        self._passwords = list(passwords)
+        self._confirms = list(confirms or [])
+        self.password_prompts: list[str] = []
+        self.confirm_prompts: list[str] = []
+
+    def password(self, message: str, **_kwargs):
+        self.password_prompts.append(message)
+        return _JevAnswer(self._passwords.pop(0))
+
+    def confirm(self, message: str, **_kwargs):
+        self.confirm_prompts.append(message)
+        return _JevAnswer(self._confirms.pop(0))
+
+    def text(self, message: str, **_kwargs):
+        raise AssertionError(f"unexpected text prompt: {message}")
+
+    def select(self, message: str, **_kwargs):
+        raise AssertionError(f"unexpected select prompt: {message}")
+
+
+def _jev_console(monkeypatch):
+    from agentos.onboarding import flow
+
+    buf = StringIO()
+    monkeypatch.setattr(flow, "console", Console(file=buf, width=200, force_terminal=False))
+    return buf
+
+
+def _jev_probe(monkeypatch, results):
+    import agentos.agentos_router.jev as jev_mod
+
+    calls: list[dict[str, object]] = []
+    queue = list(results)
+
+    def _fake_probe(api_key, **kwargs):
+        calls.append({"api_key": api_key, **kwargs})
+        return queue.pop(0)
+
+    monkeypatch.setattr(jev_mod, "probe_jev", _fake_probe)
+    return calls
+
+
+def test_ask_router_jev_prints_consent_and_env_state_then_probes_the_entered_key(
+    monkeypatch,
+):
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    buf = _jev_console(monkeypatch)
+    calls = _jev_probe(monkeypatch, [None])
+    cfg = GatewayConfig(
+        llm={"provider": "openrouter", "model": "deepseek/x"},
+        agentos_router={"jev": {"base_url": "https://jev.example.test", "model": "jev-x"}},
+    )
+    q = _JevQuestionary(passwords=["tsk-entered"])
+
+    fields = flow._ask_router_jev(q, cfg)
+
+    assert fields == {"jevApiKey": "tsk-entered"}
+    assert calls == [
+        {"api_key": "tsk-entered", "base_url": "https://jev.example.test", "model": "jev-x"}
+    ]
+    out = buf.getvalue()
+    assert "Experimental. Sends the current turn text to typesafe.ai." in out
+    assert "TYPESAFE_API_KEY" in out
+    assert "not set" in out
+    assert "tsk-entered" not in out
+    assert q.confirm_prompts == []
+
+
+def test_ask_router_jev_blank_key_uses_the_environment_key(monkeypatch):
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "tsk-from-env")
+    buf = _jev_console(monkeypatch)
+    calls = _jev_probe(monkeypatch, [None])
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+    q = _JevQuestionary(passwords=[""])
+
+    fields = flow._ask_router_jev(q, cfg)
+
+    # None = "use the env var" (nothing persisted); the env key is still probed.
+    assert fields == {"jevApiKey": None}
+    assert [c["api_key"] for c in calls] == ["tsk-from-env"]
+    out = buf.getvalue()
+    assert "TYPESAFE_API_KEY" in out
+    assert "tsk-from-env" not in out
+
+
+def test_ask_router_jev_honours_a_custom_api_key_env(monkeypatch):
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("MY_TYPESAFE_KEY", "tsk-custom-env")
+    buf = _jev_console(monkeypatch)
+    calls = _jev_probe(monkeypatch, [None])
+    cfg = GatewayConfig(
+        llm={"provider": "openrouter", "model": "deepseek/x"},
+        agentos_router={"jev": {"api_key_env": "MY_TYPESAFE_KEY"}},
+    )
+
+    fields = flow._ask_router_jev(_JevQuestionary(passwords=[""]), cfg)
+
+    assert fields == {"jevApiKey": None}
+    assert [c["api_key"] for c in calls] == ["tsk-custom-env"]
+    assert "MY_TYPESAFE_KEY" in buf.getvalue()
+
+
+def test_ask_router_jev_blank_key_without_env_skips_the_probe(monkeypatch):
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    buf = _jev_console(monkeypatch)
+    calls = _jev_probe(monkeypatch, [])
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+
+    fields = flow._ask_router_jev(_JevQuestionary(passwords=[""]), cfg)
+
+    assert fields == {"jevApiKey": None}
+    assert calls == []
+    assert "TYPESAFE_API_KEY" in buf.getvalue()
+
+
+def test_ask_router_jev_retries_after_a_failed_probe(monkeypatch):
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    buf = _jev_console(monkeypatch)
+    calls = _jev_probe(monkeypatch, ["HTTP 401: invalid api key", None])
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+    q = _JevQuestionary(passwords=["tsk-bad", "tsk-good"], confirms=[True])
+
+    fields = flow._ask_router_jev(q, cfg)
+
+    assert fields == {"jevApiKey": "tsk-good"}
+    assert [c["api_key"] for c in calls] == ["tsk-bad", "tsk-good"]
+    out = buf.getvalue()
+    assert "HTTP 401: invalid api key" in out
+    assert "tsk-bad" not in out
+    assert len(q.confirm_prompts) == 1
+
+
+def test_ask_router_jev_can_keep_a_failing_key_anyway(monkeypatch):
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    _jev_console(monkeypatch)
+    _jev_probe(monkeypatch, ["connection refused"])
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+    # no retry, but continue anyway
+    q = _JevQuestionary(passwords=["tsk-offline"], confirms=[False, True])
+
+    fields = flow._ask_router_jev(q, cfg)
+
+    assert fields == {"jevApiKey": "tsk-offline"}
+
+
+def test_ask_router_jev_falls_back_to_pilot_when_the_operator_gives_up(monkeypatch):
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    buf = _jev_console(monkeypatch)
+    _jev_probe(monkeypatch, ["connection refused"])
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+    q = _JevQuestionary(passwords=["tsk-offline"], confirms=[False, False])
+
+    fields = flow._ask_router_jev(q, cfg)
+
+    # The fragment overrides the strategy in _ask_router_fields' payload, and
+    # carries no key: nothing unverified is persisted.
+    assert fields == {"strategy": "pilot-v1"}
+    assert "pilot" in buf.getvalue().lower()
+
+
+def test_ask_router_fields_asks_jev_only_for_the_jev_choice(monkeypatch):
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+
+    jev_calls: list[object] = []
+    monkeypatch.setattr(
+        flow,
+        "_ask_router_jev",
+        lambda questionary, config: jev_calls.append(config) or {"jevApiKey": "tsk-1"},
+    )
+    monkeypatch.setattr(
+        flow,
+        "_ask_router_judge",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("judge prompt ran")),
+    )
+    _jev_console(monkeypatch)
+    cfg = GatewayConfig(llm={"provider": "openrouter", "model": "deepseek/x"})
+
+    class _Q:
+        def select(self, message: str, **_kwargs):
+            if message == "Router mode":
+                return _JevAnswer(flow._ROUTER_JEV_LABEL)
+            if message == "Default text model":
+                return _JevAnswer(flow._TEXT_TIER_LABELS["c1"])
+            raise AssertionError(f"unexpected select prompt: {message}")
+
+        def confirm(self, message: str, **_kwargs):
+            assert message == "Edit router tier models now?"
+            return _JevAnswer(False)
+
+    payload = flow._ask_router_fields(
+        _Q(), cfg, provider_id="openrouter", requested_mode="recommended"
+    )
+
+    assert payload == {
+        "mode": "recommended",
+        "strategy": "jev",
+        "defaultTier": "c1",
+        "jevApiKey": "tsk-1",
+    }
+    assert len(jev_calls) == 1
+    assert getattr(jev_calls[0].agentos_router, "strategy", None) == "jev"
+
+
+def test_interactive_router_configure_persists_jev_key_and_reads_back_jev(tmp_path, monkeypatch):
+    """run_interactive_router_configure must (a) preselect Jev when the persisted
+    strategy is jev and (b) forward jevApiKey from the collected payload."""
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+    from agentos.onboarding.config_store import load_config, persist_config
+
+    target = tmp_path / "c.toml"
+    monkeypatch.setenv("AGENTOS_GATEWAY_CONFIG_PATH", str(target))
+    monkeypatch.setattr(flow, "_is_tty", lambda: True)
+    persist_config(
+        GatewayConfig(
+            llm={"provider": "openrouter", "model": "deepseek/x"},
+            agentos_router={"strategy": "jev"},
+        ),
+        path=str(target),
+        restart_required=False,
+    )
+    seen: dict[str, str] = {}
+
+    def _fake_ask_router_fields(questionary, config, *, provider_id, requested_mode):
+        seen["requested_mode"] = requested_mode
+        return {
+            "mode": "recommended",
+            "strategy": "jev",
+            "defaultTier": "c1",
+            "jevApiKey": "tsk-cli",
+        }
+
+    monkeypatch.setattr(flow, "_ask_router_fields", _fake_ask_router_fields)
+
+    result = flow.run_interactive_router_configure(config_path=str(target))
+    assert result is not None
+
+    assert seen["requested_mode"] == "jev"
+    router = load_config(str(target)).agentos_router
+    assert router.strategy == "jev"
+    assert router.jev.api_key == "tsk-cli"
+
+
+def test_imported_provider_router_defaults_forward_strategy_and_jev_key(monkeypatch):
+    """The onboard-flow router sites must forward the selected ``strategy`` and
+    ``jevApiKey`` from the collected payload, not only the judge fields —
+    otherwise picking Jev (or the LLM judge) in ``agentos onboard`` persists
+    the credentials while the strategy silently stays pilot-v1."""
+    from agentos.gateway.config import GatewayConfig
+    from agentos.onboarding import flow
+
+    def _fake_ask_router_fields(questionary, config, *, provider_id, requested_mode):
+        return {
+            "mode": "recommended",
+            "strategy": "jev",
+            "defaultTier": "c1",
+            "jevApiKey": "tsk-onboard",
+        }
+
+    monkeypatch.setattr(flow, "_ask_router_fields", _fake_ask_router_fields)
+    cfg = GatewayConfig(
+        llm={"provider": "deepseek", "model": "deepseek-chat", "api_key_env": "DEEPSEEK_API_KEY"}
+    )
+
+    out = flow._use_imported_provider_credentials_with_router_defaults(
+        object(), cfg, requested_mode="recommended"
+    )
+
+    assert out.agentos_router.strategy == "jev"
+    assert out.agentos_router.jev.api_key == "tsk-onboard"

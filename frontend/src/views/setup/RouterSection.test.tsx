@@ -161,6 +161,89 @@ describe('RouterSection', () => {
   })
 })
 
+// ── Jev cloud classifier mode ───────────────────────────────────────────────
+
+describe('RouterSection jev mode', () => {
+  const tiers = { c0: { provider: 'openai', model: 'gpt-4o-mini' } }
+
+  it('selecting jev shows the key, consent hint and threshold; hides judge/pilot fields', () => {
+    renderSection(catalogWithTiers(tiers))
+    // Pilot is the persisted strategy: its threshold is visible, jev is not.
+    expect(screen.getByLabelText('Pilot safety-net threshold')).toBeInTheDocument()
+    expect(screen.queryByLabelText('TypeSafe API key')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Router mode'), { target: { value: 'jev' } })
+
+    const key = screen.getByLabelText('TypeSafe API key')
+    expect(key).toHaveAttribute('type', 'password')
+    expect(key).toHaveAttribute('autocomplete', 'off')
+    expect(key).toHaveAttribute('placeholder', expect.stringContaining('TYPESAFE_API_KEY'))
+    expect(screen.getByText(/Sends the current turn text to typesafe\.ai/)).toBeInTheDocument()
+    const threshold = screen.getByLabelText('High-risk floor threshold')
+    expect(threshold).toHaveValue(0.7)
+    expect(threshold).toHaveAttribute('min', '0')
+    expect(threshold).toHaveAttribute('max', '1')
+    expect(threshold).toHaveAttribute('step', '0.05')
+    expect(screen.queryByLabelText('Pilot safety-net threshold')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Judge model')).not.toBeInTheDocument()
+  })
+
+  it('saving jev sends the strategy, key and threshold', () => {
+    const onSave = vi.fn()
+    renderSection(catalogWithTiers(tiers), onSave)
+    fireEvent.change(screen.getByLabelText('Router mode'), { target: { value: 'jev' } })
+    fireEvent.change(screen.getByLabelText('TypeSafe API key'), { target: { value: 'k' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Router' }))
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'recommended',
+        strategy: 'jev',
+        jevApiKey: 'k',
+        jevHighRiskThreshold: 0.7,
+      }),
+    )
+    expect(onSave.mock.calls[0]?.[0]?.safetyNetThreshold).toBeUndefined()
+  })
+
+  it('a blank key is sent as null so the persisted / env key is preserved', () => {
+    const onSave = vi.fn()
+    renderSection(catalogWithTiers(tiers), onSave)
+    fireEvent.change(screen.getByLabelText('Router mode'), { target: { value: 'jev' } })
+    fireEvent.change(screen.getByLabelText('High-risk floor threshold'), {
+      target: { value: '0.85' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Router' }))
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ strategy: 'jev', jevApiKey: null, jevHighRiskThreshold: 0.85 }),
+    )
+  })
+
+  it('seeds the threshold from the persisted agentos_router.jev config', () => {
+    const props = {
+      catalog: catalogWithTiers(tiers),
+      status: STATUS,
+      config: {
+        ...CONFIG,
+        agentos_router: { enabled: true, strategy: 'jev', jev: { high_risk_threshold: 0.9 } },
+      },
+      onSave: vi.fn(),
+      onBack: vi.fn(),
+      onNext: vi.fn(),
+      saving: false,
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <RouterSection {...props} />
+      </QueryClientProvider>,
+    )
+    expect(screen.getByLabelText('Router mode')).toHaveValue('jev')
+    expect(screen.getByLabelText('High-risk floor threshold')).toHaveValue(0.9)
+  })
+})
+
 // ── tier model pickers (#142) ───────────────────────────────────────────────
 
 describe('RouterSection tier model pickers', () => {
