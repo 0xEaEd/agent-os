@@ -216,6 +216,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `***bold italic***`) no longer leaks its asterisks into the rendered
   `<b>…</b>`; the label path strips single-asterisk italics the way it already
   stripped `_italic_` (#2964)
+- Channels (Telegram): a backslash-escaped Markdown character was printed to
+  the reader *and* the formatting it was meant to suppress was applied anyway.
+  `_render_inline` ran its emphasis passes as plain regex substitutions over
+  the escaped text, with no notion of a preceding backslash, and
+  `_replace_code_spans` treated a backslash-escaped backtick as a delimiter --
+  so `\*not italic\*` reached the reader as `\<i>not italic\</i>` and a
+  backslash-escaped backtick pair opened a real `<code>` span. The table
+  label strip had the same defect with a different outcome: `\*x\*` in a
+  header or row label came out as `\x\`. CommonMark consumes the backslash
+  and makes the character literal: the code-span scan now skips an escaped
+  backtick as an opener, and inline escapes are parked before the URL and
+  emphasis passes and before the label strip, restored afterwards as the
+  bare character (HTML-escaped on the way out).
 
 ## [2026.9.22.post1] - 2026-09-22
 
