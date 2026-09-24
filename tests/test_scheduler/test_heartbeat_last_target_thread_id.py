@@ -55,11 +55,15 @@ class _UnthreadedSessionStorage:
 
 
 def _service(storage: Any, adapter: _FakeAdapter, channel_type: str) -> HeartbeatService:
+    return _multi_channel_service(storage, {channel_type: adapter})
+
+
+def _multi_channel_service(storage: Any, adapters: dict[str, _FakeAdapter]) -> HeartbeatService:
     manager = ChannelManager(
-        _channels={channel_type: adapter},  # type: ignore[dict-item]
+        _channels=adapters,  # type: ignore[arg-type]
         _turn_runner=None,
         _session_manager=None,
-        _channel_types={channel_type: channel_type},
+        _channel_types={name: name for name in adapters},
     )
     return HeartbeatService(
         turn_runner=_FakeTurnRunner(),
@@ -117,3 +121,46 @@ async def test_an_explicit_thread_override_still_wins() -> None:
 
     assert result.status == "delivered"
     assert adapter.messages[0].reply_to == "999"
+
+
+async def test_a_redirected_chat_does_not_inherit_the_inferred_thread() -> None:
+    """``heartbeat.to`` (and cron's ``_delivery_override_from_fields``) builds
+    a ``channel_id`` override: the recipient is no longer the conversation
+    ``last_thread_id`` belongs to, so topic 42 must not follow it."""
+    adapter = _FakeAdapter()
+    service = _service(_ThreadedSessionStorage(), adapter, "telegram")
+
+    result = await service.run_once(
+        reason="heartbeat:loop",
+        agent_id="main",
+        session_key="agent:main:main",
+        prompt="ping",
+        target="last",
+        delivery_override={"channel_id": "-100999", "mode": "channel"},
+    )
+
+    assert result.status == "delivered"
+    assert adapter.messages[0].reply_to == "-100999"
+    assert adapter.messages[0].metadata == {}
+
+
+async def test_a_redirected_channel_does_not_inherit_the_inferred_thread() -> None:
+    """A Telegram topic id must never be passed to Slack as a ``thread_ts``."""
+    telegram, slack = _FakeAdapter(), _FakeAdapter()
+    service = _multi_channel_service(
+        _ThreadedSessionStorage(), {"telegram": telegram, "slack": slack}
+    )
+
+    result = await service.run_once(
+        reason="heartbeat:loop",
+        agent_id="main",
+        session_key="agent:main:main",
+        prompt="ping",
+        target="last",
+        delivery_override={"channel_name": "slack", "channel_id": "C999", "mode": "channel"},
+    )
+
+    assert result.status == "delivered"
+    assert telegram.messages == []
+    assert slack.messages[0].reply_to == "cron"
+    assert slack.messages[0].metadata == {"thread_ts": None, "channel": "C999"}
