@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `apply_patch`: the reason a patch was refused now reaches the model — the
+  missing marker, the offending line, the bad hunk header, the path outside the
+  workspace, the mismatched context — instead of "The tool received an invalid
+  argument". A context mismatch, which quotes a line of the target file, is
+  masked the way `read_file` output is (#2977)
 - `musebook` skill: `keygen --save` refuses to run when the identity file
   already holds a secret, since replacing it in place would lose that muse
   for good with no recovery. `--force` now offers a supported way to
