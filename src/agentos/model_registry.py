@@ -189,7 +189,15 @@ MODEL_FACTS: tuple[ModelFacts, ...] = (
         "deepseek/deepseek-v4-flash",
         max_output_tokens=16_384,
         context_window=1_048_576,
-        price=PriceFacts(0.14, 0.28),
+        price=PriceFacts(0.14, 0.28, beats_live_catalog=True),
+        note=(
+            "Pinned to DeepSeek's rate like deepseek/deepseek-v4-pro. OpenRouter "
+            "often lists no deepseek-owned endpoint for this id, so the live "
+            "lookup falls back to whichever reseller is listed first -- 0.54 on "
+            "one fetch, 1.10 on the next. It is the OpenRouter c0, and the "
+            "cost-aware router compares it against c1 openai/gpt-6-luna (0.60), "
+            "so an unpinned price flipped c0 turns to c1 at random."
+        ),
     ),
     ModelFacts(
         "deepseek/deepseek-v4-pro",

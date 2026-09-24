@@ -16,6 +16,7 @@ from agentos.gateway.access import (
 )
 
 if TYPE_CHECKING:
+    from agentos.gateway.agent_surface import AgentBinding
     from agentos.gateway.config import GatewayConfig
 
 log = structlog.get_logger(__name__)
@@ -33,6 +34,10 @@ class AccessContext:
     surface: ConnectionSurface
     admitted: bool
     credential_verified: bool
+    # Set at admission when the connection is an agent's (see
+    # ``gateway.agent_surface``). Read by handlers whose answer depends on
+    # who is asking — the trading guardrails — never by admission itself.
+    agent: AgentBinding | None = None
 
 
 def denied_access(surface: ConnectionSurface = ConnectionSurface.CONTROL) -> AccessContext:
