@@ -63,6 +63,23 @@ describe('handshake', () => {
     expect(req.params.auth).toEqual({ token: 'tok-1' })
   })
 
+  it('merges extra auth (the desktop operator secret) into the handshake', () => {
+    const client = new WsRpcClient({ WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket })
+    client.connect('ws://test/ws', 'tok-1', { operatorSecret: 'op-secret' })
+    const ws = FakeWebSocket.instances.at(-1)!
+    ws.serverOpen()
+    ws.serverSend({ type: 'event', event: 'connect.challenge' })
+    const req = JSON.parse(ws.sent.at(-1)!)
+    expect(req.params.auth).toEqual({ token: 'tok-1', operatorSecret: 'op-secret' })
+    // Without a token the extra auth still goes; with nothing at all, no auth key.
+    const bare = new WsRpcClient({ WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket })
+    bare.connect('ws://test/ws', null, {})
+    const ws2 = FakeWebSocket.instances.at(-1)!
+    ws2.serverOpen()
+    ws2.serverSend({ type: 'event', event: 'connect.challenge' })
+    expect(JSON.parse(ws2.sent.at(-1)!).params.auth).toBeUndefined()
+  })
+
   it('enters connected state and stores policy on HelloOk', () => {
     const { client, ws } = newClient()
     handshake(ws)

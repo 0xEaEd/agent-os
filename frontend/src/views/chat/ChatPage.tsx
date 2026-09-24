@@ -3,7 +3,7 @@ import './chat-unified.css'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { SquarePen, Terminal, X } from 'lucide-react'
+import { ArrowDown, SquarePen, Terminal, X } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import { useRpc } from '@/app/providers'
 import { ShellHeaderPortal, ShellPrimaryActionPortal } from '@/app/ShellHeaderSlot'
@@ -248,6 +248,8 @@ export function ChatPage() {
     setRouterFxEnabled,
     history,
     runState,
+    pinnedToTail,
+    scrollToTail,
     isCompactInFlightForCurrentSession,
     setStreamIdlePausedForApproval,
     setPendingDelegates,
@@ -771,6 +773,20 @@ export function ChatPage() {
       <div className="chat-history-loading" role="status" aria-live="polite">
         <span className="chat-history-loading__dot" aria-hidden="true" />
         <span>{t('chat.opening')}</span>
+      </div>
+      {/* Zero-height dock at the thread/composer seam: the button floats over the
+          tail of the transcript without ever taking layout space from it. */}
+      <div className="chat-jump-dock" data-visible={pinnedToTail ? 'false' : 'true'}>
+        <button
+          type="button"
+          className="chat-jump-to-latest"
+          tabIndex={pinnedToTail ? -1 : 0}
+          onClick={scrollToTail}
+          title={t('chat.jumpToLatest')}
+        >
+          <ArrowDown className="size-3.5" strokeWidth={2} aria-hidden />
+          <span>{t('chat.jumpToLatest')}</span>
+        </button>
       </div>
       <PendingQueue queue={pending.queue} onRemove={pending.remove} onClearAll={pending.clearAll} />
       <Composer

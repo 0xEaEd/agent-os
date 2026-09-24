@@ -103,6 +103,46 @@ def test_intent_summary_is_redacted_and_persisted(tmp_path) -> None:
     assert loaded[0].intent_summary == summary
 
 
+def test_intent_summary_redacts_a_windows_user_path() -> None:
+    """_ABS_PATH_RE only ever covered POSIX (/home, /Users, /root): a Windows
+    user's pasted file path -- machine-local, carrying their username --
+    passed through completely unredacted."""
+    backslash = build_intent_summary(
+        r"Can you read C:\Users\JaneDoe\Documents\secret-project\notes.txt please"
+    )
+    forward_slash = build_intent_summary("C:/Users/Bob/project/main.py has a bug")
+
+    assert "JaneDoe" not in backslash
+    assert "secret-project" not in backslash
+    assert "[path:notes.txt]" in backslash
+
+    assert "Bob" not in forward_slash
+    assert "C:" not in forward_slash
+    assert "[path:main.py]" in forward_slash
+
+
+def test_intent_summary_redacts_a_long_path_as_a_path_not_a_generic_secret() -> None:
+    """A path long enough (most real ones, once a couple of directories deep)
+    used to be caught by the generic long-secret catch-all before the
+    dedicated path redaction ever ran, producing a stray unredacted prefix
+    and suffix around "[secret]" instead of "[path:basename]"."""
+    summary = build_intent_summary(
+        "Can you read /home/janedoe/secret-project/notes.txt and summarize it?"
+    )
+
+    assert summary == "Can you read [path:notes.txt] and summarize it?"
+    assert "janedoe" not in summary
+    assert "secret-project" not in summary
+
+
+def test_intent_summary_leaves_a_non_home_absolute_path_visible() -> None:
+    """The redaction is deliberately scoped to home-directory-shaped paths,
+    not every absolute path -- proves the fix didn't widen that scope."""
+    summary = build_intent_summary("/etc/hosts is fine to mention")
+
+    assert summary == "/etc/hosts is fine to mention"
+
+
 def test_decision_log_round_trips_daily_notes_policy(tmp_path) -> None:
     entry = DecisionEntry(
         turn_id="turn-daily",
