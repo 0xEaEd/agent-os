@@ -12,6 +12,7 @@ import { createCardsMounter, type CardsMounter } from './transcript/cards'
 import { createChartMounter, type ChartMounter } from './transcript/chart'
 import {
   createStreamController,
+  JUMP_TO_TAIL_GAP_PX,
   type StreamController,
   type TranscriptHeaderStateRef,
 } from './transcript/stream'
@@ -258,6 +259,13 @@ export function useTranscript(opts: {
   history: string[]
   /** Current session run state rendered by the header chip. */
   runState: RunStatusResult
+  /**
+   * False once the reader has scrolled more than `JUMP_TO_TAIL_GAP_PX` above the
+   * newest row — the view renders its "jump to latest" affordance on this.
+   */
+  pinnedToTail: boolean
+  /** Return to the newest row AND re-arm tail following. */
+  scrollToTail: () => void
   /**
    * True while a compaction is in flight for the CURRENT session (chat.js:8660
    * `_isCompactInFlightForCurrentSession`). ChatPage reads it for the
@@ -659,17 +667,98 @@ export function useTranscript(opts: {
     opts.openModal,
   ])
 
+  /* ── tail state (drives the "jump to latest" affordance) ────────────────── */
+
+  // React-facing mirror of "the reader can see the newest row". The controller
+  // keeps the authoritative auto-follow flag; this only decides whether the
+  // view offers a way back down, so it uses the wider `JUMP_TO_TAIL_GAP_PX`.
+  const [pinnedToTail, setPinnedToTail] = useState(true)
+  const syncPinnedToTail = useCallback(() => {
+    const th = containerRef.current
+    if (!th) return
+    const gap = th.scrollHeight - th.scrollTop - th.clientHeight
+    setPinnedToTail(gap <= JUMP_TO_TAIL_GAP_PX)
+  }, [])
+
+  /**
+   * Jump back to the newest row and resume following.
+   *
+   * Re-arming auto-follow is the point: landing at the bottom without it meant
+   * the very next streaming delta could scroll past and strand the reader again.
+   */
+  const scrollToTail = useCallback(() => {
+    controller.resetAutoScroll()
+    controller.scrollToBottom()
+    syncPinnedToTail()
+  }, [controller, syncPinnedToTail])
+
   // chat.js:2575-2579 — streaming follows the tail only while the reader is
   // already near it. Passive scroll tracking lets a manual upward scroll pause
   // auto-follow until the reader returns within the legacy 60px threshold.
   useEffect(() => {
     const thread = containerRef.current
     if (!thread) return
-    const onScroll = () => controller.updateAutoScrollFromThread()
+    const onScroll = () => {
+      controller.updateAutoScrollFromThread()
+      syncPinnedToTail()
+    }
     thread.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
     return () => thread.removeEventListener('scroll', onScroll)
-  }, [controller])
+  }, [controller, syncPinnedToTail])
+
+  // Tail following used to be driven ONLY by the render seams that append rows
+  // (`scrollToBottom` after a delta / a tool card / a history rebuild). Anything
+  // that changed the transcript's height WITHOUT going through one of those
+  // seams left the reader stranded above the bottom with no way back but a
+  // manual drag, because a height change fires no scroll event:
+  //
+  //   - a <details> tool/thinking row expanding or collapsing (the turn-end
+  //     `collapseLiveThinkingBlock` does exactly this, AFTER the last delta),
+  //   - images / charts / cards that mount or decode a frame later,
+  //   - late syntax highlighting and web-font swaps reflowing a code block,
+  //   - a window resize narrowing the column so every row rewraps taller.
+  //
+  // A mutation + resize watcher closes that gap: while the reader is pinned, any
+  // height change re-pins on the next frame. It is a no-op whenever auto-follow
+  // is paused, so it never fights a reader who scrolled up.
+  useEffect(() => {
+    const thread = containerRef.current
+    if (!thread) return
+    let frame = 0
+    const repin = () => {
+      frame = 0
+      if (controller.isAutoScrollEnabled()) controller.scrollToBottom()
+      syncPinnedToTail()
+    }
+    const schedule = () => {
+      if (frame) return
+      frame = requestAnimationFrame(repin)
+    }
+    const mutations = new MutationObserver(schedule)
+    mutations.observe(thread, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      // `open` is the <details> toggle; `style`/`class` cover collapse
+      // animations and the height-bearing state classes on tool cards.
+      attributeFilter: ['open', 'style', 'class'],
+    })
+    // Images finish decoding without mutating the DOM, so they need the capture
+    // -phase load event (which does not bubble) on top of the mutation watch.
+    thread.addEventListener('load', schedule, true)
+    // The viewport half: narrowing the column rewraps every row taller without
+    // touching the DOM. Feature-detected — jsdom has no ResizeObserver, and the
+    // mutation watch above already covers everything tests exercise.
+    const resize = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null
+    resize?.observe(thread)
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      mutations.disconnect()
+      resize?.disconnect()
+      thread.removeEventListener('load', schedule, true)
+    }
+  }, [controller, syncPinnedToTail])
 
   // chat.js:916-932 `_bindHoverActions` — anchor artifact targets keep native
   // download behavior; any non-anchor target delegates to the authenticated
@@ -1076,8 +1165,14 @@ export function useTranscript(opts: {
     const th = containerRef.current
     historySettledSessionRef.current = ''
     subscriptionSettledSessionRef.current = ''
+    // Tail following is controller state that outlives the session switch. A
+    // stale `false` (the reader had scrolled up in the previous session) would
+    // suppress the reveal-time pin below AND make the history renderer take its
+    // `preserveScroll` branch, restoring the PREVIOUS session's offset into a
+    // freshly built transcript. Every session opens at its tail.
+    controller.resetAutoScroll()
     if (th) th.dataset.historyReady = 'false'
-  }, [opts.sessionKey])
+  }, [controller, opts.sessionKey])
 
   // A session swap clears the abort/stop flags so a prior session's pending stop
   // can't gate the new session's drain (legacy resets these on the session
@@ -2031,6 +2126,8 @@ export function useTranscript(opts: {
     setRouterFxEnabled,
     history,
     runState,
+    pinnedToTail,
+    scrollToTail,
     isCompactInFlightForCurrentSession,
     setStreamIdlePausedForApproval,
     setPendingDelegates,

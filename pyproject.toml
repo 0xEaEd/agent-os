@@ -1,6 +1,6 @@
 [project]
 name = "use-agent-os"
-version = "2026.9.22.post1"
+version = "2026.9.24"
 description = "Local-first agentic trading AI agent with on-device Pilot Router"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
@@ -81,6 +81,7 @@ dependencies = [
     "pypdf>=4.0.0,<7.0",
     "reportlab>=4.0.0,<5.0",
     "python-telegram-bot>=20.0,<23.0",
+    "eth-account>=0.13,<0.14",
 ]
 
 [project.urls]

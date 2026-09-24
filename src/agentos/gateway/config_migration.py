@@ -95,9 +95,9 @@ LEGACY_GATEWAY_MODEL_IDS: dict[str, str] = {
     "virtuals/minimax-m3": "minimax-m3",
     "virtuals/deepseek-v4-flash": "deepseek-v4-flash",
     "virtuals/qwen3.7-max": "qwen3.7-max",
-    "virtuals/claude-opus-4.8": "claude-opus-5",
+    "virtuals/claude-opus-4.8": "claude-opus-5.5",
     "virtuals/kimi-k2.6": "minimax-m3",
-    "claude-opus-4.8": "claude-opus-5",
+    "claude-opus-4.8": "claude-opus-5.5",
 }
 
 # Prior OpenRouter tier defaults, mapped to the defaults that replaced them.
@@ -106,9 +106,9 @@ LEGACY_GATEWAY_MODEL_IDS: dict[str, str] = {
 # "virtuals/kimi-k2.6" got when minimax-m3 replaced it as the gateway default.
 LEGACY_OPENROUTER_MODEL_IDS: dict[str, str] = {
     "deepseek/deepseek-v4-pro": "minimax/minimax-m3",
-    "z-ai/glm-5.1": "z-ai/glm-5.2",
-    "anthropic/claude-opus-4.7": "anthropic/claude-opus-5",
-    "anthropic/claude-opus-4.8": "anthropic/claude-opus-5",
+    "z-ai/glm-5.1": "z-ai/glm-5.3",
+    "anthropic/claude-opus-4.7": "anthropic/claude-opus-5.5",
+    "anthropic/claude-opus-4.8": "anthropic/claude-opus-5.5",
     "moonshotai/kimi-k2.6": "minimax/minimax-m3",
 }
 
@@ -117,7 +117,21 @@ LEGACY_OPENROUTER_MODEL_IDS: dict[str, str] = {
 #: the end of :func:`migrate_config_payload`.
 LEGACY_MAX_SKILLS_PROMPT_CHARS = 8000
 
+#: Every default the budget has ever been materialised as, the current one
+#: included. A config carrying one of these was written by us, not chosen by an
+#: operator, so it follows the default when the default moves; any other value
+#: is left alone. Add the old value here whenever the default is raised.
+STALE_MAX_SKILLS_PROMPT_CHARS: frozenset[int] = frozenset(
+    {LEGACY_MAX_SKILLS_PROMPT_CHARS, 24000, 26000, 28000}
+)
+
 OPENROUTER_PROVIDER_ID = "openrouter"
+
+#: ``agentos.trading.providers.DEFAULT_PROVIDER_ID``, repeated rather than
+#: imported: config migration runs at boot, before the trading package (and
+#: its HTTP stack) has any reason to be loaded. ``test_trading_migration``
+#: asserts the two stay equal.
+DEFAULT_SWAP_PROVIDER = "aggregator"
 
 GATEWAY_PROVIDER_ID = "bankr"
 # Historical aliases ("capgateway" / "opencap-gateway") are intentionally not
@@ -666,19 +680,44 @@ def migrate_config_payload(data: dict[str, Any]) -> ConfigMigrationResult:
             builder.removed_fields.extend(sorted(deprecated_subagents))
             handle_deprecated_subagents_fields(deprecated_subagents, "config_migration")
 
+    # 2026-09: the KyberSwap provider was removed and the AgentOS Aggregator
+    # became the default. TradingConfig forbids extras, so an existing
+    # agentos.toml carrying `kyber_client_id` would fail validation at boot;
+    # and `provider = "kyber"` now names a provider that no longer exists.
+    # Both are rewritten rather than rejected, so an upgrade keeps trading.
+    trading_section = builder.payload.get("trading")
+    if isinstance(trading_section, dict):
+        if "kyber_client_id" in trading_section:
+            trading_section.pop("kyber_client_id")
+            builder.removed_fields.append("trading.kyber_client_id")
+        if str(trading_section.get("provider") or "").strip().lower() == "kyber":
+            trading_section["provider"] = DEFAULT_SWAP_PROVIDER
+            builder.changes.append(f"trading.provider: kyber -> {DEFAULT_SWAP_PROVIDER}")
+            builder.warnings.append(
+                "The KyberSwap provider was removed; swaps now route through the "
+                "AgentOS Aggregator, which needs no API key"
+            )
+
     # 2026-07: the skills-block budget default rose from 8000 to 24000 once the
     # block stopped emitting a filesystem path per skill. 8000 could not fit the
     # descriptions for the shipped set, so every install that saved a config was
     # pinned to a name-only skill list — the raised default alone would never
-    # have reached them. Refresh only the exact old default, the same rule the
-    # legacy model ids use: a value someone chose deliberately is left alone.
+    # have reached them. The same happened again at 24000 and 26000 as bundled
+    # skills were added. Refresh only a value that was itself a default, the
+    # same rule the legacy model ids use: a value someone chose deliberately is
+    # left alone.
     skills_section = builder.payload.get("skills")
     if isinstance(skills_section, dict):
         current_budget = skills_section.get("max_skills_prompt_chars")
-        if current_budget == LEGACY_MAX_SKILLS_PROMPT_CHARS:
+        if (
+            isinstance(current_budget, int)
+            and not isinstance(current_budget, bool)
+            and current_budget in STALE_MAX_SKILLS_PROMPT_CHARS
+            and current_budget != DEFAULT_MAX_SKILLS_PROMPT_CHARS
+        ):
             skills_section["max_skills_prompt_chars"] = DEFAULT_MAX_SKILLS_PROMPT_CHARS
             builder.changes.append(
-                f"skills.max_skills_prompt_chars: {LEGACY_MAX_SKILLS_PROMPT_CHARS} -> "
+                f"skills.max_skills_prompt_chars: {current_budget} -> "
                 f"{DEFAULT_MAX_SKILLS_PROMPT_CHARS}"
             )
 

@@ -66,6 +66,27 @@ _MAX_RESPONSE_BYTES = 256 * 1024 * 1024
 USER_AGENT = "poolsdotfun-token-launcher/1.0"
 
 
+def _names_a_revert(message: Any) -> bool:
+    """True when a JSON-RPC error message reports a contract revert.
+
+    Code ``3`` is the standard spelling (see :class:`RpcError`); nodes that
+    report a revert under another code say so in the message, so the text is
+    the fallback signal. A node fault never names a revert.
+    """
+    return "revert" in str(message).lower()
+
+
+def _carries_a_revert_blob(data: Any) -> bool:
+    """True when the error carries a hex ``data`` payload — the contract's own output.
+
+    A node that refuses a call (a rate limit, a transient internal error) has no
+    contract output to attach, so a non-empty hex blob means the call reached the
+    contract and it answered, whatever the message says. Some nodes report a
+    revert as ``VM Exception`` instead of naming it.
+    """
+    return isinstance(data, str) and data.startswith("0x") and len(data) > 2
+
+
 class RpcError(RuntimeError):
     """A JSON-RPC error response. ``data`` carries the revert blob when present.
 
@@ -73,6 +94,13 @@ class RpcError(RuntimeError):
     with a bare string (``"error": "rate limit exceeded"``) or null. Reading it
     as a dict unconditionally turned every one of those into an AttributeError
     that killed the whole command instead of the RpcError callers handle.
+
+    ``answered`` separates the two kinds of error: the contract answering with
+    a revert (``True``) and the node refusing the call -- a rate limit, a
+    transient internal error (``False``). Only the first is evidence about the
+    contract, so callers must not report the second as a revert that never
+    happened. A revert blob in ``data`` is the contract's own output, so a
+    non-empty hex payload counts as an answer whatever the message says.
     """
 
     def __init__(self, method: str, error: Any) -> None:
@@ -81,6 +109,11 @@ class RpcError(RuntimeError):
         self.code = fields.get("code")
         self.data = fields.get("data")
         self.raw = error
+        self.answered = (
+            self.code == 3
+            or _names_a_revert(fields.get("message", error))
+            or _carries_a_revert_blob(self.data)
+        )
 
 
 class RpcClient:

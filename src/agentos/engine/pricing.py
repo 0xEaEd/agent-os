@@ -504,17 +504,23 @@ def _select_official_endpoint_price(data: dict, model_id: str) -> PriceEntry | N
     non-discount prompt/completion price. Prefer the endpoint whose
     ``provider_name`` or tag matches the model namespace, then fall back to the
     first priced endpoint if OpenRouter has no owner endpoint for that model.
+
+    Among the owner's endpoints the bare tag (``openai``) wins over a service
+    tier of the same provider (``openai/flex``, ``openai/fast``). OpenRouter
+    lists ``openai/gpt-6-luna``'s flex tier first, at half the standard rate,
+    and taking it made the cost-aware router treat c1 as cheaper than c0.
     """
     model = data.get("data") or data
     endpoints = model.get("endpoints") or []
     if not endpoints:
         return _endpoint_price(model)
 
-    for endpoint in endpoints:
-        if _is_official_endpoint(model_id, endpoint):
-            price = _endpoint_price(endpoint)
-            if price is not None:
-                return price
+    official = [e for e in endpoints if _is_official_endpoint(model_id, e)]
+    official.sort(key=lambda e: "/" in str(e.get("tag") or ""))
+    for endpoint in official:
+        price = _endpoint_price(endpoint)
+        if price is not None:
+            return price
     for endpoint in endpoints:
         price = _endpoint_price(endpoint)
         if price is not None:

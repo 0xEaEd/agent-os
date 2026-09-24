@@ -29,6 +29,7 @@ function route(overrides: Partial<RoutePinApi> = {}): RoutePinApi {
     pin: vi.fn(),
     pinModel: vi.fn(),
     clear: vi.fn(),
+    reload: vi.fn(),
     ...overrides,
   }
   // Derived in the hook, so derive it here too rather than making every case
@@ -108,6 +109,17 @@ describe('RoutePicker', () => {
     expect(options[2]).toHaveTextContent('c1')
     expect(options[2]).toHaveTextContent('gpt-5.6-luna')
     expect(options[6]).toHaveTextContent('grok-5')
+  })
+
+  it('re-reads the tier list when the menu opens, so a config edit shows up', () => {
+    const reload = vi.fn()
+    render(<RoutePicker route={route({ reload })} />)
+    fireEvent.click(trigger())
+    expect(reload).toHaveBeenCalledTimes(1)
+    // Closing is not a read: nothing can have changed between the two clicks
+    // that the open menu did not already show.
+    fireEvent.click(trigger())
+    expect(reload).toHaveBeenCalledTimes(1)
   })
 
   it('does not offer a model a tier already covers', () => {

@@ -1,0 +1,2997 @@
+/* Trading — the desk.
+
+   DESIGN BRIEF
+   Subject: one person's on-chain desk (Base tokens, Robinhood Stock Tokens)
+   that an agent also trades from. The page's single job: show what the money
+   is doing right now, and let you act on it without a second thought about
+   whether the price is fresh.
+
+   Type: Bricolage Grotesque, the app's wordmark face, is let out of the logo
+   for one purpose — the portfolio value and each wallet's total — set narrow
+   (font-stretch 85%) and heavy, so the desk has a voice the rest of the app
+   never uses. Every other figure is JetBrains Mono with tabular numerals, so
+   a ticking price never reflows a column. Labels stay SF.
+
+   Hierarchy and density: one hero number, then 12–13 px everywhere. Rows are
+   30 px, separated by hairlines, never boxed. Three columns: wallets (rail),
+   the ledger (overview, holdings, history, approvals), the ticket (swap).
+
+   Signature: the ticket's primary button wears the quote's countdown as a lit
+   edge travelling its own perimeter, so the button itself says how fresh the
+   price is without pushing its label off centre; and allocation is drawn as a
+   thin lime rule under each holding's value, a ledger line rather than a pie.
+
+   Colour: palette tokens only. Up is --ok, down is --danger, live is
+   --primary. The one gradient is the hero's wash, tinted by today's move.
+   Motion: a value that changed flashes a wash and fades; a new row lifts in
+   4 px; the countdown drains continuously. Reduced motion turns all of it
+   off. */
+
+/* ── Frame ─────────────────────────────────────────────────────────────────── */
+
+/* The desk sizes itself from its own width, not the window's: the app
+   sidebar comes and goes. Three columns when there is room, a narrower rail
+   and ticket below ~1180px, and below ~1000px the wallets become a strip
+   across the top so the ledger keeps at least ~650px beside a 300px ticket.
+   Math: 1920 window − 220 sidebar = 1700 → ledger 1152; 1440 → 1220 →
+   ledger 672; 1200 → 980 → strip, ledger 680; 1200 with the sidebar hidden
+   → 1200 → ledger 652. */
+.trd-viewport {
+  container-type: inline-size;
+  container-name: desk-viewport;
+  height: 100%;
+  min-height: 0;
+}
+.trd {
+  --trd-rail: 232px;
+  --trd-ticket: 316px;
+  --trd-row: 34px;
+  --trd-up: var(--ok);
+  --trd-down: var(--danger);
+  display: grid;
+  grid-template-columns: var(--trd-rail) minmax(0, 1fr) var(--trd-ticket);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  /* The gutter belongs to the frame, not to any one column: all three float
+     on the same canvas with the same margin. */
+  padding: 12px 14px 14px;
+  isolation: isolate;
+}
+/* One wallet, or the list put away: the head already says whose desk this is,
+   so the column goes to the ledger rather than standing empty. */
+.trd[data-rail='off'] {
+  grid-template-columns: minmax(0, 1fr) var(--trd-ticket);
+}
+
+/* Every column of the desk is the same instrument: a hairline, a surface one
+   step above the canvas, and a 1 px highlight along the top edge. Nothing
+   here is glass or a resting shadow — depth is luminance. */
+.trd-rail,
+.trd-panel,
+.trd-hero,
+.trd-ticket {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-surface);
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 4%, transparent);
+}
+/* …and every one of them heads with the same micro label. */
+.trd-rail__title,
+.trd-ticket__title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+@container desk-viewport (max-width: 1179px) {
+  .trd {
+    --trd-rail: 200px;
+    --trd-ticket: 300px;
+  }
+}
+.trd-num,
+.trd-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-variant-ligatures: none;
+}
+/* A token symbol is on-chain data: isolate its bidi run so a right-to-left
+ * override inside it cannot reorder the amount or the arrow beside it. */
+.trd-sym {
+  unicode-bidi: isolate;
+  direction: ltr;
+}
+.trd-num[data-tone='up'] {
+  color: var(--trd-up);
+}
+.trd-num[data-tone='down'] {
+  color: var(--trd-down);
+}
+.trd-num[data-tone='flat'] {
+  color: var(--muted-foreground);
+}
+
+/* The swap route's brand mark: monochrome, so it takes the colour of
+   whatever row, seat or plate it sits in. */
+.trd-mark {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+.trd-mark > svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* A figure that just changed: a wash that fades out. */
+@keyframes trd-tick {
+  0% {
+    background-color: color-mix(in srgb, var(--primary) 26%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.trd-tick {
+  border-radius: 3px;
+  animation: trd-tick 900ms ease-out;
+}
+
+/* Offline / locked / empty: the whole desk is one message and one action. */
+.trd-state {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 32px;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+.trd-state h1 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+.trd-state p {
+  max-width: 380px;
+  font-size: 13px;
+}
+.trd-state__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.trd-state__mark {
+  margin-bottom: 8px;
+  color: var(--dim);
+}
+
+/* ── Rail ──────────────────────────────────────────────────────────────────── */
+
+.trd-rail {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: clip;
+}
+/* The same toolbar band the ledger panel and the ticket wear. */
+.trd-rail__head,
+.trd-ticket__head {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+.trd-rail__list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px;
+  overflow-y: auto;
+}
+.trd-wallet {
+  position: relative;
+  display: grid;
+  /* Mark, text, figure. The "all" row has no mark and leaves the column
+     empty, which puts its text on the same rule as every wallet under it. */
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  width: 100%;
+  padding: 7px 8px 7px 10px;
+  border-radius: var(--radius);
+  text-align: left;
+  color: var(--foreground);
+  transition: background-color 80ms ease-out;
+}
+.trd-wallet:hover {
+  background: color-mix(in srgb, var(--sidebar-accent) 70%, transparent);
+}
+.trd-wallet[aria-selected='true'] {
+  background: var(--sidebar-accent);
+}
+.trd-wallet:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-wallet__mark {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  align-self: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+}
+.trd-wallet__name {
+  grid-column: 2;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.trd-wallet__name > span:first-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-wallet__star {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.trd-wallet__addr {
+  grid-column: 2;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+  /* A dust wallet's total runs long ("$0.00004276"); the address beside it
+     must give way on its own line rather than wrap into a second one. */
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-wallet__value {
+  grid-row: 1 / span 2;
+  grid-column: 3;
+  align-self: center;
+  font-family: var(--font-display);
+  font-stretch: 85%;
+  font-weight: 650;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  text-align: right;
+}
+.trd-wallet__delta {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  font-stretch: 100%;
+  letter-spacing: 0;
+}
+.trd-wallet--all .trd-wallet__name {
+  color: var(--muted-foreground);
+}
+.trd-wallet--all[aria-selected='true'] .trd-wallet__name {
+  color: var(--foreground);
+}
+.trd-wallet__menu {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  transition: opacity 80ms ease-out;
+}
+.trd-wallet:hover .trd-wallet__menu,
+.trd-wallet:focus-within .trd-wallet__menu,
+.trd-wallet__menu[aria-expanded='true'] {
+  opacity: 1;
+}
+.trd-wallet:hover .trd-wallet__value,
+.trd-wallet:focus-within .trd-wallet__value {
+  visibility: hidden;
+}
+
+.trd-rail__add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  margin: 2px 0 0;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  transition:
+    background-color 80ms ease-out,
+    color 80ms ease-out;
+}
+.trd-rail__add:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.trd-rail__add:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* Agent budget: a thin meter, the remainder in words. Same tile as the four
+   figures in the desk head, so a panel's insets read as one family. */
+.trd-budget {
+  margin: auto 6px 6px;
+  padding: 9px 10px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--foreground) 3.5%, transparent);
+}
+.trd-budget__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* `space-between` only holds the two apart while there is slack. Once the
+     tile is sized to its content — which it is as soon as the rail turns into
+     a strip — the caption and the wallet name met and read as one word. */
+  gap: 10px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-budget__meter {
+  position: relative;
+  height: 3px;
+  margin: 8px 0 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+  overflow: hidden;
+}
+.trd-budget__meter > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--primary);
+  transition: width 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.trd-budget__meter[data-full='true'] > span {
+  background: var(--danger);
+}
+.trd-budget__text {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-budget__text b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--foreground);
+}
+/* Out of the rail and into the ledger column: one line, meter between the
+   label and the words, so a guardrail costs a band rather than a block. */
+.trd-budget--strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 7px 12px;
+  background: var(--surface);
+}
+.trd-budget--strip .trd-budget__label {
+  flex-shrink: 0;
+  gap: 8px;
+}
+.trd-budget--strip .trd-budget__meter {
+  flex: 1;
+  min-width: 60px;
+  margin: 0;
+}
+.trd-budget--strip .trd-budget__text {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ── Ledger column ─────────────────────────────────────────────────────────── */
+
+/* The ledger column is a stack of two instruments — the head and the book —
+   floating on the desk's canvas. The column itself never scrolls: the panel
+   owns the scroll, so the value and the tabs stay put while rows move. */
+.trd-desk {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+.trd-desk > :not(.trd-panel) {
+  flex-shrink: 0;
+}
+.trd-desk__notice {
+  display: contents;
+}
+
+/* ── Head: value, move, figures, allocation ────────────────────────────────── */
+
+/* One raised card. Depth is luminance, not shadow: a hairline, a surface a
+   step above the canvas, a 1 px top highlight, and a corner light that warms
+   or cools with the day's direction. */
+.trd-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px 15px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-surface);
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
+  overflow: hidden;
+}
+.trd-hero::before {
+  content: '';
+  position: absolute;
+  top: -150px;
+  left: -70px;
+  width: 460px;
+  height: 300px;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--foreground) 12%, transparent),
+    transparent
+  );
+  opacity: 0.7;
+  pointer-events: none;
+  transition: opacity 240ms ease-out;
+}
+.trd-hero[data-tone='up']::before {
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--trd-up) 26%, transparent),
+    transparent
+  );
+}
+.trd-hero[data-tone='down']::before {
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--trd-down) 26%, transparent),
+    transparent
+  );
+}
+.trd-hero > * {
+  position: relative;
+}
+/* ── Head: whose wallet this is ────────────────────────────────────────────
+   The mark, the address, the name under it, the actions on the right. It
+   reads like the top of a wallet app on purpose: identity first, then the
+   figure. */
+/* Grid, not flex: the identity takes the whole remaining column, so the
+   address ellipsizes only when it truly does not fit rather than whenever a
+   flex item guesses its content size short. */
+.trd-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+.trd-head__who {
+  position: relative;
+  min-width: 0;
+}
+/* The whole identity block is the switcher's trigger: a 40 px target that
+   happens to also be the thing it changes. */
+.trd-head__id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: 100%;
+  margin: -4px 0 -4px -6px;
+  padding: 4px 8px 4px 6px;
+  border-radius: var(--radius-control);
+  text-align: left;
+  color: var(--foreground);
+  transition: background-color 80ms ease-out;
+}
+.trd-head__id:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-head__id:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+/* One wallet: the block is a label, not a control — no hover, no pointer. */
+.trd-head__id:disabled {
+  cursor: default;
+}
+.trd-head__mark {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 10%, transparent);
+}
+/* Every wallet at once has no one mark, so it gets the first three, fanned. */
+.trd-head__stack {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  width: 40px;
+  height: 40px;
+  padding-left: 4px;
+}
+.trd-head__stack img {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.trd-head__stack img + img {
+  margin-left: -11px;
+}
+.trd-head__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.trd-head__line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.trd-head__line > b {
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-head__line > svg {
+  flex-shrink: 0;
+  color: var(--dim);
+}
+.trd-head__star {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.trd-head__sub {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-head__acts {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+.trd-head__menu {
+  position: relative;
+}
+
+.trd-hero__tools {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+/* The venue is a fact about where orders go, so it reads as a plate with a
+   live lamp — not as the lime CTA colour spent on a label. */
+.trd-venue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  white-space: nowrap;
+}
+.trd-venue i {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--primary);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--primary) 65%, transparent);
+}
+.trd-hero__sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.trd-hero__sync[data-live='true'] {
+  color: var(--primary);
+}
+
+.trd-hero__figure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.trd-hero__figure > b {
+  font-family: var(--font-display);
+  font-stretch: 85%;
+  font-weight: 700;
+  font-size: 44px;
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+/* Today's move is a verdict, so it gets a plate of its own colour rather
+   than three loose figures of three different sizes. */
+.trd-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px 0 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-delta[data-tone='up'] {
+  color: var(--trd-up);
+  background: color-mix(in srgb, var(--trd-up) 13%, transparent);
+}
+.trd-delta[data-tone='down'] {
+  color: var(--trd-down);
+  background: color-mix(in srgb, var(--trd-down) 13%, transparent);
+}
+.trd-delta em {
+  font-style: normal;
+  opacity: 0.72;
+}
+.trd-delta small {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.6;
+}
+
+/* Four figures, four tiles: equal weight, one rhythm, no dead gutter. */
+.trd-hero__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.trd-stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--foreground) 3.5%, transparent);
+}
+.trd-stat__label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-stat__value {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  column-gap: 5px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.trd-stat__value > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trd-stat__value small {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+
+/* Allocation: one meter, and a chip per share carrying the same shade of
+   the ladder. Reading one share dims the others — no JS, no extra colour. */
+.trd-alloc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* A meter on a track, not a slab. The ladder is monochrome on purpose: the
+   proportion is the signal, and lime stays rationed for what is live. */
+.trd-alloc__bar {
+  display: flex;
+  height: 7px;
+  gap: 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-alloc__bar > span {
+  min-width: 3px;
+  border-radius: 2px;
+  background: var(--foreground);
+  opacity: max(0.18, calc(0.42 - var(--i, 0) * 0.05));
+  transition:
+    opacity 160ms ease-out,
+    flex-basis 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.trd-alloc__bar > span:first-child,
+.trd-alloc__legend > span:first-child i {
+  opacity: 0.7;
+}
+.trd-alloc__bar > span:first-child {
+  border-start-start-radius: 4px;
+  border-end-start-radius: 4px;
+}
+.trd-alloc__bar > span:last-child {
+  border-start-end-radius: 4px;
+  border-end-end-radius: 4px;
+}
+.trd-alloc__bar > span[data-other='true'],
+.trd-alloc__legend i[data-other='true'] {
+  background: var(--dim);
+  opacity: 0.5;
+}
+.trd-alloc__bar:hover > span:not(:hover) {
+  opacity: 0.15;
+}
+.trd-alloc__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.trd-alloc__legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 4.5%, transparent);
+  transition: opacity 140ms ease-out;
+}
+.trd-alloc__legend i {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 2px;
+  background: var(--foreground);
+  opacity: max(0.18, calc(0.42 - var(--i, 0) * 0.05));
+}
+.trd-alloc__legend b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+}
+.trd-alloc__legend:hover > span:not(:hover) {
+  opacity: 0.4;
+}
+
+/* ── Book panel: its own header bar, its own scroll ────────────────────────── */
+
+.trd-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-surface);
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 4%, transparent);
+  /* clip, not hidden: `hidden` would make this a scrollport and break the
+     table head's sticky against the body below. */
+  overflow: clip;
+}
+.trd-panel__body {
+  --trd-head-bg: var(--surface);
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* Tabs are the panel's toolbar: pills, a count, and the chain filter right. */
+.trd-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+.trd-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin: 6px 0;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+.trd-tab:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-tab[aria-selected='true'] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.trd-tab:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-tab__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.trd-tabs__spacer {
+  flex: 1;
+}
+.trd-tabs__tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+.trd-chainpick {
+  margin-right: 6px;
+}
+/* The chain filter carries a long and a short label; the ledger's width picks. */
+.trd-chainpick [data-short] {
+  display: none;
+}
+.trd-desk {
+  container-type: inline-size;
+  container-name: desk;
+}
+@container desk (max-width: 720px) {
+  .trd-chainpick [data-long] {
+    display: none;
+  }
+  .trd-chainpick [data-short] {
+    display: inline;
+  }
+}
+@container desk (max-width: 639px) {
+  .trd-hero__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ── Holdings table ────────────────────────────────────────────────────────── */
+
+/* The table keeps every column at its minimum and scrolls sideways past
+   that, rather than squeezing figures into each other. */
+.trd-tablewrap {
+  flex-shrink: 0;
+}
+.trd-table {
+  width: 100%;
+  min-width: 800px;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+.trd-table .trd-col--amount {
+  min-width: 96px;
+}
+.trd-table .trd-col--price {
+  min-width: 96px;
+}
+.trd-table .trd-col--change {
+  min-width: 64px;
+}
+.trd-table .trd-col--value {
+  min-width: 96px;
+}
+.trd-table .trd-col--cost {
+  min-width: 90px;
+}
+.trd-table .trd-col--pnl {
+  min-width: 110px;
+}
+.trd-table th,
+.trd-table td {
+  height: var(--trd-row);
+  padding: 0 10px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: right;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.trd-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 28px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--dim);
+  /* Opaque against whatever ground the table sits on — the panel's surface
+     on the desk, the canvas in the rail. */
+  background: var(--trd-head-bg, var(--background));
+}
+.trd-table th:first-child,
+.trd-table td:first-child {
+  padding-left: 14px;
+  text-align: left;
+}
+.trd-table th:last-child,
+.trd-table td:last-child {
+  padding-right: 12px;
+}
+.trd-table th button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+}
+.trd-table th button[aria-pressed='true'] {
+  color: var(--foreground);
+}
+.trd-table th button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-table tbody tr {
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+.trd-table tbody tr:hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+/* The open row keeps a lit edge in the gutter, so it stays findable once the
+   chart pushes it down the page. */
+.trd-table tbody tr[aria-selected='true'] {
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+.trd-table tbody tr[aria-selected='true'] td:first-child {
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+.trd-table td {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.trd-table tbody tr:last-child td {
+  border-bottom-color: transparent;
+}
+.trd-table td.trd-cell--muted {
+  color: var(--muted-foreground);
+}
+/* A junk token shown on request: present, but unmistakably not counted. */
+.trd-table tbody tr[data-hidden='true'] td {
+  color: var(--muted-foreground);
+  opacity: 0.7;
+}
+.trd-table tbody tr[data-hidden='true'] .trd-value::before {
+  display: none;
+}
+/* The tag leads the name line, so a marked row is exactly as tall as any
+   other and the symbol line keeps its badges. */
+.trd-asset__tag {
+  margin-right: 6px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+.trd-asset__tag::after {
+  content: '·';
+  margin-left: 6px;
+  color: var(--dim);
+  letter-spacing: 0;
+}
+.trd-table td[data-tone='up'] {
+  color: var(--trd-up);
+}
+.trd-table td[data-tone='down'] {
+  color: var(--trd-down);
+}
+.trd-table td[data-tone='flat'] {
+  color: var(--muted-foreground);
+}
+.trd-table .trd-col--asset {
+  /* A percentage width plus max-width 0 makes the cell ellipsize its
+     contents instead of growing the table past the ledger. */
+  width: 34%;
+  min-width: 150px;
+  max-width: 0;
+}
+.trd-table .trd-col--actions {
+  /* three ghost buttons: chart, swap, and unwrap for WETH */
+  width: 96px;
+  min-width: 96px;
+}
+.trd-asset {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-sans);
+}
+.trd-asset__logo {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  overflow: hidden;
+}
+.trd-asset__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.trd-asset__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.trd-asset__symbol {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+/* A 20-character airdrop ticker must not push the chain chip off the cell. */
+.trd-asset__ticker {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trd-asset__name {
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* Whose row, when the table mixes wallets: a small chip ahead of the name. */
+.trd-asset__wallet {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  vertical-align: 1px;
+}
+/* Chain identity: the network's own mark, then its name. Inline SVG, so a
+   badge costs no request and stays crisp at this size. */
+.trd-chainmark {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 2px;
+}
+.trd-chainbadge {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.trd-asset__chain {
+  height: 14px;
+  flex-shrink: 0;
+  padding: 0 5px 0 3px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+/* In the chain filter the mark stands alone next to the segment's own label. */
+.trd-chainpick .trd-chainmark {
+  margin-right: 5px;
+  width: 12px;
+  height: 12px;
+}
+.trd-asset__warn {
+  flex-shrink: 0;
+  color: var(--warn);
+}
+
+/* The allocation rule under the value: the signature ledger line. A full
+   track with the share filled from the right, so a 0.3% position reads as a
+   nearly-empty meter instead of a stray two-pixel dash. */
+.trd-value {
+  position: relative;
+  display: inline-block;
+  min-width: 46px;
+  padding-bottom: 4px;
+}
+.trd-value::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(
+    to left,
+    color-mix(in srgb, var(--primary) 72%, transparent) 0 clamp(2%, calc(var(--alloc) * 1%), 100%),
+    color-mix(in srgb, var(--foreground) 9%, transparent) 0
+  );
+}
+.trd-row__actions {
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 80ms ease-out;
+}
+tr:hover .trd-row__actions,
+tr:focus-within .trd-row__actions {
+  opacity: 1;
+}
+
+.trd-note {
+  padding: 14px 24px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.trd-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+.trd-empty b {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-empty p {
+  max-width: 360px;
+  font-size: 12.5px;
+}
+.trd-empty svg {
+  margin-bottom: 6px;
+  color: var(--dim);
+}
+/* A read that failed: the mark warns, and the body is the RPC's own words. */
+.trd-empty[data-tone='error'] svg {
+  color: var(--warn);
+}
+.trd-empty[data-tone='error'] p {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+/* The page after the last one shown: one button, centred under the list. */
+.trd-history__more {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 0 16px;
+}
+
+/* Skeletons: the shape of a row before its numbers arrive. */
+@keyframes trd-shimmer {
+  50% {
+    opacity: 0.35;
+  }
+}
+.trd-skel {
+  display: inline-block;
+  max-width: 100%;
+  height: 10px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  animation: trd-shimmer 1.4s ease-in-out infinite;
+}
+
+/* ── Chart panel (under the table when a row is picked) ────────────────────── */
+
+.trd-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 24px 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+.trd-chart__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+/* Four figures across the top, divided by hairlines rather than boxed. All of
+   them come out of the price response the line's own lookup already made. */
+.trd-chart__strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  margin: 0;
+  gap: 1px;
+  background: var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.trd-chart__stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+}
+.trd-chart__stat dt {
+  font-size: 11px;
+  color: var(--dim);
+}
+.trd-chart__stat dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trd-chart__hero {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.trd-chart__value {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.trd-chart__move {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.trd-chart__move[data-tone='up'] .trd-num {
+  color: var(--trd-up, var(--ok));
+}
+.trd-chart__move[data-tone='down'] .trd-num {
+  color: var(--trd-down, var(--danger));
+}
+.trd-chart__move small {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+/* "local": the line is the app's own snapshots, not an indexed pool. */
+.trd-chart__move small:last-child:not(:nth-child(2)) {
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.trd-chart__canvas {
+  height: 180px;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.trd-chart__empty {
+  display: flex;
+  height: 120px;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* ── History ───────────────────────────────────────────────────────────────── */
+
+.trd-day {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 14px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  background: var(--background);
+}
+.trd-entry {
+  display: grid;
+  grid-template-columns: 26px minmax(96px, 0.8fr) minmax(140px, 1.4fr) 88px 72px 28px;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 5px 12px 5px 14px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 12px;
+}
+.trd-entry:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.trd-entry__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-entry__glyph[data-kind='deposit'] {
+  color: var(--trd-up);
+  background: color-mix(in srgb, var(--trd-up) 12%, transparent);
+}
+.trd-entry__glyph[data-kind='withdraw'] {
+  color: var(--trd-down);
+  background: color-mix(in srgb, var(--trd-down) 12%, transparent);
+}
+.trd-entry__glyph[data-kind='swap'] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-entry__what {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.trd-entry__kind {
+  font-weight: 500;
+}
+.trd-entry__sub {
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-entry__legs {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+.trd-entry__legs > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-entry__out {
+  color: var(--muted-foreground);
+}
+.trd-entry__in {
+  color: var(--foreground);
+}
+.trd-entry__value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.trd-entry__value small {
+  display: block;
+  font-size: 10px;
+  color: var(--dim);
+}
+.trd-entry__who {
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-by {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.trd-by[data-by='agent'] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-entry__time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+  text-align: right;
+}
+
+/* ── Orders and approvals ──────────────────────────────────────────────────── */
+
+/* A row is the ledger's two lines: the trade, then a quiet caption under it.
+   The five columns hold the same rhythm as History — mark, what, value, who,
+   door — so the two tabs read as one book and the figures tabulate down the
+   page. Everything that is not the trade itself (chain, venue, minimum,
+   impact, fee) is one dim caption rather than six competing label/value pairs,
+   and anything the row adds later (approval, note, reason) hangs under the
+   caption, indented to the same column. */
+.trd-order {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 92px 68px 28px;
+  align-items: center;
+  gap: 3px 10px;
+  padding: 9px 12px 10px 14px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 12px;
+}
+.trd-order:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.trd-order[data-status='awaiting_approval'] {
+  background: color-mix(in srgb, var(--warn) 5%, transparent);
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+.trd-order__mark {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  grid-area: 1 / 1 / span 2 / 2;
+}
+.trd-order__mark[data-tone='ok'] {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.trd-order__mark[data-tone='warn'] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.trd-order__mark[data-tone='danger'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.trd-order__mark[data-tone='live'] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-order__head {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 7px;
+  grid-area: 1 / 2 / 2 / 3;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+.trd-order__leg {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+/* The ticker rides quieter than the figure it belongs to. */
+.trd-order__leg i {
+  color: var(--muted-foreground);
+  font-style: normal;
+}
+.trd-order__sym {
+  color: var(--muted-foreground);
+}
+.trd-order__arrow {
+  align-self: center;
+  color: var(--dim);
+}
+.trd-order__value {
+  grid-area: 1 / 3 / span 2 / 4;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.trd-order__who {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  grid-area: 1 / 4 / span 2 / 5;
+}
+.trd-order__time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.trd-order__link {
+  display: flex;
+  justify-content: flex-end;
+  grid-area: 1 / 5 / span 2 / 6;
+}
+.trd-order__meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  grid-area: 2 / 2 / 3 / 3;
+  font-size: 11px;
+  color: var(--dim);
+}
+.trd-order__state {
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.trd-order__state[data-tone='ok'] {
+  color: var(--ok);
+}
+.trd-order__state[data-tone='warn'] {
+  color: var(--warn);
+}
+.trd-order__state[data-tone='danger'] {
+  color: var(--danger);
+}
+.trd-order__state[data-tone='live'] {
+  color: var(--primary);
+}
+.trd-order__fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.trd-order__fact b {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.trd-order__fact b[data-tone='warn'] {
+  color: var(--warn);
+}
+.trd-order__fact b[data-tone='danger'] {
+  color: var(--danger);
+}
+/* Anything past the caption hangs in the same column as the caption. */
+.trd-order__act,
+.trd-order__note,
+.trd-order__reason {
+  grid-column: 2 / -1;
+}
+.trd-order__act {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+}
+.trd-order__actions {
+  display: flex;
+  margin-left: auto;
+  gap: 6px;
+}
+.trd-order__timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.trd-order__timer[data-urgent='true'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.trd-order__note {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+/* A failure says why on its own tinted strip, tied to the row rather than
+   loose red text running the full width of the page. */
+.trd-order__reason {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 5px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+.trd-order__reason svg {
+  margin-top: 2px;
+}
+.trd-order__reason span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.trd-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  white-space: nowrap;
+}
+.trd-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  opacity: 0.8;
+}
+.trd-status[data-tone='ok'] {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.trd-status[data-tone='warn'] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.trd-status[data-tone='danger'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.trd-status[data-tone='live'] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-status[data-tone='live']::before {
+  animation: mac-light-pulse 1.2s ease-in-out infinite;
+}
+
+/* ── Ticket (swap) ─────────────────────────────────────────────────────────── */
+
+.trd-ticket {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: clip;
+}
+.trd-ticket__body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* A leg: label row, token button + amount, balance row. */
+.trd-leg {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 10px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--foreground) 3.5%, transparent);
+  transition: border-color 100ms ease-out;
+}
+.trd-leg:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.trd-leg__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.trd-leg__label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-leg__balance {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.trd-leg__balance button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--primary);
+}
+.trd-leg__balance button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+/* Under the pay leg when it pays in the gas coin: what Max holds back. */
+.trd-leg__reserve {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--dim);
+}
+.trd-leg__main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.trd-tokenbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 8px 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  transition: background-color 80ms ease-out;
+}
+.trd-tokenbtn:hover {
+  background: color-mix(in srgb, var(--foreground) 13%, transparent);
+}
+.trd-tokenbtn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-tokenbtn[data-empty='true'] {
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+.trd-tokenbtn svg {
+  color: var(--dim);
+}
+.trd-tokenbtn[data-empty='true'] svg {
+  color: inherit;
+}
+.trd-amount {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--foreground);
+  user-select: text;
+}
+.trd-amount::placeholder {
+  color: var(--dim);
+}
+.trd-amount[data-invalid='true'] {
+  color: var(--danger);
+}
+.trd-amount--out {
+  color: var(--foreground);
+}
+.trd-amount--out[data-pending='true'] {
+  color: var(--dim);
+}
+.trd-leg__usd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+  text-align: right;
+}
+.trd-pcts {
+  display: flex;
+  gap: 4px;
+}
+.trd-pcts button {
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  transition:
+    background-color 80ms ease-out,
+    color 80ms ease-out;
+}
+.trd-pcts button:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+.trd-pcts button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.trd-flip {
+  display: flex;
+  justify-content: center;
+  height: 0;
+  z-index: 1;
+}
+.trd-flip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-top: -17px;
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  background: var(--elevated);
+  box-shadow:
+    0 0 0 0.5px var(--border),
+    0 1px 2px rgba(0, 0, 0, 0.2);
+  transition:
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    color 80ms ease-out;
+}
+.trd-flip button:hover {
+  color: var(--foreground);
+  transform: rotate(180deg);
+}
+.trd-flip button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* The wallet the ticket pays from. */
+.trd-ticket__wallet {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-ticket__wallet .mac-select {
+  width: 160px;
+  height: 24px;
+  font-size: 12px;
+}
+
+/* Quote facts: label left, value right, hairlines between. */
+.trd-facts {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 2px 0;
+}
+.trd-fact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 24px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-fact + .trd-fact {
+  border-top: 1px solid var(--hairline);
+}
+.trd-fact > b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+  text-align: right;
+}
+.trd-fact > b[data-tone='warn'] {
+  color: var(--warn);
+}
+.trd-fact > b[data-tone='danger'] {
+  color: var(--danger);
+}
+.trd-fact__select {
+  width: 84px;
+  height: 20px;
+  font-size: 11px;
+}
+.trd-fact__slip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.trd-fact__slip input {
+  width: 52px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  text-align: right;
+}
+
+/* Provider warnings (a transfer fee, a thin pool): warn-toned, one per line. */
+.trd-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 9px;
+  border-radius: var(--radius-control);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.trd-warnings li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.trd-warnings svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--warn);
+}
+
+/* Guard line: what the engine will say to this size of swap. */
+/* A note about the quote, not a slab. It used to be a filled bar directly
+   above the filled CTA — two full-width blocks, eight pixels apart, reading as
+   one crowded mass. Unfilled, it sits with the facts it belongs to and leaves
+   the button alone at the bottom of the ticket. */
+.trd-guard {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 2px 2px 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted-foreground);
+}
+.trd-guard svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.trd-guard[data-decision='allow'] svg {
+  color: var(--ok);
+}
+.trd-guard[data-decision='needs_approval'] svg,
+.trd-guard[data-decision='blocked_daily_cap'] svg {
+  color: var(--warn);
+}
+
+.trd-ticket__error {
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  font-size: 11.5px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+/* The signature: the primary button wears the countdown ring around its glyph. */
+/* The one action on the ticket. A single centred label — the countdown that
+   used to sit beside it as a ring pushed the text off centre and read as a
+   spinner stuck mid-load. It is the button's own lit edge now (below). */
+.trd-cta {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 44px;
+  margin-top: 6px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  transition:
+    background-color 80ms ease-out,
+    transform 80ms ease-out;
+}
+.trd-cta:hover {
+  background: color-mix(in srgb, var(--primary) 88%, var(--foreground));
+}
+.trd-cta:active {
+  transform: scale(0.994);
+}
+.trd-cta:disabled {
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  pointer-events: none;
+}
+.trd-cta:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+/* How much of the quote's life is left: a lit edge travelling the button's
+   own perimeter. --fresh is 1 at a fresh quote and drains to 0.
+
+   Registering it as a typed custom property is what makes this readable — an
+   unregistered variable is a string, so the conic angle would jump once a
+   second; typed, the browser interpolates it and the edge glides. Both layers
+   are a padded box masked down to its own border, which is how you get a
+   gradient border: ::before is the unlit track, ::after the lit arc. */
+@property --fresh {
+  syntax: '<number>';
+  /* Must inherit: the arc is drawn by ::after, and a non-inherited custom
+     property never reaches a pseudo-element — it would read the initial 0 and
+     the edge would never light. */
+  inherits: true;
+  initial-value: 0;
+}
+.trd-cta[data-fresh] {
+  transition:
+    background-color 80ms ease-out,
+    transform 80ms ease-out,
+    --fresh 900ms linear;
+}
+/* The band stands off the face by 2px. Flush against it the lit arc — which
+   is the button's own colour — merged into the button, and the *unlit* track
+   was the only thing you could see: the effect read backwards. Held away, the
+   arc is a lit line travelling around the button and the track is barely
+   there. */
+.trd-cta[data-fresh]::before,
+.trd-cta[data-fresh]::after {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  padding: 2px;
+  border-radius: calc(var(--radius) + 5px);
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.trd-cta[data-fresh]::before {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-cta[data-fresh]::after {
+  background: conic-gradient(
+    from -90deg,
+    var(--primary) calc(var(--fresh) * 360deg),
+    transparent calc(var(--fresh) * 360deg)
+  );
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--primary) 70%, transparent));
+}
+.trd-ticket__fresh {
+  display: flex;
+  margin-top: -2px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.trd-ticket__fresh button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--primary);
+}
+.trd-ticket__fresh button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* ── Sheets (confirm, wallet, token picker) ────────────────────────────────── */
+
+.trd-modal__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: color-mix(in srgb, var(--background) 55%, transparent);
+  backdrop-filter: blur(6px) saturate(0.9);
+}
+.trd-modal {
+  display: flex;
+  width: 100%;
+  max-width: 420px;
+  max-height: calc(100% - 32px);
+  flex-direction: column;
+  border-radius: var(--radius-dialog);
+  background: color-mix(in srgb, var(--popover) 97%, transparent);
+  box-shadow:
+    0 0 0 0.5px var(--border),
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 5%, transparent),
+    0 30px 80px rgba(0, 0, 0, 0.45),
+    0 4px 14px rgba(0, 0, 0, 0.2);
+  outline: none;
+  overflow: hidden;
+}
+/* 540, not 480: the wallet manager's action row carries five labelled buttons
+   (443px of them), and at 480 the last one wrapped to a line of its own. */
+.trd-modal--wide {
+  max-width: 540px;
+}
+/* The catalogue is a grid of cards, not a column of fields: at the column
+   width a card title wraps and every hint runs to three lines. */
+.trd-modal--widest {
+  max-width: 760px;
+}
+.trd-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 14px 8px 20px;
+}
+.trd-modal__head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.trd-modal__body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 20px 16px;
+  overflow-y: auto;
+}
+.trd-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--hairline);
+}
+.trd-modal__foot > .trd-modal__note {
+  margin-right: auto;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+/* The note is the only thing in the row allowed to wrap. A footer button
+   whose label folded in half ("Create / new") read as a broken control. */
+.trd-modal__foot > .mac-button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* ── Wallet manager ──────────────────────────────────────────────────────────
+   The desk's narrow surfaces can hold a wallet's *name*; this is where it
+   holds everything else. One card per wallet: what it is called, what it is
+   worth, the address written out in full, the chains it lives on, and the
+   four things you can do to it. Nothing is behind a hover or a kebab — the
+   whole point of the sheet is that the rail had nowhere to put any of it. */
+.trd-wman {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.trd-wman__row {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px 13px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+/* The primary wallet is the one the agent spends from, so it is the only one
+   the sheet marks — in the same lime the pill's live dot uses. */
+.trd-wman__row[data-primary] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+.trd-wman__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.trd-wman__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.trd-wman__star {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.trd-wman__value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-shrink: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.trd-wman__delta {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--dim);
+}
+.trd-wman__delta[data-tone='up'] {
+  color: var(--trd-up, var(--ok));
+}
+.trd-wman__delta[data-tone='down'] {
+  color: var(--trd-down, var(--danger));
+}
+/* Full, selectable, and on its own line. A wrapped address is still readable;
+   an ellipsised one is not, and is exactly what sent people looking. */
+/* Receive: the QR keeps its own white field with a little more white around
+   it — that margin is the symbol's quiet zone, not padding, and a scanner
+   needs it. Everything else on the sheet stays dark. */
+.trd-qr {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+.trd-qr__code {
+  display: block;
+  padding: 10px;
+  border-radius: var(--radius-control);
+  background: #fff;
+}
+.trd-qr__addr {
+  overflow-wrap: anywhere;
+  padding: 7px 10px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  user-select: text;
+}
+.trd-qr__note {
+  max-width: 34ch;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.trd-wman__addr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-wman__addr code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  user-select: text;
+}
+.trd-wman__copy {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-control);
+  color: var(--muted-foreground);
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+.trd-wman__copy:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+.trd-wman__copy:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-wman__chains {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* The badge *is* the explorer link — one control per chain instead of a menu
+   item per chain stacked under an already busy card. */
+.trd-wman__chain {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px 2px 4px;
+  border-radius: var(--radius-pill);
+  transition: background-color 120ms ease-out;
+}
+.trd-wman__chain:hover {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.trd-wman__chain:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+/* Five actions on a narrow row: they wrap as whole buttons, never inside a
+   label. A broken "Make / primary" reads as two controls that are not there. */
+.trd-wman__acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 4px;
+  padding-top: 2px;
+  border-top: 1px solid var(--hairline);
+  margin-top: 1px;
+}
+/* Destructive action to the end of its row, wrapped or not: an auto margin
+   eats the free space wherever the row happens to break, which a spacer
+   element could only do on the first line. */
+.trd-wman__act--danger {
+  margin-left: auto;
+}
+.trd-wman__act {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  white-space: nowrap;
+  border-radius: var(--radius-control);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+.trd-wman__act:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.trd-wman__act:disabled {
+  opacity: 0.5;
+}
+.trd-wman__act--danger:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.trd-wman__act:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -1px;
+}
+.trd-wman__locked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  font-size: 12px;
+  color: var(--warn);
+  text-align: left;
+}
+.trd-wman__locked:hover {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+}
+.trd-wman__empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 4px;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+
+.trd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.trd-field > label,
+.trd-field > .trd-field__label {
+  font-size: 12px;
+  font-weight: 500;
+}
+.trd-field__help {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-field__error {
+  font-size: 11.5px;
+  color: var(--danger);
+}
+.trd-warn {
+  display: flex;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.trd-warn svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--danger);
+}
+/* Removing a funded wallet: the box goes from caution to danger. */
+.trd-warn[data-tone='danger'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.trd-warn[data-tone='danger'] svg {
+  color: var(--danger);
+}
+.trd-remove__worth {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-compact);
+  font-size: 12px;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-remove__worth b {
+  font-size: 13px;
+  color: var(--foreground);
+}
+.trd-remove__worth[data-funded] b {
+  color: var(--danger);
+}
+.trd-warn[data-tone='warn'] {
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.trd-warn[data-tone='warn'] svg {
+  color: var(--warn);
+}
+.trd-secret {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  word-break: break-all;
+  user-select: text;
+}
+.trd-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trd-choice label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  font-size: 12.5px;
+  cursor: default;
+}
+.trd-choice label:has(input:checked) {
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+.trd-choice input {
+  grid-row: 1 / span 2;
+  align-self: start;
+  margin-top: 2px;
+  accent-color: var(--primary);
+}
+.trd-choice b {
+  font-weight: 500;
+}
+.trd-choice span {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+
+/* Confirm sheet: the two legs as a statement. */
+.trd-confirm__legs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.trd-confirm__leg {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.trd-confirm__leg small {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-confirm__leg b {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.trd-confirm__leg b span {
+  margin-left: 6px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+}
+.trd-confirm__min {
+  align-self: flex-end;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.trd-confirm__arrow {
+  align-self: center;
+  color: var(--dim);
+}
+
+/* Token picker list. */
+.trd-picker__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.trd-picker__search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: var(--foreground);
+  user-select: text;
+}
+.trd-picker__search input::placeholder {
+  color: var(--dim);
+}
+.trd-picker__group {
+  padding: 8px 4px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-picker__list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 -8px;
+  overflow-y: auto;
+}
+.trd-pick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 10px;
+  border-radius: var(--radius-control);
+  text-align: left;
+  transition: background-color 80ms ease-out;
+}
+.trd-pick:hover {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.trd-pick:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-pick__right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.trd-pick__right small {
+  font-size: 10px;
+  color: var(--dim);
+}
+
+@keyframes trd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.trd-spin {
+  animation: trd-spin 0.9s linear infinite;
+}
+/* The hero's resync arrow turns while a sync runs (the button is disabled then). */
+button:disabled > .trd-hero__spin {
+  animation: trd-spin 0.9s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  button:disabled > .trd-hero__spin {
+    animation: none;
+  }
+}
+
+/* ── Settings › Trading ────────────────────────────────────────────────────── */
+
+.trd-stg__probe {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+}
+.trd-stg__probe[data-verdict='ok'] {
+  color: var(--ok);
+}
+.trd-stg__probe[data-verdict='bad'] {
+  color: var(--danger);
+}
+.trd-stg__probe code {
+  font-size: 11px;
+}
+.trd-stg__keylink {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--primary);
+}
+.trd-stg__keylink:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+.trd-stg__unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* ── Strip layout (desk viewport under 1000px) ─────────────────────────────
+   Last in the file on purpose: these override the base rail/hero rules. */
+
+@container desk-viewport (max-width: 999px) {
+  .trd {
+    grid-template-columns: minmax(0, 1fr) var(--trd-ticket);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  /* No strip to reserve a band for: the ledger takes the whole height. */
+  .trd[data-rail='off'] {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  /* One horizontal row, content height, nothing centred vertically — still
+     the same card, just laid on its side. */
+  .trd-rail {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    height: auto;
+    max-height: 96px;
+    padding: 6px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .trd-rail__head {
+    flex-shrink: 0;
+    min-height: 0;
+    padding: 0 8px 0 2px;
+    border-bottom: 0;
+    background: transparent;
+  }
+  .trd-rail__list {
+    flex: 0 1 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    overflow: visible;
+  }
+  .trd-wallet {
+    width: 176px;
+    flex-shrink: 0;
+    padding: 5px 8px 5px 10px;
+  }
+  .trd-rail__add {
+    flex-shrink: 0;
+    height: 26px;
+    margin: 0;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+  /* The rail scrolls sideways here, and the budget is its last child — so it
+     was pushed clean off the end: 230 px past the right edge, reachable only
+     by scrolling the wallets away first. Pin it to the scrollport instead. A
+     guardrail readout is the last thing that should need hunting for. */
+  .trd-budget {
+    position: sticky;
+    right: 0;
+    z-index: 1;
+    flex-shrink: 0;
+    margin: 0 0 0 auto;
+    padding: 5px 10px;
+    /* Opaque: wallet cards scroll UNDER it now. */
+    background: var(--surface);
+    box-shadow: -8px 0 12px -8px rgb(0 0 0 / 35%);
+  }
+  .trd-budget__meter {
+    margin: 4px 0 3px;
+  }
+  /* No ellipsis. The old fixed 232px cut the sentence mid-figure — "$1,000.00
+     left of $1,00" reads as a different, smaller cap, which is the one way a
+     money readout must never fail. Drop the threshold clause instead; the
+     tile then fits whole at every width the rail reaches. */
+  .trd-budget__text {
+    font-size: 10.5px;
+    white-space: nowrap;
+  }
+  .trd-budget__threshold {
+    display: none;
+  }
+  /* A compact hero: the strip already took a band of height. */
+  .trd-hero {
+    gap: 8px;
+    padding: 10px 14px 11px;
+  }
+  .trd-hero__figure > b {
+    font-size: 30px;
+  }
+  .trd-head__mark,
+  .trd-head__stack {
+    width: 32px;
+    height: 32px;
+  }
+  .trd-head__mark {
+    border-radius: 9px;
+  }
+  .trd-head__line {
+    font-size: 15px;
+  }
+  .trd-hero__stats {
+    gap: 8px 12px;
+  }
+  .trd-stat {
+    gap: 0;
+  }
+  .trd-stat__value {
+    font-size: 12.5px;
+  }
+  .trd-alloc {
+    gap: 4px;
+  }
+  .trd-alloc__bar {
+    height: 4px;
+  }
+  .trd-alloc__legend {
+    font-size: 10.5px;
+  }
+}
+
+/* Fewer columns before the table would overlap: 24h and avg cost go first.
+   After the base table rules so the smaller min-width wins. */
+@container desk (max-width: 819px) {
+  .trd-table .trd-col--change,
+  .trd-table .trd-col--cost {
+    display: none;
+  }
+  .trd-table {
+    min-width: 640px;
+  }
+}
+
+/* What the table is not showing: one bar above it, a label set like the
+   column headers, and one filter chip per kind. A pressed chip means those
+   rows are in the table right below, marked. It sits above the sticky header
+   so it scrolls away with the top of the table, like a toolbar would. */
+.trd-hiddenbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--foreground) 2.5%, transparent);
+}
+.trd-hiddenbar__label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-hiddenbar__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.trd-chip {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px 0 7px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: transparent;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
+}
+.trd-chip__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-chip__label {
+  white-space: nowrap;
+}
+.trd-chip:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-chip[aria-pressed='true'] {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.trd-chip[aria-pressed='true'] .trd-chip__count {
+  color: var(--primary);
+}
+.trd-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+/* Pressed, rows not here yet: the chip breathes so the click is seen to have
+   landed. Pricing 70 junk tokens on request takes a moment. */
+.trd-chip[aria-busy='true'] {
+  animation: trd-chip-breathe 900ms ease-in-out infinite;
+}
+@keyframes trd-chip-breathe {
+  50% {
+    background: color-mix(in srgb, var(--primary) 28%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .trd-chip[aria-busy='true'] {
+    animation: none;
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+}

@@ -58,11 +58,11 @@ def test_agentos_router_defaults_match_runtime_router_config() -> None:
 
     assert cfg.tiers["c0"]["model"] == "deepseek/deepseek-v4-flash"
     assert cfg.tiers["c0"]["thinking_level"] == "high"
-    assert cfg.tiers["c1"]["model"] == "openai/gpt-5.6-luna"
+    assert cfg.tiers["c1"]["model"] == "openai/gpt-6-luna"
     assert cfg.tiers["c1"]["thinking_level"] == "high"
-    assert cfg.tiers["c2"]["model"] == "z-ai/glm-5.2"
+    assert cfg.tiers["c2"]["model"] == "z-ai/glm-5.3"
     assert cfg.tiers["c2"]["thinking_level"] == "high"
-    assert cfg.tiers["c3"]["model"] == "anthropic/claude-opus-5"
+    assert cfg.tiers["c3"]["model"] == "anthropic/claude-opus-5.5"
     assert cfg.tiers["c3"]["thinking_level"] == "high"
     assert cfg.tiers["image_model"]["model"] == "minimax/minimax-m3"
     assert cfg.tiers["image_model"]["supports_image"] is True
