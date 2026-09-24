@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.worksheet.cell_range import CellRange
 
 # Bundled scripts run under AgentOS's own interpreter; the path insert only
 # matters in a source checkout where the package is not installed (#2804).
@@ -85,6 +86,35 @@ OP_KINDS = ("set_cell", "rename_sheet", "merge_cells")
 class OpsError(ValueError):
     """An ops file that cannot be used. Reported as ``error:`` / exit 2, never
     as a traceback: the caller passed bad input, the script did not break."""
+
+
+def _merge_checked(ws: Any, rng: str) -> None:
+    """Merge *rng*, refusing one that intersects a merge the sheet already has.
+
+    openpyxl accepts an intersecting range and writes a workbook with
+    overlapping ``mergeCell`` entries, which Excel reports as corrupt and
+    repairs on open, while the run reported success. A malformed range already
+    failed loudly and left nothing written (#1993); an overlapping one now
+    fails the same way, naming both ranges so the caller can correct it.
+    ``CellRange`` raises the very error ``merge_cells`` would for a malformed
+    range, so that path is unchanged.
+
+    An *identical* range is not an overlap: it produces the same workbook,
+    openpyxl already dedupes it, and re-applying an ops file to a workbook
+    that has the merge must stay the no-op it has always been. ``CellRange``
+    equality normalises the spelling, so ``a1:b1`` matches ``A1:B1``.
+    """
+    target = CellRange(rng)
+    existing_ranges = list(ws.merged_cells.ranges)
+    if any(target == existing for existing in existing_ranges):
+        return
+    for existing in existing_ranges:
+        if not target.isdisjoint(existing):
+            raise ValueError(
+                f"cannot merge {rng} on sheet {ws.title!r}: it overlaps the existing "
+                f"merged range {existing.coord}"
+            )
+    ws.merge_cells(rng)
 
 
 def load_ops(path: Path) -> list[dict[str, Any]]:
@@ -193,7 +223,7 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             sheet_name = op.get("sheet")
             rng = op.get("range")
             if sheet_name in wb.sheetnames and isinstance(rng, str):
-                wb[sheet_name].merge_cells(rng)
+                _merge_checked(wb[sheet_name], rng)
                 applied += 1
     return applied
 

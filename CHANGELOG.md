@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `xlsx` skill: `edit_xlsx.py`'s `merge_cells` op and `create_xlsx.py`'s
+  `merged` spec passed a range straight to openpyxl, which accepts one that
+  intersects an existing merge and writes intersecting `mergeCell` entries --
+  a file Excel reports as corrupt and repairs on open -- while the run reported
+  `{"applied": 1}`. A malformed range already failed loudly with nothing
+  written; an overlapping one now fails the same way, before `wb.save`, with a
+  `ValueError` naming the sheet and both ranges. An *identical* range stays the
+  no-op it has always been -- it produces the same workbook -- and the
+  malformed path is unchanged (#3280).
 - Scheduler: a cron job's next fire time is found by jumping a field at a time
   instead of testing every minute for up to four years. A yearly schedule
   cost ~1 s (1.4 s with a timezone), a leap-day one ~4 s and an impossible
