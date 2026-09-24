@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Slack: `send_streaming` had no message-length rollover. `send()` splits a
+  long reply at `_SLACK_MESSAGE_TEXT_LIMIT`, but a streamed reply passed the
+  whole accumulated text to every `chat.update`, so past Slack's 40000-character
+  cap the update was rejected with `msg_too_long` and the reply failed part
+  way through. The open message is now edited up to the largest prefix that
+  fits, frozen there, and the rest opens a new message in the same thread --
+  the rollover Telegram, Discord and Teams already do. The final flush is also
+  skipped when nothing arrived after the last edit, as in those adapters, so a
+  short stream no longer ends with a `chat.update` that repeats the previous
+  one verbatim. A rollover inside a fenced code block keeps the block's text
+  intact: the splitter closes the fence on one message and reopens it on the
+  next, so the watermark advances by the source characters consumed rather
+  than by the closed head's length, and the reopener travels with the message
+  that continues the block (#3068).
 - `apply_patch`: the reason a patch was refused now reaches the model — the
   missing marker, the offending line, the bad hunk header, the path outside the
   workspace, the mismatched context — instead of "The tool received an invalid
