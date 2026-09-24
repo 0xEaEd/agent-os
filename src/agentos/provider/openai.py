@@ -191,6 +191,7 @@ def _should_disable_openrouter_reasoning_by_default(model: str) -> bool:
         "z-ai/glm-5",
         "z-ai/glm-5.1",
         "z-ai/glm-5.2",
+        "z-ai/glm-5.3",
     }
 
 

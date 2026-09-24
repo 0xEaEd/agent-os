@@ -1,0 +1,2804 @@
+/* Trading desk as a chat.
+
+   BRIEF
+   Subject: the agent that trades sits in a conversation; the money sits
+   beside it in the BOOK. Every fund-moving ask is a card at the point of
+   cause, decided where it was asked.
+
+   Type: SF for chrome and copy, JetBrains Mono tabular for every figure,
+   address, hash and status word. Micro labels are 11px/600, small caps at
+   ≤ 0.08em tracking, muted ink — never tertiary at that size.
+
+   Colour: lime is rationed. It lights only what is live (streaming, a running
+   mission), what waits for a signature, focus, and the one primary CTA on a
+   card. Warn is the amber pin for "needs your pen". Everything at rest is a
+   hairline and three tiers of ink; depth comes from luminance steps, not
+   glass or resting shadows.
+
+   Motion: 0/100/150/240 ms, ease-out for arrivals, in-out for moves. Motion
+   has three jobs — a state change, spatial continuity, one nudge when an
+   ask or a failure arrives. Nothing ambient, no idle loops. While an ask is
+   pending the desk goes still: data-still holds ticks, pulses and the
+   quote countdown.
+   Reduced motion takes the instant path.
+
+   Honesty: status is a word, not a spinner. No countdown the engine does not
+   own. A duration appears only when it was measured. "Confirmed" needs a
+   hash and a confirmed status, together.
+
+   THE ONE EXCEPTION — the desk power-on (data-enter="trading", 880 ms)
+   Trading is a mode of the chat, and the switch into it is the one event
+   the rules of stillness make room for: a single choreographed entrance,
+   then nothing moves. The desk is a set of instruments floating on a bench,
+   so the switch reads as the instruments being set down on it — one
+   movement, four beats, and nothing else.
+
+     0–420    a neutral veil, already up on the first frame, lifts off the
+              pane — it covers the route swap rather than dimming a void
+     0–760    the instruments land, 80 ms apart, each rising 10 px with its
+              own edge a step brighter, settling back to its hairline:
+                 head @0 · book @80 · wallets @160 · ticket @240
+              (in BOOK mode: the chat column @0, the BOOK @80)
+     0–600    what Trading adds to the status strip drops in; the seats rise
+     140–700  "TRADING DESK" stamps at 7% ink, holds, then dissolves
+     220–640  the head's four tiles stagger in, the allocation meter draws
+              left→right, and the hero value counts up from 0 (parts.tsx)
+     740–900  one lime hairline pulse on the mode pill — then stillness
+
+   Nothing in it waits. A route change drops the outgoing tree on the frame
+   the click lands, so any delay before the first instrument is a hole in the
+   middle of the switch — see the veil for the measurement that found one.
+
+   Restraint is the design. An earlier cut swept a saturated lime hairline
+   across the full width and outlined all four panels in lime as they
+   arrived: five high-chroma flashes (#ccff00 on #060608 is ~19:1) inside a
+   second, over a scale that resampled every glyph on the panels. It was
+   read as fast and tiring, and it spent the one rationed colour five times
+   for decoration. What survives is a luminance step and a rise. The only
+   lime left in the whole sequence is the pulse that confirms the click.
+
+   What does *not* move is as deliberate as what does: the mode pill and the
+   row it sits in are the control the switch was made with, and they stay put
+   through the whole sequence. Nothing animates a blur, a filter, a blend
+   mode or a scale — the first three cost a full-pane repaint per frame, the
+   last resamples type. The arriving edge is a static box-shadow on a
+   pseudo-element whose *opacity* animates, so it rides the compositor
+   instead of repainting four large panels.
+
+   Resting identity after the entrance: the lime live dot in the pill and a
+   1 px lime hairline on the composer capsule. Leaving Trading is the short
+   reverse (data-enter="chat", 320 ms). Reduced motion takes the instant
+   path; a pending ask (data-still) skips the entrance entirely. Every
+   timing lives in the custom properties below, once, and is mirrored by
+   ENTRANCE_MS / LEAVE_MS in mode-logic.ts. */
+
+/* The entrance's clock lives on the root, not on the shell. The veil is
+   painted by .mac-canvas, which is a *sibling* of the column the shell sits
+   in — declared on .mode-shell these never resolved there, the shorthand was
+   invalid at computed-value time, and the backdrop silently never ran. */
+:root {
+  --enter-total: 880ms;
+  /* The first instrument starts on the frame the route swaps — see the veil
+     below for why nothing here may wait. Four of them, one beat apart:
+     0 + 3 × 80 + 520 = 760. */
+  --enter-land-start: 0ms;
+  --enter-land: 520ms;
+  --enter-land-step: 80ms;
+  --enter-veil: 420ms;
+  --enter-count-start: 220ms;
+  --enter-count: 420ms;
+  /* The stamp arrives while the instruments are still landing and outlives
+     them: it is a watermark you are meant to read, so it needs a hold, not a
+     blink. 140 → 700, legible for ~280 ms of that. */
+  --enter-stamp-start: 140ms;
+  --enter-stamp: 560ms;
+  --enter-pulse-start: 740ms;
+  --enter-pulse: 160ms;
+  --leave-total: 320ms;
+  /* The desk's general ease-out is front-loaded: 80 % of the move in the
+     first third, which is right for a control answering a click and wrong
+     for a panel arriving — it reads as a snap. The entrance uses a plain
+     quadratic ease-out so the instruments settle instead of landing hard. */
+  --enter-ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.mode-shell {
+  --desk-ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --desk-ease-inout: cubic-bezier(0.45, 0, 0.2, 1);
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  isolation: isolate;
+}
+.mode-body {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.mode-body > .chat-desktop {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.trd-page,
+.mode-shell {
+  --trd-up: var(--ok);
+  --trd-down: var(--danger);
+  --trd-row: 30px;
+  --desk-ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --desk-ease-inout: cubic-bezier(0.45, 0, 0.2, 1);
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  isolation: isolate;
+}
+.trd-page__desk {
+  min-height: 0;
+  flex: 1;
+}
+
+/* ── Status strip ─────────────────────────────────────────────────────────── */
+
+.trd-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  /* Tall enough for the mode pill plus the bloom around its running edge. */
+  height: 50px;
+  padding: 0 12px 0 16px;
+  /* No rule under the strip: the app's toolbar rows never draw one, and a
+     full-width line here would cut across the BOOK's own header. */
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-strip__left,
+.trd-strip__right {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+.trd-strip__right {
+  justify-content: flex-end;
+}
+.trd-strip__mission {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.trd-strip__mission b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-strip__mission span {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.trd-strip__mission[data-state='running'] span,
+.trd-strip__mission[data-state='awaiting'] span {
+  color: var(--primary);
+}
+.trd-strip__mission[data-state='failed'] span {
+  color: var(--danger);
+}
+.trd-strip__more {
+  font-family: var(--font-mono);
+  color: var(--dim);
+}
+.trd-strip__word {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-strip__word[data-word='live'],
+.trd-strip__word[data-word='running'] {
+  color: var(--primary);
+}
+.trd-strip__word[data-word='awaiting'] {
+  color: var(--warn);
+}
+.trd-strip__pin {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.trd-strip__pin:hover {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+}
+.trd-strip__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.trd-strip__toggle:hover {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  color: var(--foreground);
+}
+.trd-strip__toggle[aria-pressed='true'] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+/* ── Frame: chat | BOOK ───────────────────────────────────────────────────── */
+
+.trd-frame {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  /* Transparent on purpose. The wash and the drafting grid are one canvas for
+     the whole content column (.mac-canvas in theme/tokens.css), so they run
+     continuously under the toolbar, the strip, the transcript, the composer
+     and the BOOK instead of stopping at a seam. */
+}
+.trd-chat {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+.trd-seats__spacer,
+.trd-card__spacer {
+  flex: 1;
+}
+.trd-chat__empty {
+  position: absolute;
+  inset: 0 0 20%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 40px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--dim);
+  pointer-events: none;
+}
+.trd-chat__empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+
+/* ── Seats ────────────────────────────────────────────────────────────────── */
+
+/* Everything docked over the capsule shares the capsule's column, so nothing
+   floats off to the pane's edge. */
+.trd-dock {
+  width: 100%;
+  max-width: var(--chat-col);
+  margin: 0 auto;
+}
+.trd-dock:empty {
+  display: none;
+}
+.trd-seatstack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trd-quick__chip--mission {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+.trd-seats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 4px;
+  container-type: inline-size;
+}
+/* The same plate the desk's venue pill wears: hairline, pill, 5 % wash — so
+   the chips under the composer and the chips in the BOOK read as one set. */
+.trd-seat {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  white-space: nowrap;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+.trd-seat:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+.trd-seat__anchor {
+  position: relative;
+  display: inline-flex;
+}
+.trd-seat:disabled {
+  opacity: 0.6;
+}
+.trd-seat__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.trd-quick {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  transition: opacity 100ms var(--desk-ease-out);
+}
+.trd-seats[data-typing] .trd-quick {
+  opacity: 0;
+  pointer-events: none;
+}
+.trd-quick__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--foreground);
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
+}
+.trd-quick__chip:hover {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+}
+/* Shrink chain.
+
+   The row's natural width is ~800px: permission 230 + provider 165 + wallet 84
+   + the four quick chips 287, plus gaps. Below that, flex had to take the
+   difference out of something — and since `.trd-quick` does not shrink, it came
+   entirely out of the three seats, which have `min-width: 0`. With the desk
+   panel open (a ~545px row) that left "Asks above $100.00 · $1,000.00/day"
+   rendered as "A." and the wallet seat as a bare squashed circle: two controls
+   that told the reader nothing and looked broken.
+
+   These breakpoints are the real measurements, not round numbers — each is the
+   width at which the row stops fitting once the step above it has been taken:
+     798  everything shown
+     599  without the permission text
+     546  also without the wallet name
+     430  also without the route name
+   so a label is dropped one step BEFORE flex would have crushed it. Information goes in order of how well the
+   glyph alone carries it — the padlock and the wallet read on their own, the
+   route name and the action verbs do not. Glyphs never shrink and never go. */
+@container (max-width: 800px) {
+  /* Addressed by test id, not position: `.trd-seat:first-child` also matches
+     the provider button, which is the only child of its own anchor wrapper —
+     so the "permission only" step silently took the route name with it. */
+  .trd-seat[data-testid='permission-seat'] .trd-seat__text {
+    display: none;
+  }
+}
+@container (max-width: 600px) {
+  .trd-seat[data-testid='wallet-seat'] .trd-seat__text {
+    display: none;
+  }
+}
+@container (max-width: 545px) {
+  .trd-seat[data-testid='provider-seat'] .trd-seat__text {
+    display: none;
+  }
+}
+@container (max-width: 430px) {
+  .trd-quick__chip {
+    padding: 0 6px;
+  }
+  .trd-quick__chip-text {
+    display: none;
+  }
+}
+/* The last line of defence. If a label still overruns — a long wallet name, a
+   translation that runs wide — the text ellipsises and the glyph survives at
+   full size, instead of the whole chip collapsing into a smear. */
+.trd-seat > *:not(.trd-seat__text),
+.trd-quick__chip > *:not(.trd-quick__chip-text) {
+  flex-shrink: 0;
+}
+
+/* ── Mission strip + controls ────────────────────────────────────────────── */
+
+.trd-mstrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  min-height: 18px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-mstrip__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.trd-mstrip__item b {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-mstrip__word {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.trd-mstrip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--dim);
+}
+.trd-mstrip__item[data-state='running'] .trd-mstrip__dot,
+.trd-mstrip__item[data-state='awaiting'] .trd-mstrip__dot {
+  background: var(--primary);
+}
+.trd-mstrip__item[data-state='running'] .trd-mstrip__word {
+  color: var(--primary);
+}
+.trd-mstrip__item[data-state='awaiting'] .trd-mstrip__word {
+  color: var(--warn);
+}
+.trd-mstrip__item[data-state='failed'] .trd-mstrip__dot,
+.trd-mstrip__item[data-state='failed'] .trd-mstrip__word {
+  background: var(--danger);
+  color: var(--danger);
+}
+.trd-mctl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+.trd-mctl__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 2px 0 10px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-mctl__row[data-state='running'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+.trd-mctl__name {
+  max-width: 180px;
+  margin-right: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.trd-mctl__row .mac-button,
+.trd-mctl__row button {
+  width: 24px;
+  height: 24px;
+}
+.trd-mctl__start {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px 0 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--foreground);
+  box-shadow: inset 0 0 0 0.5px var(--border);
+}
+.trd-mctl__start:hover {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+/* ── Approvals region + card ─────────────────────────────────────────────── */
+
+.trd-asks {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: min(56rem, calc(100% - 3rem));
+  max-height: 40vh;
+  margin: 0 auto;
+  padding: 6px 0 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.trd-card {
+  border-radius: var(--radius-surface);
+  padding: 12px 14px 12px;
+  background: color-mix(in srgb, var(--elevated) 92%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, var(--border)),
+    inset 3px 0 0 var(--warn);
+  animation: trd-card-in 150ms var(--desk-ease-out) both;
+}
+.trd-card[data-risk='high'] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, var(--border)),
+    inset 3px 0 0 var(--danger);
+}
+.trd-asks__stamp .trd-card {
+  padding: 8px 14px;
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  animation: none;
+}
+.trd-asks__stamp .trd-card__facts,
+.trd-asks__stamp .trd-card__note {
+  display: none;
+}
+@keyframes trd-card-in {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+.trd-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.trd-card__title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--warn);
+}
+.trd-card[data-risk='high'] .trd-card__title {
+  color: var(--danger);
+}
+.trd-card__stamps {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Closes a settled receipt by hand. Only ever on a settled card: an ask is
+   answered with Approve or Reject, never waved away. */
+.trd-card__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-right: -4px;
+  border-radius: var(--radius-compact);
+  color: var(--dim);
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+.trd-card__dismiss:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.trd-card__dismiss:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-stamp[data-tone='danger'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.trd-card__legs {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 8px 0 10px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.trd-card__legs span {
+  color: var(--dim);
+}
+.trd-card__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 4px 18px;
+  margin: 0;
+}
+.trd-card__fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 20px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 12px;
+}
+.trd-card__fact dt {
+  color: var(--muted-foreground);
+}
+.trd-card__fact dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.trd-card__fact[data-tone='warn'] dd {
+  color: var(--warn);
+}
+.trd-card__fact[data-tone='danger'] dd {
+  color: var(--danger);
+}
+.trd-card__note {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.trd-card__note-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+/* The agent's free text: bounded and scrollable so a multi-kilobyte note
+ * cannot push Approve/Reject below the fold, and bidi-isolated left-to-right
+ * so a right-to-left override in it cannot reorder or spoof the facts. */
+.trd-card__note-body {
+  margin: 2px 0 0;
+  max-height: 96px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-style: italic;
+  unicode-bidi: isolate;
+  direction: ltr;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.trd-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.trd-card__reason {
+  flex: 1 1 240px;
+  height: 28px;
+  font-size: 12px;
+}
+.trd-card__actions [data-armed] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.trd-card__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-card__link:hover {
+  color: var(--foreground);
+}
+
+/* Trust = stillness: while an ask is pending nothing on the desk moves. */
+.trd-chat[data-still] ~ .trd-book .trd-tick,
+.trd-chat[data-still] ~ .trd-book .trd-status[data-tone='live']::before,
+.trd-chat[data-still] .chat-history-loading__dot,
+.trd-chat[data-still] .composer[data-busy='true']::after {
+  animation-play-state: paused !important;
+}
+/* The quote's countdown edge is a transition, not a loop, so stillness means
+   it stops gliding rather than pauses a keyframe. */
+.trd-chat[data-still] .trd-cta::after {
+  transition: none;
+}
+.trd-chat[data-still] .trd-card {
+  animation-duration: 150ms;
+}
+
+/* ── Ledger rows ─────────────────────────────────────────────────────────── */
+
+.trd-ledger {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  margin: 4px 0;
+  padding: 4px 8px 4px 6px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.trd-ledger[data-state='running'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, transparent);
+}
+.trd-ledger[data-state='error'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.trd-ledger__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.trd-ledger__mark[data-provider] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+/* The route's own logo replaces the letter when we have one. */
+.trd-ledger__mark > svg {
+  width: 15px;
+  height: 15px;
+}
+.trd-ledger__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.trd-ledger__title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.trd-ledger__detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.trd-ledger__summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-ledger[data-state='error'] .trd-ledger__summary {
+  color: var(--danger);
+}
+.trd-ledger__side {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.trd-ledger__stamp {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.trd-ledger__stamp[data-tone='warn'] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.trd-ledger__stamp[data-tone='ok'] {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.trd-ledger__link,
+.trd-ledger__raw {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-ledger__link:hover,
+.trd-ledger__raw:hover {
+  color: var(--foreground);
+}
+.trd-ledger__raw[aria-expanded='true'] {
+  color: var(--foreground);
+}
+.trd-ledger__clock,
+.trd-ledger__dur {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.trd-lgroup {
+  margin: 4px 0;
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.trd-lgroup__summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  cursor: default;
+  list-style: none;
+}
+.trd-lgroup__summary::-webkit-details-marker {
+  display: none;
+}
+.trd-lgroup__glyphs {
+  font-family: var(--font-mono);
+  color: var(--muted-foreground);
+}
+.trd-lgroup__title {
+  font-weight: 600;
+}
+.trd-lgroup > .trd-ledger {
+  margin: 2px 6px;
+}
+
+/* ── BOOK ─────────────────────────────────────────────────────────────────── */
+
+/* The BOOK is the one instrument on the chat's bench, so it wears the same
+   card the desk's three columns do: a hairline, a surface a step above the
+   canvas, a 1 px top highlight — floating in a gutter rather than butted up
+   against the window edge with a rule down its side. */
+.trd-book {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  min-height: 0;
+  flex-direction: column;
+  container: book / inline-size;
+  margin: 10px 12px 12px 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-surface);
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 4%, transparent);
+  overflow: clip;
+  transition: width 240ms var(--desk-ease-inout);
+}
+body[data-dragging] .trd-book {
+  transition: none;
+}
+.trd-book--spine {
+  width: 48px;
+  align-items: center;
+  gap: 4px;
+  padding-top: 8px;
+}
+/* Collapsed, the card is a spine: the same edge, none of the width. */
+.trd-book--spine .trd-book__spinebtn:first-child {
+  margin-bottom: 2px;
+}
+.trd-book__spinebtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-control);
+  color: var(--muted-foreground);
+}
+.trd-book__spinebtn:hover {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  color: var(--foreground);
+}
+.trd-book__dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warn);
+}
+.trd-book__spinelabel {
+  margin-top: auto;
+  padding-bottom: 14px;
+  writing-mode: vertical-rl;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-book__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  z-index: 2;
+  width: 8px;
+  cursor: col-resize;
+}
+.trd-book__handle:hover,
+body[data-dragging] .trd-book__handle {
+  background: color-mix(in srgb, var(--primary) 25%, transparent);
+}
+.trd-book__head {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  min-height: 38px;
+  padding: 0 4px 0 6px;
+  border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+.trd-book__tabs {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+.trd-book__tab {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+.trd-book__tab:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-book__tab[aria-selected='true'] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.trd-book__tab:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-book__count {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.trd-book__body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+.trd-book__body > .trd-ticket {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+/* The BOOK's tab row already says "Swap", and two stacked toolbar bands in a
+   300 px rail is chrome twice over: the ticket keeps only the control the tab
+   cannot carry — which chain it routes on. */
+.trd-book .trd-ticket__head {
+  min-height: 0;
+  padding: 8px 8px 0 10px;
+  justify-content: flex-end;
+  border-bottom: 0;
+  background: transparent;
+}
+.trd-book .trd-ticket__title {
+  display: none;
+}
+.trd-book__portfolio {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+}
+/* The head is the desk's, compressed: the card it already sits inside supplies
+   the edge, so here it is a section of the BOOK rather than a card of its own —
+   a hairline under it, no border, no radius, no corner light. */
+.trd-book__hero {
+  gap: 10px;
+  padding: 12px 12px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.trd-book__hero::before {
+  display: none;
+}
+.trd-book__hero .trd-hero__figure > b {
+  font-size: 30px;
+}
+.trd-book__hero .trd-hero__stats {
+  grid-template-columns: 1fr 1fr;
+}
+.trd-book__hero .trd-delta {
+  height: 22px;
+  padding: 0 8px 0 6px;
+  font-size: 11px;
+}
+/* The identity line, sized for 300 px: the mark comes down to 30, the address
+   to the size a label wears, and the actions lose their padding rather than
+   their targets. The BOOK has no rail, so it has no rail toggle either. */
+/* At the BOOK's 300 px floor the address wants 91 px and the gap was eating
+   the last five of them, clipping "…da97". Eight is enough to separate the
+   identity from the actions and leaves the address whole. */
+.trd-head[data-compact='true'] {
+  gap: 8px;
+}
+.trd-head[data-compact='true'] .trd-head__mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+.trd-head[data-compact='true'] .trd-head__stack {
+  width: 30px;
+  height: 30px;
+  padding-left: 2px;
+}
+.trd-head[data-compact='true'] .trd-head__stack img {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+.trd-head[data-compact='true'] .trd-head__stack img + img {
+  margin-left: -8px;
+}
+.trd-head[data-compact='true'] .trd-head__id {
+  gap: 8px;
+}
+.trd-head[data-compact='true'] .trd-head__line {
+  font-size: 14px;
+}
+.trd-head[data-compact='true'] .trd-head__sub {
+  font-size: 11px;
+}
+.trd-head[data-compact='true'] .trd-head__acts {
+  gap: 0;
+}
+.trd-book__body .trd-tablewrap {
+  flex: 1;
+  min-height: 0;
+}
+/* Narrow rail: asset, amount, value — the rest waits for the full desk. */
+.trd-book .trd-table {
+  min-width: 0;
+  table-layout: fixed;
+  width: 100%;
+}
+.trd-book .trd-col--change,
+.trd-book .trd-col--cost,
+.trd-book .trd-col--price,
+.trd-book .trd-col--pnl,
+.trd-book .trd-col--actions {
+  display: none;
+}
+.trd-book .trd-table .trd-col--amount,
+.trd-book .trd-table .trd-col--value {
+  min-width: 0;
+  width: 84px;
+}
+.trd-book .trd-table th,
+.trd-book .trd-table td {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.trd-book .trd-table td.trd-col--asset {
+  padding-left: 12px;
+}
+/* The shared renderer's own "No messages yet." would sit under the desk's hint. */
+.trd-chat .chat-empty {
+  display: none;
+}
+
+/* ── Contract modal ──────────────────────────────────────────────────────── */
+
+.trd-contract {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.trd-contract__goal {
+  min-height: 64px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.trd-contract__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.trd-contract__checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.trd-contract__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.trd-contract__limits {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-contract__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-contract__toggle svg[data-open='true'] {
+  rotate: 180deg;
+}
+.trd-contract__prompt {
+  max-height: 240px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  user-select: text;
+}
+.trd-contract legend {
+  margin-bottom: 4px;
+}
+.trd-contract__preset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trd-contract__preset p {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-contract__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  align-self: flex-start;
+  margin-left: -3px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-contract__back:hover {
+  color: var(--foreground);
+}
+/* The two or three numbers that actually differ, side by side. */
+.trd-contract__knobs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.trd-contract__advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.trd-contract__caveat {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--warning, var(--foreground)) 8%, transparent);
+}
+
+/* ── Mission catalogue ───────────────────────────────────────────────────── */
+
+.trd-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.trd-picker__lead {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.trd-picker__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trd-picker__group h3 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-picker__group p {
+  margin-top: -4px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-picker__grid {
+  display: grid;
+  /* Two per row at the catalogue width — ~355px each, enough that a title
+     and its hint each fit on one line. */
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 8px;
+}
+.trd-picker__card {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: left;
+  background: color-mix(in srgb, var(--foreground) 2%, transparent);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+.trd-picker__card:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-picker__card svg {
+  margin-top: 1px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.trd-picker__card:hover svg {
+  color: var(--foreground);
+}
+.trd-picker__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.trd-picker__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.trd-picker__text b {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.trd-picker__text span {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted-foreground);
+}
+/* Said on the card, not only in the group heading: the safe ones are the
+   way in, and that has to be legible at the moment of choosing. */
+.trd-picker__safe {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--trd-live, var(--primary));
+  background: color-mix(in srgb, var(--trd-live, var(--primary)) 14%, transparent);
+}
+.trd-picker__safe svg {
+  color: inherit;
+}
+.trd-picker__card--custom {
+  align-items: center;
+  background: none;
+  border-style: dashed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trd-card,
+  .trd-book,
+  .trd-quick {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* ── Mode pill (Chat | Trading) ──────────────────────────────────────────── */
+
+.trd-strip__centre {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+/* The pill is the control the switch is made with, so it is sized to be the
+   object you aim at in the strip, and a light runs its edge. That light is
+   the one standing exception to "nothing ambient" — it is what tells you this
+   row holds a mode, not a label. The travelling angle is a registered custom
+   property so the sweep animates on one small element instead of repainting
+   a gradient across the strip. */
+@property --trd-pill-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+.trd-pill {
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  height: 38px;
+  padding: 4px;
+  /* Neutral while it is only a chat switch; lime once it is the desk's, so
+     the rationed colour still means "this is live money". */
+  --trd-pill-glow: color-mix(in srgb, var(--foreground) 72%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.trd-pill[data-mode='trading'] {
+  --trd-pill-glow: var(--primary);
+}
+
+/* The running edge, twice: a crisp 1.5 px ring (::before) and the same arc
+   blurred out behind it (::after) so it reads as light rather than paint.
+   Both are ring-only — the conic fill is masked down to the padding box —
+   and both sit under the wordmarks, which own z-index 1. */
+.trd-pill::before,
+.trd-pill::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--radius-pill);
+  padding: 1.5px;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--trd-pill-angle),
+    transparent 0deg 210deg,
+    color-mix(in srgb, var(--trd-pill-glow) 28%, transparent) 288deg,
+    var(--trd-pill-glow) 344deg,
+    color-mix(in srgb, var(--trd-pill-glow) 28%, transparent) 352deg,
+    transparent 360deg
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: trd-pill-run 3.2s linear infinite;
+}
+.trd-pill::after {
+  filter: blur(5px);
+  opacity: 0.85;
+}
+@keyframes trd-pill-run {
+  to {
+    --trd-pill-angle: 360deg;
+  }
+}
+.trd-pill__thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  border-radius: var(--radius-pill);
+  background: var(--elevated);
+  box-shadow: 0 0 0 0.5px var(--border);
+  transition: transform 150ms var(--desk-ease-out);
+}
+.trd-pill[data-mode='trading'] .trd-pill__thumb {
+  transform: translateX(100%);
+}
+.trd-pill__seg {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 118px;
+  padding: 0 18px;
+  border-radius: var(--radius-pill);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--muted-foreground);
+  transition: color 100ms ease-out;
+}
+.trd-pill__seg[aria-selected='true'] {
+  color: var(--foreground);
+}
+.trd-pill__seg:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--dim);
+  transition: background-color 150ms ease-out;
+}
+.trd-pill[data-mode='trading'] .trd-pill__dot {
+  background: var(--primary);
+}
+.trd-pill__dot[data-live] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+/* ── Gate banner (over the chat, never instead of it) ───────────────────── */
+
+.trd-gate {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 20px 0;
+  padding: 10px 12px 10px 14px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--border);
+  font-size: 12.5px;
+}
+.trd-gate__mark {
+  display: inline-flex;
+  color: var(--primary);
+}
+.trd-gate__text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--muted-foreground);
+}
+.trd-gate__text b {
+  color: var(--foreground);
+}
+.trd-gate__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+/* ── The chat inside the desk frame ─────────────────────────────────────── */
+
+.trd-frame > .chat-desktop {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+}
+.chat-desktop[data-desk] .chat-thread {
+  --chat-col: min(56rem, calc(100% - 3rem));
+}
+.chat-desktop[data-desk] .composer-shell {
+  padding-top: 0;
+}
+/* Resting identity: the capsule wears a lime hairline while at the desk. */
+.chat-desktop[data-desk] .composer {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.chat-desktop[data-desk][data-still] .chat-history-loading__dot,
+.chat-desktop[data-desk][data-still] .composer[data-busy='true']::after,
+.chat-desktop[data-desk][data-still] ~ .trd-book .trd-tick,
+.chat-desktop[data-desk][data-still] ~ .trd-book .trd-status[data-tone='live']::before {
+  animation-play-state: paused;
+}
+.chat-desktop[data-desk][data-still] .trd-card,
+.chat-desktop[data-desk][data-still] .trd-cta::after {
+  transition: none;
+}
+
+/* ── The entrance ────────────────────────────────────────────────────────── */
+
+/* 0–420: the veil, and the reason the sequence has no run-up.
+
+   Switching mode is a route change: React drops the whole chat tree on the
+   frame the click lands. A screencast of the switch showed the content column
+   going black for ~190 ms — the outgoing tree gone, the incoming panels still
+   waiting on their delay — then everything fading up. That black gap is what
+   read as a stutter; the frame timings across the whole switch are clean
+   (120 fps, zero frames over 25 ms), so there was never anything to smooth.
+
+   So the veil is already up on the first frame: it is the cover over the
+   swap, not a layer that dims a room which is empty anyway, and it lifts as
+   the instruments settle. No lime in it — the wash is a luminance step, and
+   the accent is rationed to the one pulse that confirms the click. */
+.mac-content:has(.mode-shell[data-enter='trading']) .mac-canvas::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--background);
+  animation: desk-veil var(--enter-veil) var(--enter-ease) both;
+}
+@keyframes desk-veil {
+  from {
+    opacity: 0.42;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* 0–760: the instruments land. One movement, one beat apart, and that is the
+   whole of it. The first starts on frame zero, and none of them start from
+   nothing — a pane of dim panels reads as a mode change, a pane of *no*
+   panels reads as a fault.
+
+   What is deliberately NOT here any more: a saturated lime hairline sweeping
+   the full width, and four large panels outlined in lime that ramp up and
+   back down. Both were flashes — #ccff00 on #060608 is ~19:1, and five of
+   them firing inside a second is the thing that made the switch hurt to
+   watch. The arrival is now carried by the panel's own edge brightening a
+   step in neutral ink, which says "this just arrived" without a flash.
+
+   No scale, either: scaling a panel full of type resamples every glyph for
+   the length of the animation, and that shimmer was the other half of the
+   complaint. Only translate and opacity move. */
+.mode-shell[data-enter='trading']
+  :is(.trd-hero, .trd-panel, .trd-rail, .trd-ticket, .trd-book, .trd-frame > .chat-desktop) {
+  will-change: transform, opacity;
+  animation: desk-land var(--enter-land) var(--enter-ease)
+    calc(var(--enter-land-start) + var(--enter-land-step) * var(--land, 0)) both;
+}
+.mode-shell[data-enter='trading'] .trd-panel,
+.mode-shell[data-enter='trading'] .trd-book {
+  --land: 1;
+}
+.mode-shell[data-enter='trading'] .trd-rail {
+  --land: 2;
+}
+.mode-shell[data-enter='trading'] .trd-ticket {
+  --land: 3;
+}
+@keyframes desk-land {
+  from {
+    opacity: 0.2;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* …and each lands with its own edge a step brighter, settling back into the
+   hairline it rests on. Drawn inside, so the panels that clip their content
+   keep it; animated on opacity, so four large panels never repaint. */
+.mode-shell[data-enter='trading']
+  :is(.trd-hero, .trd-panel, .trd-rail, .trd-ticket, .trd-book)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 20%, transparent);
+  opacity: 0;
+  animation: desk-edge var(--enter-land) var(--enter-ease)
+    calc(var(--enter-land-start) + var(--enter-land-step) * var(--land, 0)) both;
+}
+.mode-shell[data-enter='trading'] :is(.trd-hero, .trd-panel, .trd-rail, .trd-ticket) {
+  position: relative;
+}
+@keyframes desk-edge {
+  0% {
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 130–490: the row itself must not move. The mode pill lives in it in both
+   modes and is the control the user just clicked — dropping the whole strip
+   blanked it the instant it was pressed (a `both` fill applies the from-state
+   through the delay) and snapped it back later. Only what Trading *adds* to
+   the row arrives. */
+.mode-shell[data-enter='trading'] .trd-strip__mission,
+.mode-shell[data-enter='trading'] .trd-strip__more,
+.mode-shell[data-enter='trading'] .trd-strip__word,
+.mode-shell[data-enter='trading'] .trd-strip__pin,
+.mode-shell[data-enter='trading'] .trd-strip__toggle {
+  animation: desk-drop var(--enter-land) var(--enter-ease) var(--enter-land-start) both;
+}
+@keyframes desk-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.mode-shell[data-enter='trading'] .trd-seats,
+.mode-shell[data-enter='trading'] .trd-mstrip,
+.mode-shell[data-enter='trading'] .trd-mctl {
+  animation: desk-rise var(--enter-land) var(--enter-ease) calc(var(--enter-land-start) + 80ms) both;
+}
+@keyframes desk-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 300–600: the head's own figures settle last — four tiles a beat apart, the
+   allocation meter drawn left→right. The hero count-up is JavaScript
+   (Book.tsx) on the same clock. */
+.mode-shell[data-enter='trading'] .trd-stat {
+  animation: desk-tile 340ms var(--enter-ease)
+    calc(var(--enter-count-start) + 60ms * var(--tile, 0)) both;
+}
+.mode-shell[data-enter='trading'] .trd-stat:nth-child(2) {
+  --tile: 1;
+}
+.mode-shell[data-enter='trading'] .trd-stat:nth-child(3) {
+  --tile: 2;
+}
+.mode-shell[data-enter='trading'] .trd-stat:nth-child(4) {
+  --tile: 3;
+}
+@keyframes desk-tile {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.mode-shell[data-enter='trading'] .trd-alloc__bar {
+  transform-origin: left center;
+  animation: desk-draw var(--enter-count) var(--enter-ease) var(--enter-count-start) both;
+}
+@keyframes desk-draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* 200–600: the stamp. A watermark the instruments land through, not a title
+   card they wait behind — so it is held at 10 % ink and kept off the weight
+   of the value it sits behind. Only opacity moves — scaling type this size
+   resamples every glyph for the length of the hold, and that shimmer is half
+   of what made the switch tiring to watch. */
+.trd-poweron {
+  position: absolute;
+  inset: 0 0 22%;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: clamp(34px, 5.5vw, 74px);
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--foreground);
+  opacity: 0;
+  will-change: opacity;
+  animation: desk-stamp var(--enter-stamp) linear var(--enter-stamp-start) both;
+}
+@keyframes desk-stamp {
+  0% {
+    opacity: 0;
+  }
+  26% {
+    opacity: 0.07;
+  }
+  64% {
+    opacity: 0.07;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* One hairline pulse on the pill, and the sequence is over. `forwards`, not
+   `both`: a backwards fill lit the ring the moment the pill was clicked and
+   held it for the whole entrance, which is a state, not a pulse. */
+.mode-shell[data-enter='trading'] .trd-pill {
+  animation: desk-pulse var(--enter-pulse) ease-out var(--enter-pulse-start) forwards;
+}
+@keyframes desk-pulse {
+  from {
+    box-shadow:
+      inset 0 0 0 0.5px var(--hairline),
+      0 0 0 1px var(--primary),
+      0 0 12px 2px color-mix(in srgb, var(--primary) 40%, transparent);
+  }
+  to {
+    box-shadow: inset 0 0 0 0.5px var(--hairline);
+  }
+}
+
+/* Leaving: the short reverse — the chat drops back into the space the desk
+   was holding. No filter: a saturate() on the whole body is a full-pane
+   repaint for every frame of the exit, and it tinted anything captured
+   mid-flight. */
+.mode-shell[data-enter='chat'] .mode-body {
+  animation: desk-settle var(--leave-total) var(--enter-ease) both;
+}
+@keyframes desk-settle {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mode-shell[data-enter],
+  .mode-shell[data-enter] *,
+  .mode-shell[data-enter] *::before,
+  .mode-shell[data-enter] *::after,
+  .mac-content:has(.mode-shell[data-enter]) .mac-canvas::after,
+  .trd-poweron {
+    animation: none !important;
+  }
+  .trd-pill__thumb {
+    transition: none;
+  }
+  /* The ring stays — it is the control's identity, not a flourish — but it
+     stops travelling and rests as an even hairline of the same light. */
+  .trd-pill::before {
+    animation: none !important;
+    background: var(--trd-pill-glow);
+    opacity: 0.55;
+  }
+  .trd-pill::after {
+    display: none;
+  }
+}
+
+/* ── Orders inside the BOOK ─────────────────────────────────────────────────
+   The order row is laid out for the wide desk (mark, trade, value, who,
+   door). A 300–520 px rail has no room for the last three as columns, so the
+   row unfolds into three lines against one gutter: the trade with its figure,
+   the caption under it, then who and when beside the door. */
+.trd-book .trd-order {
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 3px 8px;
+  padding: 9px 10px;
+}
+.trd-book .trd-order__mark {
+  width: 20px;
+  height: 20px;
+  align-self: start;
+  grid-area: 1 / 1 / span 3 / 2;
+}
+.trd-book .trd-order__head {
+  grid-area: 1 / 2 / 2 / 3;
+  font-size: 11.5px;
+}
+.trd-book .trd-order__value {
+  grid-area: 1 / 3 / 2 / 4;
+}
+.trd-book .trd-order__meta {
+  grid-area: 2 / 2 / 3 / 4;
+}
+.trd-book .trd-order__who {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  grid-area: 3 / 2 / 4 / 3;
+  justify-content: flex-start;
+}
+.trd-book .trd-order__link {
+  grid-area: 3 / 3 / 4 / 4;
+  align-self: center;
+}
+.trd-book .trd-order__reason,
+.trd-book .trd-order__note {
+  overflow-wrap: anywhere;
+}
+
+/* ── History inside the BOOK ────────────────────────────────────────────────
+   Six columns need ~520 px; the rail stacks them into two lines:
+   glyph · kind/sub · value · link, then legs · who/time under it. */
+.trd-book__body[data-tab='history'] > *,
+.trd-book__body[data-tab='orders'] > * {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.trd-book .trd-day {
+  top: 0;
+  padding: 8px 12px 4px;
+}
+.trd-book .trd-entry {
+  grid-template-columns: 24px minmax(0, 1fr) auto 28px;
+  grid-template-areas:
+    'glyph what value link'
+    'glyph legs who link';
+  align-items: start;
+  gap: 2px 8px;
+  padding: 8px 8px 8px 12px;
+}
+.trd-book .trd-entry__glyph {
+  grid-area: glyph;
+  align-self: center;
+}
+.trd-book .trd-entry__what {
+  grid-area: what;
+}
+.trd-book .trd-entry__legs {
+  grid-area: legs;
+}
+.trd-book .trd-entry__value {
+  grid-area: value;
+  white-space: nowrap;
+}
+.trd-book .trd-entry__who {
+  grid-area: who;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
+}
+.trd-book .trd-entry__link {
+  grid-area: link;
+  align-self: center;
+}
+.trd-book .trd-entry__link:empty {
+  display: none;
+}
+@container book (max-width: 339px) {
+  .trd-entry {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    grid-template-areas:
+      'glyph what value'
+      'glyph legs who';
+  }
+  .trd-entry__link {
+    display: none;
+  }
+}
+
+/* Holdings inside a narrow rail: the asset cell must never widen the table. */
+.trd-book .trd-asset__symbol,
+.trd-book .trd-asset__text {
+  min-width: 0;
+}
+/* A long ticker keeps its letters; the chain chip drops to the next line. */
+.trd-book .trd-asset__symbol {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+.trd-book .trd-asset__ticker {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trd-book .trd-asset__chain,
+.trd-book .trd-asset__warn {
+  flex-shrink: 0;
+}
+@container book (max-width: 339px) {
+  .trd-table .trd-col--amount,
+  .trd-table .trd-col--value {
+    width: 72px;
+  }
+  .trd-asset__chain {
+    display: none;
+  }
+}
+
+/* ── Sends, revokes, batches on the card ─────────────────────────────────── */
+
+.trd-card[data-kind='send'] .trd-card__title,
+.trd-card[data-kind='revoke'] .trd-card__title {
+  color: var(--warn);
+}
+.trd-card[data-kind='send'][data-risk='high'] .trd-card__title {
+  color: var(--danger);
+}
+.trd-stamp[data-tone='warn'] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+/* Every leg of a multisend, address in full: the one thing to read. */
+.trd-card__legs-list {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+.trd-card__legs-list > summary {
+  cursor: default;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-card__legs-list ol {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: leg;
+}
+.trd-card__legs-list li {
+  display: grid;
+  grid-template-columns: 1.6em minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  border-bottom: 1px solid var(--hairline);
+  counter-increment: leg;
+}
+.trd-card__legs-list li::before {
+  content: counter(leg);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.trd-card__legs-list li[data-status='failed'] {
+  color: var(--danger);
+}
+.trd-card__addr {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--foreground);
+}
+.trd-card__legfail {
+  font-size: 11px;
+  color: var(--danger);
+}
+.trd-asks__stamp .trd-card__legs-list {
+  display: none;
+}
+
+/* ── Send sheet / decode sheet ───────────────────────────────────────────── */
+
+.trd-send,
+.trd-decode {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.trd-send__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.trd-send__field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.trd-send__field--wide {
+  grid-column: 1 / -1;
+}
+.trd-send__field > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted-foreground);
+}
+.trd-send__field > small {
+  color: var(--dim);
+}
+.trd-send__field > small[data-tone='danger'] {
+  color: var(--danger);
+}
+/* Armed: what the second click sends, written out — every address in full. */
+.trd-send__review {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-compact);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.trd-send__review h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.trd-send__review dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+}
+.trd-send__review dl div {
+  display: flex;
+  gap: 6px;
+}
+.trd-send__review dt {
+  color: var(--muted-foreground);
+}
+.trd-send__review dd {
+  margin: 0;
+}
+.trd-send__review ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  list-style: none;
+}
+.trd-send__review li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.trd-send__review li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.trd-send__review li b {
+  flex-shrink: 0;
+  font-weight: 500;
+}
+.trd-send__review p {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  font-weight: 600;
+}
+.trd-send__field[data-error] .mac-input {
+  box-shadow: 0 0 0 1px var(--danger);
+}
+.trd-send__count {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--foreground);
+}
+.trd-send__list {
+  min-height: 72px;
+  resize: vertical;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.trd-send__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.trd-send__warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+}
+.trd-send__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-send__toggle:hover {
+  color: var(--foreground);
+}
+.trd-send__prompt {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-compact);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-modal__foot .mac-button[data-armed] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.trd-decode__empty {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.trd-decode__result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.trd-decode__desc {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--foreground);
+}
+.trd-decode__legs,
+.trd-decode__move {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  font-size: 12.5px;
+}
+.trd-decode__moves h4 {
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-decode__moves ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trd-decode__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+[data-tone='danger'] {
+  color: var(--danger);
+}
+
+/* ── Allowances ──────────────────────────────────────────────────────────── */
+
+.trd-allow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.trd-allow__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.trd-allow__lead {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-allow__warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+}
+.trd-allow__loading {
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+.trd-allow__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trd-allow__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.trd-allow__row[data-unlimited] {
+  box-shadow: inset 3px 0 0 var(--danger);
+  padding-left: 8px;
+}
+.trd-allow__spender {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  font-size: 12px;
+}
+.trd-allow__spender b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trd-allow__addr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-allow__addr:hover {
+  color: var(--foreground);
+}
+.trd-allow__amount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 12px;
+  text-align: right;
+}
+.trd-allow__amount small {
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+}
+.trd-allow .mac-button[data-armed] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+@container (max-width: 380px) {
+  .trd-allow__row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .trd-allow__spender {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ── Network pips (BOOK header) ──────────────────────────────────────────── */
+
+.trd-pips {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  margin-right: 4px;
+}
+.trd-pip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.trd-pip:hover {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-pip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.trd-pip__label {
+  white-space: nowrap;
+}
+.trd-pip[data-state='ok'] .trd-pip__dot {
+  background: var(--ok, #34c759);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok, #34c759) 25%, transparent);
+}
+.trd-pip[data-state='stale'] .trd-pip__dot {
+  background: var(--warn);
+}
+.trd-pip[data-state='down'] .trd-pip__dot {
+  background: var(--danger);
+}
+
+.trd-allow__scanning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+/* Five tabs and the network pips do not fit a narrow BOOK: the tabs drop to
+   their icons (the title carries the word) and the pips to their dots. */
+.trd-book[data-narrow] .trd-book__tab > span:not(.trd-book__count) {
+  display: none;
+}
+.trd-book[data-narrow] .trd-book__tab {
+  padding: 0 7px;
+}
+/* A pip that is not green says why in words, not just in colour. */
+.trd-pip[data-state='stale'],
+.trd-pip[data-state='down'] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.trd-pip[data-state='down'] {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+/* ── Tools tab ───────────────────────────────────────────────────────────── */
+
+.trd-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 14px;
+}
+.trd-tools__lead {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+.trd-tools__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  margin-bottom: 2px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-tools__back:hover {
+  color: var(--foreground);
+}
+/* One card per tool: the same plate as the hero's stat tiles, with a
+   left-aligned icon, a name, and the one line that says whether it needs you. */
+.trd-tool {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  border-radius: var(--radius-surface);
+  text-align: left;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  transition:
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+button.trd-tool:hover {
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, var(--border));
+}
+button.trd-tool:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-tool[data-tone='warn'] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, var(--border)),
+    inset 3px 0 0 var(--warn);
+}
+.trd-tool__icon {
+  width: 18px;
+  height: 18px;
+  color: var(--muted-foreground);
+}
+.trd-tool[data-tone='warn'] .trd-tool__icon {
+  color: var(--warn);
+}
+.trd-tool__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.trd-tool__text b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-tool__text span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-tool[data-tone='warn'] .trd-tool__text span {
+  color: var(--warn);
+}
+.trd-tool__go {
+  width: 14px;
+  height: 14px;
+  color: var(--dim);
+}
+.trd-tool--static {
+  cursor: default;
+}
+.trd-tool__refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  color: var(--dim);
+}
+.trd-tool__refresh:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-tool__refresh:disabled {
+  cursor: default;
+}
+.trd-tool__chains {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--hairline);
+  list-style: none;
+}
+.trd-tool__chains li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-tool__chains li b {
+  min-width: 2.2em;
+  color: var(--foreground);
+}
+.trd-tool__chains li[data-state='ok'] .trd-pip__dot {
+  background: var(--ok, #34c759);
+}
+.trd-tool__chains li[data-state='stale'] .trd-pip__dot {
+  background: var(--warn);
+}
+.trd-tool__chains li[data-state='down'] .trd-pip__dot {
+  background: var(--danger);
+}
+/* The figures wrap to a second line rather than clip: the latency at the
+   end is the one that says whether the RPC is slow. */
+.trd-tool__chains li {
+  flex-wrap: wrap;
+}
+.trd-tool__chains li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* In a narrow BOOK the head block goes first; it is the figure nobody reads. */
+@container book (max-width: 339px) {
+  .trd-tool__head {
+    display: none;
+  }
+}
+
+/* ── Tools catalogue (same cut as the mission catalogue) ─────────────────── */
+
+.trd-picker__card[data-tone='warn'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+.trd-picker__live {
+  margin-top: 4px;
+  font-size: 10.5px;
+}
+.trd-picker__live[data-tone='ok'] {
+  color: var(--ok, #34c759);
+}
+.trd-picker__live[data-tone='warn'] {
+  color: var(--warn);
+}
+
+/* Network sheet: one row per chain, the four numbers under the name. */
+.trd-netlist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trd-netlist__row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.trd-netlist__row b {
+  font-size: 13px;
+}
+.trd-netlist__state {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-netlist__row[data-state='ok'] .trd-netlist__state {
+  color: var(--ok, #34c759);
+}
+.trd-netlist__row[data-state='stale'] .trd-netlist__state {
+  color: var(--warn);
+}
+.trd-netlist__row[data-state='down'] .trd-netlist__state {
+  color: var(--danger);
+}
+.trd-netlist__row[data-state='ok'] .trd-pip__dot {
+  background: var(--ok, #34c759);
+}
+.trd-netlist__row[data-state='stale'] .trd-pip__dot {
+  background: var(--warn);
+}
+.trd-netlist__row[data-state='down'] .trd-pip__dot {
+  background: var(--danger);
+}
+.trd-netlist__facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-column: 1 / -1;
+  gap: 8px;
+  margin: 4px 0 0;
+  font-size: 11.5px;
+}
+.trd-netlist__facts dt {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-netlist__facts dd {
+  margin: 0;
+  color: var(--foreground);
+}
+.trd-netlist__error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--danger);
+}
+.trd-netlist__rpc {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
+/* ── Approval card: an address fact on its own line, never truncated ───── */
+.trd-card__fact--wide {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.trd-card__fact--wide dd {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* The multisend list prints every recipient whole as well. */
+.trd-card__legs-list .trd-card__addr {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* ── Burn: the one destructive tool ──────────────────────────────────────── */
+
+/* Both catalogues mark it the same way, and unlike every other tone here it
+   is not conditional on a live read: the card is dangerous at rest. */
+.trd-picker__card[data-tone='danger'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.trd-picker__card[data-tone='danger'] svg,
+.trd-picker__card[data-tone='danger']:hover svg {
+  color: var(--danger);
+}
+.trd-picker__card[data-tone='danger']:hover {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+}
+.trd-picker__danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.trd-picker__danger svg {
+  color: inherit;
+}
+.trd-tool[data-tone='danger'] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, var(--border)),
+    inset 3px 0 0 var(--danger);
+}
+.trd-tool[data-tone='danger'] .trd-tool__icon {
+  color: var(--danger);
+}
+button.trd-tool[data-tone='danger']:hover {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, var(--border)),
+    inset 3px 0 0 var(--danger);
+}
+
+.trd-burn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.trd-burn__lead {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+/* The one thing on the sheet that is a statement, not a control: the
+   recipient is pinned, so it reads as a fact about where this goes. */
+.trd-burn__to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.trd-burn__to > span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+.trd-burn__to > b {
+  font-size: 11.5px;
+  color: var(--danger);
+  word-break: break-all;
+}
+.trd-burn__to > em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+/* Worth money: the argument against burning gets the loud treatment, above
+   the amount field rather than under it. */
+.trd-burn__valuable {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-surface);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.trd-burn__valuable svg {
+  flex: none;
+  margin-top: 1px;
+}
+.trd-burn__all {
+  font: inherit;
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

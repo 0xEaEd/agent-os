@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from agentos.scheduler import scripts as scripts_module
 from agentos.scheduler.delivery import DeliveryChain
 from agentos.scheduler.handlers import make_agent_run_handler, make_script_run_handler
 from agentos.scheduler.jobs import execute_with_timeout
@@ -125,6 +126,10 @@ async def test_script_exit_racing_with_cleanup_preserves_original_outcome(
         ),
     )
     monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=proc))
+    # The process-group sweep that follows the reap wants a real pid; this
+    # double has none, and what is under test here is the outcome the caller
+    # reports, not the sweep (covered by the live-subprocess tests above).
+    monkeypatch.setattr(scripts_module, "_kill_process_group", AsyncMock())
 
     if cancelled:
         with pytest.raises(asyncio.CancelledError):

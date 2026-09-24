@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +23,13 @@ def _isolate_registry() -> None:
 
 
 class TestSubprocessEnv:
+    """What is withheld. PATH is rewritten too, but that is TestOwnCliFirst's
+    subject; neutralising it here keeps these assertions about stripping."""
+
+    @pytest.fixture(autouse=True)
+    def _no_cli_beside_us(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(env_passthrough, "own_cli_dir", lambda: None)
+
     def test_the_gateway_token_never_reaches_a_child(self) -> None:
         """It authenticates to the control plane; nothing a command runs needs it."""
         base = {"PATH": "/usr/bin", "AGENTOS_GATEWAY_TOKEN": "tok"}
@@ -31,6 +41,8 @@ class TestSubprocessEnv:
             "AGENTOS_SENSITIVE_PATHS_DISABLED",
             "AGENTOS_SENSITIVE_PAYLOAD_DISABLED",
             "AGENTOS_REDACT_SECRETS",
+            "AGENTOS_OPERATOR_SECRET",
+            "AGENTOS_OPERATOR_SECRET_FILE",
         ],
     )
     def test_guard_switches_never_reach_a_child(self, name: str) -> None:
@@ -189,3 +201,90 @@ def test_sandboxed_code_sees_registered_names(monkeypatch: pytest.MonkeyPatch) -
     safe_env = code_exec._build_safe_env()
     assert safe_env["CAP_API_KEY"] == "cap_live_value"
     assert "UNRELATED_SECRET" not in safe_env
+
+
+def _path(*parts: str) -> str:
+    """A PATH in the platform's own separator (``:`` on POSIX, ``;`` on Windows)."""
+    return os.pathsep.join(parts)
+
+
+class TestOwnCliFirst:
+    """Which ``agentos`` an agent reaches when it runs one.
+
+    An agent trades by running ``agentos trade …`` in a shell, so the name
+    resolves against the user's PATH rather than against the build that holds
+    the vault. A second, older install earlier in PATH — ``uv tool install``
+    into ``~/.local/bin`` is the usual one — answers instead, and says only
+    ``No such command 'trade'``.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _pretend_we_live_here(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(env_passthrough, "own_cli_dir", lambda: "/opt/agentos/bin")
+
+    def test_the_running_build_wins_over_an_older_one_in_path(self) -> None:
+        result = env_passthrough.build_subprocess_env(
+            {"PATH": _path("/home/u/.local/bin", "/usr/bin")}
+        )
+        assert result["PATH"] == _path("/opt/agentos/bin", "/home/u/.local/bin", "/usr/bin")
+
+    def test_a_later_copy_of_our_own_bin_is_not_left_behind(self) -> None:
+        """Otherwise PATH grows a duplicate on every nested tool call."""
+        result = env_passthrough.build_subprocess_env(
+            {"PATH": _path("/usr/bin", "/opt/agentos/bin")}
+        )
+        assert result["PATH"] == _path("/opt/agentos/bin", "/usr/bin")
+
+    def test_an_already_correct_path_is_untouched(self) -> None:
+        result = env_passthrough.build_subprocess_env(
+            {"PATH": _path("/opt/agentos/bin", "/usr/bin")}
+        )
+        assert result["PATH"] == _path("/opt/agentos/bin", "/usr/bin")
+
+    def test_an_absent_path_is_not_invented(self) -> None:
+        """One directory is not a PATH: it would take ``sh`` off the child's."""
+        assert "PATH" not in env_passthrough.build_subprocess_env({"HOME": "/home/u"})
+
+    def test_nothing_changes_when_no_agentos_sits_beside_the_interpreter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A system Python keeps its scripts elsewhere; guessing would reorder
+        which ``git`` and ``python3`` every shell call resolves to."""
+        monkeypatch.setattr(env_passthrough, "own_cli_dir", lambda: None)
+        assert env_passthrough.build_subprocess_env({"PATH": "/usr/bin"})["PATH"] == "/usr/bin"
+
+
+_CONSOLE_SCRIPT = "agentos.exe" if os.name == "nt" else "agentos"
+
+
+class TestOwnCliDir:
+    def test_it_finds_the_console_script_next_to_a_venv_interpreter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        bin_dir = tmp_path / "venv" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / _CONSOLE_SCRIPT).write_text("#!/bin/sh\n")
+        monkeypatch.setattr(sys, "executable", str(bin_dir / "python"))
+        assert env_passthrough.own_cli_dir() == str(bin_dir)
+
+    def test_it_declines_when_there_is_no_console_script_there(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
+        assert env_passthrough.own_cli_dir() is None
+
+    @pytest.mark.skipif(os.name == "nt", reason="venv symlinks are a POSIX layout")
+    def test_a_venv_symlink_is_not_followed_out_of_its_own_bin(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``venv/bin/python`` points at the base interpreter, whose directory
+        holds no console scripts — resolving it loses the venv entirely."""
+        base_bin = tmp_path / "pythons" / "bin"
+        base_bin.mkdir(parents=True)
+        (base_bin / "python3").write_text("#!/bin/sh\n")
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "agentos").write_text("#!/bin/sh\n")
+        (venv_bin / "python").symlink_to(base_bin / "python3")
+        monkeypatch.setattr(sys, "executable", str(venv_bin / "python"))
+        assert env_passthrough.own_cli_dir() == str(venv_bin)
