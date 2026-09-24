@@ -117,7 +117,9 @@ from agentos.cli.sandbox_cmd import sandbox_app  # noqa: E402
 from agentos.cli.search_cmd import search_app  # noqa: E402
 from agentos.cli.sessions_cmd import app as sessions_app  # noqa: E402
 from agentos.cli.skills_cmd import skills_app  # noqa: E402
+from agentos.cli.trade_cmd import app as trade_app  # noqa: E402
 from agentos.cli.upgrade_cmd import upgrade_command  # noqa: E402
+from agentos.cli.wallet_cmd import app as wallet_app  # noqa: E402
 
 app = typer.Typer(
     name="agentos",
@@ -125,6 +127,7 @@ app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
+
 
 # ── Sub-apps ─────────────────────────────────────────────────────────────────
 
@@ -147,6 +150,8 @@ app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(search_app, name="search")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(skills_app, name="skills")
+app.add_typer(trade_app, name="trade")
+app.add_typer(wallet_app, name="wallet")
 
 
 def _version_callback(value: bool) -> None:
@@ -168,6 +173,7 @@ def _root(
     version: bool = typer.Option(
         False,
         "--version",
+        "-V",
         help="Show the installed AgentOS version and exit.",
         callback=_version_callback,
         is_eager=True,

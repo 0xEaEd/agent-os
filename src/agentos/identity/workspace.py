@@ -189,6 +189,7 @@ def load_workspace_files_budgeted_with_report(
             break
         file_limit = min(per_file_limit, remaining)
         raw_chars = len(content)
+        blocked = False
         if filename != "BOOTSTRAP.md":
             content, findings = scan_for_injection(
                 content,
@@ -196,10 +197,28 @@ def load_workspace_files_budgeted_with_report(
                 mode=normalized_scan_mode,
             )
             _write_injection_findings(findings, safety_log_path=safety_log_path)
+            # enforce mode replaces the whole file with a short "[BLOCKED: ...]"
+            # marker on a threat classification -- a deliberate content
+            # replacement, not a size trim. Without this flag the report below
+            # infers a size-based truncation_cause for it, which sends an
+            # operator chasing per_file_max_chars/total_max_chars for
+            # something budget settings can't fix (#3351).
+            blocked = normalized_scan_mode == "enforce" and bool(findings)
         injected = _truncate_with_marker(content, filename, file_limit)
         if not injected:
             continue
         result[filename] = injected
+        if blocked:
+            report.append(
+                BootstrapFileReport(
+                    filename=filename,
+                    raw_chars=raw_chars,
+                    injected_chars=len(injected),
+                    skipped_reason="blocked_injection",
+                )
+            )
+            remaining -= len(injected)
+            continue
         truncated = raw_chars > len(injected) or raw_chars > file_limit
         cause: str | None = None
         if truncated:

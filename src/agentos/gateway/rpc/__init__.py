@@ -75,6 +75,7 @@ import agentos.gateway.rpc_sessions  # noqa: E402, F401
 import agentos.gateway.rpc_skills  # noqa: E402, F401
 import agentos.gateway.rpc_system  # noqa: E402, F401
 import agentos.gateway.rpc_tools  # noqa: E402, F401
+import agentos.gateway.rpc_trading  # noqa: E402, F401
 import agentos.gateway.rpc_updates  # noqa: E402, F401
 import agentos.gateway.rpc_usage  # noqa: E402, F401
 

@@ -25,7 +25,7 @@ const MODELS_OK = [
   { id: 'claude-opus-5', name: 'claude-opus-5', provider: 'opencap' },
 ]
 
-function fakeRpc(overrides: Record<string, unknown> = {}) {
+function fakeRpc(overrides: Record<string, unknown> = {}, options: { connected?: boolean } = {}) {
   const listeners = new Map<string, Set<Handler>>()
   const calls: { method: string; params: unknown }[] = []
   const responses: Record<string, unknown> = {
@@ -33,8 +33,16 @@ function fakeRpc(overrides: Record<string, unknown> = {}) {
     'models.list': MODELS_OK,
     ...overrides,
   }
+  // Mirrors the real client: `waitForConnection` resolves at once when the
+  // socket is up and otherwise on the next `_state: connected`.
+  let connected = options.connected ?? true
+  const emit = (event: string, payload: unknown) => {
+    if (event === '_state') connected = payload === 'connected'
+    listeners.get(event)?.forEach((handler) => handler(payload))
+  }
   const rpc = {
     call: vi.fn((method: string, params: unknown) => {
+      if (!connected) return Promise.reject(new Error('Not connected'))
       calls.push({ method, params })
       const value = responses[method]
       if (value instanceof Error) return Promise.reject(value)
@@ -45,10 +53,21 @@ function fakeRpc(overrides: Record<string, unknown> = {}) {
       listeners.get(event)!.add(handler)
       return () => listeners.get(event)?.delete(handler)
     }),
+    waitForConnection: vi.fn(() => {
+      if (connected) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        const unsub = rpc.on('_state', (state: unknown) => {
+          if (state === 'connected') {
+            unsub()
+            resolve()
+          }
+        })
+      })
+    }),
   }
-  const emit = (event: string, payload: unknown) =>
-    listeners.get(event)?.forEach((handler) => handler(payload))
-  return { rpc: rpc as unknown as WsRpcClient, calls, emit }
+  // `responses` is handed back mutable so a test can change what the gateway
+  // answers mid-life — which is exactly what a config edit does to the tier list.
+  return { rpc: rpc as unknown as WsRpcClient, calls, emit, responses }
 }
 
 describe('useRoutePin', () => {
@@ -81,6 +100,39 @@ describe('useRoutePin', () => {
     await waitFor(() => expect(rpc.call).toHaveBeenCalled())
     expect(result.current.enabled).toBe(false)
     expect(result.current.tiers).toEqual([])
+  })
+
+  it('waits for the socket instead of filing "Not connected" as router off', async () => {
+    // The desktop opens onto the home chat while the gateway is still starting,
+    // so the first mount happens with no socket. The picker used to stay
+    // disabled until the next session switch.
+    const { rpc, calls, emit } = fakeRpc({}, { connected: false })
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+
+    await waitFor(() => expect(rpc.waitForConnection).toHaveBeenCalled())
+    expect(calls).toHaveLength(0)
+    expect(result.current.enabled).toBe(false)
+
+    act(() => emit('_state', 'connected'))
+
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+    expect(calls[0]).toEqual({ method: 'router.hold.get', params: { key: 'agent:main:main' } })
+    // The first connection is read exactly once: the mount read was waiting on
+    // it, and the reconnect listener must not add a second.
+    await new Promise((r) => setTimeout(r, 20))
+    expect(calls.filter((c) => c.method === 'router.hold.get')).toHaveLength(1)
+  })
+
+  it('re-reads the pin after a reconnect, since a restarted gateway drops every pin', async () => {
+    const { rpc, calls, emit } = fakeRpc()
+    const holdReads = () => calls.filter((c) => c.method === 'router.hold.get')
+    renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(holdReads()).toHaveLength(1))
+
+    act(() => emit('_state', 'disconnected'))
+    act(() => emit('_state', 'connected'))
+
+    await waitFor(() => expect(holdReads()).toHaveLength(2))
   })
 
   it('re-reads the pin when the session changes', async () => {
@@ -125,6 +177,36 @@ describe('useRoutePin', () => {
     rerender({ key: 'agent:main:two' })
 
     expect(result.current.pinned).toBeNull()
+  })
+
+  it('picks up a tier model edited in config when asked to reload', async () => {
+    const { rpc, responses } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.tiers[0]?.model).toBe('deepseek-v4-flash'))
+
+    // The user rewires c0 in settings; the gateway applies it live, so the
+    // picker's copy is now the only stale thing in the system.
+    responses['router.hold.get'] = {
+      ...HOLD_GET_OK,
+      tiers: [
+        { tier: 'c0', model: 'grok-5' },
+        { tier: 'c3', model: 'claude-opus-5' },
+      ],
+    }
+    act(() => result.current.reload())
+
+    await waitFor(() => expect(result.current.tiers[0]?.model).toBe('grok-5'))
+  })
+
+  it('re-reads the pinnable model catalog on reload, not just the tiers', async () => {
+    const { rpc, responses } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.models).toHaveLength(2))
+
+    responses['models.list'] = [...MODELS_OK, { id: 'glm-5.3', name: 'glm-5.3' }]
+    act(() => result.current.reload())
+
+    await waitFor(() => expect(result.current.models.map((m) => m.id)).toContain('glm-5.3'))
   })
 
   it('tracks the tier the router actually used', async () => {

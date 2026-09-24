@@ -249,6 +249,8 @@ are released under AgentOS's repository license (Apache-2.0; see `LICENSE`):
 - `title-card-image`
 - `tmux`
 - `video-still-animator`
+- `token-burner`
+- `wallet-trading`
 - `weather`
 - `xlsx`
 - `advanced-dubbing-studio`
@@ -530,6 +532,7 @@ when multiple packages use the same license.
 - `motion@12.42.2` — MIT
 - `motion-dom@12.42.2` — MIT
 - `motion-utils@12.39.0` — MIT
+- `qrcode-generator@1.5.2` — MIT
 - `react@19.2.7` — MIT
 - `react-dom@19.2.7` — MIT
 - `react-router@7.18.1` — MIT
@@ -551,8 +554,15 @@ allowlist covering only its compiled JavaScript and type declarations, so its
 MIT text is absent from the npm tarball. The upstream license from
 https://github.com/tradingview/fancy-canvas is kept verbatim at
 `frontend/vendor-licenses/fancy-canvas-LICENSE.txt`, and the Control UI builder
-appends it to the generated ledger marked as vendored. Packages that ship no
-license and have no vendored copy still fail the build.
+appends it to the generated ledger marked as vendored.
+
+`qrcode-generator@1.5.2` (the Control UI's local QR renderer) likewise
+publishes only its sources, README and type declarations. The MIT text from
+https://github.com/kazuhikoarase/qrcode-generator (Copyright (c) 2009 Kazuhiko
+Arase) is kept verbatim at
+`frontend/vendor-licenses/qrcode-generator-LICENSE.txt` and appended the same
+way. Packages that ship no license and have no vendored copy still fail the
+build.
 
 ### React Control UI fonts
 
