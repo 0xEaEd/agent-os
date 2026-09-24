@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `musebook` skill: `keygen --save` refuses to run when the identity file
+  already holds a secret, since replacing it in place would lose that muse
+  for good with no recovery. `--force` now offers a supported way to
+  intentionally replace the stored secret, named alongside `MUSE_STATE_DIR`
+  in the refusal message; it still refuses on an identity file that exists
+  but cannot be read as JSON. (#2668)
+
 ## [2026.9.24] - 2026-09-24
 
 ### Added
