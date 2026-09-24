@@ -127,3 +127,48 @@ async def test_a_longer_interval_job_is_still_debounced_against_a_double_tick() 
         await asyncio.gather(*list(timer._running.values()), return_exceptions=True)
 
     assert fired is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("last_run_ago", "expect_fired"),
+    [
+        (0.5, False),  # inside the job's own 1s interval -> still debounced
+        (1.1, True),  # past the 1s interval -> fires (was skipped under the flat 2s floor)
+    ],
+)
+async def test_every_one_second_job_in_a_nudge_race(
+    last_run_ago: float, expect_fired: bool
+) -> None:
+    """The per-job cap must still debounce a nudge landing inside an
+    every_seconds=1 job's own interval, while no longer skipping it once
+    that interval has elapsed (#3345)."""
+    async with JobStore(":memory:") as store:
+        ops = SchedulerOps(store, max_jitter=0.0)
+        job = await ops.add(
+            name="every-1s",
+            schedule_kind=ScheduleKind.EVERY,
+            schedule_value="1",
+            handler_key="agent_run",
+            payload={"kind": "agent_turn", "task": "noop", "agent_id": "main"},
+            session_target=SessionTarget.ISOLATED,
+            timeout_seconds=5,
+        )
+        now = datetime.now(UTC)
+        job.last_run_at = now - timedelta(seconds=last_run_ago)
+        job.next_run_at = now
+        await store.save(job, write_reservation=False)
+
+        fired = False
+
+        async def handler(_job: CronJob) -> str:
+            nonlocal fired
+            fired = True
+            return "ok"
+
+        timer = SchedulerTimer(store=store, handlers={"agent_run": handler}, max_concurrent=3)
+        timer.nudge()
+        await timer._tick()
+        await asyncio.gather(*list(timer._running.values()), return_exceptions=True)
+
+    assert fired is expect_fired
