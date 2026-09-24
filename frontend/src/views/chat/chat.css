@@ -3399,3 +3399,74 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── Jump to latest ──────────────────────────────────────────────────────────
+   The transcript pauses tail-following whenever the reader scrolls up, and a
+   paused transcript used to have no way back but a manual drag to the bottom.
+   This is that way back: a zero-height dock at the thread/composer seam, so the
+   pill floats over the last line of the conversation and never steals layout
+   from it. Hidden — and untabbable — while the reader is already at the tail. */
+.chat-jump-dock {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  height: 0;
+  justify-content: center;
+  overflow: visible;
+  pointer-events: none;
+}
+.chat-jump-to-latest {
+  position: absolute;
+  bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px 5px 10px;
+  border: 1px solid var(--border, rgb(255 255 255 / 14%));
+  border-radius: var(--radius-pill, 999px);
+  background: var(--elevated, var(--background));
+  color: var(--foreground);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 28%);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    border-color 140ms ease;
+}
+.chat-jump-to-latest svg {
+  color: var(--primary);
+}
+.chat-jump-to-latest:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+.chat-jump-to-latest:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.chat-jump-dock[data-visible='false'] {
+  /* `visibility` (not `display`) so the pill can fade out rather than vanish,
+     and so it stops taking pointer/focus while hidden. */
+  visibility: hidden;
+}
+.chat-jump-dock[data-visible='false'] .chat-jump-to-latest {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.chat-jump-dock[data-visible='true'] .chat-jump-to-latest {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-jump-to-latest {
+    transition: none;
+  }
+  .chat-jump-dock[data-visible='false'] .chat-jump-to-latest {
+    transform: none;
+  }
+}

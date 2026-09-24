@@ -217,6 +217,28 @@ def test_deepseek_v4_pro_override_wins_over_discounted_live_cache(
     assert price.output_per_m == pytest.approx(3.48)
 
 
+def test_openrouter_c0_price_ignores_a_reseller_listed_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OpenRouter often has no deepseek-owned endpoint for this id, so the live
+    # lookup takes whichever reseller comes first -- here OpenInference at
+    # 0.10/1.00, which priced c0 above c1 and let the cost-aware router send
+    # every c0 turn to c1 (main CI, 2026-09-23).
+    from agentos.engine.steps.agentos_router import _get_cheapest_compatible_tier
+    from agentos.gateway.config import _openrouter_tiers
+
+    monkeypatch.setenv("AGENTOS_OPENROUTER_LIVE_PRICING", "1")
+    seed_live_price_cache_for_tests("deepseek/deepseek-v4-flash", PriceEntry(0.1, 1.0))
+    seed_live_price_cache_for_tests("openai/gpt-6-luna", PriceEntry(0.1, 0.5))
+
+    price = lookup_price("deepseek/deepseek-v4-flash")
+
+    assert price.input_per_m == pytest.approx(0.14)
+    assert price.output_per_m == pytest.approx(0.28)
+    tiers = _openrouter_tiers()
+    assert _get_cheapest_compatible_tier("c0", tiers, ["c0", "c1", "c2", "c3"]) == "c0"
+
+
 def test_deepseek_v4_pro_override_covers_versioned_openrouter_model_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -246,3 +246,25 @@ def test_discord_channel_context_sites_are_bounded() -> None:
     channel = DiscordChannel(DiscordChannelConfig(token="token"))
     _field(channel, "_channel_types")
     _field(channel, "_thread_parent_channels")
+    _field(channel, "_sent_messages")
+
+
+def test_discord_sent_messages_growth_is_actually_capped() -> None:
+    """``_sent_messages`` was a plain ``dict`` -- every ``send()``/``send_file()``
+    call adds an entry, and the only removal path is an explicit ``delete()``
+    of that exact message, which is rare. A long-running gateway on a busy
+    channel grew this without bound for the life of the process, unlike its
+    two siblings in the same field block."""
+    from agentos.channels.discord import (
+        _MAX_CACHED_CHANNEL_CONTEXTS,
+        DiscordChannel,
+        DiscordChannelConfig,
+    )
+
+    channel = DiscordChannel(DiscordChannelConfig(token="token"))
+    for i in range(_MAX_CACHED_CHANNEL_CONTEXTS + 500):
+        channel._sent_messages[str(i)] = "chan"
+
+    assert len(channel._sent_messages) == _MAX_CACHED_CHANNEL_CONTEXTS
+    assert "0" not in channel._sent_messages
+    assert str(_MAX_CACHED_CHANNEL_CONTEXTS + 499) in channel._sent_messages

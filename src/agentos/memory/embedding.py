@@ -697,6 +697,18 @@ def chunk_text(
                 if overlap_tokens_back >= chunk_overlap:
                     new_start = j
                     break
+            if new_start <= chunk_start_line:
+                # The backward scan couldn't reach chunk_overlap tokens
+                # without walking all the way back to (or past) where the
+                # chunk just emitted started -- one line in that span (a long
+                # URL, a data URI, a minified single-line blob) is on its own
+                # already >= chunk_overlap, or chunk_overlap exceeds the whole
+                # chunk. Either way, "overlapping" here would re-include the
+                # entire previous chunk verbatim and the next chunk would
+                # start at the same line all over again -- forever, once one
+                # dominant line is involved (#3348). Start clean instead: no
+                # line boundary may repeat as a chunk start.
+                new_start = i
             chunk_start_line = new_start
             current_tokens = sum(_estimate_tokens(lines[k]) for k in range(chunk_start_line, i))
         current_tokens += line_tokens

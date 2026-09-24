@@ -197,7 +197,14 @@ class DiscordChannel:
         repr=False,
     )
     _rate_limiter: RateLimiter = field(default_factory=RateLimiter, init=False, repr=False)
-    _sent_messages: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _sent_messages: BoundedRegistry[str, str] = field(
+        default_factory=lambda: BoundedRegistry(
+            name="DiscordChannel._sent_messages",
+            max_entries=_MAX_CACHED_CHANNEL_CONTEXTS,
+        ),
+        init=False,
+        repr=False,
+    )
     _channel_types: BoundedRegistry[str, int] = field(
         default_factory=lambda: BoundedRegistry(
             name="DiscordChannel._channel_types",
