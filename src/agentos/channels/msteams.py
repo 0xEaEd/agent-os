@@ -298,6 +298,20 @@ class MSTeamsChannel:
                 loaded[key] = ConversationReference().deserialize(ref_dict)
             except Exception as exc:  # noqa: BLE001 — surface but skip bad entries
                 log.warning("msteams.cache_entry_invalid", key=key, error=str(exc))
+        excess = len(loaded) - _MAX_CACHED_CONVERSATION_REFERENCES
+        if excess > 0:
+            # A cache saved before the cap existed can be over it, and
+            # _on_turn only ever evicts one entry per new one -- so it would
+            # stay over for good. The file is saved in last-activity order,
+            # oldest first: keep the tail, which leaves the "whoever last
+            # spoke" fallback pointing at the same conversation.
+            for key in list(loaded)[:excess]:
+                del loaded[key]
+            log.info(
+                "msteams.cache_trimmed",
+                dropped=excess,
+                kept=_MAX_CACHED_CONVERSATION_REFERENCES,
+            )
         self._references = loaded
 
     def _save_conversation_cache(self) -> None:
@@ -391,7 +405,7 @@ class MSTeamsChannel:
             # spoke" fallback -- tracks last activity, not first insertion.
             self._references.pop(cache_key, None)
             self._references[cache_key] = ref
-            if len(self._references) > _MAX_CACHED_CONVERSATION_REFERENCES:
+            while len(self._references) > _MAX_CACHED_CONVERSATION_REFERENCES:
                 # Oldest-first iteration order (the pop-and-reinsert above
                 # keeps it that way): the first key is whichever conversation
                 # has gone longest without speaking -- the right one to drop
