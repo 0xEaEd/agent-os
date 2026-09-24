@@ -114,6 +114,12 @@ Rules:
   non-array, or an unknown `op` exits 2 with `error: …` and writes nothing —
   the file is validated before the workbook is opened, so a bad op list cannot
   leave a half-applied workbook or overwrite `--out` with an unchanged copy.
+- A `merge_cells` range that is malformed, or that overlaps a merge the sheet
+  already has (including one made by an earlier op in the same list), raises
+  `ValueError` naming the ranges before anything is written. Excel treats
+  intersecting merges as a corrupt file, so the run does not report success
+  for one. Re-merging the *same* range is a no-op, not an overlap, so an ops
+  file stays safe to re-apply.
 - `0`, `false` and `""` are values, not absence. Note that Excel has no
   empty-string cell, so `""` reads back as empty — use `null` when you mean
   "clear this cell".
@@ -169,7 +175,9 @@ Spec:
 the `merged` list returned by `inspect_xlsx.py`. This compatibility applies
 to merge metadata only; inspected `rows` contain cell objects rather than
 the plain values required by the creation spec. Invalid range coordinates
-raise an error from openpyxl.
+raise an error from openpyxl, and a range that overlaps an earlier entry in
+the same `merged` list raises `ValueError` naming both -- nothing is written.
+A repeated identical entry is ignored rather than refused.
 
 For programmatic use:
 

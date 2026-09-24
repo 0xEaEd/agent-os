@@ -17,6 +17,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   were not modelled at all. All are now recognised, with a test that a long run
   of prefixes with no delete behind it still cannot backtrack.
 
+- Memory provider fencing: recalled text can no longer smuggle a
+  `<memory-context>` tag past `sanitize_context`. The function made a single
+  pass of each regex, and deleting a match rejoins what sat on either side of
+  it -- so `<<memory-context>memory-context>` contains exactly one tag, and
+  removing that tag spells a live one from the two halves left behind. The same
+  trick spells a closing tag, which ended the fenced block early and left the
+  rest of the recalled text outside it, where the model reads it as ordinary
+  context instead of as recalled reference data. The strip now repeats until
+  the text stops changing, capped at 16 passes with an angle-bracket fallback
+  so a deeply nested payload cannot make it rescan the string indefinitely. Of
+  200,000 randomised payloads, 341 came back carrying a live tag before this
+  change and none do now.
+
+- `xlsx` skill: `edit_xlsx.py`'s `merge_cells` op and `create_xlsx.py`'s
+  `merged` spec passed a range straight to openpyxl, which accepts one that
+  intersects an existing merge and writes intersecting `mergeCell` entries --
+  a file Excel reports as corrupt and repairs on open -- while the run reported
+  `{"applied": 1}`. A malformed range already failed loudly with nothing
+  written; an overlapping one now fails the same way, before `wb.save`, with a
+  `ValueError` naming the sheet and both ranges. An *identical* range stays the
+  no-op it has always been -- it produces the same workbook -- and the
+  malformed path is unchanged (#3280).
 - Scheduler: a cron job's next fire time is found by jumping a field at a time
   instead of testing every minute for up to four years. A yearly schedule
   cost ~1 s (1.4 s with a timezone), a leap-day one ~4 s and an impossible

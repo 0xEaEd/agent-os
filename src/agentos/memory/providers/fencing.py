@@ -36,16 +36,49 @@ _INTERNAL_NOTE_RE = re.compile(
 )
 
 
+#: Passes of the strip loop before the angle-bracket fallback takes over. One
+#: pass per nested tag is what a caller can force, and each pass rescans the
+#: whole string; ordinary recalled text settles on the first pass.
+_MAX_SANITIZE_PASSES = 16
+
+
 def sanitize_context(text: str) -> str:
     """Strip fence tags, injected context blocks, and system notes from text.
 
     Applied to provider output before re-fencing so a provider that returns
     already-wrapped context cannot nest fences or forge the system note.
+
+    The three passes are repeated until the text stops changing. One pass is
+    not enough, because deleting a match rejoins what sat on either side of
+    it: ``<<memory-context>memory-context>`` has exactly one tag in it, and
+    removing that tag leaves the two halves spelling a live ``<memory-context>``
+    behind. A single pass therefore handed back the very tag this function
+    exists to remove, and the same trick spells a closing tag, which lets
+    recalled text end the block early and continue outside it.
+
+    Substituting a separator instead of looping does not work here: the tag
+    pattern already tolerates whitespace (``< memory-context >``), so any
+    separator innocuous enough to leave in recalled prose is also one the
+    pattern reads straight through.
+
+    The loop terminates on its own -- every pass that changes anything replaces
+    a non-empty match with the empty string, so the text is strictly shorter
+    each time round -- but it is capped anyway, because the number of passes a
+    caller can force is one per nested tag and each pass rescans the whole
+    string. Beyond the cap the remaining text has its angle brackets removed
+    instead, which cannot spell a tag and costs one linear pass. Ordinary
+    recalled text never reaches that: it takes deliberately nested tags to
+    need a second pass at all.
     """
-    text = _INTERNAL_CONTEXT_RE.sub("", text)
-    text = _INTERNAL_NOTE_RE.sub("", text)
-    text = _FENCE_TAG_RE.sub("", text)
-    return text
+    for _ in range(_MAX_SANITIZE_PASSES):
+        cleaned = _INTERNAL_CONTEXT_RE.sub("", text)
+        cleaned = _INTERNAL_NOTE_RE.sub("", cleaned)
+        cleaned = _FENCE_TAG_RE.sub("", cleaned)
+        if cleaned == text:
+            return cleaned
+        text = cleaned
+    logger.warning("memory_provider.fence_sanitize_pass_limit")
+    return text.replace("<", "").replace(">", "")
 
 
 def build_memory_context_block(raw_context: str) -> str:
