@@ -21,7 +21,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agentos.channels.msteams import MSTeamsChannel, MSTeamsChannelConfig
+from agentos.channels.msteams import (
+    _MAX_CACHED_CONVERSATION_REFERENCES,
+    MSTeamsChannel,
+    MSTeamsChannelConfig,
+)
 from agentos.channels.types import OutgoingMessage
 
 
@@ -128,3 +132,42 @@ async def test_on_turn_does_not_reorder_when_the_latest_speaker_speaks_again() -
 
     assert list(channel._references) == ["conversation-A", "conversation-B"]
     assert channel._resolve_reference_key(None) == "conversation-B"
+
+
+async def test_references_growth_is_capped() -> None:
+    """Issue: _references was a plain dict with no eviction at all -- a bot
+    running long enough to talk to more than a handful of distinct
+    conversations grew it without bound, unlike the sibling
+    _message_conversation_keys (#3052, fixed the same class of leak)."""
+    channel = MSTeamsChannel(config=MSTeamsChannelConfig(name="msteams"))
+    channel._adapter = MagicMock()
+    channel._adapter.continue_conversation = AsyncMock()
+    channel._persist_conversation_cache = lambda: None  # skip real disk I/O
+
+    for i in range(_MAX_CACHED_CONVERSATION_REFERENCES + 500):
+        await channel._on_turn(_turn(f"conv-{i}", f"a{i}"))
+
+    assert len(channel._references) == _MAX_CACHED_CONVERSATION_REFERENCES
+    assert "conv-0" not in channel._references
+    assert f"conv-{_MAX_CACHED_CONVERSATION_REFERENCES + 499}" in channel._references
+
+
+async def test_an_explicit_send_to_an_older_conversation_does_not_steal_recency() -> None:
+    """The bound must not reuse BoundedRegistry: that primitive's .get()
+    moves a key to the end on every *read*, not just a write. An outbound
+    send to a known-but-not-most-recent conversation reads _references via
+    .get() -- if that reordered, it would make the "whoever last spoke"
+    fallback return whoever the bot last *sent to*, not whoever last spoke,
+    exactly the same class of bug this file's own docstring describes for
+    a plain dict[key] = ref reassignment."""
+    channel = await _channel_after_a_b_a()
+    assert channel._resolve_reference_key(None) == "conversation-A"
+    # B is actually the second-most-recent speaker here; force it back to
+    # being the oldest so the assertion below is unambiguous either way.
+    await channel._on_turn(_turn("conversation-C", "c1"))
+    assert channel._resolve_reference_key(None) == "conversation-C"
+
+    # An explicit, known-target send to the *older* conversation A.
+    channel._resolve_reference(OutgoingMessage(content="hi", reply_to="conversation-A"))
+
+    assert channel._resolve_reference_key(None) == "conversation-C"

@@ -71,6 +71,16 @@ FATAL_ERROR_CLASSES: tuple[str, ...] = (
 
 _CONVERSATION_CACHE_SCHEMA_VERSION = 1
 
+#: Not a defence against an oversized file (see #733/#736: the maintainer
+#: ruled that threat model doesn't apply here -- the cache is written only
+#: by this adapter, in AgentOS's own trusted state dir, never from outside
+#: input). This bounds ordinary operational growth instead: a bot running
+#: for a long time talking to many distinct conversations accumulates one
+#: entry per conversation with no eviction otherwise, the same class of
+#: leak already accepted and fixed for the sibling
+#: ``_message_conversation_keys`` (#3052).
+_MAX_CACHED_CONVERSATION_REFERENCES = 10_000
+
 # Teams rejects an Activity whose serialized payload exceeds 40 KB with
 # ``413 MessageSizeTooBig`` -- nothing is delivered, not a truncated message.
 # The budget for the text leaves room for the rest of the envelope (ids,
@@ -288,6 +298,20 @@ class MSTeamsChannel:
                 loaded[key] = ConversationReference().deserialize(ref_dict)
             except Exception as exc:  # noqa: BLE001 — surface but skip bad entries
                 log.warning("msteams.cache_entry_invalid", key=key, error=str(exc))
+        excess = len(loaded) - _MAX_CACHED_CONVERSATION_REFERENCES
+        if excess > 0:
+            # A cache saved before the cap existed can be over it, and
+            # _on_turn only ever evicts one entry per new one -- so it would
+            # stay over for good. The file is saved in last-activity order,
+            # oldest first: keep the tail, which leaves the "whoever last
+            # spoke" fallback pointing at the same conversation.
+            for key in list(loaded)[:excess]:
+                del loaded[key]
+            log.info(
+                "msteams.cache_trimmed",
+                dropped=excess,
+                kept=_MAX_CACHED_CONVERSATION_REFERENCES,
+            )
         self._references = loaded
 
     def _save_conversation_cache(self) -> None:
@@ -381,6 +405,16 @@ class MSTeamsChannel:
             # spoke" fallback -- tracks last activity, not first insertion.
             self._references.pop(cache_key, None)
             self._references[cache_key] = ref
+            while len(self._references) > _MAX_CACHED_CONVERSATION_REFERENCES:
+                # Oldest-first iteration order (the pop-and-reinsert above
+                # keeps it that way): the first key is whichever conversation
+                # has gone longest without speaking -- the right one to drop
+                # first. A plain dict, not BoundedRegistry: that primitive's
+                # .get() moves a key to the end on every *read*, which would
+                # let an outbound send to an older, explicitly-addressed
+                # conversation steal the "most recent" rank this fallback
+                # depends on away from whoever actually spoke last.
+                self._references.pop(next(iter(self._references)))
             self._persist_conversation_cache()
         if activity.recipient is not None and getattr(activity.recipient, "id", None):
             self._bot_id = activity.recipient.id
