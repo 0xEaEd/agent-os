@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.25] - 2026-09-25
+
 ### Fixed
 - Trading: a request to bridge funds between chains is answered in one
   message as not supported, and nothing runs for it. AgentOS has no bridge,
