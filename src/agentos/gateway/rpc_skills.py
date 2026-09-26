@@ -504,7 +504,15 @@ async def _handle_skills_search(params: dict | None, ctx: RpcContext) -> dict[st
         # The browse gallery requests whole catalogs (Bankr alone is ~100
         # skills), so the cap must comfortably exceed catalog sizes — a cap
         # sized for paged search results silently truncates browse.
-        limit = min(int(params.get("limit", 20)), 500)
+        # Floor as well as cap. A non-positive limit reached the sources
+        # unchecked, and `CapminalSource.search` ends in `results[:limit]`:
+        # `limit=-5` returned every result *except the last five* -- a
+        # silently truncated result set rather than an error or an empty
+        # one -- while `ClawhubSource` put the negative value straight into
+        # the remote API's own `limit` parameter. `search.query` already
+        # refuses anything below 1; this endpoint clamps, matching the cap
+        # above it.
+        limit = max(1, min(int(params.get("limit", 20)), 500))
     except (TypeError, ValueError):
         limit = 20
     source_id = params.get("source")

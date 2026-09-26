@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Gateway: `skills.search` clamped only the top of its `limit` range, so a
+  non-positive value reached the skill sources unchecked. Because a source
+  ends in `results[:limit]`, `limit=-5` returned every result except the last
+  five -- a silently truncated answer rather than an error. The limit is now
+  clamped to `1..500` (#3420).
+
 ## [2026.9.25] - 2026-09-25
 
 ### Fixed
