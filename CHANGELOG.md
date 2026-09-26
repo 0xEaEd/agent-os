@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Gateway: `models.list` with a string `capabilities` filter returned an empty
+  list. `set("chat")` is four single letters, none of which is a capability
+  tag, so every model was filtered out -- a wrong answer rather than an error.
+  A bare string is now read as one capability (#3418).
+
 ## [2026.9.25] - 2026-09-25
 
 ### Fixed

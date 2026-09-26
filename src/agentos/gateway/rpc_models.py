@@ -88,6 +88,13 @@ async def collect_models(
         models = [m for m in models if m["provider"] == provider_filter]
 
     if capabilities_filter:
+        # A bare string is one capability, not a set of letters. `set("chat")`
+        # is `{'c','h','a','t'}`, and no model's capability list contains a
+        # single letter, so `issubset` failed for every model and the call
+        # answered with an empty list -- a wrong answer rather than an error,
+        # with nothing for the caller to go on.
+        if isinstance(capabilities_filter, str):
+            capabilities_filter = [capabilities_filter]
         required = set(capabilities_filter)
         models = [m for m in models if required.issubset(set(m["capabilities"]))]
 
