@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `gmgn-wallet-analysis` skill: a value-taking flag in last position
+  (`analyze.py <wallet> --latency`) failed its own parse branch and fell
+  through to the positional one, so the flag name was read as the chain and
+  the run analysed `--latency`. A flag is now recognised by its name, and a
+  missing value is reported (#3431).
+
 ## [2026.9.25] - 2026-09-25
 
 ### Fixed

@@ -2753,19 +2753,27 @@ def main(argv):
     latency_s, my_size, fixture, brief = 3.0, None, None, False
     rest = []
     k = 0
+    # A flag is recognised by its name alone, not by "name AND a value after
+    # it". Pairing the two meant a value-taking flag in last position failed
+    # its own branch and fell through to the positional one, so
+    # `analyze.py <wallet> --latency` read the flag name as the chain and
+    # analysed `--latency` -- a wrong answer, with no error anywhere.
+    value_flags = ("--latency", "--size", "--fixture")
     while k < len(args):
-        if args[k] == "--latency" and k + 1 < len(args):
-            latency_s = f(args[k + 1], 3.0)
-            k += 2
-        elif args[k] == "--size" and k + 1 < len(args):
-            my_size = f(args[k + 1])
+        if args[k] in value_flags:
+            if k + 1 >= len(args):
+                print(T('{0} needs a value.', args[k]), file=sys.stderr)
+                return 2
+            if args[k] == "--latency":
+                latency_s = f(args[k + 1], 3.0)
+            elif args[k] == "--size":
+                my_size = f(args[k + 1])
+            else:
+                fixture = args[k + 1]
             k += 2
         elif args[k] == "--brief":
             brief = True
             k += 1
-        elif args[k] == "--fixture" and k + 1 < len(args):
-            fixture = args[k + 1]
-            k += 2
         else:
             rest.append(args[k])
             k += 1
