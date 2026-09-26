@@ -380,6 +380,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the gateway reflects it in `Access-Control-Allow-Origin`, and Chromium
   compared that with the renderer's real origin. The main process now
   translates the answer back to the renderer's origin.
+- Terminal chat renderer: three inline-span defects. A backslash-escaped
+  Markdown character was printed *and* the formatting it suppressed applied
+  anyway (#3426); a code span opened with two backticks lost the backtick it
+  quoted and left its delimiters on screen (#3427); and nested emphasis such
+  as `**bold with *italic* inside**` printed its outer `**` / `~~` because the
+  pattern claim order, not the nesting, decided which overlapping span
+  survived (#3428).
 
 ## [2026.9.25] - 2026-09-25
 
