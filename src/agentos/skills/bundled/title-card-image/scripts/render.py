@@ -88,17 +88,29 @@ def _is_cjk_ideograph(char: str) -> bool:
     )
 
 
-def _wrap_text(text: str, max_chars: int) -> list[str]:
-    """Greedy line wrap that respects CJK (no spaces) and ASCII (whitespace)."""
+def _is_kana(char: str) -> bool:
+    """Return True for Japanese kana, which is written without spaces (#2439).
+
+    Hangul is deliberately *not* included: Korean is space-delimited and must
+    keep taking the whitespace-wrap path (#2265).
+    """
+    cp = ord(char)
+    return (
+        0x3040 <= cp <= 0x309F       # Hiragana
+        or 0x30A0 <= cp <= 0x30FF    # Katakana
+        or 0x31F0 <= cp <= 0x31FF    # Katakana Phonetic Extensions
+        or 0xFF66 <= cp <= 0xFF9F    # Halfwidth Katakana
+    )
+
+
+def _wrap_paragraph(text: str, max_chars: int) -> list[str]:
+    """Wrap a single line (no explicit newlines) to ``max_chars``."""
     if not text:
         return [""]
-    # If text already has explicit newlines, honour them.
-    if "\n" in text:
-        return text.split("\n")
-    # Use the fixed-width chunker only when the text is predominantly CJK
-    # ideographs.  Space-delimited scripts (Latin, Cyrillic, Hangul, etc.)
-    # and emoji take the whitespace-wrap path.
-    if not any(_is_cjk_ideograph(c) for c in text):
+    # Use the fixed-width chunker only for scripts written without spaces:
+    # CJK ideographs and Japanese kana.  Space-delimited scripts (Latin,
+    # Cyrillic, Hangul, etc.) and emoji take the whitespace-wrap path.
+    if not any(_is_cjk_ideograph(c) or _is_kana(c) for c in text):
         words = text.split()
         out: list[str] = []
         line = ""
@@ -113,8 +125,19 @@ def _wrap_text(text: str, max_chars: int) -> list[str]:
         if line:
             out.append(line)
         return out or [text]
-    # CJK / mixed: break at character count.
+    # CJK / kana / mixed: break at character count.
     return [text[i:i + max_chars] for i in range(0, len(text), max_chars)]
+
+
+def _wrap_text(text: str, max_chars: int) -> list[str]:
+    """Greedy line wrap that respects CJK/kana (no spaces) and ASCII (whitespace).
+
+    Explicit newlines are honoured, and each resulting line is wrapped too.
+    """
+    lines: list[str] = []
+    for paragraph in text.split("\n"):
+        lines.extend(_wrap_paragraph(paragraph, max_chars))
+    return lines
 
 
 def main() -> int:

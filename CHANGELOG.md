@@ -43,6 +43,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   LibreOffice conversion, and under exit code 4 ("conversion failed") instead
   of the script's own "bad arguments" code, 1 (#3327)
 
+- `title-card-image` skill: a Japanese kana headline (hiragana, katakana,
+  half-width katakana) is wrapped by character count instead of being set as
+  one unbroken line, and each explicit line of a multi-line headline is
+  wrapped to `--max-chars-per-line` rather than passed through as is. Hangul
+  still wraps on whitespace, and a word longer than the limit still keeps its
+  own line (#2439).
+
 - Zhipu/GLM provider: `glm-4.6` no longer silently loses reasoning support.
   `get_capabilities`'s zai reasoning-shape prefix check listed `glm-4.5` and
   `glm-4.7` but skipped `glm-4.6` — even though `engine/reasoning_hint.py`'s
