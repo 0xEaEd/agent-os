@@ -36,6 +36,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `glm-4.7` — so a request to `glm-4.6` got `supports_reasoning=False` and
   never carried the `thinking` payload key, silently dropping a configured
   `thinking_level` with no error anywhere (#2618).
+- Sandbox: a delete wrapped in a quoted shell string — `bash -c "rm -rf /etc"`,
+  `sh -c 'rm -rf ~/.ssh'` — is caught by the sensitive-path hard block. The
+  intent extractor matched `rm` up to the wrapper's closing quote, `shlex`
+  refused the unbalanced quote, and the whitespace fallback kept it glued to
+  the target (`/etc"`), so no sensitive path matched. The delete tail is now
+  retried with the stray quote trimmed (#2141).
+- Gateway: `usage.status` and `usage.cost` count every stored session instead
+  of the first 100 that `list_sessions` returns by default, so the Usage and
+  Overview totals no longer undercount and a `sessionKey` lookup for an older
+  session resolves. `usage.cost` also filters by the agent and channel stored
+  on the session record, falling back to the scope encoded in its key, so a
+  session keyed `agent:main:…` but stored under another agent or channel is
+  no longer missed (#2232).
+- `gmgn-holder-analysis` skill: a failing or rate-limited `created-tokens`
+  lookup no longer aborts the whole holder analysis. It is a secondary
+  enrichment call, so a non-zero `gmgn-cli` exit or an unexpected payload now
+  costs only the creator's token-history section (#2429).
+- Sessions: branching with `fork_transcript=True` keeps each copied row's
+  `reasoning_content`, `tool_call_id` and input-provenance fields. The fork
+  rebuilt rows from a hand-written column list that had drifted; it now copies
+  the row itself and resets only its identity, so a column added later is
+  carried over too (#2582).
+- `srt-from-script` skill: a cue never ends past its own shot. The 800 ms
+  readability floor was applied without checking the shot boundary, so a shot
+  shorter than 800 ms emitted a cue that overlapped the next one; such a shot
+  now gets a cue spanning the whole shot (#2588).
 
 ## [2026.9.26] - 2026-09-26
 
