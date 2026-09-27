@@ -8,6 +8,7 @@ the surface that admitted the request, not on user roles or implied scopes.
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Iterable
 from enum import StrEnum
 
@@ -118,14 +119,38 @@ def normalize_peer_ip(peer_ip: str | None) -> str:
     return (peer_ip or "").strip().lower().strip("[]")
 
 
+def _parsed_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """The address *value* denotes, or ``None`` when it is not an IP literal."""
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
 def peer_is_trusted_proxy(trusted_proxy: str | None, peer_ip: str | None) -> bool:
     """True when the transport ``peer_ip`` is in the trusted-proxy set.
 
     This is the single shared gate: admission (HTTP middleware and RPC auth)
     requires it, and X-Forwarded-For consumption requires it — a header from
     any other peer is never honored.
+
+    Comparison is on the address, not its spelling. One IPv6 address has many
+    valid textual forms, and the operator writing the config and the ASGI
+    server reporting the peer need not choose the same one, so ``::1`` was not
+    matching a peer reported as ``0:0:0:0:0:0:0:1``. An entry that is not an IP
+    literal — a hostname, or anything unparseable — keeps the exact string
+    comparison it had, so this only ever matches an address already configured.
     """
-    return normalize_peer_ip(peer_ip) in parse_trusted_proxy_set(trusted_proxy)
+    peer = normalize_peer_ip(peer_ip)
+    if not peer:
+        return False
+    configured = parse_trusted_proxy_set(trusted_proxy)
+    if peer in configured:
+        return True
+    peer_address = _parsed_ip(peer)
+    if peer_address is None:
+        return False
+    return any(peer_address == entry for entry in map(_parsed_ip, configured) if entry is not None)
 
 
 __all__ = [

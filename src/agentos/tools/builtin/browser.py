@@ -21,7 +21,10 @@ from urllib.parse import urlparse
 
 import structlog
 
-from agentos.safety.injection_guard import wrap_untrusted_boundary
+from agentos.safety.injection_guard import (
+    neutralize_untrusted_markers,
+    wrap_untrusted_boundary,
+)
 from agentos.tools import agent_browser
 from agentos.tools.agent_browser import browser_available
 from agentos.tools.browser_eval_policy import (
@@ -498,7 +501,7 @@ async def _do_navigate(session_key: str, url: str) -> str:
         "success": True,
         "action": "navigate",
         "url": final_url,
-        "title": str(data.get("title") or ""),
+        "title": neutralize_untrusted_markers(str(data.get("title") or "")),
         "truncated": truncated,
         "snapshot": _wrap(final_url, truncated_text),
     }

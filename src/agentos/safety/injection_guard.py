@@ -310,6 +310,21 @@ _UNTRUSTED_CLOSE_IN_CONTENT = re.compile(r"<\s*/\s*untrusted\s*>", re.IGNORECASE
 _UNTRUSTED_OPEN_IN_CONTENT = re.compile(r"<\s*untrusted\b", re.IGNORECASE)
 
 
+def neutralize_untrusted_markers(text: str) -> str:
+    """Make envelope markers in *text* inert without wrapping it.
+
+    The boundary wrapper neutralises markers and then adds an envelope. Short
+    external strings returned beside enveloped content -- a response header, a
+    page title -- are not prose to be enveloped, but they are still chosen by
+    the remote side, so a marker in one could close the genuine envelope early
+    or forge a new one. This applies the same escaping on its own.
+    """
+
+    safe = _UNTRUSTED_CLOSE_IN_CONTENT.sub("&lt;/untrusted&gt;", text)
+    safe = _UNTRUSTED_OPEN_IN_CONTENT.sub("&lt;untrusted", safe)
+    return safe
+
+
 def wrap_untrusted_boundary(content: str, source: str) -> str:
     """Wrap bulk external content in the untrusted envelope, readably.
 

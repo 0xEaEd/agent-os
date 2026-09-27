@@ -12,6 +12,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import urllib.error
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -703,3 +705,144 @@ def test_write_cards_creates_parent_directory(tmp_path: Path) -> None:
         assert out.is_file()
     finally:
         sys.path.remove(str(_SCRIPT.parent))
+
+
+# ---------------------------------------------------------------------------
+# #3290: the Chainlink feed directory is an optional price source -- a fetch
+# that fails at the network level must cost the price read, not the reading
+# ---------------------------------------------------------------------------
+
+
+def _stub_main_reads(monkeypatch: pytest.MonkeyPatch, feed_fetch: Callable[[], Any]) -> None:
+    """Drive ``main --query Apple --no-cards`` fully offline.
+
+    The RPC answers like a genuine Stock Token; ``_http_json`` serves the token
+    list and defers ``FEEDS_URL`` to *feed_fetch*.
+    """
+    chain = _FakeChain(
+        {
+            (AAPL, chain_stocks.SEL_SYMBOL): "0x"
+            + _word_hex(32)
+            + _word_hex(4)
+            + b"AAPL".hex().ljust(64, "0"),
+            (AAPL, chain_stocks.SEL_DECIMALS): "0x" + _word_hex(18),
+            (AAPL, chain_stocks.SEL_TOTAL_SUPPLY): "0x" + _word_hex(1_000 * 10**18),
+            (AAPL, chain_stocks.SEL_UI_MULTIPLIER): "0x" + _word_hex(10**18),
+            (AAPL, chain_stocks.SEL_ORACLE_PAUSED): "0x" + _word_hex(0),
+        }
+    )
+    monkeypatch.setattr(chain_stocks, "_eth_call", chain)
+
+    def _http(url: str, _timeout: float, _payload: Any = None) -> Any:
+        if url == chain_stocks.FEEDS_URL:
+            return feed_fetch()
+        if url == chain_stocks.TOKEN_LIST_URL:
+            return {"tokens": _TOKENS}
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(chain_stocks, "_http_json", _http)
+    monkeypatch.setattr(sys, "argv", ["chain_stocks.py", "--query", "Apple", "--no-cards"])
+
+
+def test_unreachable_feed_directory_still_returns_the_reading(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A directory outage costs the price, not the on-chain reading (#3290)."""
+
+    def _down() -> Any:
+        raise urllib.error.URLError("directory unreachable (connection refused)")
+
+    _stub_main_reads(monkeypatch, _down)
+
+    rc = chain_stocks.main()
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+
+    assert "error" not in out
+    token = out["token"]
+    assert token["onchainSymbol"] == "AAPL"
+    assert token["isStockToken"] is True
+    assert "price" not in token
+    assert any("could not fetch the Chainlink feed directory" in n for n in token["notes"])
+    assert "directory unreachable" in token["readErrors"]["feedDirectory"]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(urllib.error.URLError("connection refused"), id="url-error"),
+        pytest.param(
+            urllib.error.HTTPError(
+                "https://reference-data-directory.vercel.app/feeds.json",
+                503,
+                "Service Unavailable",
+                {},
+                None,
+            ),
+            id="http-503",
+        ),
+        pytest.param(TimeoutError("timed out"), id="timeout"),
+        pytest.param(ValueError("Expecting value: line 1 column 1 (char 0)"), id="non-json-body"),
+    ],
+)
+def test_feed_directory_faults_degrade_instead_of_dropping_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: Exception,
+) -> None:
+    """Every way the fetch can fault lands on the note, never on `{"error"}` alone."""
+
+    def _raise() -> Any:
+        raise failure
+
+    _stub_main_reads(monkeypatch, _raise)
+
+    rc = chain_stocks.main()
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+
+    assert "error" not in out
+    token = out["token"]
+    assert token["isStockToken"] is True
+    assert "price" not in token
+    assert any("could not fetch the Chainlink feed directory" in n for n in token["notes"])
+    assert token["readErrors"]["feedDirectory"] == str(failure)
+
+
+def test_feed_directory_returning_a_non_list_keeps_the_note(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The fetch that *succeeds* with a non-list body notes the gap the same way."""
+    _stub_main_reads(monkeypatch, lambda: {"unexpected": True})
+
+    rc = chain_stocks.main()
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+
+    assert "error" not in out
+    token = out["token"]
+    assert "price" not in token
+    assert any("could not fetch the Chainlink feed directory" in n for n in token["notes"])
+    assert "feedDirectory" not in token.get("readErrors", {})
+
+
+def test_unreachable_token_list_still_fails_the_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The token list is not optional: without it there is no target to resolve."""
+
+    def _http(url: str, _timeout: float, _payload: Any = None) -> Any:
+        if url == chain_stocks.FEEDS_URL:
+            return []
+        if url == chain_stocks.TOKEN_LIST_URL:
+            raise urllib.error.URLError("list unreachable")
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(chain_stocks, "_http_json", _http)
+    monkeypatch.setattr(sys, "argv", ["chain_stocks.py", "--query", "Apple", "--no-cards"])
+
+    rc = chain_stocks.main()
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "error" in out
+    assert "token" not in out

@@ -69,15 +69,25 @@ def _temporal_decay(
     return score * math.exp(-lam * age_days)
 
 
+#: ``[A-Za-z0-9]+`` widened to every Unicode letter and digit, underscore left
+#: out so an ASCII snippet tokenizes exactly as it did before. The ASCII class
+#: yielded **no tokens at all** for a Cyrillic, Greek, Hangul, Arabic, Hebrew or
+#: Devanagari snippet, which made every such pair score a perfect 1.0 below.
+#: Same widening ``memory_tools._memory_search_query_terms`` already applies.
+_WORD_RE = re.compile(r"[^\W_]+")
+#: CJK ideographs and kana carry no spaces, so they are matched one char at a
+#: time and additionally paired into bigrams.
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff]")
+
+
 def _jaccard_similarity(a: str, b: str) -> float:
     """Token-level Jaccard similarity for MMR diversity."""
 
     def tokenize(text: str) -> set[str]:
         tokens: set[str] = set()
-        # ASCII words
-        tokens.update(re.findall(r"[a-zA-Z0-9]+", text.lower()))
+        tokens.update(_WORD_RE.findall(text.lower()))
         # CJK unigrams + bigrams
-        cjk = re.findall(r"[\u4e00-\u9fff\u3040-\u30ff]", text)
+        cjk = _CJK_RE.findall(text)
         tokens.update(cjk)
         for i in range(len(cjk) - 1):
             tokens.add(cjk[i] + cjk[i + 1])

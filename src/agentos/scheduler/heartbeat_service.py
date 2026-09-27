@@ -100,6 +100,7 @@ class HeartbeatService:
 
         if target == "last":
             delivery = await infer_delivery(self._session_storage, session_key, None)
+            inferred_recipient = (delivery.channel_name, delivery.channel_id)
             if override.get("channel_name"):
                 delivery.channel_name = override["channel_name"]
             if override.get("channel_id"):
@@ -108,7 +109,15 @@ class HeartbeatService:
                 delivery.account_id = override["account_id"]
             if override.get("thread_id"):
                 delivery.thread_id = override["thread_id"]
-            elif not turn_source_thread_id:
+            elif (delivery.channel_name, delivery.channel_id) != inferred_recipient:
+                # The override redirected delivery to another chat/channel, so
+                # the inferred thread (node.last_thread_id) belongs to a
+                # conversation we're no longer posting to -- drop it rather
+                # than reply into an unrelated chat's topic or pass a Telegram
+                # topic id as a Slack thread_ts. Without a redirect the
+                # inferred thread stays, like the other inferred fields
+                # (#3347). turn_source_thread_id, when populated, still wins
+                # over both via the shared override below.
                 delivery.thread_id = ""
             if override.get("mode") == DeliveryMode.CHANNEL and override.get("channel_id"):
                 # The override carries a recipient someone configured, not

@@ -28,6 +28,13 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+# Bundled scripts run under AgentOS's own interpreter; the path insert only
+# matters in a source checkout where the package is not installed (#2804).
+_SRC_ROOT = str(Path(__file__).resolve().parents[5])
+if _SRC_ROOT not in sys.path:
+    sys.path.insert(0, _SRC_ROOT)
+from agentos.skill_stdio import write_stdout as _write_stdout  # noqa: E402
+
 CHAIN_ID = 4663
 DEFAULT_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 EXPLORER_URL = "https://robinhoodchain.blockscout.com"
@@ -59,33 +66,6 @@ SEL_ORACLE_PAUSED = "0x7706ba52"  # oraclePaused()
 SEL_LATEST_ROUND_DATA = "0xfeaf968c"  # latestRoundData() -- AggregatorV3Interface
 
 WAD = 10**18
-
-
-def _write_stdout(text: str) -> None:
-    """Write *text* to stdout as UTF-8, surviving a non-UTF-8 stdout encoding.
-
-    ``print`` encodes through ``sys.stdout.encoding``, which on Windows is the
-    console code page (cp1252, cp936, cp932) and not UTF-8, so a character
-    outside that page raises ``UnicodeEncodeError`` before a byte is written —
-    the document decides whether the skill runs. The binary buffer is therefore
-    the primary path, matching the ``--out`` branch, which already passes
-    ``encoding="utf-8"``. A stream without a usable ``buffer`` — a wrapper, or a
-    captured stdout — still gets the text, escaped rather than lost.
-    """
-    buffer = getattr(sys.stdout, "buffer", None)
-    if buffer is not None:
-        try:
-            buffer.write(text.encode("utf-8"))
-            buffer.flush()
-            return
-        except (AttributeError, OSError, ValueError):
-            # Buffer closed or not writable — fall through to the text layer.
-            pass
-
-    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-    # Lossless: unencodable chars become \\uXXXX escapes, not "?".
-    sys.stdout.write(text.encode(encoding, errors="backslashreplace").decode(encoding))
-    sys.stdout.flush()
 
 
 # Standard JSON-RPC code for a reverted `eth_call` (EIP-1474 / geth). Some
@@ -487,18 +467,30 @@ def inspect_token(
 
 def _resolve_target(
     args: argparse.Namespace, timeout: float
-) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]]]:
-    """Return (address, list-entry-or-None, feeds) for the requested target."""
+) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]], str | None]:
+    """Return (address, list-entry-or-None, feeds, feed-fetch-error-or-None).
+
+    The Chainlink directory is an optional price source: a fetch that faults at
+    the network level is recorded and degrades to an empty list, which lands on
+    the "could not fetch the Chainlink feed directory" note in ``main`` — the
+    failure the note names, instead of a whole-run abort from one unreachable
+    host taking the RPC's already-answered reading down with it.
+    """
     feeds: list[dict[str, Any]] = []
+    feed_error: str | None = None
     if not args.no_price:
-        fetched = _http_json(FEEDS_URL, timeout)
-        if isinstance(fetched, list):
-            feeds = fetched
+        try:
+            fetched = _http_json(FEEDS_URL, timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+            feed_error = str(exc)
+        else:
+            if isinstance(fetched, list):
+                feeds = fetched
 
     if args.address:
         if not _ADDRESS_RE.match(args.address):
             raise ValueError(f"not a valid 0x address: {args.address}")
-        return args.address, None, feeds
+        return args.address, None, feeds, feed_error
 
     listed = _http_json(TOKEN_LIST_URL, timeout)
     tokens = listed.get("tokens") if isinstance(listed, dict) else None
@@ -507,7 +499,7 @@ def _resolve_target(
     match = resolve_token(args.query or "", tokens)
     if match is None:
         raise ValueError(f"no Robinhood Stock Token matched {args.query!r}")
-    return str(match.get("address", "")), match, feeds
+    return str(match.get("address", "")), match, feeds, feed_error
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -547,7 +539,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        address, listed, feeds = _resolve_target(args, args.timeout)
+        address, listed, feeds, feed_error = _resolve_target(args, args.timeout)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
         _write_stdout(
             json.dumps({"query": args.query, "error": str(exc)}, ensure_ascii=False) + "\n"
@@ -560,6 +552,11 @@ def main(argv: list[str] | None = None) -> int:
     state = inspect_token(
         args.rpc_url, address, args.timeout, holder=args.holder, feed=feed, feeds=feeds
     )
+    if feed_error is not None:
+        # The directory is optional: its failure costs the price read, not the
+        # reading. Record the cause beside the note that reports the gap, so
+        # "could not fetch" arrives with the reason it could not.
+        state.setdefault("readErrors", {})["feedDirectory"] = feed_error
     if (
         not args.no_price
         and "price" not in state

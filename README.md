@@ -29,15 +29,15 @@ that can do each job. AgentOS also
 has memory that stays after you close it, a safe sandbox with many
 layers, built-in web search, and on-device embeddings.
 
-You can use AgentOS from the Web UI, the CLI, or chat apps. All of
-them use the same core loop. This means tool calls, retries, and logs
+You can use AgentOS from the AgentOS App on your desktop, the Web UI,
+the CLI, or chat apps. All of them use the same core loop. This means tool calls, retries, and logs
 work the same way everywhere. AgentOS can talk to many AI providers.
 By default it uses OpenRouter. It can also use the Bankr LLM Gateway, OpenCAP,
 Surplus Intelligence, OpenAI, Anthropic, Ollama, DeepSeek, Gemini,
 Qwen/DashScope, and 20+ other providers. You do not need to change your code or config to
 switch providers.
 
-AgentOS 2026.9.22.post1 is the current release. The project website is
+AgentOS 2026.9.26 is the current release. The project website is
 [useagentos.dev](https://useagentos.dev). Follow
 [@useAgentOS](https://x.com/useAgentOS) on X for updates.
 
@@ -48,10 +48,38 @@ For step-by-step guides, start with the
 
 ---
 
+## AgentOS App
+
+AgentOS App is the native desktop app for macOS. It is the easiest way to
+run AgentOS: download it, open it, and it installs the engine and starts
+the gateway for you. Signed builds for Apple silicon and Intel are
+published on every release.
+
+<p align="center">
+  <a href="https://github.com/use-agent-os/agent-os/releases"><b>Download AgentOS App from GitHub Releases &rarr;</b></a>
+</p>
+
+- **One-click install.** On first launch the app installs the `use-agent-os`
+  engine and starts the local gateway. No terminal, Python, or `uv` needed.
+- **Chat and Trading in one window.** A desktop chat with the same sessions,
+  approvals, and scheduled jobs as the Web UI, plus the Trading Desk.
+- **Self-updating.** New releases show up as an **Update** pill inside the
+  app; the app and the engine update together.
+- **Signed and notarized.** Opens on macOS 13 or newer without any
+  Gatekeeper workaround.
+
+Each release page lists the app builds next to the Windows portable zip and
+the Python wheel: `AgentOS-<version>-arm64.dmg` for Apple silicon and
+`AgentOS-<version>.dmg` for Intel. See
+[AgentOS for Mac](#agentos-for-mac) for install steps and
+[`desktop/README.md`](desktop/README.md) for how the app is built.
+
+---
+
 ## Architecture
 
-Every client — the Web UI, the CLI, and the chat channels — talks to
-one local gateway. This gateway handles sessions, approvals, and
+Every client — the AgentOS App, the Web UI, the CLI, and the chat
+channels — talks to one local gateway. This gateway handles sessions, approvals, and
 scheduling. It sends each turn to the Pilot Router, which picks the
 model. Then it runs tool calls inside the safe sandbox.
 
@@ -88,6 +116,7 @@ file name.
 
 | Path | Audience | When to use |
 | --- | --- | --- |
+| [AgentOS for Mac](#agentos-for-mac) | macOS users | A signed desktop app that installs the engine for you and updates itself |
 | [Windows portable](#windows-portable-no-python) | Windows users | No Python needed; just unzip and run |
 | [Quick terminal install](#quick-terminal-install) **(recommended)** | End users on any OS | Install a release from a terminal |
 | [Install from source](#install-from-source) | Users who want the latest `main` code | Run from a Git checkout, but don't edit it |
@@ -128,6 +157,27 @@ it — it just routes every turn to one single model instead.
 Install links: [Git](https://git-scm.com/downloads) ·
 [Git LFS](https://git-lfs.com/) ·
 [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+### AgentOS for Mac
+
+The desktop app for macOS 13 or newer, Apple silicon and Intel. It is
+signed with a Developer ID and notarized, so it opens without any
+Gatekeeper workaround.
+
+1. Download the dmg for your Mac from the
+   [latest release](https://github.com/use-agent-os/agent-os/releases/latest)
+   (or pick a version from the
+   [releases page](https://github.com/use-agent-os/agent-os/releases)):
+   `AgentOS-<version>-arm64.dmg` for Apple silicon, `AgentOS-<version>.dmg`
+   for Intel. The number in the file name is the app's build version; the
+   release it belongs to is the tag.
+2. Drag AgentOS into Applications and open it. On first launch it installs
+   the engine (the same `use-agent-os` package the terminal install uses)
+   and starts the gateway for you.
+3. Later releases show up inside the app as an **Update** pill; nothing
+   downloads or installs until you click it. See
+   [`desktop/README.md`](desktop/README.md) for how the app and the engine
+   update together.
 
 ### Windows portable (no Python)
 
@@ -225,14 +275,14 @@ agentos gateway run
 > new terminal window. Or run the PATH command from step 1 again.
 
 For an install pinned to one exact version, add `==<version>` — for
-example `uv tool install --python 3.12 "use-agent-os[recommended]==2026.9.22.post1"` —
+example `uv tool install --python 3.12 "use-agent-os[recommended]==2026.9.26"` —
 or use the GitHub release wheel link directly:
-`https://github.com/use-agent-os/agent-os/releases/download/v2026.9.22.post1/use_agent_os-2026.9.22.post1-py3-none-any.whl`.
+`https://github.com/use-agent-os/agent-os/releases/download/v2026.9.26/use_agent_os-2026.9.26-py3-none-any.whl`.
 
 > [!NOTE]
 > Release install commands use published GitHub release assets.
 > Python wheel installs use versioned wheel filenames — for example
-> `use_agent_os-2026.9.22.post1-py3-none-any.whl` — because the installers validate the
+> `use_agent_os-2026.9.26-py3-none-any.whl` — because the installers validate the
 > version segment inside the wheel filename, so there is no `latest`
 > wheel alias. Only the Windows portable zip has a version-independent
 > `releases/latest/download/` alias.
@@ -628,6 +678,7 @@ settings are all in `agentos.toml.example`.
 | **Persistent local memory** | AgentOS remembers things between sessions, using a main `MEMORY.md` file plus dated notes in Markdown. You can search this memory two ways: by keyword (SQLite full-text search) or by meaning (`sqlite-vec`). The meaning search runs on your device using a built-in ONNX model, or you can switch to OpenAI or Ollama instead. Old memories can also slowly fade if you turn that on. |
 | **Layered security sandbox** | There are three safety levels: Standard, Strict, and Locked. Each one controls what tools are allowed to do. On Linux, Bubblewrap keeps code running in its own safe space. On macOS, this job is done by `sandbox-exec` (Apple's Seatbelt). Windows does not have this sandbox yet. If AgentOS is denied the same action too many times in a row, it pauses itself automatically and does not keep trying. Any blocked output is deleted right away. Skill details and tool results are also cleaned (escaped) so they can't trick the AI into doing something unsafe. |
 | **Built-in tools** | AgentOS can read, write, and edit files; run shell commands and background tasks; use git; search the web (with Brave or DuckDuckGo) and fetch pages safely (blocking unsafe internal network requests); create spreadsheets, PPTX, and PDF files; generate images; and turn text into speech. |
+| **AgentOS App (desktop)** | A signed, notarized macOS app that installs the engine, supervises the gateway, and offers Chat and the Trading Desk in a native window. It updates itself and the engine together. Download it from [GitHub Releases](https://github.com/use-agent-os/agent-os/releases). |
 | **Unified gateway** | One local web server (built with Starlette) runs at `127.0.0.1:18791`. It uses WebSockets and has a built-in control page at `/control/`. The Web UI, CLI, terminal, websocket, Slack, Telegram, and Discord clients all share one single `TurnRunner` engine underneath. |
 | **Durable sessions, subagents, and scheduling** | Sessions, chat history, and replay data are all saved in SQLite, and each agent gets its own workspace folder. An agent can start smaller "subagent" helpers, up to a limited depth. A `SchedulerEngine`, with its own built-in cron reader, runs jobs on a schedule through `agentos cron`. |
 | **Operator controls** | A person can review and approve risky tool calls before they run. You can see how many tokens and how much cost each turn and each session used, with `agentos cost`. More diagnostic tools are available from both the CLI and the Web UI. |

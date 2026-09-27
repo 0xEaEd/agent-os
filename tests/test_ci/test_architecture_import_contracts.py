@@ -106,6 +106,10 @@ APPROVED_PACKAGE_IMPORTS: frozenset[tuple[str, str]] = frozenset({
     ("gateway", "session"),
     ("gateway", "skills"),
     ("gateway", "tools"),
+    # The wallet/trading engine is a leaf the gateway exposes over RPC; it
+    # never imports back into the gateway (events arrive through an injected
+    # broadcast callable), so this edge cannot form a cycle.
+    ("gateway", "trading"),
     ("identity", "safety"),
     ("identity", "session"),
     ("mcp", "tools"),

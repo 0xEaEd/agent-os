@@ -131,6 +131,27 @@ def test_pilot_asset_probe_reports_missing_bundle(tmp_path: Path) -> None:
     assert any("manifest.json" in m for m in missing)
 
 
+def test_pilot_asset_probe_reports_a_missing_runtime_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An install without the ml-router extra has the pilot package but not
+    # numpy, so importing it raises. The probe must report that like any other
+    # missing asset — boot warns and degrades — rather than let the ImportError
+    # escape and take the gateway down with a traceback.
+    from agentos import router_strategies
+
+    def no_numpy() -> Path:
+        raise ImportError("No module named 'numpy'", name="numpy")
+
+    monkeypatch.setattr(router_strategies, "_pilot_default_artifact_dir", no_numpy)
+
+    missing = router_strategies.pilot_asset_probe(None)
+
+    assert len(missing) == 1
+    assert "numpy" in missing[0]
+    assert "ml-router" in missing[0]
+
+
 def test_pilot_asset_probe_reports_partial_minilm_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

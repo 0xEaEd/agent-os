@@ -152,6 +152,7 @@ class FakeStorage:
 class FakeSessionManager:
     def __init__(self, sessions: list[FakeSession] | None = None):
         self._storage = FakeStorage(sessions)
+        self._epoch_cache: dict[str, int] = {}
         self.created_messages: list[tuple[str, str, str]] = []
         self.removed_messages: list[tuple[str, str]] = []
         self.applied_intents: list[tuple[str, str]] = []
@@ -2202,6 +2203,24 @@ class TestSessionsDelete:
             _tracker._closed.discard((key, "task-1"))
             _history_store.clear()
             _spawn_locks.pop(key, None)
+
+    @pytest.mark.asyncio
+    async def test_delete_drops_the_cached_epoch(self, dispatcher, session):
+        """The sessions.delete RPC path (WebUI "Delete Chat") bypasses
+        SessionManager.delete() and used to leave the epoch cache entry
+        behind, so a session recreated under the same key inherited the
+        dead session's epoch (#2447 addressed SessionManager.delete()
+        itself; this is the sibling path that calls storage directly)."""
+        key = session.session_key
+        manager = FakeSessionManager([session])
+        manager._epoch_cache[key] = 7
+        ctx = make_ctx(session_manager=manager)
+
+        res = await dispatcher.dispatch("r1", "sessions.delete", {"key": key}, ctx)
+
+        assert res.ok is True
+        assert res.payload["deleted"] == [key]
+        assert manager._epoch_cache == {}
 
     @pytest.mark.asyncio
     async def test_delete_survives_a_task_runtime_that_cannot_cancel(self, dispatcher, session):

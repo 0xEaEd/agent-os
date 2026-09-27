@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 
 import structlog
@@ -17,14 +18,45 @@ from agentos.observability.trace import default_log_dir
 
 log = structlog.get_logger(__name__)
 
-# Default managed log file families (excludes unrelated files in the log directory)
+# Default managed log file families (excludes unrelated files in the log directory).
+# ``debug.log`` is deliberately absent: it is written through a RotatingFileHandler
+# bounded by log_file_max_bytes x log_file_backup_count, so it already has an owner.
 DEFAULT_LOG_PATTERNS: tuple[str, ...] = (
     "decisions-*.jsonl",
     "traces-*.jsonl",
     "safety-*.jsonl",
     "turn-calls-*.jsonl",
-    "agentos.log*",
+    "gateway.log*",
 )
+
+# Families the gateway holds open for its whole life. ``gateway.log`` is the
+# daemon's stdout/stderr sink: cli/gateway_lifecycle.py opens it ``"ab"`` and
+# hands the descriptor to the child, and nothing rotates it.
+APPEND_ONLY_PATTERNS: tuple[str, ...] = ("gateway.log*",)
+
+
+def _is_append_only(path: Path) -> bool:
+    return any(fnmatch(path.name, pattern) for pattern in APPEND_ONLY_PATTERNS)
+
+
+def _reclaim(path: Path, size: int) -> None:
+    """Free a managed log file's bytes, removing it unless it is still open.
+
+    Unlinking a file the running gateway still holds would leave that descriptor
+    appending into an orphaned inode: the bytes stay charged to the filesystem,
+    no path reaches them, and the disk does not recover until the gateway
+    restarts. Age and debounce do not rule the case out -- a quiet gateway can
+    pass the TTL without writing a byte to stdout and still be running -- so an
+    append-only family is truncated in place instead. The ``O_APPEND`` handle
+    resumes at the new end, so no in-flight write is lost.
+    """
+
+    if _is_append_only(path):
+        if size > 0:
+            with path.open("r+b") as fh:
+                fh.truncate(0)
+        return
+    path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -105,7 +137,7 @@ def prune_expired_log_files(
                 break
             if mtime < cutoff_mtime and mtime < debounce_cutoff:
                 try:
-                    p.unlink(missing_ok=True)
+                    _reclaim(p, size)
                     pruned += 1
                     bytes_freed += size
                     del candidates[p]
@@ -128,7 +160,7 @@ def prune_expired_log_files(
                     # Do not prune files written within debounce window
                     continue
                 try:
-                    p.unlink(missing_ok=True)
+                    _reclaim(p, size)
                     pruned += 1
                     bytes_freed += size
                     total_size -= size

@@ -26,6 +26,9 @@ from agentos.gateway.config import (
     GatewayConfig,
     MCPServerEntry,
 )
+from agentos.migration._dotenv import parse_env_value
+from agentos.migration._mcp import headers as mcp_headers
+from agentos.migration._mcp import remote_transport
 from agentos.onboarding.config_store import load_config, persist_config
 from agentos.paths import default_agentos_home
 
@@ -282,7 +285,7 @@ def _load_env_file(path: Path) -> dict[str, str]:
         if line.startswith("export "):
             line = line[len("export ") :].lstrip()
         key, value = line.split("=", 1)
-        values[key.strip().lstrip("\ufeff")] = value.strip().strip('"').strip("'")
+        values[key.strip().lstrip("\ufeff")] = parse_env_value(value)
     return values
 
 
@@ -334,16 +337,25 @@ def _provider_from_model(model: str) -> str | None:
     return None
 
 
+# The ``<prefix>/`` OpenClaw puts in front of a model id for each AgentOS provider
+# ``_provider_from_model`` derives from one. The provider's own API wants the bare id.
+_PROVIDER_MODEL_PREFIXES = {
+    "openrouter": "openrouter",
+    "zhipu": "zai",
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "deepseek": "deepseek",
+    "minimax": "minimax",
+}
+
+
 def _model_for_agentos_provider(model: str, provider: str | None) -> tuple[str, dict[str, Any]]:
     """Convert OpenClaw provider-prefixed model ids to provider-native ids."""
-    if provider == "openrouter" and model.lower().startswith("openrouter/"):
+    prefix = _PROVIDER_MODEL_PREFIXES.get(provider or "")
+    if prefix and model.lower().startswith(f"{prefix}/"):
         native = model.split("/", 1)[1].strip()
         if native:
-            return native, {"source_model": model, "normalized_provider_prefix": "openrouter"}
-    if provider == "zhipu" and model.lower().startswith("zai/"):
-        native = model.split("/", 1)[1].strip()
-        if native:
-            return native, {"source_model": model, "normalized_provider_prefix": "zai"}
+            return native, {"source_model": model, "normalized_provider_prefix": prefix}
     return model, {}
 
 
@@ -1435,7 +1447,15 @@ class OpenClawMigrator:
         for name, raw in servers.items():
             if not isinstance(raw, dict):
                 continue
-            supported = {"url", "command", "args", "env", "tool_timeout_seconds"}
+            supported = {
+                "url",
+                "command",
+                "args",
+                "env",
+                "headers",
+                "transport",
+                "tool_timeout_seconds",
+            }
             extra = sorted(str(key) for key in raw if str(key) not in supported)
             if extra:
                 unsupported_fields[str(name)] = extra
@@ -1448,7 +1468,9 @@ class OpenClawMigrator:
                 )
             url = raw.get("url")
             command = raw.get("command")
-            transport: Literal["stdio", "sse"] = "sse" if url else "stdio"
+            transport: Literal["stdio", "sse", "streamable_http"] = (
+                remote_transport(raw) if url else "stdio"
+            )
             entries.append(
                 MCPServerEntry(
                     name=str(name),
@@ -1456,6 +1478,7 @@ class OpenClawMigrator:
                     command=str(command) if command else None,
                     args=[str(item) for item in raw.get("args", []) if item is not None],
                     url=str(url) if url else None,
+                    headers=mcp_headers(raw) if url else {},
                     env={
                         str(k): str(v) for k, v in (raw.get("env") or {}).items() if v is not None
                     },

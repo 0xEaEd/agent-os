@@ -232,7 +232,11 @@ def env_get_cmd(
         if json_output:
             print_json(payload)
         else:
-            console.print(payload["value"])
+            # Not through the Rich console: it hard-wraps a redirected stdout
+            # at 80 columns, which splits a long key across two lines, and it
+            # reads "[...]" in the value as markup. The revealed value is what
+            # the caller copies, so it goes out exactly as stored.
+            typer.echo(payload["value"])
         return
 
     listing = _run(_try_gateway("env.list", {}, json_output=json_output))

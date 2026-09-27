@@ -1108,6 +1108,29 @@ def test_persistently_unfetchable_message_is_quarantined_after_max_attempts(
     assert channel._fetch_attempts == {}
 
 
+def test_message_that_never_converts_is_quarantined_after_max_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poison message whose conversion always raises must not be refetched forever (#3011)."""
+    channel = EmailChannel(config=_config())
+    fake = _FlakyBodyIMAP(_raw().as_bytes(), recovers_on_attempt=1)
+    monkeypatch.setattr(channel, "_imap_connect", lambda: fake)
+
+    def _boom(_parsed: object) -> None:
+        raise ValueError("malformed header")
+
+    monkeypatch.setattr(channel, "_to_incoming", _boom)
+
+    for expected_attempt in range(1, EmailChannel.MAX_FETCH_ATTEMPTS):
+        assert channel._fetch_unseen() == []
+        assert fake.stored == []
+        assert channel._fetch_attempts == {"9": expected_attempt}
+
+    assert channel._fetch_unseen() == []
+    assert fake.stored == [("9", "+FLAGS", "\\Seen")]
+    assert channel._fetch_attempts == {}
+
+
 def test_stale_retry_counters_are_evicted_when_uid_leaves_the_unseen_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

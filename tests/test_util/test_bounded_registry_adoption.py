@@ -17,6 +17,7 @@ from agentos.application.intent_cache import IntentApprovalCache
 from agentos.engine.cache_break_monitor import CacheBreakMonitor
 from agentos.engine.progress_watchdog import ProgressWatchdog
 from agentos.engine.subagent import SubagentRegistry
+from agentos.gateway.channel_dispatch import ChannelSessionPointers
 from agentos.gateway.session_streams import SessionStreamRegistry
 from agentos.plan_mode import PlanModeStore
 from agentos.sandbox.governance import DenialLedger
@@ -42,6 +43,7 @@ def _field(owner: object, name: str) -> BoundedRegistry:
         (ProgressWatchdog, ["_repeat_counts", "_repeat_results"]),
         (CacheBreakMonitor, ["_baselines"]),
         (IntentApprovalCache, ["_entries"]),
+        (ChannelSessionPointers, ["_map"]),
     ],
 )
 def test_named_sites_are_bounded(factory, fields: list[str]) -> None:
@@ -199,6 +201,28 @@ def test_turn_runner_compaction_state_is_dropped_on_teardown() -> None:
     assert "kept" in runner._emergency_compaction_overrides
 
 
+def test_channel_session_pointers_are_dropped_on_teardown() -> None:
+    """#1561: ``_map`` grew one entry per chat that ever ran ``/new``, forever."""
+    pointers = ChannelSessionPointers()
+    pointers.set("doomed", "doomed-new")
+    pointers.set("kept", "kept-new")
+
+    drop_session_state("doomed-new")
+
+    assert pointers.resolve("doomed") == "doomed"
+    assert pointers.resolve("kept") == "kept-new"
+
+
+def test_channel_session_pointers_survive_teardown_of_the_base_session() -> None:
+    """Archiving/deleting the abandoned base session must not reroute the chat."""
+    pointers = ChannelSessionPointers()
+    pointers.set("base", "fresh")
+
+    drop_session_state("base")
+
+    assert pointers.resolve("base") == "fresh"
+
+
 def test_denial_ledger_session_state_is_dropped_on_teardown() -> None:
     ledger = DenialLedger()
 
@@ -222,3 +246,25 @@ def test_discord_channel_context_sites_are_bounded() -> None:
     channel = DiscordChannel(DiscordChannelConfig(token="token"))
     _field(channel, "_channel_types")
     _field(channel, "_thread_parent_channels")
+    _field(channel, "_sent_messages")
+
+
+def test_discord_sent_messages_growth_is_actually_capped() -> None:
+    """``_sent_messages`` was a plain ``dict`` -- every ``send()``/``send_file()``
+    call adds an entry, and the only removal path is an explicit ``delete()``
+    of that exact message, which is rare. A long-running gateway on a busy
+    channel grew this without bound for the life of the process, unlike its
+    two siblings in the same field block."""
+    from agentos.channels.discord import (
+        _MAX_CACHED_CHANNEL_CONTEXTS,
+        DiscordChannel,
+        DiscordChannelConfig,
+    )
+
+    channel = DiscordChannel(DiscordChannelConfig(token="token"))
+    for i in range(_MAX_CACHED_CHANNEL_CONTEXTS + 500):
+        channel._sent_messages[str(i)] = "chan"
+
+    assert len(channel._sent_messages) == _MAX_CACHED_CHANNEL_CONTEXTS
+    assert "0" not in channel._sent_messages
+    assert str(_MAX_CACHED_CHANNEL_CONTEXTS + 499) in channel._sent_messages

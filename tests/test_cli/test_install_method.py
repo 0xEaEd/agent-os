@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from agentos.cli import install_method as im
-from agentos.cli.install_method import InstallMethod
+from agentos.compat import install_method as im
+from agentos.compat.install_method import InstallMethod
 
 
 @pytest.mark.parametrize(
@@ -214,9 +214,7 @@ def test_resolve_tool_uses_hardened_path(monkeypatch: pytest.MonkeyPatch, tmp_pa
     uv_bin.write_text("#!/bin/sh\n")
     uv_bin.chmod(0o755)
 
-    import agentos.cli.install_method as mod
-
-    monkeypatch.setattr(mod, "_LOGIN_PATH_DIRS", (str(brew),))
+    monkeypatch.setattr(im, "_LOGIN_PATH_DIRS", (str(brew),))
     resolved = im.resolve_tool("uv", {"PATH": "/nowhere", "HOME": str(tmp_path)})
     assert resolved == str(uv_bin.resolve())
 

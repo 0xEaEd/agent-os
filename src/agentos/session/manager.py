@@ -887,15 +887,22 @@ class SessionManager:
         self._evict_session_runtime_state(session_key)
         return node
 
-    @staticmethod
-    def _evict_session_runtime_state(session_key: str) -> None:
+    def _evict_session_runtime_state(self, session_key: str) -> None:
         """Drop in-memory subagent and routing bookkeeping for ``session_key``.
 
         Called from ``finish`` and from every deletion path so neither
         terminal nor deleted sessions leak unbounded entries in long-running
         gateway processes. Idempotent, so the two overlapping callers are
         safe. See :mod:`agentos.session.runtime_state`.
+
+        The epoch cache is dropped here rather than in
+        :func:`evict_session_runtime_state`, which can only reach
+        process-global stores: this one belongs to the manager instance. It has
+        to go at the same moment as the rest, because the epoch is a staleness
+        marker -- a key that outlives its row hands its epoch to the next
+        session created under the same name.
         """
+        self._epoch_cache.pop(session_key, None)
         evict_session_runtime_state(session_key)
 
     async def _cancel_task_runtime(self, session_key: str, *, reason: str) -> None:
@@ -934,7 +941,7 @@ class SessionManager:
         """
         session_key = canonicalize_session_key(session_key)
         await self._cancel_task_runtime(session_key, reason="session_delete")
-        evict_session_runtime_state(session_key)
+        self._evict_session_runtime_state(session_key)
         await self._storage.delete_session(session_key)
 
     async def branch(
@@ -989,15 +996,17 @@ class SessionManager:
                     target_session_key=new_session_key,
                 )
                 for entry in parent_entries:
+                    # Build the forked row from the entry itself so a new
+                    # TranscriptEntry column is carried over by default instead
+                    # of being dropped by a hand-written field list (#2582).
+                    # Only row identity is reset: a fresh primary key and
+                    # message_id, and the child session linkage.
                     forked = TranscriptEntry(
+                        **entry.model_dump(
+                            exclude={"id", "message_id", "session_id", "session_key"}
+                        ),
                         session_id=child.session_id,
                         session_key=new_session_key,
-                        role=entry.role,
-                        content=entry.content,
-                        tool_calls=entry.tool_calls,
-                        turn_usage=entry.turn_usage,
-                        created_at=entry.created_at,
-                        token_count=entry.token_count,
                     )
                     await self._storage.append_transcript_entry(forked)
                 for summary in parent_summaries:

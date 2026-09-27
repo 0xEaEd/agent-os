@@ -128,7 +128,7 @@
 
 [llm]
 provider = "openrouter"
-model = "openai/gpt-5.6-luna"
+model = "openai/gpt-6-luna"
 # api_key = ""          # OpenRouter API key; env OPENROUTER_API_KEY also works
 base_url = "https://openrouter.ai/api/v1"
 # proxy = ""            # e.g. http://127.0.0.1:7890
@@ -182,8 +182,8 @@ base_url = "https://openrouter.ai/api/v1"
 # [llm.provider_routing]
 # "deepseek/deepseek-v4-flash" = "deepseek"
 # "minimax/minimax-m3" = "minimax"
-# "z-ai/glm-5.2" = "z-ai"
-# "anthropic/claude-opus-5" = "anthropic"
+# "z-ai/glm-5.3" = "z-ai"
+# "anthropic/claude-opus-5.5" = "anthropic"
 #
 # OpenCAP and Surplus use bare model IDs and send values as a provider/seller
 # allow-list. Check
@@ -438,21 +438,21 @@ thinking_level = "high"
 
 [agentos_router.tiers.c1]
 provider = "openrouter"
-model = "openai/gpt-5.6-luna"
+model = "openai/gpt-6-luna"
 description = "Default balanced text route for normal agent work, coding assistance, debugging, and moderate analysis"
 supports_image = false
 thinking_level = "high"
 
 [agentos_router.tiers.c2]
 provider = "openrouter"
-model = "z-ai/glm-5.2"
+model = "z-ai/glm-5.3"
 description = "Stronger text route for multi-step coding, structured reasoning, larger context synthesis, and harder analysis"
 supports_image = false
 thinking_level = "high"
 
 [agentos_router.tiers.c3]
 provider = "openrouter"
-model = "anthropic/claude-opus-5"
+model = "anthropic/claude-opus-5.5"
 description = "Highest-quality text reasoning route for difficult planning, deep review, complex debugging, and high-stakes synthesis"
 supports_image = false
 thinking_level = "high"

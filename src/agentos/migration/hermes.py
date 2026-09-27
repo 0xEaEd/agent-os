@@ -15,6 +15,9 @@ import yaml
 
 from agentos.env_store import write_env_file_values
 from agentos.gateway.config import ChannelsConfig, GatewayConfig, MCPServerEntry
+from agentos.migration._dotenv import parse_env_value
+from agentos.migration._mcp import headers as mcp_headers
+from agentos.migration._mcp import remote_transport
 from agentos.onboarding.config_store import load_config, persist_config
 from agentos.paths import default_agentos_home
 
@@ -179,7 +182,7 @@ def _load_env_file(path: Path) -> dict[str, str]:
         if stripped.startswith("export "):
             stripped = stripped[len("export ") :].lstrip()
         key, value = stripped.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
+        values[key.strip()] = parse_env_value(value)
     return values
 
 
@@ -885,7 +888,8 @@ class HermesMigrator:
                 if key in raw:
                     payload[key] = raw[key]
             if payload.get("url") and not payload.get("command"):
-                payload["transport"] = "sse"
+                payload["transport"] = remote_transport(raw)
+                payload["headers"] = mcp_headers(raw)
             elif payload.get("command"):
                 payload["transport"] = "stdio"
             imported.append(MCPServerEntry.model_validate(payload))

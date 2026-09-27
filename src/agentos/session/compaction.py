@@ -524,15 +524,6 @@ def _merge_summaries(summaries: list[str]) -> str:
     return "\n".join(merged_lines)
 
 
-def _is_assistant_tool_call_entry(entry: dict[str, Any]) -> bool:
-    if entry.get("role") != "assistant":
-        return False
-    if entry.get("tool_calls"):
-        return True
-    content = str(entry.get("content") or "")
-    return "[tool_call:" in content or "[Used tool:" in content
-
-
 def _is_tool_result_entry(entry: dict[str, Any] | None) -> bool:
     if entry is None:
         return False
@@ -578,19 +569,18 @@ def _find_turn_boundary_cut(
         return 0
 
     # Walk backward from legacy_keep_start toward index 1 looking for a clean
-    # turn boundary. A clean boundary: the last removed entry (index cut-1)
-    # is NOT an assistant message that ends with a tool call whose result is
-    # the first kept entry.
+    # turn boundary. A clean boundary can never start with a tool result: that
+    # would orphan it from its assistant call, whether or not the immediately
+    # preceding entry is itself that assistant call — parallel tool calls put
+    # other tool results in between. (An assistant tool call with no result at
+    # all yet, i.e. first_kept is None, is not orphaning anything and is a
+    # valid place to cut.)
     cut = legacy_keep_start
     while cut > 0:
-        last_removed = entries[cut - 1]
         first_kept = entries[cut] if cut < len(entries) else None
 
-        # Mid-turn: assistant tool call removed, tool result would be first kept.
-        if _is_assistant_tool_call_entry(last_removed) and _is_tool_result_entry(
-            first_kept
-        ):
-            # Move cut one step earlier to avoid splitting the pair.
+        if _is_tool_result_entry(first_kept):
+            # Move cut one step earlier to avoid orphaning the tool result.
             cut -= 1
             continue
 

@@ -7,6 +7,7 @@ import inspect
 import logging
 import os
 import secrets
+import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -483,6 +484,30 @@ def _warn_workspace_state_mismatch(config: GatewayConfig) -> None:
     )
 
 
+def _warn_temporary_workspace(config: GatewayConfig) -> None:
+    """Log loudly when the workspace lives under the OS temp directory.
+
+    A temp workspace is never what an operator meant: everything the agent
+    writes will vanish, and every ordinary path (memory files, the user's
+    own files) counts as "outside the workspace", so routine writes start
+    asking for approval. That shipped once as an unexplained prompt naming
+    ``/var/folders/.../T/tmpXXXX/ws`` on a user's machine; this line is the
+    evidence that report was missing.
+    """
+    workspace = _resolved_path(getattr(config, "workspace_dir", None))
+    if workspace is None:
+        return
+    temp_root = _resolved_path(tempfile.gettempdir())
+    if temp_root is None or not _path_is_relative_to(workspace, temp_root):
+        return
+    log.warning(
+        "build_services.workspace_in_temp_dir",
+        workspace=str(workspace),
+        temp_dir=str(temp_root),
+        config_path=getattr(config, "config_path", None),
+    )
+
+
 def _ensure_configured_agent_workspaces(
     config: GatewayConfig,
     *,
@@ -566,6 +591,30 @@ def _task_runtime_turn_hard_deadline_s(config: GatewayConfig) -> float | None:
     return float(configured)
 
 
+_USER_MESSAGE_PROVENANCE_KINDS = frozenset({"web_message", "channel_message", "cli_message"})
+
+
+def _end_once_intent_grants_for_user_turn(run: Any) -> None:
+    """Expire the session's ``once`` destructive-intent approvals for a new user turn.
+
+    ``IntentApprovalCache`` documents ``once`` as lasting until the session's next
+    user message. ``sessions.send`` clears them only on its no-runtime fallback,
+    which the gateway never takes; every turn goes through ``TaskRuntime``, so this
+    is the one place a user message from the web UI, a channel or the CLI reaches.
+    """
+    provenance = getattr(run, "input_provenance", None)
+    if not isinstance(provenance, dict) or provenance.get("kind") not in (
+        _USER_MESSAGE_PROVENANCE_KINDS
+    ):
+        return
+    try:
+        from agentos.sandbox.intent_cache import get_intent_cache
+
+        get_intent_cache().clear_scope("once", session_key=run.session_key)
+    except Exception:  # pragma: no cover - never block a turn on the cache
+        log.debug("intent_cache.clear_once_failed", exc_info=True)
+
+
 async def dispatch_task_runtime_turn(
     run: Any,
     *,
@@ -601,6 +650,7 @@ async def dispatch_task_runtime_turn(
     ):
         raise PermissionError("channel pairing was revoked before the turn started")
     tool_context.task_id = run.task_id
+    _end_once_intent_grants_for_user_turn(run)
     session = None
     if session_manager is not None and hasattr(session_manager, "get_session"):
         session = await session_manager.get_session(run.session_key)
@@ -628,6 +678,7 @@ async def dispatch_task_runtime_turn(
             idle_timeout=stream_idle_timeout,
             heartbeat_interval=heartbeat_interval,
             stream_event_sink=getattr(run, "stream_event_sink", None),
+            show_thinking=bool(getattr(getattr(config, "control_ui", None), "show_thinking", True)),
         )
     except TaskRuntimeStreamError as exc:
         if exc.code in {
@@ -807,8 +858,13 @@ async def _emit_task_runtime_stream_events(
     idle_timeout: float | None = 180.0,
     heartbeat_interval: float | None = None,
     stream_event_sink: Any = None,
+    show_thinking: bool = True,
 ) -> None:
-    """Emit turn events and fail the task if the stream reports an error."""
+    """Emit turn events and fail the task if the stream reports an error.
+
+    ``show_thinking`` mirrors ``control_ui.show_thinking``: when off, model
+    reasoning is neither streamed nor carried on the ``done`` event.
+    """
     from dataclasses import asdict, is_dataclass
 
     from agentos.engine.stream_wrappers import wrap_stream
@@ -843,6 +899,11 @@ async def _emit_task_runtime_stream_events(
                 if not key.startswith("_")
             }
         event_kind = event_dict.pop("kind", getattr(event, "kind", event.__class__.__name__))
+        if not show_thinking:
+            if event_kind == "thinking":
+                continue
+            if event_kind == "done":
+                event_dict.pop("reasoning_content", None)
         if event_kind == "error":
             raw_message = event_dict.get("message")
             error_message = (
@@ -1470,6 +1531,7 @@ async def build_services(
         if config.config_path:
             log.info("build_services.config_loaded", path=config.config_path)
     _warn_workspace_state_mismatch(config)
+    _warn_temporary_workspace(config)
 
     validate_agentos_router_runtime(config)
     from agentos.memory.embedding_resolver import resolve_memory_embedding
@@ -2160,6 +2222,19 @@ async def start_gateway_server(
 
     # Gateway-specific: set env var for other components to discover
     os.environ["AGENTOS_GATEWAY_PORT"] = str(config.port)
+
+    # The desktop hands the gateway an operator secret at spawn; read it now
+    # and scrub it so no child process inherits it (see gateway.agent_surface).
+    from agentos.gateway.agent_surface import ensure_operator_file, get_agent_surface
+
+    get_agent_surface().load_operator_secret_from_env()
+    # And write our own for the local CLI (0600 under wallets/, rotated every
+    # boot). Without it the CLI on this machine is bound as an agent, which
+    # fails safe, so an unwritable file is a warning rather than a refusal.
+    try:
+        ensure_operator_file()
+    except OSError as exc:
+        log.warning("gateway.operator_file_unwritable", error=str(exc))
 
     # Gateway-specific: ensure auth token exists
     if config.auth.mode == "token" and not config.auth.token:

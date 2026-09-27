@@ -79,6 +79,10 @@ class CompactionReport(BaseModel):
 
 _MAX_OBLIGATION_VALUE_CHARS = 240
 _MAX_CRITICAL_CARRY_FORWARD = 32
+#: Appended by :func:`_clean_obligation_text` where it cut a value short. It is
+#: this module's own mark, never transcript text, so the coverage check has to
+#: drop it again before looking for the value in a summary.
+_TRUNCATION_MARKER = "..."
 _PATH_RE = re.compile(
     r"(?<![\w.-])(?:[A-Za-z]:[\\/]|\.{1,2}/|/|[A-Za-z0-9_.@()+-]+/)"
     r"(?:[A-Za-z0-9_.@()+-]+(?: [A-Za-z0-9_.@()+-]+)*/)*"
@@ -115,10 +119,14 @@ def _entry_value(entry: Any, key: str, default: Any = None) -> Any:
 
 def _clean_obligation_text(value: Any, *, max_chars: int = _MAX_OBLIGATION_VALUE_CHARS) -> str:
     text = _string_value(value)
-    text = re.sub(r"\s+", " ", text).strip(" `\t\r\n,;)]")
+    text = _collapse_whitespace(text).strip(" `\t\r\n,;)]")
     if len(text) <= max_chars:
         return text
-    return text[: max_chars - 3].rstrip() + "..."
+    return text[: max_chars - len(_TRUNCATION_MARKER)].rstrip() + _TRUNCATION_MARKER
+
+
+def _collapse_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text)
 
 
 def _after_label(line: str) -> str:
@@ -329,6 +337,35 @@ def extract_compaction_obligations(
     return obligations
 
 
+def _coverage_haystack(summary_text: str) -> str:
+    """The summary in the shape an obligation value was stored in.
+
+    An obligation is not raw transcript text: :func:`_clean_obligation_text`
+    collapses its whitespace before storing it. Searching a summary that still
+    carries the original runs meant a value taken from ``ship  the  release``
+    was looked up as ``ship the release`` and never found, so the obligation
+    was reported missing from a summary quoting it verbatim.
+    """
+    return _collapse_whitespace(summary_text).casefold()
+
+
+def _coverage_needle(value: str) -> str:
+    """What has to appear in the summary for ``value`` to count as covered.
+
+    A value long enough to be cut short carries :data:`_TRUNCATION_MARKER`,
+    which comes from this module rather than from the transcript — so an exact
+    substring test could never match it, however faithfully the summary
+    reproduced the line. Those obligations were reported missing every single
+    time, which downgrades the coverage status, fills ``critical_carry_forward``
+    with text the summary already holds, and, with ``coverage_blocking`` on,
+    abandons the compaction entirely.
+
+    Dropping a trailing marker can only shorten the needle, so an obligation
+    that matched before still matches.
+    """
+    return value.casefold().removesuffix(_TRUNCATION_MARKER)
+
+
 def verify_summary_coverage(
     summary_text: str,
     obligations: Sequence[CompactionObligation],
@@ -338,9 +375,11 @@ def verify_summary_coverage(
 ) -> CoverageResult:
     """Compare obligations with summary text without blocking by default."""
 
-    search_text = summary_text.casefold()
+    search_text = _coverage_haystack(summary_text)
     missing_obligations = [
-        obligation for obligation in obligations if obligation.value.casefold() not in search_text
+        obligation
+        for obligation in obligations
+        if _coverage_needle(obligation.value) not in search_text
     ]
     missing = [_obligation_label(obligation) for obligation in missing_obligations]
     blocked = block_missing_critical and any(

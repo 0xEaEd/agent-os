@@ -114,6 +114,12 @@ Rules:
   non-array, or an unknown `op` exits 2 with `error: …` and writes nothing —
   the file is validated before the workbook is opened, so a bad op list cannot
   leave a half-applied workbook or overwrite `--out` with an unchanged copy.
+- A `merge_cells` range that is malformed, or that overlaps a merge the sheet
+  already has (including one made by an earlier op in the same list), raises
+  `ValueError` naming the ranges before anything is written. Excel treats
+  intersecting merges as a corrupt file, so the run does not report success
+  for one. Re-merging the *same* range is a no-op, not an overlap, so an ops
+  file stays safe to re-apply.
 - `0`, `false` and `""` are values, not absence. Note that Excel has no
   empty-string cell, so `""` reads back as empty — use `null` when you mean
   "clear this cell".
@@ -128,6 +134,11 @@ Rules:
 - Datetimes go in as ISO 8601 strings (`"2026-05-06T09:00:00"`); the helper
   parses them back to `datetime` objects so Excel renders the cell with date
   format. Pass `as_text: true` to keep such a string as text instead.
+- `rename_sheet` lands the sheet on exactly the name you asked for, or does
+  nothing. Excel compares sheet names without regard to case, so a name another
+  sheet already holds is refused and not counted in `applied` — inspect the
+  workbook and pick a free name. Correcting only a sheet's own capitalisation
+  (`data` → `Data`) is applied normally.
 - Editing a cell does not recalculate dependent formulas. Excel and
   LibreOffice recalculate on open. If you need cached values immediately,
   use a calculation engine (out of scope here).
@@ -164,7 +175,9 @@ Spec:
 the `merged` list returned by `inspect_xlsx.py`. This compatibility applies
 to merge metadata only; inspected `rows` contain cell objects rather than
 the plain values required by the creation spec. Invalid range coordinates
-raise an error from openpyxl.
+raise an error from openpyxl, and a range that overlaps an earlier entry in
+the same `merged` list raises `ValueError` naming both -- nothing is written.
+A repeated identical entry is ignored rather than refused.
 
 For programmatic use:
 

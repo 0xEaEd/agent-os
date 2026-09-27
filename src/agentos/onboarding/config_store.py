@@ -65,6 +65,7 @@ def load_config(path: str | Path | None = None) -> GatewayConfig:
     target = _resolve_path(path)
     if not target.exists():
         cfg = GatewayConfig()
+        cfg.mark_env_sourced_auth_secrets({})
         if cfg.llm.api_key:
             cfg.mark_runtime_secret("llm.api_key")
         cfg.config_path = str(target)
@@ -73,6 +74,9 @@ def load_config(path: str | Path | None = None) -> GatewayConfig:
         data = tomllib.load(fh)
     migration = migrate_config_payload(data)
     cfg = GatewayConfig.model_validate(migration.payload)
+    # Same provenance rule as GatewayConfig.load: an auth token or password
+    # that came from the environment must not be written back to the file.
+    cfg.mark_env_sourced_auth_secrets(migration.payload)
     if migration.changed:
         backup_and_write_migrated_config(target, migration.payload, migration)
     llm_payload = data.get("llm") if isinstance(data, dict) else None

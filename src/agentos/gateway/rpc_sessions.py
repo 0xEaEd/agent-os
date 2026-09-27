@@ -30,6 +30,7 @@ from agentos.gateway.rpc import (
 )
 from agentos.gateway.session_events import build_sessions_changed_payload
 from agentos.gateway.session_services import (
+    clear_session_epoch,
     get_session_epoch,
     get_session_lock,
     get_session_storage,
@@ -1686,6 +1687,17 @@ async def _handle_sessions_rename(params: dict | None, ctx: RpcContext) -> dict:
             "Session storage cannot persist a rename",
         )
 
+    # Other open clients (and the sidebar of the one that renamed) learn the
+    # new name now instead of on their next list poll.
+    await _emit_to_subscribers(
+        ctx,
+        resolved_key,
+        "sessions.changed",
+        build_sessions_changed_payload(
+            resolved_key, "renamed", display_name=name, displayName=name
+        ),
+    )
+
     return {
         "key": resolved_key,
         "name": name,
@@ -2014,6 +2026,7 @@ async def _handle_sessions_delete(params: dict | None, ctx: RpcContext) -> dict:
                 except Exception:
                     log.warning("sessions.delete.task_cancel_failed", session_key=canonical)
             evict_session_runtime_state(canonical)
+            clear_session_epoch(ctx.session_manager, canonical)
             await storage.delete_session(canonical)
             deleted.append(k)
         except Exception as exc:

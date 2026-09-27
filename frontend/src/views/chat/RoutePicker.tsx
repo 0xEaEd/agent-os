@@ -226,7 +226,14 @@ export function RoutePicker({ route }: RoutePickerProps) {
         aria-controls="chat-route-menu"
         aria-label={t('chat.routeLabel')}
         title={title}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          // Re-read on the way open. The tier rows are config, and config can be
+          // edited in another view while this composer stays mounted — without
+          // this the menu keeps offering the models a tier USED to name until
+          // the socket happens to reconnect.
+          if (!open) route.reload()
+          setOpen((v) => !v)
+        }}
       >
         <RouteIcon aria-hidden="true" />
         <span className="chat-route-trigger__label">{label}</span>

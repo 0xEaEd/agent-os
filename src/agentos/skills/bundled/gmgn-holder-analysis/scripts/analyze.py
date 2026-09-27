@@ -3,6 +3,17 @@ import json, subprocess, sys, time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
+from pathlib import Path
+
+# Bundled scripts run under AgentOS's own interpreter; the path insert only
+# matters in a source checkout where the package is not installed (#2804).
+_SRC_ROOT = str(Path(__file__).resolve().parents[5])
+if _SRC_ROOT not in sys.path:
+    sys.path.insert(0, _SRC_ROOT)
+from agentos.skill_stdio import configure_utf8_stdio  # noqa: E402
+
+configure_utf8_stdio()
+
 USAGE = f"Usage: {sys.argv[0]} <token_address> <chain> [zh|en]"
 
 if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
@@ -35,7 +46,8 @@ if CHAIN == "auto" or (TOKEN_ADDR.startswith("0x") and CHAIN not in KNOWN_CHAINS
                 "--raw",
             ],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
         )
         if _r.returncode == 0:
@@ -81,7 +93,11 @@ def _get_list(resp):
 
 def run_cli(args, timeout=30):
     r = subprocess.run(
-        ["gmgn-cli"] + args + ["--raw"], capture_output=True, text=True, timeout=timeout
+        ["gmgn-cli"] + args + ["--raw"],
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
     )
     if r.returncode != 0:
         raise RuntimeError(r.stderr)
@@ -130,7 +146,17 @@ with ThreadPoolExecutor(max_workers=3) as ex:
         )
 
     holders = _get_list(f_holders.result())
-    created_data = f_created.result() if f_created else None
+    # created-tokens is a secondary enrichment call: a transient failure (rate
+    # limit, non-zero exit, bad JSON) or an unexpected payload shape costs only
+    # the token-history section, not the whole analysis (#2429).
+    created_data = None
+    if f_created:
+        try:
+            created_data = unwrap(f_created.result())
+        except Exception:
+            created_data = None
+        if not isinstance(created_data, dict):
+            created_data = None
 
 normal = [h for h in holders if _f(h.get("addr_type"), 0) == 0]
 burn = [h for h in holders if _f(h.get("addr_type"), 0) == 1]
@@ -193,8 +219,15 @@ cur_mc = total_supply * cur_price
 
 burn_pct = sum(_f(h.get("amount_percentage")) for h in burn)
 dex_pct = sum(_f(h.get("amount_percentage")) for h in dex)
-top10 = sum(_f(h.get("amount_percentage")) for h in holders[:10])
-top20 = sum(_f(h.get("amount_percentage")) for h in holders[:20])
+# Concentration is about supply that can be sold. ``holders`` is the raw
+# top-100, which includes the burn address and the DEX pools -- on any
+# tradable token those hold the largest balances and sit in the first slots,
+# so counting them made a token read 🔴 over supply that is destroyed or owned
+# by the AMM. The report already says so itself: the burn line calls that
+# balance "permanently locked, non-circulating" and the footer prints DEX as
+# "excluded from eval". Every other aggregate here sums over ``normal``.
+top10 = sum(_f(h.get("amount_percentage")) for h in normal[:10])
+top20 = sum(_f(h.get("amount_percentage")) for h in normal[:20])
 
 airdrop = [h for h in normal if _f(h.get("buy_tx_count_cur")) == 0 and _f(h.get("balance")) > 0]
 bundlers = [h for h in normal if "bundler" in (h.get("maker_token_tags") or [])]
@@ -759,7 +792,7 @@ if creator:
     print(f"  → {_('小结', 'Summary')}{_('：', ': ')}{dev_summary}")
     print()
     if created_data:
-        data_unwrapped = unwrap(created_data)
+        data_unwrapped = created_data  # unwrapped and dict-checked at fetch time
         if isinstance(data_unwrapped, dict):
             all_tokens = data_unwrapped.get("tokens") or []
             total_cnt = _f(data_unwrapped.get("inner_count")) + _f(data_unwrapped.get("open_count"))
