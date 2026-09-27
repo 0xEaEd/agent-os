@@ -27,6 +27,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `AGENTOS_REDACT_SECRETS` is on by default and `redact_file_output` is the one
   policy behind `read_file`, `grep_search`, `read_spreadsheet` and `edit_file`.
 
+- MS Teams channel: `_message_conversation_keys` mapped every outbound
+  activity id to its conversation and never evicted, so a long-running bot
+  grew one entry per message sent for the life of the process. It is now a
+  bounded LRU registry (#3052).
+
 - Approval queue: a process that shares a state directory with a live gateway
   but has no approval surface of its own can no longer queue approvals there.
   A test or probe script that imported the shell tool and drove
