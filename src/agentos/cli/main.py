@@ -184,7 +184,7 @@ def _root(
     # surface here (standalone chat prompts inline, ``agentos agent`` prints
     # the envelope). That is what lets a CLI share ~/.agentos with a running
     # gateway; a library caller without this claim is refused instead.
-    from agentos.application.approval_queue import claim_local_approval_surface
+    from agentos.gateway.approval_queue import claim_local_approval_surface
 
     claim_local_approval_surface()
 

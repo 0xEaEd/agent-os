@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
+from agentos.application.gateway_pidlock import live_gateway_pid
 from agentos.paths import state_dir
 from agentos.util.bounded_registry import BoundedRegistry
 
@@ -258,11 +259,6 @@ class ApprovalQueue:
     def _foreign_live_gateway(self) -> int | None:
         if _LOCAL_APPROVAL_SURFACE:
             return None
-        # Lazy: ``agentos.gateway`` is the heavy package and imports this
-        # module during boot; by the time anything requests an approval it is
-        # either already loaded (gateway, CLI) or worth loading once (script).
-        from agentos.gateway.pidlock import live_gateway_pid
-
         return live_gateway_pid(self._db_path.parent)
 
     def request(self, namespace: str = "exec", params: dict | None = None) -> str:

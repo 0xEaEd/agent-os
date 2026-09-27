@@ -35,12 +35,31 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import IO, Any, cast
+from typing import IO
+
+from agentos.application.gateway_pidlock import (
+    LOCK_FILENAME,
+    PID_FILENAME,
+    live_gateway_pid,
+    read_pid_from_path,
+    try_lock,
+    unlock,
+)
 
 log = logging.getLogger(__name__)
 
-_PID_FILENAME = "gateway.pid"
-_LOCK_FILENAME = "gateway.pid.lock"
+__all__ = ["GatewayPidLock", "live_gateway_pid"]
+
+# The lock primitives and the liveness probe live in
+# ``agentos.application.gateway_pidlock`` so the approval queue (application
+# layer) can ask "does a live gateway own this state dir?" without importing
+# the gateway package. They keep their historical names here for callers and
+# tests.
+_PID_FILENAME = PID_FILENAME
+_LOCK_FILENAME = LOCK_FILENAME
+_try_lock = try_lock
+_unlock = unlock
+_read_pid_from_path = read_pid_from_path
 
 
 class GatewayPidLock:
@@ -165,94 +184,3 @@ class GatewayPidLock:
             f.write(payload)
             f.flush()
             os.fsync(f.fileno())
-
-
-# ---------------------------------------------------------------------------
-# Module-level helpers (no self state needed)
-# ---------------------------------------------------------------------------
-
-
-def live_gateway_pid(state_dir: str | Path) -> int | None:
-    """Return the pid of a live gateway that owns ``state_dir`` and is not us.
-
-    ``None`` when no gateway wrote a pid file, when the pid file is this
-    process's own, or when it is a leftover from a gateway that died without
-    cleaning up. Liveness is judged the way :meth:`GatewayPidLock.acquire`
-    judges it — by whether the OS lock on ``gateway.pid.lock`` is still held —
-    never by probing the pid, which a reused pid would get wrong.
-
-    Used by the approval queue to refuse writes from a process that shares a
-    state directory with a running gateway but has no approval surface of its
-    own: such a row would surface as a prompt in the gateway's UI, asked of a
-    user who never issued the command.
-    """
-    root = Path(state_dir)
-    pid = _read_pid_from_path(root / _PID_FILENAME)
-    if pid is None or pid == os.getpid():
-        return None
-    lock_path = root / _LOCK_FILENAME
-    if not lock_path.exists():
-        return None
-    try:
-        fh = open(str(lock_path), "a+b")  # noqa: WPS515
-    except OSError:
-        # Cannot tell; a pid file with an unreadable lock anchor is treated
-        # as live so the caller fails closed.
-        return pid
-    try:
-        if _try_lock(fh):
-            _unlock(fh)
-            return None
-        return pid
-    finally:
-        fh.close()
-
-
-def _try_lock(fh: IO[bytes]) -> bool:
-    if os.name == "nt":
-        import msvcrt
-
-        msvcrt_mod = cast(Any, msvcrt)
-        try:
-            fh.seek(0)
-            msvcrt_mod.locking(fh.fileno(), msvcrt_mod.LK_NBLCK, 1)
-            return True
-        except OSError:
-            return False
-    else:
-        import fcntl
-
-        fcntl_mod = cast(Any, fcntl)
-        try:
-            fcntl_mod.flock(fh.fileno(), fcntl_mod.LOCK_EX | fcntl_mod.LOCK_NB)
-            return True
-        except OSError:
-            return False
-
-
-def _unlock(fh: IO[bytes]) -> None:
-    if os.name == "nt":
-        import msvcrt
-
-        msvcrt_mod = cast(Any, msvcrt)
-        try:
-            fh.seek(0)
-            msvcrt_mod.locking(fh.fileno(), msvcrt_mod.LK_UNLCK, 1)
-        except OSError:
-            pass
-    else:
-        import fcntl
-
-        fcntl_mod = cast(Any, fcntl)
-        try:
-            fcntl_mod.flock(fh.fileno(), fcntl_mod.LOCK_UN)
-        except OSError:
-            pass
-
-
-def _read_pid_from_path(path: Path) -> int | None:
-    try:
-        info = json.loads(path.read_bytes())
-        return int(info["pid"])
-    except Exception:  # noqa: BLE001
-        return None
