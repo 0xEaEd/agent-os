@@ -23,7 +23,6 @@ export function StatusStrip({
   running = new Set(),
   sessionPending = 0,
   globalPending = null,
-  streaming = false,
   deskMode = false,
   onToggleDesk,
   onOpenApprovals,
@@ -37,7 +36,6 @@ export function StatusStrip({
   sessionPending?: number
   /** null while loading or errored. */
   globalPending?: number | null
-  streaming?: boolean
   deskMode?: boolean
   onToggleDesk?: () => void
   onOpenApprovals?: () => void
@@ -45,7 +43,6 @@ export function StatusStrip({
   const trading = mode === 'trading'
   const word: StatusWord = statusWord({
     pendingApprovals: sessionPending,
-    streaming,
     missionRunning: missions.some((m) => m.id && running.has(m.id)),
   })
   const shown = missions.slice(0, 2)

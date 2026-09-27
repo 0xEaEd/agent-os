@@ -156,8 +156,8 @@ class CuratedMemoryStore:
         # the agent into a silent memory blackout for the whole session --
         # the file still holds every entry on disk, but the snapshot is empty
         # and nothing anywhere says why. Worse, the store then holds [] in
-        # memory while disk holds real entries, and `add` (which skips the
-        # drift check) would flush that emptiness back over them.
+        # memory while disk holds real entries, and any write that did not
+        # re-read the file would flush that emptiness back over them.
         #
         # Record the failure instead: writes refuse, and the caller can tell
         # "no memory" apart from "could not read memory".
@@ -226,9 +226,11 @@ class CuratedMemoryStore:
             return {"success": False, "error": scan_error}
 
         with self._file_lock(self._path_for(target)):
-            reload_signal = self._reload_target(target, skip_drift=True)
+            reload_signal = self._reload_target(target, skip_drift=False)
             if reload_signal is _READ_FAILED:
                 return self._read_failed_error(self._path_for(target))
+            if reload_signal:
+                return self._drift_error(self._path_for(target), reload_signal)
             entries = self.entries_for(target)
             limit = self._char_limit(target)
             if content in entries:
@@ -549,7 +551,7 @@ class CuratedMemoryStore:
         separator = "═" * 46
         return f"{separator}\n{header}\n{separator}\n{content}"
 
-    def _reload_target(self, target: str, skip_drift: bool = True) -> str | None:
+    def _reload_target(self, target: str, skip_drift: bool = False) -> str | None:
         """Re-read entries from disk into in-memory state.
 
         Called under the file lock to get the latest state before mutating.
@@ -564,8 +566,12 @@ class CuratedMemoryStore:
           - ``None`` on a clean reload.
 
         When *skip_drift* is True the round-trip / entry-size check is
-        bypassed. Used by ``add``, which appends without rewriting, so
-        existing content is never clobbered.
+        bypassed. No mutator passes it: ``add`` is not append-only -- like
+        ``replace`` / ``remove`` / ``apply_batch`` it persists through
+        ``_save()``'s full atomic rewrite of the file, so it must see (and
+        refuse on) the same drift. Its rewrite would not lose data (the parser
+        keeps every non-empty segment, and an oversized entry already fails
+        the char-limit check), but it would erase the drift silently.
         """
         path = self._path_for(target)
         raw = self._read_raw_checked(path)
@@ -620,6 +626,19 @@ class CuratedMemoryStore:
         # Drift confirmed — snapshot the file so the operator can recover
         # whatever the external writer added, then return the .bak path so
         # the caller can refuse the mutation.
+        #
+        # Every mutator refuses on drift, so a model retrying against a file
+        # nobody has fixed yet would leave one snapshot per attempt. When the
+        # newest snapshot already holds exactly these contents, point at it
+        # instead of writing a duplicate.
+        backups = self._drift_backups(path)
+        if backups:
+            newest = backups[-1]
+            try:
+                if newest.read_text(encoding="utf-8") == raw:
+                    return str(newest)
+            except (OSError, UnicodeDecodeError):
+                pass  # unreadable snapshot -- take a fresh one
         ts = int(time.time())
         bak_path = path.with_suffix(path.suffix + f".bak.{ts}")
         try:
@@ -627,6 +646,28 @@ class CuratedMemoryStore:
         except OSError:
             return str(bak_path) + " (BACKUP FAILED — file unchanged on disk)"
         return str(bak_path)
+
+    @staticmethod
+    def _drift_backups(path: Path) -> list[Path]:
+        """Return *path*'s ``<file>.bak.<unix_ts>`` drift snapshots, oldest first.
+
+        Ordered by the numeric timestamp parsed from the name -- not lexically
+        (``9`` would sort after ``10``) and not by mtime (coarse on some
+        filesystems, and changed by a copy or restore). Names whose suffix is
+        not a plain number are not snapshots this store took and are ignored.
+        """
+        prefix = f"{path.name}.bak."
+        found: list[tuple[int, Path]] = []
+        try:
+            candidates = list(path.parent.glob(f"{path.name}.bak.*"))
+        except OSError:
+            return []
+        for candidate in candidates:
+            ts = candidate.name[len(prefix) :]
+            if ts.isascii() and ts.isdigit():
+                found.append((int(ts), candidate))
+        found.sort(key=lambda item: item[0])
+        return [candidate for _, candidate in found]
 
     def _save(self, target: str) -> None:
         self._memory_dir.mkdir(parents=True, exist_ok=True)
@@ -682,9 +723,13 @@ class CuratedMemoryStore:
             ),
             "drift_backup": bak_path,
             "remediation": (
-                "Open the .bak file, integrate the missing entries into memory "
-                "one at a time via add, then remove or rewrite the original "
-                "file to a clean state."
+                "Every memory action (add, replace, remove, batch) refuses "
+                "until the file is fixed, so retrying the memory tool will not "
+                f"help. First rewrite {path} outside the memory tool as a clean "
+                f"§-delimited list: entries joined by {ENTRY_DELIMITER!r} (a "
+                "line holding only §), with no blank lines around the § and "
+                "no empty entries — carry over anything worth keeping from "
+                "the .bak snapshot. Then retry the memory call."
             ),
         }
 

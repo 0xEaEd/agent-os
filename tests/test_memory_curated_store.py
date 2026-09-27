@@ -1,8 +1,11 @@
 """CuratedMemoryStore — bounded §-delimited entry stores (hermes-style)."""
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from agentos.memory import curated as curated_module
 from agentos.memory.curated import ENTRY_DELIMITER, CuratedMemoryStore
 
 
@@ -165,15 +168,20 @@ def test_external_drift_blocks_replace_and_writes_backup(store: CuratedMemorySto
     assert list(tmp_path.glob("MEMORY.md.bak.*")), "backup snapshot must exist"
 
 
-def test_add_skips_drift_guard(store: CuratedMemoryStore, tmp_path: Path):
+def test_add_also_blocks_on_external_drift(store: CuratedMemoryStore, tmp_path: Path):
+    """``add`` persists via the same full-file rewrite as every other
+    mutator (`_save` -> `_write_file`), so it is not actually append-only --
+    it must detect and refuse on external drift exactly like `replace`."""
     store.add("memory", "entry one")
     mem = tmp_path / "MEMORY.md"
     mem.write_text(
-        mem.read_text(encoding="utf-8") + "\n\nfree text appended externally",
+        mem.read_text(encoding="utf-8") + ENTRY_DELIMITER + ENTRY_DELIMITER + "entry two",
         encoding="utf-8",
     )
-    result = store.add("memory", "entry two")
-    assert result["success"] is True  # append-only add never clobbers
+    result = store.add("memory", "entry three")
+    assert result["success"] is False
+    assert "drift_backup" in result
+    assert list(tmp_path.glob("MEMORY.md.bak.*")), "backup snapshot must exist"
 
 
 def test_roundtrip_mismatch_drift_blocks_replace(store: CuratedMemoryStore, tmp_path: Path):
@@ -189,6 +197,85 @@ def test_roundtrip_mismatch_drift_blocks_replace(store: CuratedMemoryStore, tmp_
     assert result["success"] is False
     assert "drift_backup" in result
     assert list(tmp_path.glob("MEMORY.md.bak.*"))
+
+
+def _write_drift(mem: Path, tail: str) -> str:
+    """Write a round-trip-mismatch drift shape (empty segment) and return it."""
+    raw = "entry one" + ENTRY_DELIMITER + ENTRY_DELIMITER + tail
+    mem.write_text(raw, encoding="utf-8")
+    return raw
+
+
+def test_drift_remediation_does_not_send_the_model_back_to_add(
+    store: CuratedMemoryStore, tmp_path: Path
+):
+    """``add`` refuses on drift too, so advice to recover "via add" would loop."""
+    store.add("memory", "entry one")
+    _write_drift(tmp_path / "MEMORY.md", "entry two")
+    result = store.add("memory", "entry three")
+    assert result["success"] is False
+    remediation = result["remediation"]
+    assert "via add" not in remediation
+    assert "one at a time" not in remediation
+    assert "outside the memory tool" in remediation
+    assert "rewrite" in remediation.lower()
+    # Names the real on-disk delimiter, not a paraphrase of it.
+    assert repr(ENTRY_DELIMITER) in remediation
+
+
+def test_refused_retries_reuse_the_drift_snapshot(
+    store: CuratedMemoryStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Snapshots are named by whole seconds; step the clock so the second
+    # drift below does not land in the same second as the first.
+    clock = iter(range(1_000_000, 1_000_100))
+    monkeypatch.setattr(
+        curated_module, "time", SimpleNamespace(time=lambda: next(clock), monotonic=time.monotonic)
+    )
+    store.add("memory", "entry one")
+    mem = tmp_path / "MEMORY.md"
+    first_raw = _write_drift(mem, "entry two")
+
+    first = store.add("memory", "entry three")
+    second = store.replace("memory", "entry one", "updated")
+    assert first["success"] is False and second["success"] is False
+    baks = list(tmp_path.glob("MEMORY.md.bak.*"))
+    assert len(baks) == 1, "an unchanged drifted file must not be snapshotted twice"
+    assert first["drift_backup"] == second["drift_backup"] == str(baks[0])
+
+    # The file drifts again with different contents: that IS a new snapshot,
+    # and the earlier one is left intact.
+    second_raw = _write_drift(mem, "entry two, edited again")
+    third = store.remove("memory", "entry one")
+    assert third["success"] is False
+    assert len(list(tmp_path.glob("MEMORY.md.bak.*"))) == 2
+    assert third["drift_backup"] != first["drift_backup"]
+    assert Path(third["drift_backup"]).read_text(encoding="utf-8") == second_raw
+    assert Path(first["drift_backup"]).read_text(encoding="utf-8") == first_raw
+
+
+def test_newest_drift_snapshot_is_ordered_numerically(store: CuratedMemoryStore, tmp_path: Path):
+    """``.bak.10`` is newer than ``.bak.9`` -- lexical order would say otherwise."""
+    store.add("memory", "entry one")
+    mem = tmp_path / "MEMORY.md"
+    old_raw = "entry one" + ENTRY_DELIMITER + ENTRY_DELIMITER + "old"
+    new_raw = "entry one" + ENTRY_DELIMITER + ENTRY_DELIMITER + "new"
+    (tmp_path / "MEMORY.md.bak.9").write_text(old_raw, encoding="utf-8")
+    (tmp_path / "MEMORY.md.bak.10").write_text(new_raw, encoding="utf-8")
+    # Not a snapshot name -- must be ignored even with matching contents.
+    (tmp_path / "MEMORY.md.bak.manual").write_text(old_raw, encoding="utf-8")
+
+    mem.write_text(new_raw, encoding="utf-8")
+    assert store.add("memory", "x")["drift_backup"] == str(tmp_path / "MEMORY.md.bak.10")
+
+    # Matches only an OLDER snapshot: a fresh one is taken.
+    mem.write_text(old_raw, encoding="utf-8")
+    result = store.add("memory", "x")
+    assert result["drift_backup"] not in {
+        str(tmp_path / "MEMORY.md.bak.9"),
+        str(tmp_path / "MEMORY.md.bak.manual"),
+    }
+    assert Path(result["drift_backup"]).read_text(encoding="utf-8") == old_raw
 
 
 def test_snapshot_block_renders_header_and_entries(store: CuratedMemoryStore):

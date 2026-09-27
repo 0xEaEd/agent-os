@@ -75,6 +75,25 @@ The React console lives in `frontend/` (Node >= 22) and builds to
 - Dev loop: `agentos gateway run` + `cd frontend && npm run dev`
   (Vite proxies `/ws` and `/control/api` to the gateway).
 
+## Developing while the app is running
+
+The desktop app's gateway is a separate install (`~/.local/bin/agentos`, its
+own uv tool venv); editing `src/` does not reach it until you upgrade it. What
+the two *do* share is `~/.agentos` — sessions, wallets, and the approval queue
+the app's "Approval needed" dialog reads.
+
+- `pytest` is already isolated: `tests/conftest.py` points `AGENTOS_STATE_DIR`
+  at a per-run temp directory.
+- Anything else you run from the checkout that imports `agentos` — a probe
+  script, `uv run python -c …`, a notebook — must set `AGENTOS_STATE_DIR` to
+  a scratch directory first, or it reads and writes the live app's state.
+- The approval queue refuses a write from a process that shares a state
+  directory with a live gateway but has no approval surface of its own
+  (`ApprovalQueueOwnedByGatewayError`). The CLI claims a surface at startup;
+  library callers do not. A probe that queued `bash -c "rm -rf /etc"` into
+  the running app's dialog is what this guards against — do not work around
+  it by claiming the surface from a script.
+
 ## Desktop lane (Electron shell)
 
 The macOS desktop app lives in `desktop/` (Electron + React + TypeScript,

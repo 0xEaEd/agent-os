@@ -117,3 +117,122 @@ def test_cli_writes_fractional_timestamps(tmp_path: Path, monkeypatch: pytest.Mo
     assert out_path.read_text(encoding="utf-8") == (
         "1\n00:00:00,000 --> 00:00:03,500\nline 1\n\n2\n00:00:03,500 --> 00:00:06,000\nline 2\n"
     )
+
+
+def test_sub_second_shots_do_not_bleed_into_subsequent_shot_cues() -> None:
+    """Two 0.5s shots: cue 1 must not bleed past 500ms into shot 2.
+
+    An unconstrained start+800ms minimum display forced cue 1 to end at 800ms,
+    overlapping with shot 2 (which starts at 500ms). The cue end time must be
+    capped at the shot boundary (500ms).
+    """
+    mod = _build_srt_module()
+
+    srt = mod.build_srt(mod.parse_script(_script("0.5", "0.5")), gap_ms=200)
+
+    assert srt == (
+        "1\n00:00:00,000 --> 00:00:00,500\nline 1\n\n2\n00:00:00,500 --> 00:00:01,000\nline 2\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("durations", "gap_ms", "expected_end_1"),
+    [
+        (("0.3", "1.0"), 200, "00:00:00,300"),
+        (("0.6", "1.0"), 200, "00:00:00,600"),
+        (("0.9", "1.0"), 200, "00:00:00,800"),  # 900ms - 200ms = 700ms, boosted to 800ms <= 900ms
+        (("1.2", "1.0"), 200, "00:00:01,000"),  # 1200ms - 200ms = 1000ms
+        (("0.5", "1.0"), 0, "00:00:00,500"),
+    ],
+)
+def test_cue_end_time_never_exceeds_shot_boundary(
+    durations: tuple[str, ...],
+    gap_ms: int,
+    expected_end_1: str,
+) -> None:
+    mod = _build_srt_module()
+
+    srt = mod.build_srt(mod.parse_script(_script(*durations)), gap_ms=gap_ms)
+
+    assert f"00:00:00,000 --> {expected_end_1}" in srt
+
+
+def test_cli_sub_second_shots_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = _build_srt_module()
+    script_path = tmp_path / "script.txt"
+    script_path.write_text(_script("0.5", "0.5"), encoding="utf-8")
+    out_path = tmp_path / "out.srt"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_srt.py",
+            "--script",
+            str(script_path),
+            "--output",
+            str(out_path),
+            "--gap-ms",
+            "200",
+        ],
+    )
+
+    assert mod.main() == 0
+
+    assert out_path.read_text(encoding="utf-8") == (
+        "1\n00:00:00,000 --> 00:00:00,500\nline 1\n\n2\n00:00:00,500 --> 00:00:01,000\nline 2\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("durations", "gap_ms", "expected_end_1"),
+    [
+        (("0.5", "1.0"), 5000, "00:00:00,500"),  # gap_ms longer than the shot
+        (("2.0", "1.0"), 5000, "00:00:00,800"),  # gap_ms swallows the shot: 800 ms floor
+        (("0", "1.0"), 200, "00:00:00,000"),  # zero-length shot: end == start, never before
+        (("0.5", "1.0"), -300, "00:00:00,500"),  # negative gap_ms is treated as 0
+    ],
+)
+def test_cue_end_edge_cases_stay_within_shot(
+    durations: tuple[str, ...],
+    gap_ms: int,
+    expected_end_1: str,
+) -> None:
+    mod = _build_srt_module()
+
+    srt = mod.build_srt(mod.parse_script(_script(*durations)), gap_ms=gap_ms)
+
+    assert srt.startswith(f"1\n00:00:00,000 --> {expected_end_1}\n")
+
+
+def test_last_short_shot_is_capped_at_its_own_end() -> None:
+    mod = _build_srt_module()
+
+    srt = mod.build_srt(mod.parse_script(_script("2.0", "0.4")), gap_ms=200, leading_offset_ms=1000)
+
+    assert srt == (
+        "1\n00:00:01,000 --> 00:00:02,800\nline 1\n\n2\n00:00:03,000 --> 00:00:03,400\nline 2\n"
+    )
+
+
+@pytest.mark.parametrize("gap_ms", [0, 200, 900, 5000])
+def test_cues_never_overlap_or_run_backwards(gap_ms: int) -> None:
+    mod = _build_srt_module()
+    durations = ("0.1", "0.8", "0.95", "1.0", "0", "0.3", "2.5", "0.7")
+
+    srt = mod.build_srt(mod.parse_script(_script(*durations)), gap_ms=gap_ms)
+
+    def _ms(ts: str) -> int:
+        hms, ms = ts.split(",")
+        h, m, s = (int(part) for part in hms.split(":"))
+        return ((h * 60 + m) * 60 + s) * 1000 + int(ms)
+
+    spans = [
+        tuple(_ms(ts) for ts in line.split(" --> ")) for line in srt.splitlines() if " --> " in line
+    ]
+    assert len(spans) == len(durations)
+    shot_start = 0
+    for (start, end), duration in zip(spans, durations, strict=True):
+        shot_end = shot_start + round(float(duration) * 1000)
+        assert start == shot_start
+        assert start <= end <= shot_end
+        shot_start = shot_end

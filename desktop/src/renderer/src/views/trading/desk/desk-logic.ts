@@ -23,16 +23,17 @@ import { TRADING_AGENT_ID } from './agent'
 
 /* ── Status word ─────────────────────────────────────────────────────────── */
 
-export type StatusWord = 'awaiting' | 'live' | 'running' | 'idle'
+export type StatusWord = 'awaiting' | 'running' | 'idle'
 
-/** AWAITING beats LIVE beats RUNNING beats IDLE: a pending decision is the one thing to see. */
+/**
+ * AWAITING beats RUNNING beats IDLE: a pending decision is the one thing to
+ * see. A streaming reply earns no word: the chat itself shows it.
+ */
 export function statusWord(input: {
   pendingApprovals: number
-  streaming: boolean
   missionRunning: boolean
 }): StatusWord {
   if (input.pendingApprovals > 0) return 'awaiting'
-  if (input.streaming) return 'live'
   if (input.missionRunning) return 'running'
   return 'idle'
 }

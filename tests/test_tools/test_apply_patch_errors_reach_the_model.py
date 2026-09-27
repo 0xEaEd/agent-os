@@ -173,6 +173,24 @@ async def test_a_context_mismatch_does_not_quote_a_secret_from_the_file(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_a_pure_addition_hunk_past_the_end_reaches_the_model(tmp_path: Path) -> None:
+    """Issue #2632: this hunk used to land at EOF and report success."""
+    target = tmp_path / "sample.py"
+    target.write_text("line 1\nline 2\nline 3\n", encoding="utf-8")
+
+    envelope = await _failure(
+        tmp_path, _update("sample.py", "@@@ -50,0 +50,1 @@@", "+# added at line 50")
+    )
+
+    assert (
+        "Update File: sample.py: Hunk start line 50 exceeds file length (3 lines)"
+        in envelope["user_message"]
+    )
+    assert envelope["error_class"] == "PatchError"
+    assert target.read_text(encoding="utf-8") == "line 1\nline 2\nline 3\n"
+
+
+@pytest.mark.asyncio
 async def test_a_missing_update_target_keeps_its_file_not_found_shape(tmp_path: Path) -> None:
     """Only the ValueError sites change; an OSError keeps its class and message."""
     patch = "*** Begin Patch\n*** Update File: ghost.py\n@@@ -1,1 +1,1 @@@\n-a\n+b\n*** End Patch\n"

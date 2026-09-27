@@ -77,7 +77,6 @@ export interface DeskProps {
   /** Start over in a fresh desk chat. */
   onStartFresh: () => void
   onOpenBookTab: (tab: BookTab) => void
-  onStreaming: (busy: boolean) => void
   onSessionPending: (count: number) => void
   /**
    * The chat's reject path — the one that tells the agent why — offered to
@@ -147,9 +146,6 @@ export function useDeskInstruments(
   } = ctx
   const { setFocusOrderId } = ctx
 
-  useEffect(() => {
-    if (desk) desk.onStreaming(busy)
-  }, [busy, desk])
   // The mutation callbacks below read the flag at completion time, not at
   // the render that started them.
   const busyRef = useRef(busy)
