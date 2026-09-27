@@ -7,6 +7,7 @@ export const chat = defineNamespace('chat', {
   newChatTitle: 'New chat ({shortcut})',
   sessionControls: 'Chat session controls',
   opening: 'Opening conversation…',
+  jumpToLatest: 'Jump to latest',
   toolOutputEyebrow: 'Tool output',
   toolOutputClose: 'Close tool output',
   toolOutputFull: 'Full result',
@@ -141,6 +142,9 @@ export const chat = defineNamespace('chat', {
   copyCode: 'Copy code',
   mathTitle: 'LaTeX formula (not rendered)',
   copyFailed: 'Copy failed. Select the code manually.',
+  externalImageBlocked: 'External image not loaded:',
+  externalImageTitle:
+    'Loading it would tell that host about this conversation, so it is a link, not a picture. Open it if you trust it.',
 
   // Session reset.
   resetNoBackup: 'Session reset without transcript backup',
@@ -208,6 +212,19 @@ export const chat = defineNamespace('chat', {
   // Transcript: artifacts + charts + cards.
   artifactDownload: 'Download',
   artifactDownloadTitle: 'Download {name}',
+  // The file's kind, for a card subtitle ("Spreadsheet · XLSX · 5 KB").
+  artifactKindSpreadsheet: 'Spreadsheet',
+  artifactKindDocument: 'Document',
+  artifactKindPdf: 'PDF',
+  artifactKindPresentation: 'Presentation',
+  artifactKindImage: 'Image',
+  artifactKindAudio: 'Audio',
+  artifactKindArchive: 'Archive',
+  artifactKindCode: 'Code',
+  artifactKindData: 'Data',
+  artifactKindText: 'Text',
+  artifactKindWeb: 'Web page',
+  artifactKindFile: 'File',
   chartLoading: 'Loading chart…',
   chartUnavailable: 'Chart data is unavailable.',
   chartUnreadable: 'Chart data could not be read.',

@@ -42,11 +42,13 @@ ORIGINALS = {
     "summarize",
     "text-file-read",
     "title-card-image",
+    "token-burner",
     "tmux",
     "video-still-animator",
     "voice-clone-lab",
     "voice-conversion-studio",
     "voiceover-studio",
+    "wallet-trading",
     "weather",
     "xlsx",
 }

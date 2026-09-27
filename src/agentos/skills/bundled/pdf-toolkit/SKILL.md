@@ -122,11 +122,18 @@ Splits use the same syntax in reverse:
 {python} {baseDir}/scripts/split.py input.pdf --pages "1-3,7,10-12" --out output_dir/
 ```
 
+`split.py` also takes a range with one end open: `N-` runs from page `N` to
+the last page and `-M` from page 1 to page `M`, so `--pages "1-3,4-"` splits
+into the first three pages and the rest without knowing the page count first
+(`merge.py` manifests do not accept this form).
+
 Each range writes one output file: `output_dir/input_001.pdf`,
 `output_dir/input_002.pdf`, … The JSON summary lists each file with the pages
 it holds under `parts`, and any requested page past the end of the document
-under `skipped_pages` — check it before reporting the split as done. A spec
-with no page in range exits 2 and writes nothing.
+under `skipped_pages` — check it before reporting the split as done. At most
+1000 skipped pages are listed; when a range runs further past the end, the rest
+are counted under `skipped_pages_omitted` (absent otherwise). A spec with no
+page in range exits 2 and writes nothing.
 
 ---
 

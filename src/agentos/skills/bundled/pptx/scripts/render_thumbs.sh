@@ -50,6 +50,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if ! awk -v v="$dpi" 'BEGIN { exit !(v ~ /^[0-9]+(\.[0-9]+)?$/ && v + 0 > 0) }'; then
+  echo "Invalid --dpi '$dpi'; expected a positive number (e.g. 150, 300)" >&2
+  exit 1
+fi
+
 if [[ ! -f "$input" ]]; then
   echo "File not found: $input" >&2
   exit 1
@@ -122,7 +127,9 @@ fi
 tmp_dir="$(mktemp -d "$out_dir/.render_thumbs.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-if ! pdftoppm -jpeg -r "$dpi" "${range_args[@]}" \
+# ${arr[@]+"${arr[@]}"}: an empty array is an unbound variable under `set -u`
+# on bash 3.2 (the macOS system bash).
+if ! pdftoppm -jpeg -r "$dpi" ${range_args[@]+"${range_args[@]}"} \
     "$pdf_path" "$tmp_dir/page"; then
   echo "pdftoppm failed" >&2
   exit 4

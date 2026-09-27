@@ -53,13 +53,10 @@ def test_active_workspace_exception_keeps_leaf_secret_blocks() -> None:
         "/.env*",
     }
     assert sensitive_path_marker(str(workspace / "id_rsa"), workspace=workspace) == "/id_rsa"
-    assert (
-        sensitive_path_in_text(
-            f"cat {workspace / '.env.local'}",
-            workspace=workspace,
-        )
-        in {"/.env.local", "/.env*"}
-    )
+    assert sensitive_path_in_text(
+        f"cat {workspace / '.env.local'}",
+        workspace=workspace,
+    ) in {"/.env.local", "/.env*"}
 
 
 def test_sensitive_command_targets_honor_active_workspace_exception() -> None:
@@ -72,13 +69,10 @@ def test_sensitive_command_targets_honor_active_workspace_exception() -> None:
         )
         is None
     )
-    assert (
-        sensitive_target_in_command(
-            f"rm {workspace / '.env'}",
-            workspace=workspace,
-        )
-        in {"/.env", "/.env*"}
-    )
+    assert sensitive_target_in_command(
+        f"rm {workspace / '.env'}",
+        workspace=workspace,
+    ) in {"/.env", "/.env*"}
 
 
 def test_windows_rooted_workspace_targets_keep_leaf_secret_blocks() -> None:
@@ -91,23 +85,17 @@ def test_windows_rooted_workspace_targets_keep_leaf_secret_blocks() -> None:
         )
         is None
     )
-    assert (
-        sensitive_target_in_command(
-            r"rm \root\.agentos\workspace\.env",
-            workspace=workspace,
-        )
-        in {"/.env", "/.env*"}
-    )
+    assert sensitive_target_in_command(
+        r"rm \root\.agentos\workspace\.env",
+        workspace=workspace,
+    ) in {"/.env", "/.env*"}
 
 
 def test_posix_sensitive_paths_stay_blocked_on_windows_runners() -> None:
     workspace = Path("/root/.agentos/workspace")
 
     assert sensitive_path_in_text("cat /dev/sda 2>/dev/null") == "/dev"
-    assert (
-        sensitive_path_in_text("cat /root/.ssh/id_rsa", workspace=workspace)
-        == "~/.ssh"
-    )
+    assert sensitive_path_in_text("cat /root/.ssh/id_rsa", workspace=workspace) == "~/.ssh"
 
 
 def test_every_rm_in_a_compound_command_is_checked() -> None:
@@ -646,6 +634,22 @@ def test_cwd_alone_still_anchors_relative_targets(fixed_home: Path) -> None:
     assert (
         sensitive_target_in_command("rm scratch.txt", cwd=Path("/root/.agentos/workspace")) is None
     )
+
+
+def test_trading_vault_is_sensitive(fixed_home: Path) -> None:
+    assert is_sensitive_path(str(fixed_home / ".agentos" / "wallets")) == "~/.agentos/wallets"
+    assert (
+        is_sensitive_path(str(fixed_home / ".agentos" / "wallets" / "unlock.key"))
+        == "~/.agentos/wallets"
+    )
+    assert (
+        is_sensitive_path(str(fixed_home / ".agentos" / "wallets" / "0xabc.json"))
+        == "~/.agentos/wallets"
+    )
+    # The password file is sensitive wherever it is copied to.
+    assert is_sensitive_path("/tmp/unlock.key") == "/unlock.key"
+    # The rest of ~/.agentos is not swept up with it.
+    assert is_sensitive_path(str(fixed_home / ".agentos" / "workspace" / "SOUL.md")) is None
 
 
 # --- ~/.docker (#2623) ------------------------------------------------------

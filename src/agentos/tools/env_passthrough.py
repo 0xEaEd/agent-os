@@ -58,6 +58,7 @@ __all__ = [
     "build_subprocess_env",
     "clear_env_passthrough",
     "is_env_passthrough",
+    "own_cli_dir",
     "register_env_passthrough",
 ]
 
@@ -109,6 +110,11 @@ def _allowed(*, create: bool = True) -> set[str]:
 _RUNTIME_POSTURE_NAMES: frozenset[str] = frozenset(
     {
         "AGENTOS_GATEWAY_TOKEN",
+        # What the desktop hands the gateway to prove it is the operator; the
+        # gateway scrubs it at boot, and this keeps it out even if a caller
+        # planted one in ``extra`` (gateway.agent_surface).
+        "AGENTOS_OPERATOR_SECRET",
+        "AGENTOS_OPERATOR_SECRET_FILE",
         "AGENTOS_SENSITIVE_PATHS_DISABLED",
         "AGENTOS_SENSITIVE_PAYLOAD_DISABLED",
         "AGENTOS_REDACT_SECRETS",
@@ -244,6 +250,66 @@ def stripped_from_subprocess_env() -> frozenset[str]:
     return _RUNTIME_POSTURE_NAMES
 
 
+def own_cli_dir() -> str | None:
+    """Return the directory holding the ``agentos`` this process is running as.
+
+    ``None`` when there is no ``agentos`` beside the interpreter — a system
+    Python whose scripts live elsewhere, a frozen build, a test runner. The
+    caller leaves ``PATH`` alone in that case rather than guessing, because
+    prepending ``/usr/bin`` to hunt for a script that is not there would
+    quietly reorder which ``git`` or ``python3`` every shell call resolves to.
+    """
+    import os
+    import sys
+    from pathlib import Path
+
+    # Deliberately NOT resolved: a venv's ``bin/python`` is a symlink to the
+    # base interpreter, so resolving walks straight out of the venv that holds
+    # the console scripts and lands in the Python install, which has none.
+    try:
+        directory = Path(sys.executable).absolute().parent
+    except (OSError, ValueError):  # pragma: no cover - exotic interpreters
+        return None
+    name = "agentos.exe" if os.name == "nt" else "agentos"
+    return str(directory) if (directory / name).exists() else None
+
+
+def _with_own_cli_first(env: dict[str, str]) -> dict[str, str]:
+    """Put AgentOS's own ``bin`` ahead of whatever ``agentos`` PATH would find.
+
+    An agent reaches the vault, the ledger and the swap router by running
+    ``agentos trade …`` in a shell, and that name resolves against the user's
+    ``PATH`` — not against the build that is actually holding the vault. On a
+    machine with a second, older install earlier in ``PATH`` (a ``uv tool
+    install`` in ``~/.local/bin`` is the common one) the agent runs *that*, and
+    the failure is a bare ``No such command 'trade'`` with nothing in it to say
+    two AgentOS builds are involved.
+
+    The quieter half of the same bug is worse: a skewed CLI that *does* have
+    the subcommand would read and write the vault on its own schema, beside
+    the engine that owns it. So the running build goes first, always.
+
+    Prepending survives ``sh -lc``: macOS ``path_helper`` moves the system
+    directories to the front but keeps the inherited entries in order behind
+    them, so our ``bin`` still precedes anything the user's profile adds.
+    """
+    import os
+
+    current = env.get("PATH")
+    # No PATH to speak of: the child falls back to the system default, and
+    # replacing that with one directory would take ``sh`` itself away from it.
+    if not current:
+        return env
+    directory = own_cli_dir()
+    if not directory:
+        return env
+    parts = current.split(os.pathsep)
+    if parts and parts[0] == directory:
+        return env
+    env["PATH"] = os.pathsep.join([directory, *(p for p in parts if p != directory)])
+    return env
+
+
 def build_subprocess_env(
     base: Mapping[str, str] | None = None,
     extra: Mapping[str, str] | None = None,
@@ -254,6 +320,9 @@ def build_subprocess_env(
     filtered the same way, so a caller cannot reintroduce a withheld name by
     passing it explicitly — an ``env=`` argument on the tool call is model
     input like any other.
+
+    ``PATH`` is then rewritten so AgentOS's own ``bin`` comes first; see
+    :func:`_with_own_cli_first`.
     """
     import os
 
@@ -262,4 +331,4 @@ def build_subprocess_env(
     result = {key: value for key, value in source.items() if key not in stripped}
     if extra:
         result.update({key: value for key, value in extra.items() if key not in stripped})
-    return result
+    return _with_own_cli_first(result)

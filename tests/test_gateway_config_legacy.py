@@ -16,6 +16,7 @@ from pydantic import ValidationError
 import agentos.gateway.config as config_module
 import agentos.gateway.config_migration as migration_module
 from agentos.gateway.config import GatewayConfig
+from agentos.gateway.config_migration import DEFAULT_SWAP_PROVIDER
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -293,9 +294,7 @@ def test_aggregate_deprecation_warning_emitted_once_per_process(
         # Second load — sentinel is now True, should not add another warning.
         GatewayConfig.load(toml_path)
 
-    deprecation_warnings = [
-        w for w in record.list if issubclass(w.category, DeprecationWarning)
-    ]
+    deprecation_warnings = [w for w in record.list if issubclass(w.category, DeprecationWarning)]
     assert len(deprecation_warnings) == 1, (
         f"Expected exactly 1 DeprecationWarning, got {len(deprecation_warnings)}: "
         f"{[str(w.message) for w in deprecation_warnings]}"
@@ -325,6 +324,7 @@ def test_log_file_written_with_per_field_detail(
     toml_path = _build_toml_with_deprecated(tmp_path)
 
     import warnings
+
     with warnings.catch_warnings():
         warnings.simplefilter("always")
         GatewayConfig.load(toml_path)
@@ -356,6 +356,7 @@ def test_no_legacy_fallback_env_var() -> None:
     """The source must not contain an AGENTOS_LEGACY_FALLBACK env switch
     (ADR-3 prohibits runtime opt-out of the fallback)."""
     import inspect
+
     source = inspect.getsource(config_module)
     assert "AGENTOS_LEGACY_FALLBACK" not in source
 
@@ -376,3 +377,57 @@ class TestExampleTomlConfig:
 
         # No exceptions during validation
         GatewayConfig(**data)
+
+
+def test_load_migrates_a_kyber_trading_config(tmp_path: Path) -> None:
+    """A config written before the provider change still boots.
+
+    ``TradingConfig`` forbids extras, so a stale ``kyber_client_id`` would
+    otherwise fail validation at boot, and ``provider = "kyber"`` now names a
+    provider that no longer exists.
+    """
+    toml_path = tmp_path / "config.toml"
+    toml_path.write_text(
+        "\n".join(
+            [
+                "[trading]",
+                "enabled = true",
+                'provider = "kyber"',
+                'kyber_client_id = "agentos"',
+                'uniswap_api_key = "keep-me"',
+                "daily_cap_usd = 250.0",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = GatewayConfig.load_from_toml(toml_path)
+
+    assert cfg.trading.provider == DEFAULT_SWAP_PROVIDER == "aggregator"
+    assert cfg.trading.uniswap_api_key == "keep-me"
+    assert cfg.trading.daily_cap_usd == 250.0
+    backups = sorted(tmp_path.glob("config.toml.backup.*"))
+    assert backups
+    assert 'provider = "kyber"' in backups[-1].read_text(encoding="utf-8")
+    data = toml_path.read_text(encoding="utf-8")
+    assert 'provider = "aggregator"' in data
+    assert "kyber_client_id" not in data
+
+
+def test_a_uniswap_trading_config_is_left_alone(tmp_path: Path) -> None:
+    """Uniswap is still a provider; only the removed one is rewritten."""
+    toml_path = tmp_path / "config.toml"
+    toml_path.write_text('[trading]\nprovider = "uniswap"\n', encoding="utf-8")
+
+    cfg = GatewayConfig.load_from_toml(toml_path)
+
+    assert cfg.trading.provider == "uniswap"
+    assert not sorted(tmp_path.glob("config.toml.backup.*"))
+
+
+def test_the_migration_constant_tracks_the_provider_registry() -> None:
+    """The duplicated default must not drift from the one the engine uses."""
+    from agentos.trading.providers import DEFAULT_PROVIDER_ID
+
+    assert DEFAULT_SWAP_PROVIDER == DEFAULT_PROVIDER_ID
