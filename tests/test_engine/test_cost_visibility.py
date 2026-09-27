@@ -160,7 +160,7 @@ async def test_rpc_handle_usage_cost(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_rpc_handle_usage_cost_fallback_decline() -> None:
     class MockSessionManager:
-        async def list_sessions(self):
+        async def list_sessions(self, *, limit=100, offset=0, agent_id=None):
             return []
 
     class MockRpcContext:

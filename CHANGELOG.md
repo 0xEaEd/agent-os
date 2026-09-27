@@ -29,6 +29,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `agentos chat --standalone` and `agentos agent` keep working beside a
   running gateway; a stale pid file from a crashed gateway does not block.
 
+- `senior-unilp-manager`: a node that refuses the simulated `eth_call` — a
+  rate limit, a transient internal error, an HTTP-level failure — no longer
+  prints `result: REVERTED` with "Fix the parameters"; the dry-run reports
+  `REFUSED (node fault — not a contract revert)` and says to retry. Only a
+  contract that answered (code 3, a message naming a revert, or a non-empty
+  hex revert blob) may be reported as a revert (#3355)
+
+- `pptx` skill: `render_thumbs.sh --dpi` is now validated as a positive number
+  before `soffice` runs. A negative or zero value used to reach `pdftoppm -r`
+  unchecked and silently produce a 1x1 pixel "thumbnail" while the script
+  reported success; a non-numeric value errored, but only after a full
+  LibreOffice conversion, and under exit code 4 ("conversion failed") instead
+  of the script's own "bad arguments" code, 1 (#3327)
+
 - Zhipu/GLM provider: `glm-4.6` no longer silently loses reasoning support.
   `get_capabilities`'s zai reasoning-shape prefix check listed `glm-4.5` and
   `glm-4.7` but skipped `glm-4.6` — even though `engine/reasoning_hint.py`'s

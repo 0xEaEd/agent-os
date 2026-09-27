@@ -4,7 +4,7 @@ import contextlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args, get_origin
 
 import pytest
 import pytest_asyncio
@@ -417,6 +417,201 @@ async def test_branch_fork_transcript(manager):
         "input_tokens": 11,
         "output_tokens": 5,
     }
+
+
+@pytest.mark.asyncio
+async def test_branch_fork_transcript_preserves_reasoning_content(manager):
+    await manager.create("agent:main:main")
+    await manager.append_message(
+        "agent:main:main",
+        "assistant",
+        "let me think...",
+        reasoning_content="step-by-step reasoning trace",
+        token_count=10,
+    )
+    await manager.branch("agent:main:main", "agent:main:direct:u1", fork_transcript=True)
+    child_entries = await manager.get_transcript("agent:main:direct:u1")
+    assert len(child_entries) == 1
+    assert child_entries[0].reasoning_content == "step-by-step reasoning trace"
+
+
+@pytest.mark.asyncio
+async def test_branch_fork_transcript_preserves_tool_call_id(manager):
+    await manager.create("agent:main:main")
+    await manager.append_message(
+        "agent:main:main",
+        "tool",
+        '{"result": "ok"}',
+        tool_call_id="call_abc123",
+        token_count=8,
+    )
+    await manager.branch("agent:main:main", "agent:main:direct:u1", fork_transcript=True)
+    child_entries = await manager.get_transcript("agent:main:direct:u1")
+    assert len(child_entries) == 1
+    assert child_entries[0].tool_call_id == "call_abc123"
+
+
+@pytest.mark.asyncio
+async def test_branch_fork_transcript_preserves_provenance_metadata(manager):
+    await manager.create("agent:main:main")
+    await manager.append_message(
+        "agent:main:main",
+        "user",
+        "run action",
+        provenance={
+            "kind": "tool",
+            "origin_session_id": "sess_orig_99",
+            "source_session_key": "agent:sub:1",
+            "source_channel": "slack",
+            "source_tool": "browser",
+        },
+        token_count=6,
+    )
+    await manager.branch("agent:main:main", "agent:main:direct:u1", fork_transcript=True)
+    child_entries = await manager.get_transcript("agent:main:direct:u1")
+    assert len(child_entries) == 1
+    assert child_entries[0].provenance_kind == "tool"
+    assert child_entries[0].provenance_origin_session_id == "sess_orig_99"
+    assert child_entries[0].provenance_source_session_key == "agent:sub:1"
+    assert child_entries[0].provenance_source_channel == "slack"
+    assert child_entries[0].provenance_source_tool == "browser"
+
+
+@pytest.mark.asyncio
+async def test_branch_fork_transcript_preserves_all_metadata_multi_turn(manager):
+    await manager.create("agent:main:main")
+    # Turn 1: user with provenance
+    await manager.append_message(
+        "agent:main:main",
+        "user",
+        "calculate sum",
+        provenance={
+            "kind": "user_ui",
+            "origin_session_id": "root_sess",
+            "source_session_key": "agent:main:main",
+            "source_channel": "webui",
+            "source_tool": None,
+        },
+        token_count=4,
+    )
+    # Turn 2: assistant with reasoning and tool_calls
+    await manager.append_message(
+        "agent:main:main",
+        "assistant",
+        "calling calc",
+        reasoning_content="need to invoke calculator",
+        tool_calls=[{"id": "call_calc_1", "type": "function", "function": {"name": "calc"}}],
+        token_count=12,
+    )
+    # Turn 3: tool result with tool_call_id
+    await manager.append_message(
+        "agent:main:main",
+        "tool",
+        "42",
+        tool_call_id="call_calc_1",
+        provenance={
+            "kind": "tool",
+            "origin_session_id": "root_sess",
+            "source_session_key": "agent:main:main",
+            "source_channel": "webui",
+            "source_tool": "calc",
+        },
+        token_count=2,
+    )
+    # Turn 4: assistant final response
+    await manager.append_message(
+        "agent:main:main",
+        "assistant",
+        "The result is 42.",
+        turn_usage={"model": "deepseek/deepseek-r1", "input_tokens": 50, "output_tokens": 15},
+        token_count=8,
+    )
+
+    child = await manager.branch("agent:main:main", "agent:main:direct:u1", fork_transcript=True)
+    assert child.forked_from_parent is True
+
+    entries = await manager.get_transcript("agent:main:direct:u1")
+    assert len(entries) == 4
+
+    # Entry 0
+    assert entries[0].role == "user"
+    assert entries[0].provenance_kind == "user_ui"
+    assert entries[0].provenance_source_channel == "webui"
+
+    # Entry 1
+    assert entries[1].role == "assistant"
+    assert entries[1].reasoning_content == "need to invoke calculator"
+    assert entries[1].tool_calls == [
+        {"id": "call_calc_1", "type": "function", "function": {"name": "calc"}}
+    ]
+
+    # Entry 2
+    assert entries[2].role == "tool"
+    assert entries[2].tool_call_id == "call_calc_1"
+    assert entries[2].provenance_source_tool == "calc"
+
+    # Entry 3
+    assert entries[3].role == "assistant"
+    assert entries[3].turn_usage == {
+        "model": "deepseek/deepseek-r1",
+        "input_tokens": 50,
+        "output_tokens": 15,
+    }
+
+
+# Row identity that a fork deliberately resets. Every other TranscriptEntry
+# column must be carried over to the child session verbatim (#2582).
+_FORK_RESET_TRANSCRIPT_FIELDS = frozenset({"id", "message_id", "session_id", "session_key"})
+
+
+def _distinctive_transcript_value(name: str, annotation: Any, ordinal: int) -> Any:
+    """Return a non-default value for a TranscriptEntry field, keyed off its type."""
+    members = [arg for arg in get_args(annotation) if arg is not type(None)]
+    base = members[0] if members else annotation
+    base = get_origin(base) or base
+    if base is str:
+        return f"forked-{name}"
+    if base is int:
+        return 4200 + ordinal
+    if base is list:
+        return [{"field": name}]
+    if base is dict:
+        return {"field": name}
+    raise AssertionError(
+        f"TranscriptEntry.{name} has unhandled type {annotation!r}; "
+        "teach _distinctive_transcript_value about it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_branch_fork_transcript_carries_every_non_identity_field(manager):
+    parent = await manager.create("agent:main:main")
+    copied_fields = [
+        name for name in TranscriptEntry.model_fields if name not in _FORK_RESET_TRANSCRIPT_FIELDS
+    ]
+    values = {
+        name: _distinctive_transcript_value(
+            name, TranscriptEntry.model_fields[name].annotation, ordinal
+        )
+        for ordinal, name in enumerate(copied_fields)
+    }
+    for name, value in values.items():
+        default = TranscriptEntry.model_fields[name].get_default(call_default_factory=True)
+        assert value != default, name
+    await manager._storage.append_transcript_entry(
+        TranscriptEntry(session_id=parent.session_id, session_key=parent.session_key, **values)
+    )
+    [parent_entry] = await manager.get_transcript("agent:main:main")
+
+    child = await manager.branch("agent:main:main", "agent:main:direct:u1", fork_transcript=True)
+
+    [forked] = await manager.get_transcript("agent:main:direct:u1")
+    for name, value in values.items():
+        assert getattr(forked, name) == value, name
+    assert forked.session_id == child.session_id
+    assert forked.session_key == "agent:main:direct:u1"
+    assert forked.id != parent_entry.id
+    assert forked.message_id != parent_entry.message_id
 
 
 @pytest.mark.asyncio
