@@ -415,3 +415,140 @@ def test_separator_after_a_prepend_hunk_is_trimmed() -> None:
 
 def test_counted_trailing_blank_is_kept_and_only_the_separator_is_trimmed() -> None:
     assert _parsed_hunk_lines("@@@ -1,2 +1,2 @@@\n-bar\n+baz\n\n\n") == ["-bar", "+baz", ""]
+
+
+def test_addition_hunk_with_start_exceeding_file_length_raises_error() -> None:
+    hunk = patch_tool.Hunk(old_start=50, old_count=0, new_start=50, new_count=1)
+    hunk.lines = ["+line at 50"]
+
+    with pytest.raises(
+        patch_tool.PatchError, match=r"Hunk start line 50 exceeds file length \(3 lines\)"
+    ):
+        patch_tool._apply_hunk(["line1\n", "line2\n", "line3\n"], hunk)
+
+
+def test_addition_hunk_with_start_exceeding_empty_file_raises_error() -> None:
+    hunk = patch_tool.Hunk(old_start=2, old_count=0, new_start=2, new_count=1)
+    hunk.lines = ["+line at 2"]
+
+    with pytest.raises(
+        patch_tool.PatchError, match=r"Hunk start line 2 exceeds file length \(0 lines\)"
+    ):
+        patch_tool._apply_hunk([], hunk)
+
+
+def test_addition_hunk_at_exact_eof_is_allowed() -> None:
+    hunk = patch_tool.Hunk(old_start=4, old_count=0, new_start=4, new_count=1)
+    hunk.lines = ["+line4"]
+
+    assert patch_tool._apply_hunk(["line1\n", "line2\n", "line3\n"], hunk) == [
+        "line1\n",
+        "line2\n",
+        "line3\n",
+        "line4\n",
+    ]
+
+
+def test_addition_hunk_at_line_zero_and_one_on_empty_file_is_allowed() -> None:
+    hunk0 = patch_tool.Hunk(old_start=0, old_count=0, new_start=1, new_count=1, lines=["+first"])
+    assert patch_tool._apply_hunk([], hunk0) == ["first\n"]
+
+    hunk1 = patch_tool.Hunk(old_start=1, old_count=0, new_start=1, new_count=1, lines=["+first"])
+    assert patch_tool._apply_hunk([], hunk1) == ["first\n"]
+
+
+# ── near misses the start-line bound must keep accepting (#2632) ────────────
+
+
+@pytest.mark.asyncio
+async def test_append_right_after_the_last_line_still_applies(tmp_path: Path) -> None:
+    target = tmp_path / "test.txt"
+    target.write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+    result = await _apply(
+        tmp_path,
+        """*** Begin Patch
+*** Update File: test.txt
+@@@ -4,0 +4,1 @@@
++line4
+*** End Patch""",
+    )
+
+    assert "1 file(s) modified" in result
+    assert target.read_text(encoding="utf-8") == "line1\nline2\nline3\nline4\n"
+
+
+@pytest.mark.asyncio
+async def test_append_after_an_unterminated_last_line_still_applies(tmp_path: Path) -> None:
+    """No trailing newline is still three lines, so ``-4`` is still in range."""
+    target = tmp_path / "test.txt"
+    target.write_text("line1\nline2\nline3", encoding="utf-8")
+
+    await _apply(
+        tmp_path,
+        """*** Begin Patch
+*** Update File: test.txt
+@@@ -4,0 +4,1 @@@
++line4
+*** End Patch""",
+    )
+
+    assert target.read_text(encoding="utf-8") == "line1\nline2\nline3\nline4\n"
+
+
+@pytest.mark.asyncio
+async def test_append_alongside_an_edit_of_the_last_line_still_applies(tmp_path: Path) -> None:
+    """Hunks apply bottom-up, so the append is bounded by the original length."""
+    target = tmp_path / "test.txt"
+    target.write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+    await _apply(
+        tmp_path,
+        """*** Begin Patch
+*** Update File: test.txt
+@@@ -3,1 +3,1 @@@
+-line3
++LINE3
+@@@ -4,0 +4,1 @@@
++line4
+*** End Patch""",
+    )
+
+    assert target.read_text(encoding="utf-8") == "line1\nline2\nLINE3\nline4\n"
+
+
+@pytest.mark.asyncio
+async def test_insert_at_line_one_of_an_empty_file_still_applies(tmp_path: Path) -> None:
+    target = tmp_path / "test.txt"
+    target.write_text("", encoding="utf-8")
+
+    await _apply(
+        tmp_path,
+        """*** Begin Patch
+*** Update File: test.txt
+@@@ -1,0 +1,1 @@@
++first
+*** End Patch""",
+    )
+
+    assert target.read_text(encoding="utf-8") == "first\n"
+
+
+@pytest.mark.asyncio
+async def test_append_one_line_past_the_end_is_rejected_and_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "test.txt"
+    target.write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+    with pytest.raises(patch_tool.PatchError, match=r"Hunk start line 5 exceeds file length"):
+        await _apply(
+            tmp_path,
+            """*** Begin Patch
+*** Update File: test.txt
+@@@ -5,0 +5,1 @@@
++line5
+*** End Patch""",
+        )
+
+    assert target.read_text(encoding="utf-8") == "line1\nline2\nline3\n"

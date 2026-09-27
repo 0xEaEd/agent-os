@@ -218,7 +218,6 @@
   text-transform: uppercase;
   color: var(--dim);
 }
-.trd-strip__word[data-word='live'],
 .trd-strip__word[data-word='running'] {
   color: var(--primary);
 }

@@ -6,13 +6,161 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Fixed
+### Changed
+- Desktop: the mode pill reads Chat | Trade, and the strip no longer says
+  LIVE while a reply streams. The tab is a verb like its sibling, and the
+  streaming reply is visible in the chat itself; the word only repeated it.
+  AWAITING and RUNNING stay: a pending decision and a mission in flight are
+  things the chat does not show on its own.
 
+### Fixed
 - `docx` skill: an `edit_docx` op carrying a JSON `null` -- the way a caller
   clears a placeholder or empties a run -- wrote the literal word "None" into
   the document instead. `null` now resolves to an empty string, while every
   other value keeps its `str()` so `0` and `false` still print as themselves
   (#3417).
+- Secret redaction: a connection string with an empty username no longer
+  reaches the model with its password intact. `_DB_CONNSTR_RE` lists
+  `postgres`, `mysql`, `mongodb`, `redis` and `amqp` deliberately, but required
+  a non-empty username before the colon -- so `redis://user:pw@host` was masked
+  while `redis://:pw@host` was not. That empty field is the canonical Redis URL
+  (Redis had no usernames before ACLs, so it is what a `REDIS_URL` holds), and
+  `postgres`, `amqp`, `mongodb` and `mysql` accept the same shape.
+  `_URL_USERINFO_RE` had the identical `+` and the same consequence for
+  `https://:token@host`. Both now accept an empty username. This is the default
+  path for an agent reading a `.env` or `docker-compose.yml`:
+  `AGENTOS_REDACT_SECRETS` is on by default and `redact_file_output` is the one
+  policy behind `read_file`, `grep_search`, `read_spreadsheet` and `edit_file`.
+
+- MS Teams channel: `_message_conversation_keys` mapped every outbound
+  activity id to its conversation and never evicted, so a long-running bot
+  grew one entry per message sent for the life of the process. It is now a
+  bounded LRU registry (#3052).
+
+- Approval queue: a process that shares a state directory with a live gateway
+  but has no approval surface of its own can no longer queue approvals there.
+  A test or probe script that imported the shell tool and drove
+  `_check_exec_approval` wrote every gated command — including
+  `bash -c "rm -rf /etc"` — as a pending row in `~/.agentos/state/
+  approval_queue.sqlite`, and the running desktop app popped "Approval needed
+  for exec" at a user who never issued it. `ApprovalQueue.request()` now
+  checks `gateway.pid` and the OS lock on `gateway.pid.lock` (the same
+  liveness test the gateway uses to refuse a second instance) and raises
+  `ApprovalQueueOwnedByGatewayError` naming the owning pid and the
+  `AGENTOS_STATE_DIR` fix. The CLI claims a local surface at startup, so
+  `agentos chat --standalone` and `agentos agent` keep working beside a
+  running gateway; a stale pid file from a crashed gateway does not block.
+
+- `senior-unilp-manager`: a node that refuses the simulated `eth_call` — a
+  rate limit, a transient internal error, an HTTP-level failure — no longer
+  prints `result: REVERTED` with "Fix the parameters"; the dry-run reports
+  `REFUSED (node fault — not a contract revert)` and says to retry. Only a
+  contract that answered (code 3, a message naming a revert, or a non-empty
+  hex revert blob) may be reported as a revert (#3355)
+
+- `pptx` skill: `render_thumbs.sh --dpi` is now validated as a positive number
+  before `soffice` runs. A negative or zero value used to reach `pdftoppm -r`
+  unchecked and silently produce a 1x1 pixel "thumbnail" while the script
+  reported success; a non-numeric value errored, but only after a full
+  LibreOffice conversion, and under exit code 4 ("conversion failed") instead
+  of the script's own "bad arguments" code, 1 (#3327)
+
+- `title-card-image` skill: a Japanese kana headline (hiragana, katakana,
+  half-width katakana) is wrapped by character count instead of being set as
+  one unbroken line, and each explicit line of a multi-line headline is
+  wrapped to `--max-chars-per-line` rather than passed through as is. Hangul
+  still wraps on whitespace, and a word longer than the limit still keeps its
+  own line (#2439).
+
+- Zhipu/GLM provider: `glm-4.6` no longer silently loses reasoning support.
+  `get_capabilities`'s zai reasoning-shape prefix check listed `glm-4.5` and
+  `glm-4.7` but skipped `glm-4.6` — even though `engine/reasoning_hint.py`'s
+  own reasoning-family markers already list `glm-4.6` right next to
+  `glm-4.7` — so a request to `glm-4.6` got `supports_reasoning=False` and
+  never carried the `thinking` payload key, silently dropping a configured
+  `thinking_level` with no error anywhere (#2618).
+- Sandbox: a delete wrapped in a quoted shell string — `bash -c "rm -rf /etc"`,
+  `sh -c 'rm -rf ~/.ssh'` — is caught by the sensitive-path hard block. The
+  intent extractor matched `rm` up to the wrapper's closing quote, `shlex`
+  refused the unbalanced quote, and the whitespace fallback kept it glued to
+  the target (`/etc"`), so no sensitive path matched. The delete tail is now
+  retried with the stray quote trimmed (#2141).
+- Gateway: `usage.status` and `usage.cost` count every stored session instead
+  of the first 100 that `list_sessions` returns by default, so the Usage and
+  Overview totals no longer undercount and a `sessionKey` lookup for an older
+  session resolves. `usage.cost` also filters by the agent and channel stored
+  on the session record, falling back to the scope encoded in its key, so a
+  session keyed `agent:main:…` but stored under another agent or channel is
+  no longer missed (#2232).
+- `gmgn-holder-analysis` skill: a failing or rate-limited `created-tokens`
+  lookup no longer aborts the whole holder analysis. It is a secondary
+  enrichment call, so a non-zero `gmgn-cli` exit or an unexpected payload now
+  costs only the creator's token-history section (#2429).
+- Sessions: branching with `fork_transcript=True` keeps each copied row's
+  `reasoning_content`, `tool_call_id` and input-provenance fields. The fork
+  rebuilt rows from a hand-written column list that had drifted; it now copies
+  the row itself and resets only its identity, so a column added later is
+  carried over too (#2582).
+- `srt-from-script` skill: a cue never ends past its own shot. The 800 ms
+  readability floor was applied without checking the shot boundary, so a shot
+  shorter than 800 ms emitted a cue that overlapped the next one; such a shot
+  now gets a cue spanning the whole shot (#2588).
+- `apply_patch`: a hunk whose start line lies past the end of the file is
+  rejected with `Hunk start line N exceeds file length (M lines)` and the file
+  is left untouched. A hunk of only `+` lines never reached the bounds check,
+  so it was appended at EOF and reported as applied. Appending right after the
+  last line still works (#2632).
+- `nano-banana-pro` skill: the sleep between retries no longer drops back to
+  2 s when the schedule moves on to a fallback model. The backoff used the
+  per-model attempt count, which restarts at 1 for each fallback; it now uses
+  the overall attempt number, so the waits run 2 s, 4 s, 8 s instead of 2 s,
+  4 s, 2 s (#2637).
+- Memory: the curated store's `add` refuses a `MEMORY.md`/`USER.md` that an
+  external writer has left out of the store's own format, as `replace`,
+  `remove` and batch already did, instead of rewriting it with no sign the
+  drift existed. `add`'s rewrite never lost data (the parser keeps every
+  non-empty segment), so what this adds is the signal; the cost is that a
+  whitespace-only hand edit, such as a blank line before a `§`, now blocks
+  every memory write until the file is fixed by hand. A refused retry against
+  an unchanged file reuses the existing `.bak` snapshot, and the error no
+  longer tells the model to recover the entries via `add` (#2952).
+- `pdf-toolkit` skill: `split.py` clamps a `--pages` range to the document
+  before expanding it, so `1-100000000` on a five-page PDF no longer exhausts
+  memory. `skipped_pages` lists at most 1000 pages and counts the rest under
+  `skipped_pages_omitted`, and the open-ended ranges `N-` (to the last page)
+  and `-M` (from page 1) are accepted (#2996).
+
+## [2026.9.26] - 2026-09-26
+
+### Changed
+- Desktop: a generated file shows as a file card in the chat instead of a
+  bare link that spelled out its mime type: a tile tinted and drawn by kind
+  (spreadsheet, document, PDF, presentation, archive, data, code, web page),
+  the file name, a plain subtitle such as "Spreadsheet · XLSX · 5 KB", and a
+  Download button. The shared transcript now stamps the kind, that subtitle
+  and the action label on the chip (`data-artifact-kind`, `-summary`,
+  `-action`) so a host can draw it as a card; the web console's chip is
+  unchanged.
+
+### Fixed
+- Desktop: a file the agent generated (an `.xlsx` from `create_xlsx`, a PDF,
+  a CSV) can be downloaded from its chip in the chat. Two things were wrong.
+  The shared transcript built every artifact URL relative to the page, which
+  is right for the console the gateway serves and wrong for the desktop
+  renderer, which loads from disk: the chip's link resolved to the dev server
+  (saving an HTML page under the Excel file's name) or to `file://` (saving
+  nothing), and the same relative URLs broke image previews, audio and chart
+  artifacts in the desktop. Off gateway the URLs now keep the gateway origin,
+  and a click on the chip goes through the authenticated fetch instead of a
+  cross-origin `download` link the shell refuses to navigate to; the file
+  then goes out through the normal save dialog, and a download the gateway
+  does not answer shows a toast rather than nothing. Second, that fetch — and
+  every other `fetch` the desktop makes to the gateway: bootstrap, the
+  approvals poll, file uploads — failed as a CORS error: the app presents the
+  gateway's own origin on loopback requests (the gateway refuses `file://`),
+  the gateway reflects it in `Access-Control-Allow-Origin`, and Chromium
+  compared that with the renderer's real origin. The main process now
+  translates the answer back to the renderer's origin.
 
 ## [2026.9.25] - 2026-09-25
 

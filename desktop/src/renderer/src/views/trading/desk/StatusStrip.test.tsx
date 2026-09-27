@@ -20,7 +20,6 @@ describe('StatusStrip', () => {
         running={new Set()}
         sessionPending={0}
         globalPending={null}
-        streaming={false}
         deskMode={false}
         onToggleDesk={vi.fn()}
         onOpenApprovals={onOpenApprovals}
@@ -43,7 +42,6 @@ describe('StatusStrip', () => {
         running={new Set(['j1'])}
         sessionPending={2}
         globalPending={3}
-        streaming={true}
         deskMode={false}
         onToggleDesk={vi.fn()}
         onOpenApprovals={onOpenApprovals}
@@ -66,7 +64,6 @@ describe('StatusStrip', () => {
         running={new Set()}
         sessionPending={0}
         globalPending={0}
-        streaming={false}
         deskMode={true}
         onToggleDesk={onToggleDesk}
         onOpenApprovals={vi.fn()}
@@ -112,7 +109,6 @@ describe('StatusStrip', () => {
         running={new Set()}
         sessionPending={0}
         globalPending={null}
-        streaming={false}
         deskMode={false}
         onToggleDesk={vi.fn()}
         onOpenApprovals={vi.fn()}
@@ -127,14 +123,13 @@ describe('StatusStrip', () => {
 describe('ModePill', () => {
   it('names the two modes and nothing else; a busy desk is said beside it', () => {
     const { rerender } = renderDesk(<StatusStrip mode="chat" onSwitchMode={vi.fn()} />)
-    // The tabs are their names: no dot riding on "Trading", in either mode.
-    expect(screen.getAllByRole('tab').map((tab) => tab.innerHTML)).toEqual(['Chat', 'Trading'])
+    // The tabs are their names: no dot riding on "Trade", in either mode.
+    expect(screen.getAllByRole('tab').map((tab) => tab.innerHTML)).toEqual(['Chat', 'Trade'])
     rerender(<StatusStrip mode="trading" onSwitchMode={vi.fn()} />)
-    expect(screen.getAllByRole('tab').map((tab) => tab.innerHTML)).toEqual(['Chat', 'Trading'])
+    expect(screen.getAllByRole('tab').map((tab) => tab.innerHTML)).toEqual(['Chat', 'Trade'])
     const idle = screen.getByTestId('mode-pill').outerHTML
     const busy: [Partial<ComponentProps<typeof StatusStrip>>, string][] = [
       [{ sessionPending: 1 }, 'Awaiting'],
-      [{ streaming: true }, 'Live'],
       [{ missions: [{ id: 'j1', name: 'DCA ETH' }], running: new Set(['j1']) }, 'Running'],
     ]
     for (const [state, word] of busy) {

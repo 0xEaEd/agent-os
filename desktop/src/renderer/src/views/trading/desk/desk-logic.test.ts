@@ -88,17 +88,10 @@ describe('tradingProjectKnowledge', () => {
 })
 
 describe('statusWord', () => {
-  it('ranks awaiting over live over running over idle', () => {
-    expect(statusWord({ pendingApprovals: 1, streaming: true, missionRunning: true })).toBe(
-      'awaiting',
-    )
-    expect(statusWord({ pendingApprovals: 0, streaming: true, missionRunning: true })).toBe('live')
-    expect(statusWord({ pendingApprovals: 0, streaming: false, missionRunning: true })).toBe(
-      'running',
-    )
-    expect(statusWord({ pendingApprovals: 0, streaming: false, missionRunning: false })).toBe(
-      'idle',
-    )
+  it('ranks awaiting over running over idle', () => {
+    expect(statusWord({ pendingApprovals: 1, missionRunning: true })).toBe('awaiting')
+    expect(statusWord({ pendingApprovals: 0, missionRunning: true })).toBe('running')
+    expect(statusWord({ pendingApprovals: 0, missionRunning: false })).toBe('idle')
   })
 })
 

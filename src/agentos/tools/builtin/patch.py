@@ -697,6 +697,15 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk, newline: str = "\n") -> list[
     pos = max(hunk.old_start - 1, 0)
     result = list(file_lines)
 
+    # The context check below only bounds a hunk that has context or deleted
+    # lines; a pure-addition hunk starting past the end was spliced at EOF and
+    # reported as applied (#2632). ``len + 1`` -- right after the last line --
+    # is the last valid start, and ``0``/``1`` on an empty file stay valid.
+    if pos > len(result):
+        raise PatchError(
+            f"Hunk start line {hunk.old_start} exceeds file length ({len(result)} lines)"
+        )
+
     # Verify context and deleted lines match
     check_pos = pos
     for raw in hunk.lines:
