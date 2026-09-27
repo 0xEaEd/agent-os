@@ -312,10 +312,14 @@ flowchart TD
 Each store expects its file to be a clean §-delimited list it wrote itself.
 If an external writer (a patch tool, shell append, manual edit, or a
 concurrent session) leaves content on disk that would not round-trip through
-that format, the next `replace`/`remove`/batch call is refused rather than
-silently discarding the foreign content. A timestamped snapshot is written
-next to the file (e.g. `MEMORY.md.bak.<unix_ts>`) and the tool response
-points at it so the drift can be reviewed and reconciled before retrying.
+that format, the next `add`/`replace`/`remove`/batch call is refused rather
+than silently rewriting the file over the foreign content. A timestamped
+snapshot is written next to the file (e.g. `MEMORY.md.bak.<unix_ts>`) and the
+tool response points at it; a refused retry against unchanged contents reuses
+that snapshot instead of writing another. Every write stays refused until the
+file is rewritten by hand as a clean §-delimited list (entries separated by a
+line holding only `§`, no blank lines around it) — even a whitespace-only edit
+such as a blank line before a `§` counts as drift.
 
 ### Migration note
 
