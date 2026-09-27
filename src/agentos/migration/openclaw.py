@@ -57,6 +57,12 @@ _PERSONA_KIND_BY_FILENAME = {
 MAX_SKILL_FILE_BYTES = 256_000
 MAX_MEMORY_CHARS = 80_000
 MEMORY_OVERFLOW_DIR = "memory-overflow"
+# Marks the start of one imported daily-memory note inside the merged
+# MEMORY.md. Everything up to the next such header belongs to that note.
+_DAILY_MEMORY_HEADER_RE = re.compile(r"^## Imported daily memory: ")
+# A paragraph boundary in MEMORY.md: blank lines, or the curated store's
+# ``\n§\n`` entry delimiter that ``memory add`` joins entries with.
+_MEMORY_PARAGRAPH_BREAK_RE = re.compile(r"\r?\n(?:[ \t]*§?[ \t]*\r?\n)+")
 
 USER_DATA_OPTIONS = {
     "soul",
@@ -1081,6 +1087,13 @@ class OpenClawMigrator:
         # by ``\n\n``, would be deduped independently and produce wrong
         # results when only the body happens to appear elsewhere.
         #
+        # A note's ``<body>`` is the whole note file, often more than one
+        # paragraph, so the header claims every paragraph up to the next
+        # daily-memory header — the same unit ``_memory_dedupe_key`` uses.
+        # Gluing only the first paragraph let a note whose opening paragraph
+        # matched the destination (a bare ``## Preferences`` is enough) lose
+        # its header and land its remaining paragraphs loose (#3092).
+        #
         # Returns ``(merged_text, n_deduplicated, n_appended)``. When all
         # logical blocks already exist the existing text is returned.
         def _logical_blocks(text: str) -> list[str]:
@@ -1089,12 +1102,16 @@ class OpenClawMigrator:
             i = 0
             while i < len(raw):
                 current = raw[i]
-                if re.match(r"^## Imported daily memory: ", current) and i + 1 < len(raw):
-                    glued.append(f"{current}\n\n{raw[i + 1]}")
-                    i += 2
-                else:
+                if not _DAILY_MEMORY_HEADER_RE.match(current):
                     glued.append(current)
                     i += 1
+                    continue
+                i += 1
+                body: list[str] = []
+                while i < len(raw) and not _DAILY_MEMORY_HEADER_RE.match(raw[i]):
+                    body.append(raw[i])
+                    i += 1
+                glued.append("\n\n".join([current, *body]))
             return glued
 
         def _norm(block: str) -> str:
@@ -1108,13 +1125,42 @@ class OpenClawMigrator:
                 stripped = match.group(1).strip()
             return re.sub(r"\s+", " ", stripped)
 
+        # On the existing side a note's extent is not reliable: the last one
+        # absorbs whatever was written below it after the previous run (the
+        # user's own section, a ``memory add`` entry), so its normalized form
+        # no longer equals the incoming note. A note therefore also counts as
+        # present when its header and body paragraphs appear back to back in
+        # the existing text, whatever follows them.
+        def _paragraphs(text: str) -> list[str]:
+            return [
+                re.sub(r"\s+", " ", paragraph.strip())
+                for paragraph in _MEMORY_PARAGRAPH_BREAK_RE.split(text)
+                if paragraph.strip()
+            ]
+
+        existing_paragraphs = _paragraphs(existing)
+
+        def _note_in_existing(block: str) -> bool:
+            if not _DAILY_MEMORY_HEADER_RE.match(block):
+                return False
+            wanted = _paragraphs(block)
+            return any(
+                existing_paragraphs[i : i + len(wanted)] == wanted
+                for i, paragraph in enumerate(existing_paragraphs)
+                if paragraph == wanted[0]
+            )
+
         existing_norms = {_norm(block) for block in _logical_blocks(existing)}
         appended: list[str] = []
         deduped = 0
         seen_in_new: set[str] = set()
         for block in _logical_blocks(new):
             normalised = _norm(block)
-            if normalised in existing_norms or normalised in seen_in_new:
+            if (
+                normalised in existing_norms
+                or normalised in seen_in_new
+                or _note_in_existing(block)
+            ):
                 deduped += 1
                 continue
             seen_in_new.add(normalised)
