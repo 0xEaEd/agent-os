@@ -50,8 +50,14 @@ def _hold_gateway_lock(state_dir: Path) -> IO[bytes]:
 
 
 def _rows(db_path: Path) -> int:
-    with sqlite3.connect(db_path) as conn:
+    # ``with sqlite3.connect()`` commits on exit but does not close, and an
+    # open handle makes the later ``reset_approval_queue()`` unlink fail on
+    # Windows (WinError 32), so close explicitly.
+    conn = sqlite3.connect(db_path)
+    try:
         return int(conn.execute("SELECT COUNT(*) FROM approval_queue").fetchone()[0])
+    finally:
+        conn.close()
 
 
 @pytest.fixture(autouse=True)
