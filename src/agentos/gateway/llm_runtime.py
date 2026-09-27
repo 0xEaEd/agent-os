@@ -9,10 +9,12 @@ from typing import Any
 OPENROUTER_DEFAULT_PROVIDER_ROUTING = {
     "deepseek/deepseek-v4-flash": "deepseek",
     "minimax/minimax-m3": "minimax",
-    "z-ai/glm-5.2": "z-ai",
-    "anthropic/claude-opus-5": "anthropic",
+    "z-ai/glm-5.3": "z-ai",
+    "anthropic/claude-opus-5.5": "anthropic",
     # Prior tier defaults — kept pinned for configs written before the
     # current defaults; existing installs keep using these ids.
+    "z-ai/glm-5.2": "z-ai",
+    "anthropic/claude-opus-5": "anthropic",
     "anthropic/claude-opus-4.8": "anthropic",
     "z-ai/glm-5.1": "z-ai",
     "anthropic/claude-opus-4.7": "anthropic",

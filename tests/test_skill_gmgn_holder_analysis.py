@@ -3,6 +3,8 @@
 - Issue #957: ``analyze.py`` missing args/help guards.
 - Robust parsing: Tolerates null/sparse fields, wrapped API envelopes, and empty responses
   without throwing TypeErrors or KeyErrors.
+- Issue #2429: a failing or malformed secondary ``created-tokens`` call must cost only
+  the token-history section, not the whole run.
 """
 
 from __future__ import annotations
@@ -62,10 +64,10 @@ def test_help_flag_prints_usage_and_exits_0(flag: str) -> None:
 
 
 class _FakeCompleted:
-    def __init__(self, stdout: str) -> None:
-        self.returncode = 0
+    def __init__(self, stdout: str, returncode: int = 0, stderr: str = "") -> None:
+        self.returncode = returncode
         self.stdout = stdout
-        self.stderr = ""
+        self.stderr = stderr
 
 
 def _run_analyze(
@@ -74,8 +76,14 @@ def _run_analyze(
     devs_payload: Any,
     created_payload: Any = None,
     lang: str = "en",
+    created_returncode: int = 0,
+    created_stderr: str = "",
 ) -> str:
-    """Execute analyze.py in-process with a stubbed ``gmgn-cli``."""
+    """Execute analyze.py in-process with a stubbed ``gmgn-cli``.
+
+    A non-zero ``created_returncode`` makes the ``portfolio created-tokens`` call
+    fail the way a real ``gmgn-cli`` error (e.g. a 429) does.
+    """
     seen: list[list[str]] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
@@ -87,6 +95,8 @@ def _run_analyze(
                 return _FakeCompleted(json.dumps(devs_payload))
             return _FakeCompleted(json.dumps(holders_payload))
         if argv[:2] == ["portfolio", "created-tokens"]:
+            if created_returncode != 0:
+                return _FakeCompleted("", created_returncode, created_stderr)
             return _FakeCompleted(json.dumps(created_payload or {}))
         raise AssertionError(f"unexpected gmgn-cli invocation: {argv}")
 
@@ -204,4 +214,95 @@ def test_analyze_handles_wrapped_envelope_responses(monkeypatch: pytest.MonkeyPa
 
     stdout = _run_analyze(monkeypatch, holders_payload, devs_payload, lang="zh")
     assert "Holder 筹码分析" in stdout
+    assert "OUTPUT COMPLETE" in stdout
+
+
+_CREATOR = "0xdev1111111111111111111111111111111111111"
+_CREATOR_HOLDERS = {
+    "list": [
+        {
+            "address": _CREATOR,
+            "amount_percentage": 0.05,
+            "balance": 1000.0,
+            "usd_value": 500.0,
+            "addr_type": 0,
+            "maker_token_tags": ["creator"],
+            "start_holding_at": 1700000000,
+        },
+        {
+            "address": "0x2222222222222222222222222222222222222222",
+            "amount_percentage": 0.10,
+            "balance": 2000.0,
+            "usd_value": 1000.0,
+            "addr_type": 0,
+            "start_holding_at": 1700000000,
+        },
+    ]
+}
+_CREATOR_DEVS = {
+    "list": [
+        {
+            "address": _CREATOR,
+            "maker_token_tags": ["creator"],
+            "balance": 1000.0,
+            "realized_profit": 0.0,
+        }
+    ]
+}
+
+
+def test_created_tokens_nonzero_exit_does_not_abort_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2429: a rate-limited created-tokens call must not kill the whole run."""
+    stdout = _run_analyze(
+        monkeypatch,
+        _CREATOR_HOLDERS,
+        _CREATOR_DEVS,
+        created_returncode=1,
+        created_stderr="rate limited (429)",
+    )
+    assert "Holder Chip Analysis" in stdout
+    assert "Dev Wallets" in stdout
+    assert "Token history" not in stdout
+    assert "OUTPUT COMPLETE" in stdout
+
+
+def test_created_tokens_list_payload_does_not_abort_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2429: a non-dict created-tokens payload is skipped, not dereferenced."""
+    stdout = _run_analyze(
+        monkeypatch,
+        _CREATOR_HOLDERS,
+        _CREATOR_DEVS,
+        [{"symbol": "OLD", "market_cap": 100000}],
+    )
+    assert "Holder Chip Analysis" in stdout
+    assert "Dev Wallets" in stdout
+    assert "Token history" not in stdout
+    assert "OUTPUT COMPLETE" in stdout
+
+
+def test_created_tokens_wrapped_payload_still_prints_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful (envelope-wrapped) created-tokens call still renders token history."""
+    created_payload = {
+        "code": 0,
+        "data": {
+            "tokens": [{"symbol": "OLDCOIN", "market_cap": 1200000, "is_open": True}],
+            "open_count": 1,
+            "inner_count": 0,
+            "creator_ath_info": {
+                "token_name": "Old Coin",
+                "token_symbol": "OLDCOIN",
+                "ath_mc": 5000000,
+            },
+        },
+    }
+    stdout = _run_analyze(monkeypatch, _CREATOR_HOLDERS, _CREATOR_DEVS, created_payload)
+    assert "Token history" in stdout
+    assert "OLDCOIN" in stdout
+    assert "All-time high MC" in stdout
     assert "OUTPUT COMPLETE" in stdout

@@ -50,6 +50,14 @@ Recheck these primary sources when product behavior or permissions may have chan
 - https://robinhood.com/us/en/agentic-trading/
 - https://robinhood.com/us/en/newsroom/robinhood-is-now-open-to-agents/
 
+This skill is the brokerage account, not the chain. On **Robinhood Chain**
+(the on-chain venue the `wallet-trading` skill swaps on) most Stock Tokens
+(AAPL, TSLA, NVDA …) answer `trading.token_not_tradeable`: the venue
+refuses them for legal reasons. That is final for this token: do not retry,
+do not retry by address; tell the user and stop. A user who wants to trade
+a stock trades it here, through the Robinhood Agentic account, never as a
+token swap.
+
 ## Classify the request
 
 Classify each request before calling tools:

@@ -996,15 +996,17 @@ class SessionManager:
                     target_session_key=new_session_key,
                 )
                 for entry in parent_entries:
+                    # Build the forked row from the entry itself so a new
+                    # TranscriptEntry column is carried over by default instead
+                    # of being dropped by a hand-written field list (#2582).
+                    # Only row identity is reset: a fresh primary key and
+                    # message_id, and the child session linkage.
                     forked = TranscriptEntry(
+                        **entry.model_dump(
+                            exclude={"id", "message_id", "session_id", "session_key"}
+                        ),
                         session_id=child.session_id,
                         session_key=new_session_key,
-                        role=entry.role,
-                        content=entry.content,
-                        tool_calls=entry.tool_calls,
-                        turn_usage=entry.turn_usage,
-                        created_at=entry.created_at,
-                        token_count=entry.token_count,
                     )
                     await self._storage.append_transcript_entry(forked)
                 for summary in parent_summaries:

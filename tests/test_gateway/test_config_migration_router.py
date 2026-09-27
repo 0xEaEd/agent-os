@@ -175,12 +175,12 @@ def test_legacy_openrouter_default_models_are_migrated_forward() -> None:
     assert result.payload["llm"]["model"] == "minimax/minimax-m3"
     tiers = result.payload["agentos_router"]["tiers"]
     assert tiers["c1"]["model"] == "minimax/minimax-m3"
-    assert tiers["c2"]["model"] == "z-ai/glm-5.2"
-    assert tiers["c3"]["model"] == "anthropic/claude-opus-5"
+    assert tiers["c2"]["model"] == "z-ai/glm-5.3"
+    assert tiers["c3"]["model"] == "anthropic/claude-opus-5.5"
     assert tiers["image_model"]["model"] == "minimax/minimax-m3"
 
 
-def test_superseded_opus_c3_default_is_migrated_to_opus_5() -> None:
+def test_superseded_opus_c3_default_is_migrated_to_current_opus() -> None:
     # claude-opus-4.8 still resolves upstream, but it is the previous C3 default,
     # so configs carrying it forward are refreshed — the same treatment
     # claude-opus-4.7 got when 4.8 replaced it. Both the namespaced OpenRouter id
@@ -199,9 +199,9 @@ def test_superseded_opus_c3_default_is_migrated_to_opus_5() -> None:
     )
 
     assert result.changed is True
-    assert result.payload["llm"]["model"] == "claude-opus-5"
+    assert result.payload["llm"]["model"] == "claude-opus-5.5"
     tiers = result.payload["agentos_router"]["tiers"]
-    assert tiers["c3"]["model"] == "anthropic/claude-opus-5"
+    assert tiers["c3"]["model"] == "anthropic/claude-opus-5.5"
     # The vision route still runs on MiniMax, so it must survive the migration.
     assert tiers["image_model"]["model"] == "minimax/minimax-m3"
 

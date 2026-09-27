@@ -13,6 +13,7 @@ import 'highlight.js/styles/github-dark.css'
 import { marked } from 'marked'
 import { toast } from 'sonner'
 import type { MarkdownDep } from './transcript/stream'
+import { qrDataUrl } from '@/lib/qr'
 
 // Import the lightweight core plus the languages used in AgentOS transcripts.
 // Importing `highlight.js` registers every bundled grammar and adds roughly a
@@ -124,6 +125,81 @@ function fallbackRender(text: string): string {
 }
 
 /**
+ * `![Receive](agentos-qr:0x89E0…)` — a QR the assistant wants shown, drawn in
+ * this process and inlined as a `data:` image.
+ *
+ * This exists because the alternative is what an assistant reaches for on its
+ * own: a public QR web service, with the address in the query string. That
+ * hands a third party the very thing being displayed, and it does not even
+ * work — the desktop window's CSP allows no arbitrary remote image host, so it
+ * renders as a broken icon. The scheme is the sanctioned way to ask, and it is
+ * substituted BEFORE parsing because the sanitizer would strip an unknown URL
+ * scheme off the `<img>` long before any later pass could see it.
+ */
+const QR_IMAGE = /!\[([^\]\n]*)\]\(\s*agentos-qr:([^)\s]+)\s*\)/g
+/** Roughly a version-25 symbol. Past this a QR is unreadable on a screen. */
+const QR_MAX_CHARS = 512
+
+function inlineQrImages(text: string): string {
+  if (!text.includes('agentos-qr:')) return text
+  return text.replace(QR_IMAGE, (whole, alt: string, payload: string) => {
+    let data = payload
+    try {
+      data = decodeURIComponent(payload)
+    } catch {
+      // A stray `%` is not an encoding; take the bytes as written.
+    }
+    if (!data || data.length > QR_MAX_CHARS) return whole
+    try {
+      return `![${alt}](${qrDataUrl(data)})`
+    } catch {
+      // An payload the encoder refuses stays as written rather than vanishing.
+      return whole
+    }
+  })
+}
+
+/**
+ * Replace a remote image with a link to it.
+ *
+ * An `<img src="https://…">` in assistant markdown is a request the browser
+ * makes without asking: whoever hosts it learns that this conversation reached
+ * that URL, and anything the model put in the path or query — a wallet
+ * address, say — goes with it. The desktop CSP blocks the load anyway and
+ * leaves a broken icon, which reads as a bug rather than as a refusal. A link
+ * keeps the image reachable on a deliberate click and says who would serve it.
+ *
+ * `data:` and `blob:` images are untouched: they are already in hand, and they
+ * are how the transcript shows attachments and locally drawn QRs.
+ */
+function linkRemoteImages(html: string): string {
+  const template = document.createElement('template')
+  template.innerHTML = html
+  for (const image of template.content.querySelectorAll('img[src]')) {
+    const src = image.getAttribute('src') || ''
+    if (!/^https?:/i.test(src)) continue
+    let host = src
+    try {
+      host = new URL(src).host
+    } catch {
+      // Not parseable: show the raw src rather than claiming a host.
+    }
+    const note = template.ownerDocument.createElement('span')
+    note.className = 'msg-extimg'
+    note.title = t('chat.externalImageTitle')
+    note.append(`${t('chat.externalImageBlocked')} `)
+    const link = template.ownerDocument.createElement('a')
+    link.setAttribute('href', src)
+    link.setAttribute('target', '_blank')
+    link.setAttribute('rel', 'noreferrer noopener')
+    link.textContent = image.getAttribute('alt') || host
+    note.appendChild(link)
+    image.replaceWith(note)
+  }
+  return template.innerHTML
+}
+
+/**
  * Send external links to a new tab.
  *
  * The transcript is a long-lived surface: following a link in place unmounts
@@ -154,12 +230,13 @@ export function render(text: string): string {
   if (!text) return ''
 
   try {
-    const { text: stashed, stash } = stashMath(text)
+    const { text: stashed, stash } = stashMath(inlineQrImages(text))
     const parsed = marked.parse(stashed, { breaks: true, gfm: true, async: false })
     let html = String(DOMPurify.sanitize(parsed))
     html = wrapCodeBlocks(html)
     html = markInlineCode(html)
     html = restoreMath(html, stash)
+    html = linkRemoteImages(html)
     html = openExternalLinksInNewTab(html)
     // The transforms above add only controlled markup, but sanitize the final
     // result as the last operation so every innerHTML call receives clean HTML.

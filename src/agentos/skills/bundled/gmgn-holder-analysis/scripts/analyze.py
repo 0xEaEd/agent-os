@@ -146,7 +146,17 @@ with ThreadPoolExecutor(max_workers=3) as ex:
         )
 
     holders = _get_list(f_holders.result())
-    created_data = f_created.result() if f_created else None
+    # created-tokens is a secondary enrichment call: a transient failure (rate
+    # limit, non-zero exit, bad JSON) or an unexpected payload shape costs only
+    # the token-history section, not the whole analysis (#2429).
+    created_data = None
+    if f_created:
+        try:
+            created_data = unwrap(f_created.result())
+        except Exception:
+            created_data = None
+        if not isinstance(created_data, dict):
+            created_data = None
 
 normal = [h for h in holders if _f(h.get("addr_type"), 0) == 0]
 burn = [h for h in holders if _f(h.get("addr_type"), 0) == 1]
@@ -782,7 +792,7 @@ if creator:
     print(f"  → {_('小结', 'Summary')}{_('：', ': ')}{dev_summary}")
     print()
     if created_data:
-        data_unwrapped = unwrap(created_data)
+        data_unwrapped = created_data  # unwrapped and dict-checked at fetch time
         if isinstance(data_unwrapped, dict):
             all_tokens = data_unwrapped.get("tokens") or []
             total_cnt = _f(data_unwrapped.get("inner_count")) + _f(data_unwrapped.get("open_count"))

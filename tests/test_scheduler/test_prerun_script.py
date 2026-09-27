@@ -80,9 +80,7 @@ class _ExplodingTurnRunner:
     calls: list[dict] = []
 
     def run(self, **kwargs):
-        raise AssertionError(
-            "a provider call was made on a tick that must cost nothing"
-        )
+        raise AssertionError("a provider call was made on a tick that must cost nothing")
 
 
 def _job(
@@ -235,9 +233,7 @@ async def test_script_args_reach_the_script(agentos_home):
     session_manager = _FakeSessionManager()
     turn_runner = _FakeTurnRunner(session_manager)
 
-    await _handler(session_manager, turn_runner)(
-        _job("argv.py", args=["--repo", "owner/name"])
-    )
+    await _handler(session_manager, turn_runner)(_job("argv.py", args=["--repo", "owner/name"]))
 
     assert "--repo owner/name" in turn_runner.calls[0]["message"]
 
@@ -270,3 +266,26 @@ async def test_a_job_without_a_script_runs_the_turn_directly(agentos_home):
     await _handler(session_manager, turn_runner)(job)
 
     assert turn_runner.calls[0]["message"] == "just do it"
+
+
+@pytest.mark.asyncio
+async def test_prerun_script_runs_as_the_agent(agentos_home):
+    """The pre-run child carries a gateway-minted agent token (see scripts.py)."""
+    from agentos.gateway.agent_surface import AGENT_TOKEN_ENV, get_agent_surface
+
+    get_agent_surface().reset()
+    try:
+        _write_script(
+            agentos_home, "who.py", f"import os; print(os.environ.get('{AGENT_TOKEN_ENV}', ''))"
+        )
+        session_manager = _FakeSessionManager()
+        turn_runner = _FakeTurnRunner(session_manager)
+
+        await _handler(session_manager, turn_runner)(_job("who.py"))
+
+        surface = get_agent_surface()
+        lines = turn_runner.calls[0]["message"].splitlines()
+        bindings = [b for b in (surface.resolve_token(ln.strip()) for ln in lines) if b]
+        assert len(bindings) == 1 and bindings[0].via == "token"
+    finally:
+        get_agent_surface().reset()

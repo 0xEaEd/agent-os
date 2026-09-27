@@ -137,8 +137,8 @@ class _FakeSessionManager:
     def __init__(self, sessions):
         self._sessions = sessions
 
-    async def list_sessions(self):
-        return self._sessions
+    async def list_sessions(self, *, limit=100, offset=0, agent_id=None):
+        return self._sessions[offset : offset + limit]
 
 
 class _FakeTranscriptSessionManager(_FakeSessionManager):

@@ -803,3 +803,53 @@ def test_telegram_heading_with_bold_does_not_nest_bold_tags() -> None:
     rendered_partial = render_telegram_html("## Prefix **Bold** and *Italic* Suffix")
     assert rendered_partial == "<b>Prefix Bold and <i>Italic</i> Suffix</b>"
     assert "<b><b>" not in rendered_partial
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("***bold italic***", "<b><i>bold italic</i></b>"),
+        ("___bold italic___", "<b><i>bold italic</i></b>"),
+        ("***first*** and ***second***", "<b><i>first</i></b> and <b><i>second</i></b>"),
+        ("___first___ and ___second___", "<b><i>first</i></b> and <b><i>second</i></b>"),
+        (
+            "***leading*** then **bold** and *italic*",
+            "<b><i>leading</i></b> then <b>bold</b> and <i>italic</i>",
+        ),
+        (
+            "___leading___ then __bold__ and _italic_",
+            "<b><i>leading</i></b> then <b>bold</b> and <i>italic</i>",
+        ),
+        ("(***parenthesised***)", "(<b><i>parenthesised</i></b>)"),
+        ("(___parenthesised___)", "(<b><i>parenthesised</i></b>)"),
+        (
+            "[***bold italic link***](https://example.com)",
+            '<a href="https://example.com"><b><i>bold italic link</i></b></a>',
+        ),
+        (
+            "[___bold italic link___](https://example.com)",
+            '<a href="https://example.com"><b><i>bold italic link</i></b></a>',
+        ),
+    ],
+)
+def test_triple_markers_render_nested_bold_italic(markdown: str, expected: str) -> None:
+    """Triple asterisks and underscores must produce properly nested HTML tags.
+
+    Separately matching double-marker bold then single-marker italic across
+    `***text***` or `___text___` produced interleaved tags like `<b><i>text</b></i>`.
+    Telegram Bot API rejects mismatched tags with HTTP 400 'can\\'t parse entities'.
+    """
+    assert render_telegram_html(markdown) == expected
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("***heading***", "heading"),
+        ("___heading___", "heading"),
+        ("***both*** and **bold**", "both and bold"),
+    ],
+)
+def test_plain_inline_strips_triple_markers(markdown: str, expected: str) -> None:
+    """Table headers and plain labels strip triple markers cleanly."""
+    assert _plain_inline(markdown) == expected

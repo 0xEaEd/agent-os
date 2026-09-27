@@ -8,8 +8,11 @@ whole reason it was raised.
 
 from __future__ import annotations
 
+import pytest
+
 from agentos.gateway.config_migration import (
     LEGACY_MAX_SKILLS_PROMPT_CHARS,
+    STALE_MAX_SKILLS_PROMPT_CHARS,
     migrate_config_payload,
 )
 from agentos.skills.injector import DEFAULT_MAX_SKILLS_PROMPT_CHARS
@@ -24,9 +27,30 @@ def test_a_config_carrying_the_old_default_is_lifted() -> None:
     assert any("max_skills_prompt_chars" in change for change in result.changes)
 
 
+@pytest.mark.parametrize("stale", sorted(STALE_MAX_SKILLS_PROMPT_CHARS))
+def test_every_materialised_default_is_lifted(stale: int) -> None:
+    """A config carrying any past default was written by us; it follows the default.
+
+    The current default is in the set too so that nothing rewrites a config
+    that already matches it — the assertion covers both halves.
+    """
+    result = migrate_config_payload({"skills": {"max_skills_prompt_chars": stale}})
+
+    assert result.payload["skills"]["max_skills_prompt_chars"] == DEFAULT_MAX_SKILLS_PROMPT_CHARS
+    lifted = stale != DEFAULT_MAX_SKILLS_PROMPT_CHARS
+    assert any("max_skills_prompt_chars" in change for change in result.changes) is lifted
+
+
+def test_the_current_default_is_a_known_default() -> None:
+    """The next lift must add the current value to the stale set, or the
+    configs materialised today will be pinned tomorrow — the bug this file
+    exists to stop."""
+    assert DEFAULT_MAX_SKILLS_PROMPT_CHARS in STALE_MAX_SKILLS_PROMPT_CHARS
+
+
 def test_a_deliberately_chosen_budget_is_left_alone() -> None:
     """Only the exact old default is refreshed — the same rule the model ids use."""
-    for chosen in (4000, 12000, 40000):
+    for chosen in (4000, 12000, 25000, 40000, True):
         result = migrate_config_payload({"skills": {"max_skills_prompt_chars": chosen}})
 
         assert result.payload["skills"]["max_skills_prompt_chars"] == chosen

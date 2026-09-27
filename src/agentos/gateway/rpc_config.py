@@ -82,8 +82,7 @@ def _align_auto_router_profile_for_provider_patch(
     if "llm.provider" not in explicit_paths:
         return
     if any(
-        path == "agentos_router" or path.startswith("agentos_router.")
-        for path in explicit_paths
+        path == "agentos_router" or path.startswith("agentos_router.") for path in explicit_paths
     ):
         return
 
@@ -135,11 +134,27 @@ def _has_existing_redacted_source(source: Any) -> bool:
     return source is not None and source != ""
 
 
+def _is_redacted_keyed_url(payload: Any, source: Any, prefix: str) -> bool:
+    """``trading.rpc_urls.<chain>`` comes back from a public view as the host
+    only (``https://base.drpc.org/…``); writing that back would replace the
+    real URL, key and all, with a broken one. Recognise it and keep the source."""
+    if not isinstance(payload, str) or not isinstance(source, str) or payload == source:
+        return False
+    parts = prefix.split(".")
+    if len(parts) < 2 or parts[-2] != "rpc_urls":
+        return False
+    from agentos.trading.chains import redact_rpc_url
+
+    return payload.strip() == redact_rpc_url(source)
+
+
 def _restore_redacted_values(payload: Any, source: Any, prefix: str = "") -> tuple[Any, set[str]]:
     if payload == _REDACTED_PUBLIC_VALUE and _is_sensitive_redacted_path(prefix):
         if not _has_existing_redacted_source(source):
             raise ValueError(f"Cannot preserve redacted secret at {prefix}: no existing secret")
         return source, {prefix} if prefix else set()
+    if _is_redacted_keyed_url(payload, source, prefix):
+        return source, {prefix}
     if isinstance(payload, dict):
         source_dict = source if isinstance(source, dict) else {}
         restored: dict[str, Any] = {}
@@ -385,9 +400,8 @@ def _restart_reasons(
         reasons.append("channels")
     if old_sandbox_posture_fingerprint != _sandbox_posture_restart_fingerprint(new_config):
         reasons.append("sandbox")
-    if (
-        old_bind_fingerprint is not None
-        and old_bind_fingerprint != _bind_restart_fingerprint(new_config)
+    if old_bind_fingerprint is not None and old_bind_fingerprint != _bind_restart_fingerprint(
+        new_config
     ):
         reasons.append("gateway_bind")
     if old_boot_runtime_fingerprints is not None:
@@ -412,7 +426,9 @@ def _has_unproven_live_change(changed_paths: set[str]) -> bool:
         for path in changed_paths
         if not any(other.startswith(f"{path}.") for other in changed_paths if other != path)
     }
-    hot_prefixes = ("llm", "image_generation", "audio")
+    # ``trading`` is read per call by the trading service (provider, limits,
+    # keys), so a write there never needs a restart.
+    hot_prefixes = ("llm", "image_generation", "audio", "trading")
     search_paths = {
         "search_provider",
         "search_api_key",
@@ -466,6 +482,25 @@ def _sync_provider_selector(ctx: RpcContext, config: Any) -> None:
 # host/port: bind posture is CLI-only (agentos gateway run --bind / --port).
 # auth credentials are provisioned through the guarded CLI flow, and
 # config_path is the boot-selected persistence target rather than user data.
+def _refuse_agent_trading_paths(ctx: RpcContext, paths: list[str]) -> None:
+    """The trading limits are the user's to set; an agent's connection may not.
+
+    Raising the cap or the approval threshold from inside a turn would make
+    every other trading guardrail decorative. The binding comes from
+    ``gateway.agent_surface``, not from anything the caller sent.
+    """
+    from agentos.gateway.agent_surface import agent_binding
+
+    if agent_binding(ctx) is None:
+        return
+    touched = [p for p in paths if p == "trading" or str(p).startswith("trading.")]
+    if touched:
+        raise ValueError(
+            "trading settings are the user's to change; an agent cannot set "
+            + ", ".join(sorted(touched))
+        )
+
+
 _BIND_READONLY_PATHS = frozenset({"host", "port"})
 _AUTH_CREDENTIAL_PATHS = frozenset({"auth.token", "auth.password"})
 _TARGET_READONLY_PATHS = frozenset({"config_path", "version"})
@@ -627,6 +662,7 @@ async def _handle_config_set(params: dict | None, ctx: RpcContext) -> dict[str, 
     path: str = params["path"]
     if path in _READONLY_PATHS:
         raise ValueError(f"Path is read-only: {path}")
+    _refuse_agent_trading_paths(ctx, [path])
 
     if ctx.config is None:
         raise ValueError("No config available")
@@ -699,6 +735,10 @@ async def _handle_config_patch(params: dict | None, ctx: RpcContext) -> dict[str
 
     if not patch_data and not dot_patches:
         raise ValueError("params.patch or params.patches is required")
+    _refuse_agent_trading_paths(
+        ctx,
+        [*dot_patches.keys(), *(patch_data.keys() if isinstance(patch_data, dict) else [])],
+    )
 
     if ctx.config is None:
         raise ValueError("No config available")
@@ -798,9 +838,7 @@ async def _handle_config_patch_safe(params: dict | None, ctx: RpcContext) -> dic
 
     unsafe_paths = sorted(set(dot_patches) - _SAFE_WRITE_PATCH_PATHS)
     if unsafe_paths:
-        raise ValueError(
-            f"Path is outside the writable configuration roots: {unsafe_paths[0]}"
-        )
+        raise ValueError(f"Path is outside the writable configuration roots: {unsafe_paths[0]}")
 
     return cast(dict[str, Any], await _handle_config_patch(params, ctx))
 

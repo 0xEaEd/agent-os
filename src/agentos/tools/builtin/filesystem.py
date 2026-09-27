@@ -26,6 +26,7 @@ from agentos.sandbox.integration import get_runtime, sandboxed
 from agentos.tools.builtin._lines import split_lines
 from agentos.tools.fuzzy_match import (
     AmbiguousMatchError,
+    EscapeDriftError,
     FuzzyMatchError,
     FuzzyMatchResult,
     fuzzy_find_and_replace,
@@ -1012,6 +1013,13 @@ def _locate_edit(original: str, old_text: str, new_text: str, *, path: str) -> F
             f"old_text matches {exc.match_count} locations in {path} (lines {lines});"
             " be more specific"
         ) from exc
+    except EscapeDriftError as exc:
+        literals = ", ".join(exc.literals)
+        raise SafeToolError(
+            f"old_text and new_text contain literal escape sequences ({literals}) that {path}"
+            " does not; nothing was written. Resend both with real line breaks and quotes,"
+            " exactly as the file holds them."
+        ) from exc
     except FuzzyMatchError as exc:
         # The hint quotes real file lines back at the model, so it is a file-read
         # channel like any other and gets the same mask.
@@ -1174,9 +1182,11 @@ async def glob_search(pattern: str, path: str | None = None) -> str:
     strict_roots = _strict_read_roots()
     workspace_root = _workspace_root()
 
+    normalized_pattern = pattern.lstrip("/\\") or "*"
+
     def _glob() -> list[str]:
         matches: list[str] = []
-        for candidate in sorted(base.glob(pattern), key=lambda item: str(item)):
+        for candidate in sorted(base.glob(normalized_pattern), key=lambda item: str(item)):
             marker = _workspace_strict_candidate_marker(
                 "glob_search",
                 candidate,

@@ -91,8 +91,12 @@ def build_srt(
         if voiceover:
             start = cursor_ms
             # Hold the line until ~gap_ms before the next shot starts so
-            # the cut doesn't visually clip the text.
-            end = max(start + 800, cursor_ms + shot_ms - max(0, gap_ms))
+            # the cut doesn't visually clip the text. A short line is
+            # stretched to an 800 ms readable floor, but the shot's own end
+            # always wins: a shot shorter than 800 ms gets a cue spanning
+            # the whole shot, never one that bleeds into the next cue.
+            shot_end = cursor_ms + shot_ms
+            end = min(shot_end, max(start + 800, shot_end - max(0, gap_ms)))
             lines.append(str(cue_index))
             lines.append(f"{fmt_ts(start)} --> {fmt_ts(end)}")
             lines.append(voiceover)

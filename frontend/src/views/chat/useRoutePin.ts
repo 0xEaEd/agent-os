@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   routerFxNormalizeTier,
@@ -93,6 +93,14 @@ export interface RoutePinApi extends RoutePinState {
   pin: (tier: string) => void
   pinModel: (model: string) => void
   clear: () => void
+  /**
+   * Re-read the tier list, the model catalog and the pin. Tiers are CONFIG, and
+   * config is editable while the chat stays mounted: after a save the picker's
+   * copy names models the router no longer routes to. There is no config-changed
+   * broadcast to hang this on, so the caller re-reads at the only moment the
+   * staleness can be seen — when the menu opens.
+   */
+  reload: () => void
 }
 
 interface HoldGetResult {
@@ -157,14 +165,27 @@ export function useRoutePin(
   const [hold, setHold] = useState<HoldSlice>(() => ({ session: '', ...EMPTY_HOLD }))
   const [routed, setRouted] = useState<RoutedSlice>(() => ({ session: '', ...EMPTY_ROUTED }))
   const [busy, setBusy] = useState(false)
+  // Whether a read has gone out over a live socket yet. The mount read waits
+  // for the first connection itself; the reconnect listener below must not
+  // double it, only cover the connections after that one.
+  const connectedOnce = useRef(false)
 
   const live = hold.session === sessionKey ? hold : EMPTY_HOLD
   const liveRouted = routed.session === sessionKey ? routed : EMPTY_ROUTED
 
   const refresh = useCallback(() => {
     const forSession = sessionKey
+    // Wait for the socket. The chat mounts before the gateway connection is
+    // up (the desktop app opens straight onto the home chat while the gateway
+    // is still starting), and a call on a closed socket rejects at once with
+    // "Not connected" — which the catch below would file as "router off" and
+    // leave the picker disabled until the next session switch.
     rpc
-      .call('router.hold.get', { key: forSession })
+      .waitForConnection()
+      .then(() => {
+        connectedOnce.current = true
+        return rpc.call('router.hold.get', { key: forSession })
+      })
       .then((res: unknown) => {
         const result = (res ?? {}) as HoldGetResult
         // A model pin still names the tier hosting it; only `targetType` says
@@ -199,6 +220,19 @@ export function useRoutePin(
     refresh()
   }, [refresh])
 
+  // Re-read after every reconnect. The hold store is gateway process memory:
+  // a restart drops every pin, so a label carried over the gap would claim a
+  // route that is no longer in force. `_state` is the client's own connection
+  // signal. The very first connection is the mount read's to handle (it is
+  // waiting on it), so only later ones trigger a read here.
+  useEffect(
+    () =>
+      rpc.on('_state', (state: unknown) => {
+        if (state === 'connected' && connectedOnce.current) refresh()
+      }),
+    [rpc, refresh],
+  )
+
   // The catalog is global, not per-session, and only worth fetching once the
   // active provider is known — it is the filter that makes the list pinnable.
   // Read from the raw slice, NOT the session-scoped `live`: a session switch
@@ -206,31 +240,47 @@ export function useRoutePin(
   // refetch the whole catalog for a fact that did not change.
   const [models, setModels] = useState<RoutePinModel[]>(EMPTY_MODELS)
   const provider = hold.provider
+  // Latest-wins across overlapping reads: the effect below and an explicit
+  // `reload` can both be in flight, and a slow earlier answer must not land on
+  // top of a newer one.
+  const modelsSeq = useRef(0)
+  const refreshModels = useCallback(
+    (forProvider: string) => {
+      if (!forProvider) return
+      const seq = ++modelsSeq.current
+      rpc
+        .call('models.list', { provider: forProvider })
+        .then((res: unknown) => {
+          if (seq !== modelsSeq.current) return
+          const rows = Array.isArray(res) ? (res as Record<string, unknown>[]) : []
+          setModels(
+            rows
+              .map((row) => ({
+                id: String(row?.id ?? ''),
+                name: String(row?.name || row?.id || ''),
+              }))
+              .filter((row) => row.id),
+          )
+        })
+        .catch(() => {
+          // No catalog is a usable state: the tier rows still pin.
+          if (seq === modelsSeq.current) setModels(EMPTY_MODELS)
+        })
+    },
+    [rpc],
+  )
   useEffect(() => {
-    if (!provider) return
-    let ignore = false
-    rpc
-      .call('models.list', { provider })
-      .then((res: unknown) => {
-        if (ignore) return
-        const rows = Array.isArray(res) ? (res as Record<string, unknown>[]) : []
-        setModels(
-          rows
-            .map((row) => ({
-              id: String(row?.id ?? ''),
-              name: String(row?.name || row?.id || ''),
-            }))
-            .filter((row) => row.id),
-        )
-      })
-      .catch(() => {
-        // No catalog is a usable state: the tier rows still pin.
-        if (!ignore) setModels(EMPTY_MODELS)
-      })
-    return () => {
-      ignore = true
-    }
-  }, [rpc, provider])
+    refreshModels(provider)
+  }, [refreshModels, provider])
+
+  // Config is editable while the chat stays mounted, and the tier rows ARE
+  // config: a `c0` model changed in settings leaves this copy naming a model
+  // the router no longer routes to. Both reads go out again, since a provider
+  // swap in the same save also rewrites the pinnable catalog.
+  const reload = useCallback(() => {
+    refresh()
+    refreshModels(provider)
+  }, [refresh, refreshModels, provider])
 
   // Track what the router actually did, which is the only honest source for the
   // Auto label and for noticing that an image turn bypassed the pin. Re-subscribed
@@ -367,5 +417,6 @@ export function useRoutePin(
     pin,
     pinModel,
     clear,
+    reload,
   }
 }

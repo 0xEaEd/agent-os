@@ -252,7 +252,19 @@ def write_trace_event(
 
 
 def load_trace_events(trace_id: str, log_dir: Path | None = None) -> list[TraceEvent]:
-    """Load all persisted events for ``trace_id`` from trace JSONL files."""
+    """Load all persisted events for ``trace_id`` from trace JSONL files.
+
+    A line that fails to parse -- a truncated write from a crash or an
+    unclean shutdown, or valid JSON missing a field this schema requires --
+    is skipped rather than raised. This reader has no way to tell "this one
+    line is damaged" from "this whole trace_id has damaged data", so
+    raising here would take out every event for *every* trace_id once a
+    single bad line existed in any dated ``traces-*.jsonl`` file -- and the
+    caller (the ``logs.trace`` RPC handler, an operator-facing debug tool)
+    has no fallback path if it does. ``parse_log_line`` in
+    ``decision_log_aggregate.py`` already treats a malformed line in the
+    sibling JSONL log family the same way.
+    """
 
     log_dir = log_dir or _default_log_dir()
     if not trace_id.strip() or not log_dir.is_dir():
@@ -264,9 +276,16 @@ def load_trace_events(trace_id: str, log_dir: Path | None = None) -> list[TraceE
                 line = line.strip()
                 if not line:
                     continue
-                payload = json.loads(line)
-                if payload.get("trace_id") == trace_id:
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict) or payload.get("trace_id") != trace_id:
+                    continue
+                try:
                     events.append(_trace_event_from_payload(payload))
+                except (KeyError, ValueError, TypeError):
+                    continue
     return events
 
 
