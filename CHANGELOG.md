@@ -13,6 +13,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   AWAITING and RUNNING stay: a pending decision and a mission in flight are
   things the chat does not show on its own.
 
+## [2026.9.26] - 2026-09-26
+
+### Changed
+- Desktop: a generated file shows as a file card in the chat instead of a
+  bare link that spelled out its mime type: a tile tinted and drawn by kind
+  (spreadsheet, document, PDF, presentation, archive, data, code, web page),
+  the file name, a plain subtitle such as "Spreadsheet · XLSX · 5 KB", and a
+  Download button. The shared transcript now stamps the kind, that subtitle
+  and the action label on the chip (`data-artifact-kind`, `-summary`,
+  `-action`) so a host can draw it as a card; the web console's chip is
+  unchanged.
+
+### Fixed
+- Desktop: a file the agent generated (an `.xlsx` from `create_xlsx`, a PDF,
+  a CSV) can be downloaded from its chip in the chat. Two things were wrong.
+  The shared transcript built every artifact URL relative to the page, which
+  is right for the console the gateway serves and wrong for the desktop
+  renderer, which loads from disk: the chip's link resolved to the dev server
+  (saving an HTML page under the Excel file's name) or to `file://` (saving
+  nothing), and the same relative URLs broke image previews, audio and chart
+  artifacts in the desktop. Off gateway the URLs now keep the gateway origin,
+  and a click on the chip goes through the authenticated fetch instead of a
+  cross-origin `download` link the shell refuses to navigate to; the file
+  then goes out through the normal save dialog, and a download the gateway
+  does not answer shows a toast rather than nothing. Second, that fetch — and
+  every other `fetch` the desktop makes to the gateway: bootstrap, the
+  approvals poll, file uploads — failed as a CORS error: the app presents the
+  gateway's own origin on loopback requests (the gateway refuses `file://`),
+  the gateway reflects it in `Access-Control-Allow-Origin`, and Chromium
+  compared that with the renderer's real origin. The main process now
+  translates the answer back to the renderer's origin.
+
 ## [2026.9.25] - 2026-09-25
 
 ### Fixed
