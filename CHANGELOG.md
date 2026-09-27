@@ -13,6 +13,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   AWAITING and RUNNING stay: a pending decision and a mission in flight are
   things the chat does not show on its own.
 
+### Fixed
+
+- Zhipu/GLM provider: `glm-4.6` no longer silently loses reasoning support.
+  `get_capabilities`'s zai reasoning-shape prefix check listed `glm-4.5` and
+  `glm-4.7` but skipped `glm-4.6` — even though `engine/reasoning_hint.py`'s
+  own reasoning-family markers already list `glm-4.6` right next to
+  `glm-4.7` — so a request to `glm-4.6` got `supports_reasoning=False` and
+  never carried the `thinking` payload key, silently dropping a configured
+  `thinking_level` with no error anywhere (#2618).
+
 ## [2026.9.26] - 2026-09-26
 
 ### Changed
