@@ -322,10 +322,9 @@ def test_a_dash_that_is_not_a_hyphen_says_so(spec: str) -> None:
         split.split_ranges(spec)
 
 
-@pytest.mark.parametrize("spec", ["3-", "-5", "-", "1,3-", "1, -5"])
-def test_an_open_ended_range_is_named_as_such(spec: str) -> None:
-    """``3-`` and ``-5`` are rejected -- there is no ``total`` here to close
-    them against -- but the message names the case, not an empty string."""
+@pytest.mark.parametrize("spec", ["-", "1,-", "1, - "])
+def test_a_range_with_neither_end_is_named_as_such(spec: str) -> None:
+    """A bare ``-`` names no page; the message says so, not an empty string."""
     split = _split_module()
 
     with pytest.raises(split.PageSpecError, match="open-ended range") as exc_info:
@@ -333,6 +332,16 @@ def test_an_open_ended_range_is_named_as_such(spec: str) -> None:
 
     assert "''" not in str(exc_info.value)
     assert repr(spec.split(",")[-1].strip()) in str(exc_info.value)
+
+
+@pytest.mark.parametrize("spec", ["3-", "-5", "1,3-", "1, -5"])
+def test_split_ranges_cannot_expand_an_open_ended_range(spec: str) -> None:
+    """``split_ranges`` has no page count to close ``3-`` against; ``split``
+    itself accepts it (#2996) through ``page_spans``."""
+    split = _split_module()
+
+    with pytest.raises(split.PageSpecError, match="open-ended range"):
+        split.split_ranges(spec)
 
 
 def test_the_error_names_the_offending_token_not_just_the_spec() -> None:
@@ -367,18 +376,35 @@ def test_split_reports_a_malformed_spec_and_creates_nothing(
     assert not out_dir.exists(), "an unparseable spec must not create the output directory"
 
 
-def test_split_reports_an_open_ended_range_on_the_cli(
+def test_split_accepts_an_open_ended_range_on_the_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``1-`` runs to the last page (#2996), closed against the document."""
+    split = _split_module()
+    pdf_file = tmp_path / "doc.pdf"
+    _make_one_page_pdf(pdf_file, "ALPHA")
+    monkeypatch.setattr(
+        sys, "argv", ["split.py", str(pdf_file), "--pages", "1-", "--out", str(tmp_path / "out")]
+    )
+
+    assert split.main() == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["parts"][0]["pages"] == [1]
+    assert summary["skipped_pages"] == []
+
+
+def test_split_rejects_a_bare_dash_on_the_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     split = _split_module()
     pdf_file = tmp_path / "doc.pdf"
     _make_one_page_pdf(pdf_file, "ALPHA")
     monkeypatch.setattr(
-        sys, "argv", ["split.py", str(pdf_file), "--pages", "3-", "--out", str(tmp_path / "out")]
+        sys, "argv", ["split.py", str(pdf_file), "--pages", "-", "--out", str(tmp_path / "out")]
     )
 
     assert split.main() == 2
-    assert "open-ended range '3-'" in capsys.readouterr().err
+    assert "open-ended range '-' gives neither end" in capsys.readouterr().err
 
 
 def test_split_parses_the_spec_before_opening_the_document(
@@ -395,8 +421,9 @@ def test_split_parses_the_spec_before_opening_the_document(
 
     monkeypatch.setattr(split, "PdfReader", reader)
 
-    with pytest.raises(split.PageSpecError):
-        split.split(tmp_path / "doc.pdf", "abc", tmp_path / "out")
+    for spec in ("abc", "-", "3-,x"):
+        with pytest.raises(split.PageSpecError):
+            split.split(tmp_path / "doc.pdf", spec, tmp_path / "out")
 
     assert opened == []
 
