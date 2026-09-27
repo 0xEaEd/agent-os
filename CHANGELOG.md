@@ -15,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `senior-unilp-manager`: a node that refuses the simulated `eth_call` — a
+  rate limit, a transient internal error, an HTTP-level failure — no longer
+  prints `result: REVERTED` with "Fix the parameters"; the dry-run reports
+  `REFUSED (node fault — not a contract revert)` and says to retry. Only a
+  contract that answered (code 3, a message naming a revert, or a non-empty
+  hex revert blob) may be reported as a revert (#3355)
+
 - `pptx` skill: `render_thumbs.sh --dpi` is now validated as a positive number
   before `soffice` runs. A negative or zero value used to reach `pdftoppm -r`
   unchecked and silently produce a 1x1 pixel "thumbnail" while the script
