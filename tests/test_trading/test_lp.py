@@ -421,8 +421,10 @@ async def test_the_retry_waits_out_the_engines_hold_on_a_miss(
         env = lp._engine_env(service, BASE, asyncio.get_running_loop())  # type: ignore[arg-type]
         got = await asyncio.to_thread(env.prices, [WETH])
     assert got == {WETH.lower(): 2500.0}
-    # Two requests: the 429, then one after the hold -- not one after the 1 s pause.
-    assert len(sent) == 2 and sent[1] - sent[0] >= 0.4
+    # Two requests: the 429, then one after the hold -- not one after the 0.05 s
+    # pause. The hold's remainder is read off ``time.time`` (about 16 ms coarse on
+    # Windows) while this gap is ``time.monotonic``, so leave the clocks some room.
+    assert len(sent) == 2 and sent[1] - sent[0] >= 0.3
 
 
 # ── prices under concurrency ────────────────────────────────────────────────
