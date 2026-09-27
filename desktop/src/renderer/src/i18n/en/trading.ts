@@ -1,9 +1,9 @@
 /** Copy for the Trading page, its sheets, and Settings › Trading. */
 export const trading = {
-  'settings.shortcuts.trading': 'Switch Chat / Trading',
+  'settings.shortcuts.trading': 'Switch Chat / Trade',
   'trading.mode.label': 'Mode',
   'trading.mode.chat': 'Chat',
-  'trading.mode.trading': 'Trading',
+  'trading.mode.trading': 'Trade',
   'trading.mode.stamp': 'TRADING DESK',
   'settings.section.trading': 'Trading',
   'settings.section.trading.blurb':
@@ -397,7 +397,6 @@ export const trading = {
   // Never rendered — the strip shows no word while idle — but statusWord()
   // still has 'idle' in its type, so the lookup must resolve.
   'trading.strip.idle': '',
-  'trading.strip.live': 'Live',
   'trading.strip.running': 'Running',
   'trading.strip.awaiting': 'Awaiting',
   'trading.strip.desk': 'Desk',
