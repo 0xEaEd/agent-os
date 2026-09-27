@@ -118,14 +118,10 @@ def _wrap_paragraph(text: str, max_chars: int) -> list[str]:
             candidate = f"{line} {word}".strip()
             if len(candidate) <= max_chars:
                 line = candidate
-                continue
-            if line:
-                out.append(line)
-            # A single word longer than the limit is split by character.
-            while 0 < max_chars < len(word):
-                out.append(word[:max_chars])
-                word = word[max_chars:]
-            line = word
+            else:
+                if line:
+                    out.append(line)
+                line = word
         if line:
             out.append(line)
         return out or [text]

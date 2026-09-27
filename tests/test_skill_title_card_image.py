@@ -162,10 +162,12 @@ def test_explicit_blank_lines_preserved() -> None:
     assert mod._wrap_text("Top\n\nBottom", max_chars=10) == ["Top", "", "Bottom"]
 
 
-def test_overlong_word_is_split_by_character() -> None:
+def test_overlong_word_stays_whole() -> None:
+    # A word longer than the limit keeps its own line (auto-shrink fits it);
+    # splitting it would cut Latin words, compounds and URLs mid-word.
     mod = _load_module()
-    lines = mod._wrap_text("go supercalifragilistic now", max_chars=8)
-    assert lines == ["go", "supercal", "ifragili", "stic now"]
+    lines = mod._wrap_text("Announcements for Cryptocurrency", max_chars=12)
+    assert lines == ["Announcements", "for", "Cryptocurrency"]
 
 
 def test_empty_text() -> None:
