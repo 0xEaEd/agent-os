@@ -89,3 +89,106 @@ def test_explicit_newlines_preserved() -> None:
     mod = _load_module()
     text = "Line 1\nLine 2\nLine 3"
     assert mod._wrap_text(text, max_chars=20) == ["Line 1", "Line 2", "Line 3"]
+
+
+# Kana and multi-line wrapping (#2439)
+
+
+def test_is_kana_distinguishes_scripts() -> None:
+    mod = _load_module()
+    # True for Japanese kana
+    assert mod._is_kana("あ") is True  # Hiragana
+    assert mod._is_kana("ア") is True  # Katakana
+    assert mod._is_kana("ー") is True  # Katakana prolonged sound mark
+    assert mod._is_kana("ㇰ") is True  # Katakana Phonetic Extensions
+    assert mod._is_kana("ｱ") is True  # Halfwidth Katakana (U+FF71)
+
+    # False for Hangul (#2265), CJK ideographs, Latin, and Emoji
+    assert mod._is_kana("안") is False
+    assert mod._is_kana("ᄀ") is False  # Hangul Jamo
+    assert mod._is_kana("中") is False
+    assert mod._is_kana("A") is False
+    assert mod._is_kana("🚀") is False
+
+
+def test_hiragana_wraps_at_character_limit() -> None:
+    mod = _load_module()
+    text = "あいうえおかきくけこさしすせそたちつてと"
+    lines = mod._wrap_text(text, max_chars=10)
+    assert lines == ["あいうえおかきくけこ", "さしすせそたちつてと"]
+
+
+def test_katakana_wraps_at_character_limit() -> None:
+    mod = _load_module()
+    text = "アイウエオカキクケコサシスセソタチツテト"
+    lines = mod._wrap_text(text, max_chars=10)
+    assert lines == ["アイウエオカキクケコ", "サシスセソタチツテト"]
+
+
+def test_halfwidth_katakana_wraps_at_character_limit() -> None:
+    mod = _load_module()
+    text = "ｱｲｳｴｵｶｷｸｹｺ"
+    assert mod._wrap_text(text, max_chars=4) == ["ｱｲｳｴ", "ｵｶｷｸ", "ｹｺ"]
+
+
+def test_latin_words_wrap_on_whitespace() -> None:
+    mod = _load_module()
+    text = "The quick brown fox jumps over the lazy dog"
+    lines = mod._wrap_text(text, max_chars=15)
+    assert lines == ["The quick brown", "fox jumps over", "the lazy dog"]
+
+
+def test_explicit_newline_lines_are_wrapped() -> None:
+    mod = _load_module()
+    text = "Line 1 is short\nLine 2 is somewhat longer and needs wrapping\nLine 3"
+    assert mod._wrap_text(text, max_chars=20) == [
+        "Line 1 is short",
+        "Line 2 is somewhat",
+        "longer and needs",
+        "wrapping",
+        "Line 3",
+    ]
+
+
+def test_explicit_newline_kana_lines_are_wrapped() -> None:
+    mod = _load_module()
+    text = "あいうえおかきくけこ\nアイウエオ"
+    lines = mod._wrap_text(text, max_chars=4)
+    assert lines == ["あいうえ", "おかきく", "けこ", "アイウエ", "オ"]
+
+
+def test_explicit_blank_lines_preserved() -> None:
+    mod = _load_module()
+    assert mod._wrap_text("Top\n\nBottom", max_chars=10) == ["Top", "", "Bottom"]
+
+
+def test_overlong_word_is_split_by_character() -> None:
+    mod = _load_module()
+    lines = mod._wrap_text("go supercalifragilistic now", max_chars=8)
+    assert lines == ["go", "supercal", "ifragili", "stic now"]
+
+
+def test_empty_text() -> None:
+    mod = _load_module()
+    assert mod._wrap_text("", max_chars=10) == [""]
+
+
+def test_render_main_writes_kana_png(tmp_path: Path, monkeypatch) -> None:
+    mod = _load_module()
+    out_file = tmp_path / "card.png"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "render.py",
+            "--text",
+            "あいうえおかきくけこさしすせそたちつてと",
+            "--subtitle",
+            "日本語サブタイトル",
+            "--output",
+            str(out_file),
+        ],
+    )
+    assert mod.main() == 0
+    assert out_file.is_file()
+    assert out_file.stat().st_size > 0
