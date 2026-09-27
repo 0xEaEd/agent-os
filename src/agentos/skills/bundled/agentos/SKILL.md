@@ -128,27 +128,30 @@ than reading a version out of `uv tool list` or `pip show`.
 | --- | --- |
 | `gateway` | `run`, `start`, `status`, `stop`, `restart` (`--port`, `--bind`, `--listen`, `--config`, `--json`, `--debug`) |
 | `config` | `get [key]` (empty key = show all), `set <dot.key> <value>` |
-| `env` | `list [--missing] [--category]`, `get <NAME> [--reveal]`, `set <NAME> --stdin`, `import <NAME>`, `unset <NAME>` |
+| `env` | `list [--missing] [--category]`, `get <NAME> [--reveal] [-y]`, `set <NAME> --stdin`, `import <NAME>`, `unset <NAME> [-y]` |
 | `providers` | `list`, `status`, `configure <id> [-m MODEL] [-k API_KEY] [--base-url] [--proxy]` |
-| `models` | `list` |
+| `models` | `list [--provider] [--capability/-c] [--json]` |
 | `skills` | `init`, `list`, `search`, `view`, `install`, `uninstall`, `update`, `publish`, `tap add/list/remove` |
-| `sessions` | `list`, `show`, `rename`, `resume`, `abort`, `delete`, `export` |
-| `projects` | `list`, `create` (`--knowledge`/`--knowledge-file`), `show`, `update`, `delete`, `move <session> <project\|none>` — group sessions across agents; the knowledge text is injected into every member session's prompt |
+| `sessions` | `list`, `show`, `rename`, `resume`, `abort`, `delete` (`-y`), `export` (`--format md\|json`, `--output`/`-o`; default file `<session-id>.<format>`) |
+| `projects` | `list` (`--agent`, `--json`), `create` (`--knowledge`/`--knowledge-file`, `--agent`, `--json`), `show`, `update`, `delete` (`-y`, `--json`), `move <session> <project\|none>` — group sessions across agents; the knowledge text is injected into every member session's prompt |
 | `wallet` | `status`, `setup [--mode auto\|manual]`, `unlock`, `lock`, `list`, `create --label L`, `import --label L (--private-key-stdin \| --keystore FILE)`, `export ADDR (--keystore \| --private-key) [--out FILE]`, `rename ADDR LABEL`, `remove ADDR [--yes\|-y]`, `primary ADDR`, `balances [ADDR] [--chain base\|robinhood] [--refresh] [--hidden]` (the ledger's last sync; `--refresh` re-reads the chain first, throttled to once per 10 s per wallet; a `chains[].status` of `partial`/`failed` means the amounts on that chain are last-good, not fresh; junk airdrops — unlisted, no pool ≥ $1k, never traded by the wallet — are hidden and not counted, `hiddenCount` says how many, `--hidden` lists them) — the engine's wallet vault (`~/.agentos/wallets/`, a sensitive path the agent cannot read); passwords come from a hidden prompt or `AGENTOS_WALLET_PASSWORD` (`AGENTOS_KEYSTORE_PASSWORD` for an imported keystore), never argv. Everything but `status`, `list` and `balances` is operator-only: from an agent's connection it fails with `trading.operator_required` |
 | `trade` | `status` (provider, key, vault, limits, chains; with `--json` also `ledgerRepair` — "full sync required" after a ledger repair migration: run `agentos trade sync --full` once, operator-only), `provider [aggregator\|uniswap]` (show/switch the swap provider: the AgentOS Aggregator is the default and needs no key, Uniswap needs `trading.uniswap_api_key`), `probe [--provider aggregator\|uniswap] [--api-key K]` (`--json` exits 1 when not ok; `--api-key` is operator-only), `tokens --chain C QUERY`, `quote --chain C --in T --out T (--amount A \| --usd D) [--wallet ADDR] [--slippage P]` (sends the initiator, so `guard.decision` is meaningful; result carries `expiresAt`), `swap --chain C --in T --out T (--amount A \| --pct P \| --usd D) [--wallet ADDR …\|--all-wallets] [--slippage P] [--note N] [--client-id ID] [--wait] [--wait-seconds 1..900] [--as-agent]`, `send --chain C --token T (--to ADDR[=AMOUNT] … \| --file F) [--amount A \| --usd D] [--wallet ADDR] [--note N] [--client-id ID] [--wait] [--wait-seconds 1..900] [--as-agent]` (several `--to` = one multisend batch with a shared `batchId`, judged and approved as one; an agent's send always waits for the user's approval; `--client-id` is an idempotency key — the same id returns the same order instead of trading twice, so reuse it on a retry), `allowances [--chain C] [--wallet ADDR] [--full] [--wait/--no-wait] [--wait-seconds 1..3600]` (live ERC-20 allowances with spender labels and `exposureUsd`; `--full` rescans from the wallet's start, `--wait` polls until the scan has caught up), `revoke --chain C --token T --spender ADDR [--wallet ADDR] [--note N] [--wait] [--wait-seconds 1..900]` (`approve(spender, 0)`; from an agent it waits for approval), `decode --chain C (TXHASH \| --data 0x… [--to ADDR])` (what a tx called and what moved), `network [--fresh]` (head block, block age, gas, RPC latency per chain), `orders [--status S] [--wallet ADDR] [--kind swap\|send\|revoke] [--limit N]`, `order ID [--wait] [--wait-seconds 1..900]`, `approve ID`, `reject ID [--reason R]`, `history [--wallet ADDR] [--chain C] [--kind swap\|deposit\|withdraw\|gas\|approval] [--limit N] [--hidden]`, `portfolio [--wallet ADDR] [--hidden]` (junk tokens are left out and never counted; `hiddenCount` says how many, `--hidden` lists them flagged `hidden`), `hide --chain C ADDR` / `unhide --chain C ADDR` (operator-only; the user's choice is final — quoting or swapping a hidden token also shows it again), `sync [--wallet ADDR] [--full]` (`--full` is operator-only), `limits [ADDR]` (default: primary) — aggregator or Uniswap swaps on Base/Robinhood Chain, orders, ledger and PnL. The 29 tokenised stocks on Robinhood Chain (AAPL, TSLA, SPY, …) cannot be routed at all and answer `trading.token_not_tradeable`; do not retry. The gateway decides which connections are an agent's (agent token — a `cron --script` job carries one too — / exec window / nothing presented; the operator proves themself with a secret: the desktop's at spawn, or `~/.agentos/wallets/operator.secret`, rewritten by the gateway at every boot and read by the CLI on its own when `AGENTOS_AGENT_TOKEN` is unset and the gateway is local — a remote gateway gets the agent's rules): agent swaps obey `trading.approval_threshold_usd`, `trading.daily_cap_usd` (0 = agent swaps off; in-flight orders count), `trading.agent_max_price_impact_pct` (above → approval) and `trading.agent_max_slippage_pct` (above → `trading.slippage_too_high`); `approve`/`reject`, `hide`/`unhide`, `probe --api-key` and `sync --full` fail for an agent with `trading.operator_required`, `wallet status`/`trade status` omit `vaultPath` for an agent, and `config set trading.*` is refused for an agent too (rejected as an invalid request; only the operator can change those keys). Swap targets and approval spenders are pinned to the provider's known contracts (any other address in a quote is refused); the gas limit is the provider's or the estimate + 20 %, and an order the wallet cannot fund (value + gas at the quoted fee) is refused before signing. `--note` is stored sanitised (control/bidi characters dropped, whitespace collapsed, 240 chars). Other `trading.*` keys: `enabled`, `provider`, `aggregator_base_url`, `uniswap_api_key`, `uniswap_api_key_env`, `rpc_urls`, `approval_ttl_seconds`, `default_slippage_pct`, `unlock_mode`, `sync_interval_seconds`, `price_ttl_seconds`. With `--json`, argument errors are `{"error":{"code":"INVALID_ARGUMENT",…}}` on stderr, exit 2 (see the `wallet-trading` skill) |
 | `cron` | `list`, `status`, `add` (also takes `--session-key`, the chat a job reports into), `update` (both take `--job-kind`, `--script`, `--script-arg`, `--workdir`, `--elevated`, `--elevated-mode`, `--tool-policy`; the policy's `profile` must be one of `coding`/`full`/`memory_only`/`messaging`/`minimal`, or be omitted), `remove`, `run`, `runs` |
 | `channels` | `list`, `status`, `types`, `describe`, `native-commands`, `add`, `remove`, `enable`, `disable`, `edit`, `restart`, `logout`, `pairing …` |
-| `memory` | `status`, `index`, `list`, `search`, `show`, `ingest`, `curated`, `embedding-download`, `raw-fallbacks …` |
+| `memory` | `status` (`--deep`, `--agent`, `--json`), `index` (`--force`, `--agent`, `--json`), `list`, `search`, `show`, `ingest`, `curated`, `embedding-download`, `raw-fallbacks …` |
 | `sandbox` | `status`, `on`, `bypass`, `full`, `reset` |
-| `search` | `list`, `status`, `query`, `configure` |
+| `search` | `list`, `status [provider]`, `query`, `configure` |
 | `auth` | `login xai` (`--no-wait`/`--resume`/`--json` for non-blocking use), `status`, `logout xai` — xAI OAuth (SuperGrok / X Premium+) for `x_search`; tokens in `~/.agentos/auth.json`, never printed |
 | `configure x-search` | xAI X (Twitter) search: `--api-key-env`, `--x-search-model`, `--x-search-reasoning-effort`, `--no-x-search-enabled`; catalog via `onboard catalog x-search` |
 | `cost` | usage and estimated cost report; `savings` for the Pilot Router savings report (`--pdf`) |
 | `diagnostics` | `status`, `on`, `off` |
-| `migrate` | `openclaw`, `hermes` (`--source`, `--profile`, `--apply`, `--migrate-secrets`; dry-run without `--apply`) |
-| `agents` | `list`, `add`, `delete` (durable agents) |
+| `migrate` | `openclaw`, `hermes` (`--source`, `--profile` (hermes only: profile under `~/.hermes/profiles`), `--preset user-data\|full`, `--apply`, `--migrate-secrets`, `--overwrite`, `--include`, `--exclude`, `--skill-conflict skip\|overwrite\|rename`, `--persona-conflict` (openclaw only), `--json`; dry-run without `--apply`); bare `migrate` auto-detects `~/.openclaw` / `~/.hermes` |
+| `agents` | `list`, `add` (`--model`, `--description`, `--workspace`, `--name`, `--json`), `delete` (`--force`/`-f`, `--json`) |
 | `mcp-server` | `run` (MCP bridge) |
-| `replay`, `dist`, `onboard` | replay recorded turns / workspace inventory / setup status |
+| `replay` | `--session`/`-s`, `--turn`/`-t` — print a recorded turn; no tools are re-executed |
+| `dist` | emit workspace-state.json (`--output`/`-o` writes a file instead of stdout) |
+| `reset` | `--key <session-key>` — rotate a session to a fresh transcript |
+| `onboard` | first-run setup / `status` |
 
 Built-in channel types are `discord`, `email`, `slack`, and `telegram`; use
 `agentos channels types` as the authoritative catalog. Config migration backs up the
@@ -168,10 +171,11 @@ Interactivity, and slash-command Request URLs to match, then restart the gateway
 Duplicate webhook paths with overlapping HTTP methods cause a startup error.
 
 Telegram direct messages always require pairing. Use `agentos channels pairing
-list <name>`, `approve <name> <code>`, `deny <name> <sender-id>`, or `revoke
-<name> <sender-id>`. Pairing is binary and has no admin/owner tier. Telegram
-groups are disabled by default; enable them only with explicit
-`group_chat_ids`, paired senders, and the desired mention requirement.
+list <name>`, `approve <name> <code>`, `deny <name> <sender-id>`, `revoke
+<name> <sender-id>`, or `clear-pending <name>`. Pairing is binary and has no
+admin/owner tier. Telegram groups are disabled by default; enable them only
+with explicit `group_chat_ids`, paired senders, and the desired mention
+requirement.
 
 The `email` channel is IMAP polling in, SMTP out, and needs no platform app
 registration. `allowed_senders` is a required fail-closed From-address
@@ -404,6 +408,7 @@ agentos skills install <bankr-skill-url> -s bankr # from Bankr (repo or bankr.bo
 agentos skills install <aeon-skill-url> -s aeon   # from Aeon (aeonfun/aeon skills/<slug>)
 agentos skills tap add owner/repo      # register a GitHub repo as a skill source
 agentos skills tap list
+agentos skills tap remove owner/repo
 agentos skills update
 agentos skills uninstall <name>
 ```
@@ -518,7 +523,9 @@ containment: `--workspace-strict` (reads), `--workspace-lockdown` (writes),
 ### Day-two operations
 
 ```sh
-agentos sessions list / show <id> / export <id> <out>
+agentos sessions list / show <id>
+agentos sessions export <id> --format md --output notes.md   # --format json|md; no --output writes <id>.md
+agentos sessions delete <id> -y
 # Label a session so it is findable later; --search matches the name.
 agentos sessions rename <id> "api-refactor"   # --clear drops the name
 agentos sessions list --search api-refactor
@@ -526,9 +533,12 @@ agentos sessions list --search api-refactor
 # the agent is running in — use it when the user just asks in prose.
 # Group related sessions into a project; its knowledge text is injected into
 # every member session. Delete keeps the sessions (they just detach).
-agentos projects create "Token research" --knowledge-file notes.md
+agentos projects create "Token research" --knowledge-file notes.md --agent main --json
 agentos projects move <session-id> <project-id>   # 'none' detaches
 agentos projects show <project-id>
+agentos projects delete <project-id> -y --json
+agentos agents add research --name Research --model gpt-5.4-mini --description "research agent"
+agentos agents delete research -f
 # Wallet vault + Uniswap trading (Base, Robinhood Chain). The vault password is
 # prompted or read from AGENTOS_WALLET_PASSWORD — never put it on the command
 # line. Swaps you run inside an agent turn are agent-initiated: above
@@ -549,6 +559,10 @@ agentos trade decode --chain base <txhash> --json / network --json   # explain a
 agentos trade portfolio / history / limits <addr>
 agentos config set trading.uniswap_api_key <key>       # or Settings › Trading in the app
 agentos cron list / add / run <id> / runs
+agentos cron remove <id> -y --json
+agentos channels edit <name> --field key=value
+agentos channels logout <name> -y
+agentos channels pairing clear-pending <name>
 # --job-kind decides what fires. Default 'auto' = reminder: --text is delivered
 # verbatim and NO LLM runs, so a job that should think needs agent_turn.
 agentos cron add --every 1h --job-kind agent_turn --text "Summarize updates"
@@ -582,6 +596,16 @@ agentos cron add --every 10m --job-kind agent_turn --script watch_rss.py \
 # host shell as the user. --no-elevated opts one job out of that, running it
 # read-only instead. See docs/cli.md before suggesting either.
 agentos cron add --every 6h --agent main --no-elevated --name "LP check" --text "..."
+agentos memory status --deep --agent main
+agentos memory index --force --agent main
+agentos context --top 10 --json
+agentos doctor --quick --json          # --deep is the default
+agentos models list --provider openrouter -c tools --json
+agentos search status                  # optional provider id: agentos search status brave
+agentos auth logout xai
+agentos dist -o workspace-state.json
+agentos reset --key <session-key>
+agentos replay -s <session-key> -t <turn-id>   # print a recorded turn; read-only
 agentos cost                   # usage + estimated spend
 # cost support filtering and grouping:
 # agentos cost [--by-model] [--json] [--csv]
@@ -600,7 +624,7 @@ agentos sandbox on             # restore standard sandboxed posture
 agentos sandbox bypass         # disable sandboxing with sensitive path protection
 agentos sandbox full           # disable sandboxing and all approval gates
 agentos sandbox reset          # reset posture to defaults
-agentos migrate hermes --source <dir> [--apply]   # dry-run first, then --apply
+agentos migrate hermes --source <dir> [--profile <name>] [--preset full] [--apply]   # dry-run first, then --apply
 ```
 
 ## Gateway HTTP API

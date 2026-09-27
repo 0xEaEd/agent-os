@@ -24,6 +24,8 @@ available without `uv tool list` or `pip show`.
 | `agentos onboard` | Run or inspect first-run setup. |
 | `agentos auth` | Provider logins that are not API keys (`login`/`status`/`logout`; xAI today). |
 | `agentos configure` | Reconfigure provider, router, channels, search, x-search, image generation, or memory embedding. |
+| `agentos config` | Get or set configuration keys (`get`/`set`). |
+| `agentos env` | Read or write `~/.agentos/.env` credentials (`list`/`get`/`set`/`import`/`unset`). |
 | `agentos gateway` | Run and manage the gateway server. |
 | `agentos chat` | Start interactive terminal chat. |
 | `agentos agent` | Run a single automation-friendly agent turn. |
@@ -478,6 +480,7 @@ Search:
 
 ```sh
 agentos search list
+agentos search status                  # optional provider id: agentos search status brave
 agentos search configure duckduckgo
 agentos search query "latest AgentOS release"
 agentos configure search --search-provider duckduckgo
@@ -554,6 +557,9 @@ agentos channels pairing list personal
 agentos channels pairing approve personal ABCD2345
 agentos channels pairing deny personal <telegram-user-id>
 agentos channels pairing revoke personal <telegram-user-id>
+agentos channels pairing clear-pending personal
+agentos channels edit inbox --field allowed_senders=you@example.com
+agentos channels logout personal -y
 agentos channels enable personal
 agentos channels disable personal
 agentos channels restart personal
@@ -583,9 +589,10 @@ For security, interactive approvals are:
 - **Access Gated**: Each button click/interaction verifies that the clicker's sender ID is paired and authorized under the channel's access policy. Clicking by an unpaired or unauthorized user is dropped and rejected.
 - **Session Bound**: Approval tokens are strictly bound to their originating chat session key. A click received from a different chat context or user session will mismatch and be ignored.
 
-Raw config:
+Raw config (`agentos config`):
 
 ```sh
+agentos config get                     # dump every key
 agentos config get llm.provider
 agentos config set port 18791
 ```
@@ -644,6 +651,7 @@ agentos env get OPENAI_API_KEY --reveal
 agentos env set OPENAI_API_KEY --stdin # value read from stdin
 agentos env import GITHUB_TOKEN         # copy from a tool that already has it
 agentos env unset OPENAI_API_KEY
+agentos env unset OPENAI_API_KEY -y    # skip the confirmation
 ```
 
 `agentos env import` covers the case where the credential is not really
@@ -795,8 +803,9 @@ agentos sessions rename <session-key> "api-refactor"
 agentos sessions rename <session-key> --clear  # drop the custom name
 agentos sessions resume <session-key>
 agentos sessions abort <session-key>
-agentos sessions export <session-key>
-agentos sessions delete <session-key>
+agentos sessions export <session-key> --format md --output notes.md
+agentos sessions export <session-key> --format json   # no --output: writes <session-key>.json
+agentos sessions delete <session-key> -y
 ```
 
 Every filter on `sessions list` runs client-side over the recent history rather
@@ -819,7 +828,8 @@ agentos projects create "Token research" --knowledge-file notes.md
 agentos projects show <project-id>
 agentos projects update <project-id> --name "New name" --knowledge-file notes.md
 agentos projects move <session-key> <project-id>   # 'none' detaches
-agentos projects delete <project-id>               # sessions survive, detached
+agentos projects delete <project-id> -y --json     # sessions survive, detached
+agentos projects list --agent main --json
 ```
 
 A project groups chat sessions across agents and carries a free-form
@@ -1015,8 +1025,8 @@ Read: [`features/trading.md`](features/trading.md)
 ## Memory
 
 ```sh
-agentos memory status
-agentos memory index
+agentos memory status --deep --agent main --json
+agentos memory index --force --agent main
 agentos memory list --source all
 agentos memory ingest /path/to/docs
 agentos memory curated get --target memory
@@ -1035,11 +1045,13 @@ Read: [`features/memory.md`](features/memory.md)
 
 ```sh
 agentos agents list
-agentos agents add research --name Research --workspace /path/to/research
-agentos agents delete research
+agentos agents add research --name Research --workspace /path/to/research --model gpt-5.4-mini --description "research agent"
+agentos agents delete research -f
 agentos cron list
 agentos cron add --every 1h --text "Summarize important updates" --name hourly-summary
 agentos cron status <job-id>
+agentos cron run <job-id> -y --json     # run now; may post into a live session
+agentos cron remove <job-id> -y --json
 agentos cron runs <job-id>
 agentos cron output <job-id>
 ```
@@ -1204,13 +1216,14 @@ Read: [`tools-and-sandbox.md`](tools-and-sandbox.md)
 
 ```sh
 agentos context
-agentos context --json
+agentos context --top 10 --json
 agentos cost
 agentos cost savings
 agentos diagnostics status
 agentos diagnostics on
 agentos diagnostics off
 agentos replay --session <session-key> --turn <turn-id>
+agentos replay -s <session-key> -t <turn-id>
 ```
 
 `agentos context` answers a different question from `agentos cost`: not what a
@@ -1218,7 +1231,8 @@ session spent, but what every request carries before the conversation starts.
 Tool schemas dominate it — around 7,300 tokens on a stock install, charged on
 every call in every turn — and the command prices each `[tools] profile` against
 the current one so the trade is visible before you make it. A profile is fixed
-for the session, so narrowing it does not disturb the prompt cache.
+for the session, so narrowing it does not disturb the prompt cache. `--top <n>`
+(default 10) sets how many of the largest tools it lists.
 
 Every CLI command logs to stderr at `INFO` and above, so its output is only
 the command's own. Set `AGENTOS_LOG_LEVEL=debug` to see the debug-level events
@@ -1290,11 +1304,68 @@ Use diagnostics and replay when you need to understand why a turn behaved a
 certain way. For Prometheus metrics (`/metrics`), OTLP trace export, and log retention
 settings under `[observability]`, see [`configuration.md`](configuration.md#observability).
 
+`agentos replay` prints one recorded turn from the decision log as a
+transcript. It is read-only: no tools are re-executed.
+
+| Option | Purpose |
+| --- | --- |
+| `--session` / `-s` | Session key (required). |
+| `--turn` / `-t` | Turn ID (required). |
+
 Read:
 
 - [`usage-and-cost.md`](usage-and-cost.md)
 - [`diagnostics-and-replay.md`](diagnostics-and-replay.md)
 - [`configuration.md`](configuration.md)
+
+## Doctor, models, migrate, reset
+
+```sh
+agentos doctor                         # --deep is the default
+agentos doctor --quick --json
+agentos doctor --agent main --gateway ws://localhost:18791/ws
+agentos doctor --config ./agentos.toml # inspected when the local gateway is unavailable
+agentos models list
+agentos models list --provider openrouter --capability tools --json
+agentos migrate                        # dry-run; auto-detects ~/.openclaw and ~/.hermes
+agentos migrate --source hermes --preset full --apply --migrate-secrets
+agentos migrate hermes --source <dir> --profile <name> --preset user-data
+agentos migrate openclaw --skill-conflict rename --overwrite --json
+agentos reset --key <session-key>
+```
+
+`agentos doctor` exits 1 when the install is not ready. `--deep` (the
+default) includes deeper memory diagnostics for `--agent` (default `main`);
+`--quick` runs the shallow checks only. `--gateway` (or
+`AGENTOS_GATEWAY_URL`) picks the gateway to ask, and `--config` names the
+config to inspect when the local gateway is unavailable. `agentos models
+list` talks to the running gateway and can filter by `--provider` and
+`--capability`/`-c`.
+
+`agentos migrate` with no subcommand scans `~/.openclaw` and `~/.hermes`;
+there `--source` takes the source ids (`openclaw`, `hermes`, comma-separated)
+and is required when both are found and stdin is not a TTY.
+`agentos migrate openclaw` and `agentos migrate hermes` take a source
+directory as `--source` instead. Every form is a dry-run report until
+`--apply`:
+
+| Option | Purpose |
+| --- | --- |
+| `--apply` | Apply the migration; without it only a dry-run report is produced. |
+| `--preset user-data\|full` | Migration preset (default `full`). |
+| `--profile <name>` | `hermes` only: Hermes profile name under `~/.hermes/profiles`. |
+| `--migrate-secrets` | Copy recognized secrets (off by default). |
+| `--overwrite` | Overwrite target workspace files after item-level backups. |
+| `--include` / `--exclude` | Comma-separated migration option ids to include or exclude. |
+| `--skill-conflict skip\|overwrite\|rename` | What to do when a skill already exists (default `skip`). |
+| `--persona-conflict` | `openclaw` and auto-detect only: resolve SOUL/USER/AGENTS conflicts with `prompt` (default), `use-agentos`, `use-openclaw`, `merge`, or `skip`. |
+| `--config` | AgentOS config path to write or preview. |
+| `--json` | Emit machine-readable JSON. |
+
+`agentos reset --key <session-key>` rotates the session to a fresh
+transcript through the gateway (`--gateway`, default
+`http://localhost:18791`). It exits 1 when the gateway refuses the reset,
+and the session is then preserved.
 
 ## MCP Server Bridge
 
