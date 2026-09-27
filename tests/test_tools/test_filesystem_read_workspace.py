@@ -396,6 +396,42 @@ async def test_sensitive_path_priority_over_workspace_strict(
 
 
 @pytest.mark.asyncio
+async def test_read_file_blocks_the_windows_gh_token_under_appdata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3078: the new AppData entry is enforced by the file tool itself."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    appdata = tmp_path / "Roaming"
+    hosts = appdata / "GitHub CLI" / "hosts.yml"
+    hosts.parent.mkdir(parents=True)
+    hosts.write_text("github.com:\n    oauth_token: not-a-real-token\n", encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    with tool_context(workspace, strict=False):
+        payload = json.loads(await fs.read_file(str(hosts)))
+
+    assert payload["reason"] == "sensitive_path"
+    assert payload["sensitive_path"] == "~/AppData/Roaming/GitHub CLI"
+
+
+@pytest.mark.asyncio
+async def test_read_file_allows_a_workspace_hosts_yml(tmp_path: Path) -> None:
+    """#3078: ``hosts.yml`` is an Ansible inventory too, so its name alone
+    must not trip the sensitive-path block."""
+    workspace = tmp_path / "workspace"
+    inventory = workspace / "inventory" / "hosts.yml"
+    inventory.parent.mkdir(parents=True)
+    inventory.write_text("all:\n  hosts:\n    web1:\n", encoding="utf-8")
+
+    with tool_context(workspace):
+        result = await fs.read_file("inventory/hosts.yml")
+
+    assert "web1" in result
+
+
+@pytest.mark.asyncio
 async def test_list_dir_broken_symlink_does_not_crash(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

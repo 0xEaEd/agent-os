@@ -1139,8 +1139,9 @@ CREDENTIAL_FILE_NAMES: frozenset[str] = _CREDENTIAL_FILE_NAMES
 #: ``.docker`` is the directory, not ``.docker/config`` as the sandbox once
 #: had it: Docker writes ``config.json``, and a prefix match anchored at a
 #: segment boundary never matched the file that exists (#2623).
-#: ``AppData/Roaming/gcloud`` is where the Cloud SDK keeps its credentials
-#: on Windows, so the same entry covers both platforms.
+#: ``AppData/Roaming/gcloud`` and ``AppData/Roaming/GitHub CLI`` are where
+#: the Cloud SDK and ``gh`` keep their credentials on Windows, the
+#: counterparts of ``.config/gcloud`` and ``.config/gh``.
 CREDENTIAL_HOME_DIRS: tuple[str, ...] = (
     ".ssh",
     ".aws",
@@ -1148,6 +1149,7 @@ CREDENTIAL_HOME_DIRS: tuple[str, ...] = (
     ".config/gcloud",
     "AppData/Roaming/gcloud",
     ".config/gh",
+    "AppData/Roaming/GitHub CLI",
     ".anthropic",
     ".openai",
     ".docker",
@@ -1174,6 +1176,9 @@ _REDACT_ONLY_CREDENTIAL_FILE_NAMES: frozenset[str] = frozenset(
         "credentials.tfrc.json",
         "credentials.toml",
         "gradle.properties",
+        # ``gh``'s token file, but also a common Ansible inventory name; the
+        # gh directories above are what block the real one.
+        "hosts.yml",
     }
 )
 
