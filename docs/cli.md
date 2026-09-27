@@ -889,6 +889,10 @@ agentos trade allowances [--chain base|robinhood] [--wallet <addr>] [--full] [--
 agentos trade revoke --chain base --token <addr> --spender <addr> [--wallet <addr>] [--note <text>] [--wait] [--wait-seconds 1..900]   # approve(spender, 0)
 agentos trade decode --chain base <txhash> / --data <0x…> [--to <addr>]   # what a transaction called and what moved
 agentos trade network [--fresh]             # head block, block age, gas, RPC latency and health per chain
+agentos trade lp pool <token|poolId> [--chain base|robinhood] [--quote <token>] [--json] [--no-card]   # Uniswap V4: a token's deepest pool — reserves, TVL, mcap, launcher, LP lock, biggest ranges
+agentos trade lp ranges <token|poolId> [--chain base|robinhood] [--json] [--no-card]   # the pool's liquidity spread over price / market-cap ranges
+agentos trade lp position <tokenId> --chain base|robinhood [--json] [--no-card]        # one position NFT: range, in/out of range, principal, uncollected fees
+agentos trade lp positions [--wallet <addr|label>]… [--chain base|robinhood]… [--all] [--budget-seconds N] [--json] [--no-card]   # every V4 position of the vault's wallets (or --wallet), out of range first; ≤ 50 rows, totals over all; answers within 25 s (--budget-seconds 5-300), partial if cut short
 agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden]
 agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
 agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
@@ -1008,6 +1012,53 @@ Uniswap routers are known; anything else is reported as its selector, never
 guessed) and lists the receipt's transfers and approvals with token
 metadata. `trade network` reads each chain's head block and gas and flags a
 head older than a minute — the sign of an RPC that is behind.
+
+`trade lp` reads Uniswap V4 liquidity on Base and Robinhood Chain and never
+signs anything, so every form is allowed from an agent's connection
+(gateway methods `trading.lp.pool`, `trading.lp.ranges`, `trading.lp.position`,
+`trading.lp.positions`). Reads use the engine's RPCs (`trading.rpc_urls`) and
+the V4 library bundled with the `senior-unilp-manager` skill. `<token>` is an
+address or a symbol the engine resolves on that chain; with no `--chain`,
+`pool` and `ranges` try Base, then Robinhood Chain. A token's pools are found
+through the launchpad registries (Clanker, Liquid, Doppler), the hook-less
+fee tiers and — where the chain's public node serves full-history logs, as
+Robinhood Chain's does — the PoolManager's `Initialize` log, which also finds
+pools at unconventional fees. A log request that times out or hits a rate
+limit is asked once more and, for pool discovery, then searched over the last
+2,000,000 blocks only (the card says so and is partial); every pool found is
+remembered per token, so a later failed log request still finds it. Only an
+explicit span refusal is remembered (for ten minutes) as "this node will not
+serve full history". The one shown is the deepest: pools with active
+liquidity before empty ones, pairs against the chain's quote assets (WETH,
+ETH, USDC, USDG) before other pairs, then by TVL; liquidity comes from the
+tick bitmap. A poolId's PoolKey is recovered the same ways; when none works
+the error is `trading.lp.pool_key_unknown` — pass the token instead.
+`positions` without `--wallet` covers every wallet in the vault on both
+chains; `--chain` may be repeated (`--chain base --chain robinhood`), while
+`pool`, `ranges` and `position` take one and refuse a repeat with
+`INVALID_ARGUMENT`. `--wallet` may name any address (read-only), but a token contract
+there fails with `trading.lp.not_a_wallet` and names the `trade lp pool`
+command to use instead. Closed positions are left out unless `--all`. A
+card lists at most 50 positions (out of range first, then by value) while
+its totals cover every position found. The scan usually takes under 15 s
+and never much more than its budget — 25 s by default, `--budget-seconds`
+(5–300) to change it: when the budget runs out the search stops, the card is
+`partialScan` and a warning names what was not read (the indexer's remaining
+pages, Transfer logs before a block) and how many of each wallet's positions
+were found; `totals.count` is everything found. A wallet holding more than 60
+distinct tokens has USD prices looked up only for the chain's quote assets,
+the listed rows' tokens and the most-held others (up to 60); every other
+position is valued at its own pool's price, and a warning says so.
+With `--json`, the JSON is the first line of stdout; unless `--no-card` is
+also given, the result is written to `lp-cards/<kind>-…json` in the working
+directory (the 20 newest cards there are kept) and the last line on stdout is
+`publish_artifact path=<file> mime=application/vnd.agentos.lp+json`, which an
+agent's shell turns into a card in the chat. Without `--json` the command
+prints a table and writes nothing. An error writes no card; with `--json`
+every error, including a bad or missing option, is `{"error": {"code", …}}`
+on stderr, and input errors (`INVALID_ARGUMENT`, `trading.invalid`,
+`trading.lp.not_a_wallet`, `trading.lp.pool_key_unknown`) exit 2. The
+payload is specified in [`lp-cards.md`](lp-cards.md).
 
 `[trading]` config keys (each also an environment variable with the
 `AGENTOS_TRADING_` prefix): `enabled`, `provider` (`aggregator` |

@@ -589,6 +589,855 @@
   display: none;
 }
 
+/* Uniswap V4 liquidity cards (lp.ts, docs/lp-cards.md). One renderer, four
+   layouts keyed by `.lp-card[data-lp-kind]` (the host wrapper only carries
+   `data-lp-host`); status colours come from the theme's
+   --ok/--warn tokens, so light and dark follow the console theme. The pill
+   always carries the status word as well — colour is never the only signal. */
+.chat-surface .msg-artifact-lp-group {
+  display: grid;
+  gap: 0.625rem;
+  max-width: min(40rem, 100%);
+}
+
+.chat-surface .msg-artifact-lp {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .msg-artifact-lp__body:empty {
+  display: none;
+}
+
+.chat-surface .msg-artifact-lp__status {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-surface);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .msg-artifact-lp__status[hidden] {
+  display: none;
+}
+
+.chat-surface .lp-card {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-surface .lp-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.chat-surface .lp-card__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+  min-width: 0;
+}
+
+.chat-surface .lp-card__pair {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.chat-surface .lp-card__slash {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.chat-surface .lp-card__meta {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-card__head-end {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.chat-surface .lp-pill {
+  --lp-tone: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--lp-tone) 45%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--lp-tone) 12%, transparent);
+  color: var(--lp-tone);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-pill[data-lp-status='in-range'] {
+  --lp-tone: var(--ok);
+}
+
+.chat-surface .lp-pill[data-lp-status='above-range'],
+.chat-surface .lp-pill[data-lp-status='below-range'] {
+  --lp-tone: var(--warn);
+}
+
+.chat-surface .lp-pill__dot {
+  font-size: 0.5rem;
+}
+
+.chat-surface .lp-badge {
+  padding: 0.0625rem 0.4375rem;
+  border: 1px dashed color-mix(in srgb, var(--warn) 60%, transparent);
+  border-radius: var(--radius-pill);
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.chat-surface .lp-card__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+/* The positions strip (count · out of range · value · fees): four across when
+   the strip is 700px or wider, else a 2×2 grid, never three and a lone fourth.
+   The track minimum flips from a quarter to a half of the strip at 700px. */
+.chat-surface .lp-card__stats.lp-totals {
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(clamp(calc(25% - 0.5rem), calc((700px - 100%) * 999), calc(50% - 0.5rem)), 1fr)
+  );
+}
+
+.chat-surface .lp-stat {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius-control);
+  background: var(--background);
+}
+
+.chat-surface .lp-stat__label,
+.chat-surface .lp-card__row-label,
+.chat-surface .lp-card__section-title,
+.chat-surface .lp-hero__label {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .lp-stat__value {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-stat__value[data-lp-tone='warn'] {
+  color: var(--warn);
+}
+
+.chat-surface .lp-card [data-lp-no-price] {
+  color: var(--muted-foreground);
+  cursor: help;
+}
+
+.chat-surface .lp-card__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+  min-width: 0;
+}
+
+.chat-surface .lp-card__row-label {
+  min-width: 4.5rem;
+}
+
+.chat-surface .lp-amount__usd,
+.chat-surface .lp-sep {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-amount__symbol {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-safety__lock {
+  padding: 0 0.4375rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-safety__lock[data-lp-locked='true'] {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+
+.chat-surface .lp-safety__lock[data-lp-locked='false'] {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.chat-surface .lp-safety__note {
+  flex-basis: 100%;
+  padding-left: 5.125rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-card__ranges {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.chat-surface .lp-card__section-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.chat-surface .lp-ranges {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .lp-ranges__row {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) minmax(3rem, 1fr) 3.5rem minmax(0, 6rem);
+  align-items: center;
+  gap: 0.625rem;
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-ranges__meter {
+  height: 0.375rem;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.chat-surface .lp-ranges__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.chat-surface .lp-ranges__share {
+  text-align: right;
+}
+
+.chat-surface .lp-ranges__owner {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-card__empty-line,
+.chat-surface .lp-card__empty {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-card__empty {
+  padding: 1rem 0.25rem;
+  text-align: center;
+}
+
+/* Distribution chart: plain SVG bars stretched to the plot box; every label is
+   HTML positioned in % so text never scales with the viewBox. */
+.chat-surface .lp-chart {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.chat-surface .lp-chart__plot {
+  position: relative;
+  padding-top: 1.375rem;
+}
+
+.chat-surface .lp-chart__svg {
+  display: block;
+  width: 100%;
+  height: 8.5rem;
+  overflow: visible;
+}
+
+.chat-surface .lp-chart__baseline {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.chat-surface .lp-chart__hit {
+  fill: transparent;
+}
+
+.chat-surface .lp-chart__fill {
+  fill: color-mix(in srgb, var(--foreground) 24%, transparent);
+  transition: fill 120ms ease;
+}
+
+.chat-surface .lp-chart__bar[data-active='true'] .lp-chart__fill {
+  fill: var(--primary);
+}
+
+.chat-surface .lp-chart__bar[data-hover='true'] .lp-chart__fill {
+  fill: color-mix(in srgb, var(--foreground) 48%, transparent);
+}
+
+.chat-surface .lp-chart__bar[data-active='true'][data-hover='true'] .lp-chart__fill {
+  fill: color-mix(in srgb, var(--primary) 80%, var(--foreground));
+}
+
+.chat-surface .lp-chart__bar {
+  outline: none;
+  cursor: default;
+}
+
+.chat-surface .lp-chart__bar:focus-visible .lp-chart__fill {
+  stroke: var(--ring);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.chat-surface .lp-chart__now-line {
+  stroke: var(--foreground);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.chat-surface .lp-chart__now,
+.chat-surface .lp-chart__tick,
+.chat-surface .lp-range__now {
+  position: absolute;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.chat-surface
+  :is(.lp-chart__now, .lp-chart__tick, .lp-range__now, .lp-chart__tooltip)[data-align='start'] {
+  transform: none;
+}
+
+.chat-surface
+  :is(.lp-chart__now, .lp-chart__tick, .lp-range__now, .lp-chart__tooltip)[data-align='end'] {
+  transform: translateX(-100%);
+}
+
+.chat-surface .lp-chart__now {
+  top: 0;
+  color: var(--foreground);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.chat-surface .lp-chart__axis {
+  position: relative;
+  height: 1rem;
+}
+
+.chat-surface .lp-chart__tick {
+  top: 0;
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+}
+
+/* A tick that would touch its neighbour at the measured width (visibleTicks). */
+.chat-surface .lp-chart__tick[data-lp-hidden] {
+  visibility: hidden;
+}
+
+.chat-surface .lp-chart__caption {
+  color: var(--dim);
+  font-size: 0.625rem;
+  text-align: center;
+}
+
+.chat-surface .lp-chart__tooltip {
+  position: absolute;
+  top: 1.625rem;
+  z-index: 2;
+  display: grid;
+  gap: 0.125rem;
+  padding: 0.4375rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--popover);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.chat-surface .lp-chart__tooltip[hidden] {
+  display: none;
+}
+
+.chat-surface .lp-chart__tooltip-line[data-lp-line='range'] {
+  font-weight: 600;
+}
+
+.chat-surface .lp-chart__tooltip-line:not([data-lp-line='range']) {
+  color: var(--muted-foreground);
+}
+
+/* Position card. */
+.chat-surface .lp-card__hero {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.75rem;
+}
+
+.chat-surface .lp-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+}
+
+.chat-surface .lp-hero__value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Unclaimed fees: green only when there are some; "$0.00" stays muted. */
+.chat-surface .lp-hero[data-lp-hero='fees'] .lp-hero__value[data-lp-fees='positive'] {
+  color: var(--ok);
+}
+
+.chat-surface .lp-hero[data-lp-hero='fees'] .lp-hero__value[data-lp-fees='zero'] {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-range__row {
+  display: grid;
+  grid-template-columns: auto minmax(8rem, 1fr);
+  align-items: center;
+  gap: 0.625rem;
+  padding: 1.125rem 0 1.25rem;
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-range__axis {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-range__track {
+  position: relative;
+  height: 0.5rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.chat-surface .lp-range__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+.chat-surface .lp-card[data-lp-status='in-range'] .lp-range__band {
+  background: color-mix(in srgb, var(--ok) 55%, transparent);
+}
+
+.chat-surface
+  .lp-card:is([data-lp-status='above-range'], [data-lp-status='below-range'])
+  .lp-range__band {
+  background: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
+.chat-surface .lp-range__pin {
+  position: absolute;
+  top: -0.25rem;
+  width: 2px;
+  height: 1rem;
+  border-radius: var(--radius-pill);
+  background: var(--foreground);
+  transform: translateX(-50%);
+}
+
+.chat-surface .lp-range__pin[data-pinned] {
+  opacity: 0.55;
+}
+
+/* The range's own bounds sit on the band's edges, above the track. */
+.chat-surface .lp-range__lower,
+.chat-surface .lp-range__upper {
+  position: absolute;
+  bottom: calc(100% + 0.3125rem);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-range__upper {
+  transform: translateX(-100%);
+}
+
+.chat-surface .lp-range__now {
+  top: calc(100% + 0.375rem);
+  color: var(--foreground);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .lp-range__now[data-outside] {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* Measured by the mounter (layoutLpCard): a band too narrow for both bounds
+   lifts the upper one a line; a reading too long for the track stacks its
+   distance and side under it. Each adds the line it takes to the row. */
+.chat-surface .lp-range[data-lp-bounds='stacked'] .lp-range__row {
+  padding-top: 2.125rem;
+}
+
+.chat-surface .lp-range[data-lp-bounds='stacked'] .lp-range__upper {
+  bottom: calc(100% + 1.3125rem);
+}
+
+.chat-surface .lp-range[data-lp-now-wrap] .lp-range__row {
+  padding-bottom: 2.25rem;
+}
+
+.chat-surface .lp-range[data-lp-now-wrap] .lp-range__now-side {
+  display: block;
+}
+
+.chat-surface .lp-range__now[data-align='center'] {
+  text-align: center;
+}
+
+.chat-surface .lp-range__now[data-align='end'] {
+  text-align: right;
+}
+
+.chat-surface .lp-card__amounts {
+  color: var(--foreground);
+  font-size: 0.8125rem;
+}
+
+.chat-surface .lp-card__amounts--fees {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* Positions list. The rows share the list's columns (subgrid), so every
+   column lines up down the list and is sized to its widest cell. Each row is
+   two lines — status · pair · value over chain · owner · fees — until the
+   mounter measures the card at 760px or wider (LP_DENSE_MIN_PX in lp.ts) and
+   stamps `.lp-card[data-lp-layout='dense']`, which folds it onto one line.
+   Only the owner may ellipsize: every other column is sized to its content. */
+.chat-surface .lp-rows {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  column-gap: 0.625rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-rows {
+  grid-template-columns:
+    max-content minmax(max-content, 1fr) max-content minmax(0, max-content)
+    max-content max-content;
+}
+
+.chat-surface .lp-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  row-gap: 0.1875rem;
+  padding: 0.4375rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-row__chain {
+  grid-area: 1 / 3;
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-row__wallet {
+  grid-area: 1 / 4;
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-row__fees {
+  grid-area: 1 / 5;
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-row__value {
+  grid-area: 1 / 6;
+}
+
+.chat-surface .lp-row__pair {
+  grid-area: 1 / 2;
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__pair .lp-card__pair {
+  font-size: 0.8125rem;
+}
+
+.chat-surface .lp-row__fee,
+.chat-surface .lp-row__wallet {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-row__chain {
+  grid-area: 2 / 1;
+  justify-self: start;
+  padding: 0 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__wallet {
+  grid-area: 2 / 2;
+  justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__wallet[data-lp-external] {
+  font-style: italic;
+}
+
+.chat-surface .lp-row__status {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__distance {
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.chat-surface .lp-row__fees {
+  grid-area: 2 / 3;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__fees[data-lp-fees='positive'] {
+  color: var(--ok);
+}
+
+/* Links inside a card: specific enough to beat `.msg.assistant .msg-body a`. */
+.chat-surface .msg-body .lp-card a:is(.lp-card__action, .lp-row__wallet) {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+
+.chat-surface .msg-body .lp-card a:is(.lp-card__action, .lp-row__wallet):hover,
+.chat-surface .msg-body .lp-card a:is(.lp-card__action, .lp-row__wallet):focus-visible {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+
+.chat-surface a.lp-row__wallet::after {
+  content: ' ↗';
+  color: var(--dim);
+}
+
+.chat-surface .lp-row__value {
+  grid-area: 1 / 3;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__no-price {
+  font-size: 0.6875rem;
+  font-weight: 400;
+}
+
+/* Narrow: the mounter measured the card under 440px (LP_NARROW_MAX_PX in
+   lp.ts — the desk with its Book panel open). Status, pair and value no
+   longer share a line without the pair being cut, so each row takes three:
+   status · distance | value, pair · fee tier | fees, chain | owner. Rows
+   drop the book's shared columns (each sizes its own) and the pair may wrap
+   instead of clipping; the owner is still the only thing that ellipsizes. */
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-rows {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row {
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  column-gap: 0.625rem;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__status {
+  grid-area: 1 / 1 / 2 / 3;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__value {
+  grid-area: 1 / 3;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__pair {
+  grid-area: 2 / 1 / 3 / 3;
+  flex-wrap: wrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__fees {
+  grid-area: 2 / 3;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__chain {
+  grid-area: 3 / 1;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__wallet {
+  grid-area: 3 / 2 / 4 / 4;
+}
+
+/* The strip stays 2×2 (the quarter/half clamp already gives that under
+   700px) with tighter tiles and figures, so a "$34,982.73" total is not cut. */
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-card__stats.lp-totals {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-stat {
+  padding: 0.375rem 0.5rem;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-stat__value {
+  font-size: 0.8125rem;
+}
+
+.chat-surface .lp-card__warnings {
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .lp-card__actions {
+  display: inline-flex;
+  gap: 0.75rem;
+}
+
+.chat-surface .lp-card__action {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  gap: 0.25rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.chat-surface .lp-card__action:hover,
+.chat-surface .lp-card__action:focus-visible {
+  color: var(--foreground);
+}
+
+.chat-surface .lp-card__copy .lp-card__action-label {
+  color: var(--dim);
+}
+
+.chat-surface .lp-card__copy[data-lp-copied='true'] {
+  color: var(--ok);
+}
+
+.chat-surface .lp-card__copy[data-lp-copied='failed'] {
+  color: var(--danger);
+}
+
+@media (max-width: 36rem) {
+  .chat-surface .lp-ranges__row {
+    grid-template-columns: minmax(0, 1fr) 3.5rem;
+  }
+
+  .chat-surface .lp-ranges__meter,
+  .chat-surface .lp-ranges__owner {
+    display: none;
+  }
+}
+
 /* Crosshair readout. lightweight-charts has no tooltip, so this strip carries
    the hovered candle's OHLC and its move. It takes its own row above the
    canvas rather than floating over it, so it can neither be clipped by the

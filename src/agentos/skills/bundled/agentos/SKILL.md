@@ -556,6 +556,9 @@ agentos trade orders --status awaiting_approval [--kind swap|send|revoke] / appr
 agentos trade send --chain base --token USDC --to <addr> --amount 25 --json   # several --to = one batch; agent sends always wait for approval
 agentos trade allowances --json / revoke --chain base --token <addr> --spender <addr>   # live ERC-20 allowances; approve(spender, 0)
 agentos trade decode --chain base <txhash> --json / network --json   # explain a tx; head block, gas, RPC health
+agentos trade lp pool <token|poolId> [--chain base|robinhood] --json   # Uniswap V4 (read-only): deepest pool, reserves, TVL, launcher, LP lock; with --json also writes a chat card
+agentos trade lp ranges <token|poolId> [--chain C] --json / position <tokenId> --chain C --json   # liquidity distribution; one position NFT
+agentos trade lp positions [--wallet ADDR]… [--chain C]… [--all] [--budget-seconds N] --json   # every V4 position of the vault's wallets, out of range first (≤ 50 rows, totals over all); --chain repeatable (none = both); answers within 25 s (--budget-seconds 5-300), partialScan + a warning when cut short; --no-card skips the card; a token as --wallet → trading.lp.not_a_wallet
 agentos trade portfolio / history / limits <addr>
 agentos config set trading.uniswap_api_key <key>       # or Settings › Trading in the app
 agentos cron list / add / run <id> / runs

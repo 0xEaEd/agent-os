@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "kind": "pool",
+  "chain": { "id": 8453, "key": "base", "name": "Base", "explorer": "https://basescan.org" },
+  "asOfBlock": 21044901,
+  "fetchedAt": "2026-09-27T09:30:00Z",
+  "partialScan": false,
+  "warnings": [],
+  "token": {
+    "address": "0x6982508145454ce325ddbe47a25d4ec3d2311933",
+    "symbol": "PEPE",
+    "decimals": 18,
+    "priceUsd": 0.00000921
+  },
+  "quote": {
+    "address": "0x4200000000000000000000000000000000000006",
+    "symbol": "WETH",
+    "decimals": 18,
+    "priceUsd": 2450.5
+  },
+  "pool": {
+    "poolId": "0x9f3c1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+    "hook": null,
+    "tickSpacing": 200,
+    "feePct": "1%",
+    "tick": -190000,
+    "liquidity": "184467440737095516",
+    "priceUsd": 0.00000921,
+    "mcapUsd": 3870000,
+    "tvlUsd": 412000
+  },
+  "reserves": {
+    "base": { "raw": "22367000000000000000000000000", "human": "22367000000", "usd": 206000 },
+    "quote": { "raw": "84065000000000000000", "human": "84.065", "usd": 206000 }
+  },
+  "safety": {
+    "launcher": { "name": "Clanker", "address": "0x375c15db32d28cecdcab5c03ab889bf15cbd2c5e" },
+    "locked": true,
+    "note": "LP owned by launchpad locker"
+  },
+  "topRanges": [
+    {
+      "tickLower": -201000,
+      "tickUpper": -180000,
+      "priceLower": 0.0000000019,
+      "priceUpper": 0.0000000154,
+      "mcapLower": 2100000,
+      "mcapUpper": 9800000,
+      "liquidity": "77476325109580116",
+      "share": 0.42,
+      "owner": "0x375c15db32d28cecdcab5c03ab889bf15cbd2c5e"
+    },
+    {
+      "tickLower": -180000,
+      "tickUpper": -160000,
+      "priceLower": 0.0000000154,
+      "priceUpper": 0.000000112,
+      "mcapLower": 9800000,
+      "mcapUpper": 71400000,
+      "liquidity": "33204139332677191",
+      "share": 0.18,
+      "owner": null
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "kind": "position",
+  "chain": {
+    "id": 8453,
+    "key": "base",
+    "name": "Base",
+    "explorer": "https://basescan.org"
+  },
+  "asOfBlock": 21044901,
+  "fetchedAt": "2026-09-27T09:30:00Z",
+  "partialScan": false,
+  "warnings": [],
+  "position": {
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "tokenId": "48213",
+    "owner": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "label": "Main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x52b492a33E447Cdb854c7FC19F1e57E8BfA1777D",
+      "symbol": "PEPE",
+      "decimals": 18,
+      "priceUsd": 2.5148879334839752e-05
+    },
+    "quote": {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "priceUsd": 2512.37
+    },
+    "pool": {
+      "poolId": "0x5c2e4e9a3c4022757cdcdfab4e3a620063d12bfdae89b05d82fec8f89ceb63b5",
+      "hook": "0xb429d62f8f3bFFb98CdB9569533eA23bF0Ba28CC",
+      "tickSpacing": 200,
+      "feePct": "dynamic",
+      "tick": 184206,
+      "liquidity": "7500000000000000000000000",
+      "priceUsd": 2.5148879334839752e-05,
+      "mcapUsd": 2514887.9334839755,
+      "tvlUsd": null
+    },
+    "range": {
+      "tickLower": 186000,
+      "tickUpper": 190000,
+      "priceLower": 5.608121268061238e-09,
+      "priceUpper": 8.366166501212042e-09,
+      "mcapLower": 1408967.5630239013,
+      "mcapUpper": 2101890.5732650096
+    },
+    "status": "above-range",
+    "liquidity": "800000000000000000000000",
+    "principal": {
+      "base": {
+        "raw": "0",
+        "human": "0",
+        "usd": 0.0
+      },
+      "quote": {
+        "raw": "13263488171990570310",
+        "human": "13.26348817199057031",
+        "usd": 33322.789778663944
+      },
+      "usd": 33322.789778663944
+    },
+    "fees": {
+      "base": {
+        "raw": "0",
+        "human": "0",
+        "usd": 0.0
+      },
+      "quote": {
+        "raw": "0",
+        "human": "0",
+        "usd": 0.0
+      },
+      "usd": 0.0
+    },
+    "valueUsd": 33322.789778663944,
+    "band": "$1.41M → $2.10M",
+    "distancePct": 19.65
+  }
+}

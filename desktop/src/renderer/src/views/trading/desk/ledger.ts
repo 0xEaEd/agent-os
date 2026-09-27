@@ -28,6 +28,7 @@ export type TradeKind =
   | 'limits'
   | 'sync'
   | 'wallet'
+  | 'lp'
   | 'other'
 
 export interface TradeCall {
@@ -90,6 +91,25 @@ function chainWord(args: string): string {
   return ''
 }
 
+/** `trade lp` flags that take no value; every other `--name` consumes the next word. */
+const LP_BOOLEAN_FLAGS = new Set(['--json', '--no-card', '--all', '--help'])
+
+/** The positional words of a `trade lp` command line, with every flag and flag value dropped. */
+function lpPositionals(args: string): string[] {
+  const out: string[] = []
+  const words = args.trim().split(/\s+/).filter(Boolean)
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!
+    if (!w.startsWith('--')) {
+      out.push(w)
+      continue
+    }
+    if (w.includes('=') || LP_BOOLEAN_FLAGS.has(w)) continue
+    if (words[i + 1] && !words[i + 1]!.startsWith('--')) i++
+  }
+  return out
+}
+
 const TITLES: Record<TradeKind, string> = {
   quote: 'Quote',
   swap: 'Swap',
@@ -110,6 +130,7 @@ const TITLES: Record<TradeKind, string> = {
   limits: 'Limits',
   sync: 'Sync',
   wallet: 'Wallet',
+  lp: 'Liquidity read',
   other: 'Trade call',
 }
 
@@ -147,6 +168,8 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
       ).includes(sub as never)
     ) {
       kind = sub as TradeKind
+    } else if (sub === 'lp') {
+      kind = 'lp'
     }
   } else if (sub === 'balances') kind = 'balances'
   else kind = 'wallet'
@@ -211,6 +234,12 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
     detail = id ?? ''
   } else if (kind === 'wallet') {
     detail = sub
+  } else if (kind === 'lp') {
+    // `lp pool boar --chain base` → "pool boar · Base"; flags and their values
+    // (`--budget-seconds 60`, `--wallet=0x…`) never reach the subject.
+    detail = [lpPositionals(args).slice(0, 2).join(' '), chainWord(args)]
+      .filter(Boolean)
+      .join(' · ')
   } else {
     detail = chainWord(args)
   }
@@ -219,6 +248,8 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
 
 export interface TradeOutcome {
   summary: string
+  /** Replaces the call's command-line detail once the result names its subject better. */
+  detail?: string
   status: OrderStatus | null
   orderId: string | null
   txHash: string | null
@@ -320,12 +351,181 @@ function statusWordFor(status: OrderStatus): string {
   }
 }
 
-/** One line for a result. Unknown shapes fall back to the first line of text. */
 /** A projection marker the transcript substitutes for a result body it did not keep. */
 const PROJECTION_MARKER = /^\s*\[[a-z_]+_projection\]\s*$/i
 
+/**
+ * The LP card announcement `agentos trade lp …` prints last on stdout, the
+ * note publish_inline_artifacts swaps in for it on a live result, or the
+ * omission marker a history projection leaves in its place.
+ */
+const LP_CARD_MARKER = new RegExp(
+  [
+    // The raw announcement, as the CLI prints it.
+    /publish_artifact\s+path=\S+\s+mime=application\/vnd\.agentos\.lp\+json/.source,
+    // A live result: publish_inline_artifacts rewrote the announcement into this
+    // note (no mime left), so the card directory is the only LP signal.
+    /\[inline artifact published and already rendered for the user:\s*(?:\S*\/)?lp-cards\/[^\s\]]+/
+      .source,
+    // A history projection that dropped the body.
+    /\[generated artifact omitted:[^\]\n]*application\/vnd\.agentos\.lp\+json/.source,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * A liquidity read recognised by its result alone (the command was wrapped
+ * past recognition): the result announces an LP card.
+ */
+export function lpCallFromResult(text: string): TradeCall | null {
+  if (!LP_CARD_MARKER.test(text)) return null
+  return { kind: 'lp', title: TITLES.lp, detail: '', command: '' }
+}
+
+const LP_STATUS_WORDS: Record<string, string> = {
+  'in-range': 'in range',
+  'above-range': 'above range',
+  'below-range': 'below range',
+  closed: 'closed',
+}
+
+/** A string field out of JSON too truncated to parse. */
+function field(text: string, pattern: RegExp): string | null {
+  const m = pattern.exec(text)
+  return m ? m[1]! : null
+}
+
+const LP_CHAIN_NAMES: Record<string, string> = {
+  base: 'Base',
+  '8453': 'Base',
+  robinhood: 'Robinhood Chain',
+  '4663': 'Robinhood Chain',
+}
+
+/** Chain names from keys, deduplicated, in the order given; unknown keys are dropped. */
+function lpChainNames(keys: string[]): string[] {
+  const names = keys.map((k) => LP_CHAIN_NAMES[k.trim().toLowerCase()]).filter(Boolean)
+  return [...new Set(names)] as string[]
+}
+
+/**
+ * A chain list for the call chip: one chain keeps its full name, several use
+ * the short form ("Base + Robinhood") so the chip stays readable in a narrow
+ * ledger before CSS has to ellipsize it.
+ */
+function chainList(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return names.map((n) => n.replace(/\s+chain$/i, '')).join(' + ')
+}
+
+/**
+ * The chains a `positions` read scanned: the envelope's `chains` when the
+ * JSON parses, the `asOfBlocks` keys when only a prefix survived, else the
+ * command's `--chain` flags (none means both). An unknown command yields ''.
+ */
+function positionsChains(d: Record<string, unknown> | null, text: string, command: string): string {
+  if (d && Array.isArray(d.chains)) {
+    const named = d.chains
+      .map((c) => (isDict(c) ? (str(c.name) ?? lpChainNames([str(c.key) ?? ''])[0]) : ''))
+      .filter((n): n is string => Boolean(n))
+    if (named.length) return chainList(named)
+  }
+  const blocks = d && isDict(d.asOfBlocks) ? Object.keys(d.asOfBlocks) : null
+  const blockKeys =
+    blocks ??
+    [...(field(text, /"asOfBlocks"\s*:\s*\{([^{}]*)\}/) ?? '').matchAll(/"([^"]+)"\s*:/g)].map(
+      (m) => m[1]!,
+    )
+  if (blockKeys.length) return chainList(lpChainNames(blockKeys))
+  if (!command) return ''
+  const flagged = flags(command, 'chain')
+  return chainList(lpChainNames(flagged.length ? flagged : ['base', 'robinhood']))
+}
+
+/**
+ * An LP read-out in one line — "pool boar (Base)" as the subject, the figures
+ * that matter as the summary — and never the JSON itself: the card below the
+ * call is the read-out; the raw body stays behind the "raw" toggle.
+ */
+function parseLpResult(text: string, data: unknown, command: string): TradeOutcome {
+  if (isDict(data) && isDict(data.error)) {
+    const message = str(data.error.message) ?? 'error'
+    return { ...EMPTY, summary: message, error: message }
+  }
+  const d = isDict(data) ? data : null
+  const kind = (d && str(d.kind)) ?? field(text, /"kind"\s*:\s*"(pool|ranges|position|positions)"/)
+  if (!kind) {
+    const code = exitCodeOf(text)
+    if (code !== null && code !== 0) {
+      const first =
+        text
+          .split('\n')
+          .find((l) => l.trim() && !/^\s*exit_code=/.test(l))
+          ?.slice(0, 140) ?? `exit ${code}`
+      return { ...EMPTY, summary: first, error: first }
+    }
+    return { ...EMPTY, summary: '' }
+  }
+
+  const chainName = (c: unknown): string => (isDict(c) ? (str(c.name) ?? str(c.key) ?? '') : '')
+  let chains = ''
+  if (kind === 'positions') {
+    // A wallet scan spans chains and each row carries its own: the label comes
+    // from the envelope or the command line, never from whichever row is first.
+    chains = positionsChains(d, text, command)
+  } else {
+    chains = d ? chainName(d.chain) : ''
+    if (!chains && d && isDict(d.position)) chains = chainName(d.position.chain)
+    if (!chains) chains = field(text, /"chain"\s*:\s*\{[^}]*?"name"\s*:\s*"([^"]+)"/) ?? ''
+  }
+  const where = chains ? ` (${chains})` : ''
+
+  let subject = ''
+  const bits: string[] = []
+  if (kind === 'pool' || kind === 'ranges') {
+    const symbol =
+      (d && isDict(d.token) ? str(d.token.symbol) : null) ??
+      field(text, /"token"\s*:\s*\{[^}]*?"symbol"\s*:\s*"([^"]+)"/) ??
+      ''
+    subject = `${kind} ${symbol}`.trim()
+    const pool = d && isDict(d.pool) ? d.pool : null
+    if (kind === 'pool') {
+      if (pool && num(pool.tvlUsd) !== null)
+        bits.push(`TVL ${formatUsd(num(pool.tvlUsd), { compact: true })}`)
+      if (pool && num(pool.mcapUsd) !== null)
+        bits.push(`mcap ${formatUsd(num(pool.mcapUsd), { compact: true })}`)
+    } else if (d && Array.isArray(d.segments)) {
+      bits.push(`${d.segments.length} range${d.segments.length === 1 ? '' : 's'}`)
+    }
+  } else if (kind === 'position') {
+    const position = d && isDict(d.position) ? d.position : null
+    const id = (position && str(position.tokenId)) ?? field(text, /"tokenId"\s*:\s*"([^"]+)"/)
+    subject = `position${id ? ` #${id}` : ''}`
+    if (position) {
+      const status = str(position.status)
+      if (status && LP_STATUS_WORDS[status]) bits.push(LP_STATUS_WORDS[status]!)
+      if (num(position.valueUsd) !== null)
+        bits.push(formatUsd(num(position.valueUsd), { compact: true }))
+    }
+  } else {
+    const wallets = d && Array.isArray(d.wallets) ? d.wallets.length : null
+    subject = `positions${wallets !== null ? ` · ${wallets} wallet${wallets === 1 ? '' : 's'}` : ''}`
+    const totals = d && isDict(d.totals) ? d.totals : null
+    const count = totals ? num(totals.count) : null
+    if (count !== null) bits.push(count === 0 ? 'none found' : `${count} open`)
+    const out = totals ? num(totals.outOfRange) : null
+    if (out) bits.push(`${out} out of range`)
+    if (totals && num(totals.valueUsd) !== null)
+      bits.push(formatUsd(num(totals.valueUsd), { compact: true }))
+  }
+  if (d && d.partialScan === true) bits.push('partial scan')
+  return { ...EMPTY, detail: `${subject}${where}`, summary: bits.join(' · ') }
+}
+
+/** One line for a result. Unknown shapes fall back to the first line of text. */
 export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
   const data = parseJson(text)
+  if (call.kind === 'lp') return parseLpResult(text, data, call.command)
   if (!isDict(data)) {
     const code = exitCodeOf(text)
     const lines = text

@@ -43,6 +43,7 @@ import {
   sessionRunStatus,
   shouldAutofocusComposer,
   slashCommandKey,
+  stripAssistantText,
   stripDirectiveTags,
   stripGeneratedArtifactMarkers,
   stripProtocolTextLeak,
@@ -204,6 +205,16 @@ describe('historyFallbackMessageIdentity', () => {
         '[[reply_to_current]] answer [generated artifact omitted: chart.png]',
       ),
     ).toBe('assistant|answer')
+  })
+  it('strips every assistant marker through one shared helper', () => {
+    const lp =
+      '[generated artifact omitted: ranges-boar-base-20260927T105305Z.json (application/vnd.agentos.lp+json)]'
+    expect(stripAssistantText(`Done.\n\n${lp}`)).toBe('Done.')
+    expect(stripAssistantText(`[[reply_to_current]] Done. ${lp}`)).toBe('Done.')
+    expect(stripAssistantText(lp)).toBe('')
+    expect(
+      stripAssistantText('Done.\n<invoke name="exec_command"><parameter name="command">pwd'),
+    ).toBe('Done.')
   })
   it('strips a positive protocol suffix but preserves ordinary angle-bracket text', () => {
     const leaked =

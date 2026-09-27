@@ -223,6 +223,21 @@ agentos trade revoke --chain base --token 0xTOKEN --spender 0xSPENDER [--wallet 
 agentos trade decode --chain base 0xTXHASH --json
 agentos trade decode --chain base --data 0xCALLDATA [--to 0xCONTRACT] --json
 agentos trade network --json
+
+# Uniswap V4 liquidity (read-only). With --json each prints JSON, then writes a chat card
+# and ends stdout with a publish_artifact line — the card renders by itself; run once, in
+# the foreground (usually < 15 s), and answer in prose. --no-card only when a card would be
+# noise. Errors are JSON on stderr: trading.lp.not_a_wallet (you passed a token as
+# --wallet: run the `trade lp pool` command it names), trading.lp.pool_key_unknown (pass
+# the token address instead of the poolId). A positions card lists ≤ 50 rows; its totals
+# cover every position found. positions answers within 25 s: a huge wallet comes back
+# partialScan with a warning naming what was not read — report it as partial; rerun with
+# --budget-seconds 40 (stay under your shell timeout) only if the user needs the rest.
+# --chain repeats on positions only.
+agentos trade lp pool 0xTOKEN|SYMBOL|0xPOOLID [--chain base|robinhood] [--quote WETH] --json   # deepest pool: reserves, TVL, mcap, launcher, LP locked?, biggest ranges
+agentos trade lp ranges 0xTOKEN|SYMBOL|0xPOOLID [--chain C] --json   # liquidity by price / market-cap range; partialScan = not every range was read
+agentos trade lp position TOKEN_ID --chain C --json                  # one position: range, in/above/below range, principal, uncollected fees
+agentos trade lp positions [--wallet ADDR]… [--chain C]… [--all] [--budget-seconds N] --json   # every V4 position of the vault's wallets (or ADDR); no --chain = both; closed ones only with --all
 ```
 
 `--in` / `--out` accept `ETH`, an address, or a symbol. A symbol must match

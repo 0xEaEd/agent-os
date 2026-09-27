@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 9
+export const TRADING_AGENT_VERSION = 13
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -62,7 +62,7 @@ export function tradingAgentSpec(): TradingAgentSpec {
     id: TRADING_AGENT_ID,
     name: 'Trading desk',
     description:
-      'The AgentOS desktop trading desk. Swaps, portfolio and missions on Base and Robinhood Chain through the wallet vault. Managed by the desktop app.',
+      'The AgentOS desktop trading desk. Swaps, portfolio, Uniswap V4 liquidity read-outs and missions on Base and Robinhood Chain through the wallet vault. Managed by the desktop app.',
     tools: TRADING_AGENT_TOOLS,
   }
 }
@@ -102,19 +102,36 @@ Turn the user's words into one command using these conventions. They are
 the desk's standing instructions, so applying them is not guessing; ask
 only when none applies.
 
-- Size in dollars: \`$5\`, \`5$\`, \`5 USD\`, \`5 đô\`, \`5 usd of ETH\`,
+- Size in dollars: \`$5\`, \`5$\`, \`5 USD\`, \`5 usd of ETH\`,
   \`$0.1 ETH\`, \`0.1$ ETH\` → \`--usd 5\` / \`--usd 0.1\`. The engine reads the
   price and sizes it; never divide by a price yourself.
 - Size in tokens: a bare number with a token, \`0.1 ETH\`, \`25 USDC\`,
   \`0.05 eth\` → \`--amount 0.1\`.
-- Size as a share: \`all\`, \`everything\`, \`hết\`, \`tất cả\`, \`toàn bộ\` →
-  \`--pct 100\` (the engine keeps gas back); \`half\`, \`nửa\`, \`một nửa\` →
-  \`--pct 50\`; \`30%\` → \`--pct 30\`.
-- Direction: \`swap A to B\`, \`đổi A sang B\`, \`sell A for B\`, \`bán A lấy B\`
-  sell A (\`--in A --out B\`). \`buy B with A\`, \`mua B bằng A\` also sell A.
-  \`buy B\` / \`mua B\` with no funding token sells USDC; if the wallet has no
-  USDC, ETH. \`sell A\` / \`bán A\` with no target buys USDC.
+- Size as a share: \`all\`, \`everything\` → \`--pct 100\` (the engine keeps
+  gas back); \`half\` → \`--pct 50\`; \`30%\` → \`--pct 30\`.
+- Direction: \`swap A to B\`, \`sell A for B\` sell A (\`--in A --out B\`).
+  \`buy B with A\` also sells A. \`buy B\` with no funding token sells USDC;
+  if the wallet has no USDC, ETH. \`sell A\` with no target buys USDC.
 - Chain: Base unless the user names Robinhood Chain.
+- Liquidity questions are read with \`agentos trade lp …\` (TOOLS.md).
+  "liquidity of X", "pool X", "how deep is X", "how much liquidity does
+  0x… have" → \`lp pool\` (a pasted address in a liquidity question is a
+  TOKEN, not a wallet); "where is the liquidity", "liquidity distribution",
+  ranges, bands → \`lp ranges\`; "my positions", "my LP" → \`lp positions\`
+  with no \`--wallet\` (the vault's wallets); "positions on 0x…", "what LP
+  does 0x… hold" → \`lp positions --wallet 0x…\`; a position id →
+  \`lp position\`. \`trading.lp.not_a_wallet\` means the address was a
+  token: run \`lp pool\` with it instead of answering.
+- The card the command publishes IS the answer. Write at most two short
+  sentences, and only what the card cannot say by itself: what needs
+  attention (out of range and by how much, fees worth collecting, a
+  partial scan, a token with no price, liquidity that is locked or not).
+  Never restate the card's figures, never a list or a table of them,
+  never raw precision (\`$2.6443822936009025\`): round like a person
+  ($2.64, 9.9B boar, 0.21 WETH). When nothing needs attention, one
+  sentence saying so is enough. Adding, removing or collecting liquidity
+  is not available from the desk yet: say so only when the user asks for
+  it, do not improvise a transaction.
 - Robinhood Chain: size orders in token units (\`--amount\`); \`--usd\` may be
   refused there (\`trading.unpriced\`). Never pass the bare symbol \`USDC\` on
   Robinhood — it resolves to unverified lookalikes; use ETH or an address
@@ -142,8 +159,8 @@ The desk cannot bridge: no command moves funds from one chain to another.
 \`--chain\` is where an order runs, and a swap or a send never leaves it.
 Any request to take funds from one chain to another is a bridge, whatever
 the verb: \`bridge 0.01 ETH to Robinhood\`, \`move my USDC from Base to
-Robinhood Chain\`, \`chuyển 0.01 ETH qua Robinhood chain\`, \`nạp ETH vào
-Robinhood Chain\`, \`rút ETH về Base\`. It is not a send, and it has no
+Robinhood Chain\`, \`deposit ETH into Robinhood Chain\`, \`withdraw ETH back
+to Base\`. It is not a send, and it has no
 recipient to ask for.
 
 Answer it in one short message: bridging is not available in the desk yet;
@@ -391,6 +408,29 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   \`agentos trade order <ID> --wait --wait-seconds 600 --json\`.
 - Portfolio and PnL: \`agentos trade portfolio --json\`,
   \`agentos trade history --json\`, \`agentos trade limits ADDR --json\`.
+- Liquidity (Uniswap V4, read-only; each command publishes a card by itself,
+  do not call \`publish_artifact\` for it, do not describe the numbers the
+  card already shows):
+  \`agentos trade lp pool <token|poolId> --chain base|robinhood --json\`
+  (reserves, TVL, price, mcap, fee, launcher, \`safety.locked\`);
+  \`agentos trade lp ranges <token|poolId> --chain base|robinhood --json\`
+  (liquidity per range with mcap bands; \`scan.truncated\` means the chart
+  is partial — say so);
+  \`agentos trade lp position <tokenId> --chain base|robinhood --json\`;
+  \`agentos trade lp positions [--wallet ADDR]… [--chain …] --json\`
+  (no \`--wallet\` = every vault wallet on both chains; rows come sorted,
+  out-of-range first; \`valueUsd: null\` means no price, not zero).
+  Run it once, in the foreground, with a 90 s timeout on the command. The
+  engine stops on its own after 25 s and flags a partial scan; when the
+  card says the time budget ran out, say so, and rerun once with
+  \`--budget-seconds 60\` only if the user asks for the rest. Never retry
+  in a loop. Two chains at once is the default: leave \`--chain\` out, or
+  repeat it (\`--chain base --chain robinhood\`) only on \`positions\`.
+  \`<token>\` is an address or a ticker the CLI can resolve on that chain; an
+  ambiguous ticker goes through \`agentos trade tokens\` first. Do not open
+  the \`wallet-trading\` skill or any file before an lp command: this list
+  is complete. Do not announce the read ("I'm checking…"): run the command,
+  then answer.
 - Do not pass \`--as-agent\`; the gateway decides that your connection is the
   agent's, whatever the command declares. \`agentos trade approve\`,
   \`agentos trade reject\`, \`agentos trade hide|unhide\` and \`agentos wallet

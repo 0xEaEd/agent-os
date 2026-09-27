@@ -124,6 +124,68 @@ class BlockscoutDiscovery:
             return None
         return _parse_token_balances(payload, self.max_tokens)
 
+    async def nft_ids(
+        self,
+        chain: ChainSpec,
+        holder: str,
+        contract: str,
+        *,
+        max_pages: int = 10,
+        on_page: Callable[[list[int]], None] | None = None,
+    ) -> list[int] | None:
+        """Token ids of ERC-721 ``contract`` the indexer says ``holder`` owns.
+
+        Same trust model as :meth:`holdings`: identity only, every id is
+        re-verified on chain by the caller. ``None`` when the chain has no
+        indexer or it did not answer; an indexer lags a few blocks, so the
+        caller must not read a short list as "that is all of them".
+
+        ``on_page`` gets each page's new ids as it arrives (it must not block:
+        it runs on the event loop), so a caller can verify page one while page
+        twenty is still on its way -- and keep what it has when it gives up.
+        """
+        base = chain.blockscout_url
+        if not base:
+            return None
+        url = f"{base.rstrip('/')}/api/v2/tokens/{checksum_address(contract)}/instances"
+        params: dict[str, Any] = {"holder_address_hash": checksum_address(holder)}
+        ids: list[int] = []
+        seen: set[int] = set()
+        for _ in range(max(1, max_pages)):
+            try:
+                response = await self._http.get(
+                    url,
+                    params=params,
+                    headers={"accept": "application/json", "user-agent": USER_AGENT},
+                    timeout=TIMEOUT_S,
+                )
+            except httpx.HTTPError as exc:
+                log.debug("trading.nft_discovery_unreachable", chain=chain.key, error=str(exc))
+                return ids or None
+            if response.status_code == 404:
+                return ids
+            if response.status_code != 200:
+                return ids or None
+            try:
+                payload = response.json()
+            except ValueError:
+                return ids or None
+            items = payload.get("items") if isinstance(payload, dict) else None
+            page: list[int] = []
+            for item in items if isinstance(items, list) else []:
+                raw = str((item or {}).get("id") or "") if isinstance(item, dict) else ""
+                if raw.isdigit() and int(raw) not in seen:
+                    seen.add(int(raw))
+                    page.append(int(raw))
+            ids.extend(page)
+            if on_page is not None and page:
+                on_page(page)
+            nxt = payload.get("next_page_params") if isinstance(payload, dict) else None
+            if not isinstance(nxt, dict) or not nxt:
+                break
+            params = {"holder_address_hash": checksum_address(holder), **nxt}
+        return ids
+
 
 def _parse_token_balances(payload: Any, max_tokens: int) -> list[str] | None:
     """The ERC-20 contract addresses in a Blockscout ``token-balances`` body."""

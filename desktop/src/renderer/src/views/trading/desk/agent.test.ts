@@ -75,7 +75,7 @@ describe('tradingAgentFiles · reading an order', () => {
   it('reads dollar, token and share sizes without asking', () => {
     expect(files['AGENTS.md']).toContain('## Reading an order')
     expect(files['AGENTS.md']).toMatch(/`0\.1\$ ETH`.*`--usd 0\.1`/s)
-    expect(files['AGENTS.md']).toMatch(/`hết`.*`--pct 100`/s)
+    expect(files['AGENTS.md']).toMatch(/`everything`.*`--pct 100`/s)
     expect(files['AGENTS.md']).toMatch(/states the default you will take/)
   })
   it('places a clear chat order with one swap command', () => {
@@ -190,7 +190,7 @@ describe('tradingAgentFiles · reading an order', () => {
   it('answers a bridge request in one message and runs nothing for it', () => {
     // No command moves funds between chains. Asked to "bridge" ETH to
     // Robinhood Chain, a desk opened the skill to look for one; asked to
-    // "chuyển 0.001 ETH qua Robinhood chain", it read a send there and
+    // "deposit 0.001 ETH into Robinhood Chain", it read a send there and
     // asked the user for a recipient address.
     const agents = files['AGENTS.md']
     expect(agents).toContain('## Bridging')
@@ -198,7 +198,7 @@ describe('tradingAgentFiles · reading an order', () => {
       /The desk cannot bridge: no command moves funds from one chain to another/,
     )
     expect(agents).toMatch(/is a bridge, whatever\s+the verb/)
-    expect(agents).toContain('`chuyển 0.01 ETH qua Robinhood chain`')
+    expect(agents).toContain('`deposit ETH into Robinhood Chain`')
     expect(agents).toMatch(/It is not a send, and it has no\s+recipient to ask for/)
     expect(agents).toMatch(/Run nothing for it, not even `agentos trade status`/)
     expect(agents).toMatch(/no send to a bridge address or to the\s+wallet's own address/)

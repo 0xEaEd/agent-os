@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Trading: `agentos trade lp pool|ranges|position|positions` read Uniswap V4
+  liquidity on Base and Robinhood Chain — a token's deepest pool (reserves,
+  TVL, market cap, launcher, whether the LP is locked), its liquidity
+  distribution, one position NFT, or every position of the vault's wallets.
+  Backed by the read-only gateway methods `trading.lp.*` (allowed for an
+  agent), the engine's own RPCs and the V4 library of the bundled
+  `senior-unilp-manager` skill. Each command also writes an
+  `application/vnd.agentos.lp+json` card for the chat unless `--no-card`
+  (payload: `docs/lp-cards.md`).
+
 ### Changed
 - Desktop: the mode pill reads Chat | Trade, and the strip no longer says
   LIVE while a reply streams. The tab is a verb like its sibling, and the
