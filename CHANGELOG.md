@@ -15,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- `pptx` skill: `render_thumbs.sh --dpi` is now validated as a positive number
+  before `soffice` runs. A negative or zero value used to reach `pdftoppm -r`
+  unchecked and silently produce a 1x1 pixel "thumbnail" while the script
+  reported success; a non-numeric value errored, but only after a full
+  LibreOffice conversion, and under exit code 4 ("conversion failed") instead
+  of the script's own "bad arguments" code, 1 (#3327)
+
 - Zhipu/GLM provider: `glm-4.6` no longer silently loses reasoning support.
   `get_capabilities`'s zai reasoning-shape prefix check listed `glm-4.5` and
   `glm-4.7` but skipped `glm-4.6` — even though `engine/reasoning_hint.py`'s
