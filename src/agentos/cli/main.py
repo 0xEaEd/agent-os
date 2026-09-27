@@ -180,6 +180,13 @@ def _root(
     ),
 ) -> None:
     """AgentOS - Python agent runtime with multi-channel support."""
+    # A human is at this terminal, so any approval this process queues has a
+    # surface here (standalone chat prompts inline, ``agentos agent`` prints
+    # the envelope). That is what lets a CLI share ~/.agentos with a running
+    # gateway; a library caller without this claim is refused instead.
+    from agentos.application.approval_queue import claim_local_approval_surface
+
+    claim_local_approval_surface()
 
 
 app.command("init")(init_command)

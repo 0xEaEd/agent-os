@@ -172,6 +172,42 @@ class GatewayPidLock:
 # ---------------------------------------------------------------------------
 
 
+def live_gateway_pid(state_dir: str | Path) -> int | None:
+    """Return the pid of a live gateway that owns ``state_dir`` and is not us.
+
+    ``None`` when no gateway wrote a pid file, when the pid file is this
+    process's own, or when it is a leftover from a gateway that died without
+    cleaning up. Liveness is judged the way :meth:`GatewayPidLock.acquire`
+    judges it — by whether the OS lock on ``gateway.pid.lock`` is still held —
+    never by probing the pid, which a reused pid would get wrong.
+
+    Used by the approval queue to refuse writes from a process that shares a
+    state directory with a running gateway but has no approval surface of its
+    own: such a row would surface as a prompt in the gateway's UI, asked of a
+    user who never issued the command.
+    """
+    root = Path(state_dir)
+    pid = _read_pid_from_path(root / _PID_FILENAME)
+    if pid is None or pid == os.getpid():
+        return None
+    lock_path = root / _LOCK_FILENAME
+    if not lock_path.exists():
+        return None
+    try:
+        fh = open(str(lock_path), "a+b")  # noqa: WPS515
+    except OSError:
+        # Cannot tell; a pid file with an unreadable lock anchor is treated
+        # as live so the caller fails closed.
+        return pid
+    try:
+        if _try_lock(fh):
+            _unlock(fh)
+            return None
+        return pid
+    finally:
+        fh.close()
+
+
 def _try_lock(fh: IO[bytes]) -> bool:
     if os.name == "nt":
         import msvcrt

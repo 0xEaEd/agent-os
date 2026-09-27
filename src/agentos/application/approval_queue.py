@@ -40,6 +40,37 @@ class PendingApproval:
 
 _DEFAULT_APPROVAL_QUEUE_PATH = state_dir("approval_queue.sqlite")
 
+#: Set by processes that can show an approval prompt to a human themselves
+#: (the CLI: standalone chat prompts inline, ``agentos agent`` prints the
+#: envelope). Such a process may share a state directory with a running
+#: gateway. Anything else that shares one — a test, a probe script, a stray
+#: import of the tool layer — has no surface, so its rows would only ever show
+#: up as prompts in the gateway's UI, asked of a user who never issued the
+#: command. ``request()`` refuses those.
+_LOCAL_APPROVAL_SURFACE = False
+
+
+def claim_local_approval_surface() -> None:
+    """Declare that this process can present approval prompts itself."""
+    global _LOCAL_APPROVAL_SURFACE
+    _LOCAL_APPROVAL_SURFACE = True
+
+
+class ApprovalQueueOwnedByGatewayError(RuntimeError):
+    """A live gateway owns this queue's state directory and we have no surface."""
+
+    def __init__(self, *, db_path: Path, gateway_pid: int, namespace: str) -> None:
+        self.db_path = db_path
+        self.gateway_pid = gateway_pid
+        self.namespace = namespace
+        super().__init__(
+            f"Refusing to queue a {namespace!r} approval in {db_path}: gateway pid "
+            f"{gateway_pid} owns that state directory and would show this prompt to its "
+            "user. Point AGENTOS_STATE_DIR at a directory of this process's own, or send "
+            "the request through the running gateway."
+        )
+
+
 #: How long a resolved row stays in the table before it is pruned. Long
 #: enough that an approved row is always consumed first, short enough that
 #: the queue file stops growing for the lifetime of the install.
@@ -224,7 +255,22 @@ class ApprovalQueue:
         for approval_id in pruned:
             self._pending.pop(approval_id, None)
 
+    def _foreign_live_gateway(self) -> int | None:
+        if _LOCAL_APPROVAL_SURFACE:
+            return None
+        # Lazy: ``agentos.gateway`` is the heavy package and imports this
+        # module during boot; by the time anything requests an approval it is
+        # either already loaded (gateway, CLI) or worth loading once (script).
+        from agentos.gateway.pidlock import live_gateway_pid
+
+        return live_gateway_pid(self._db_path.parent)
+
     def request(self, namespace: str = "exec", params: dict | None = None) -> str:
+        gateway_pid = self._foreign_live_gateway()
+        if gateway_pid is not None:
+            raise ApprovalQueueOwnedByGatewayError(
+                db_path=self._db_path, gateway_pid=gateway_pid, namespace=namespace
+            )
         self._sweep()
         payload = self._serialize_params(params or {})
         while True:
