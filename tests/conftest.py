@@ -14,7 +14,12 @@ _PYTEST_STATE_ROOT = Path(tempfile.gettempdir()) / f"agentos-pytest-{os.getpid()
 os.environ.setdefault("AGENTOS_STATE_DIR", str(_PYTEST_STATE_ROOT / "state"))
 os.environ.setdefault("AGENTOS_LOG_DIR", str(_PYTEST_STATE_ROOT / "logs"))
 os.environ.setdefault("AGENTOS_TURN_CALL_LOG", "0")
-# OpenCAP price lookups refresh their catalog over the network when the cache
-# is cold. Default tests must stay offline; tests that exercise the refresh
-# opt back in with monkeypatch.setenv.
+# OpenCAP, Surplus and OpenRouter price lookups refresh their catalogs over the
+# network when the cache is cold. Default tests must stay offline; tests that
+# exercise the refresh opt back in with monkeypatch.setenv. OpenRouter's
+# fallback endpoint for a model with no owner endpoint moves between runs, and
+# the cost-aware router reads these prices, so a live lookup made tier choice
+# depend on whichever reseller OpenRouter happened to list first.
 os.environ.setdefault("AGENTOS_OPENCAP_LIVE_PRICING", "0")
+os.environ.setdefault("AGENTOS_SURPLUS_LIVE_PRICING", "0")
+os.environ.setdefault("AGENTOS_OPENROUTER_LIVE_PRICING", "0")

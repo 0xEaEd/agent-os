@@ -328,7 +328,7 @@ class LlmProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AGENTOS_LLM_")
 
     provider: str = "openrouter"
-    model: str = "openai/gpt-5.6-luna"
+    model: str = "openai/gpt-6-luna"
     api_key: str = ""
     api_key_env: str = ""
     base_url: str = "https://openrouter.ai/api/v1"
@@ -352,6 +352,7 @@ class LlmProviderConfig(BaseSettings):
             "deepseek/deepseek-v4-flash": "deepseek-v4-flash",
             "deepseek/deepseek-v4-pro": "deepseek-v4-pro",
             "openai/gpt-5.6-luna": "gpt-5.6-luna",
+            "openai/gpt-6-luna": "gpt-6-luna",
         }
         model = str(self.model or "").strip()
         if model in aliases:
@@ -765,7 +766,7 @@ def _bankr_tiers() -> dict:
         ),
         "c1": _tier(
             provider="bankr",
-            model="gpt-5.6-luna",
+            model="gpt-6-luna",
             description=(
                 "default balanced text model for normal agent work, coding assistance, debugging, "
                 "and moderate analysis"
@@ -774,7 +775,7 @@ def _bankr_tiers() -> dict:
         ),
         "c2": _tier(
             provider="bankr",
-            model="glm-5.2",
+            model="glm-5.3",
             description=(
                 "stronger text model for multi-step coding, structured reasoning, larger context "
                 "synthesis, and harder analysis"
@@ -783,7 +784,7 @@ def _bankr_tiers() -> dict:
         ),
         "c3": _tier(
             provider="bankr",
-            model="claude-opus-5",
+            model="claude-opus-5.5",
             description=(
                 "Highest-quality text reasoning model for difficult planning, deep review, complex "
                 "debugging, and high-stakes synthesis"
@@ -827,7 +828,7 @@ def _opencap_tiers() -> dict:
         ),
         "c1": _tier(
             provider="opencap",
-            model="gpt-5.6-luna",
+            model="gpt-6-luna",
             description=(
                 "default balanced text model for normal agent work, coding assistance, debugging, "
                 "and moderate analysis"
@@ -845,7 +846,7 @@ def _opencap_tiers() -> dict:
         ),
         "c3": _tier(
             provider="opencap",
-            model="claude-opus-5",
+            model="claude-opus-5.5",
             description=(
                 "Highest-quality text reasoning model for difficult planning, deep review, complex "
                 "debugging, and high-stakes synthesis"
@@ -890,7 +891,7 @@ def _surplus_tiers() -> dict:
         ),
         "c1": _tier(
             provider="surplus",
-            model="gpt-5.6-luna",
+            model="gpt-6-luna",
             description=(
                 "default balanced text model for normal agent work, coding assistance, debugging, "
                 "and moderate analysis"
@@ -908,7 +909,7 @@ def _surplus_tiers() -> dict:
         ),
         "c3": _tier(
             provider="surplus",
-            model="claude-opus-5",
+            model="claude-opus-5.5",
             description=(
                 "Highest-quality text reasoning model for difficult planning, deep review, complex "
                 "debugging, and high-stakes synthesis"
@@ -942,7 +943,7 @@ def _openrouter_tiers() -> dict:
         ),
         "c1": _tier(
             provider="openrouter",
-            model="openai/gpt-5.6-luna",
+            model="openai/gpt-6-luna",
             description=(
                 "default balanced text model for normal agent work, coding assistance, debugging, "
                 "and moderate analysis"
@@ -951,7 +952,7 @@ def _openrouter_tiers() -> dict:
         ),
         "c2": _tier(
             provider="openrouter",
-            model="z-ai/glm-5.2",
+            model="z-ai/glm-5.3",
             description=(
                 "stronger text model for multi-step coding, structured reasoning, larger context "
                 "synthesis, and harder analysis"
@@ -960,7 +961,7 @@ def _openrouter_tiers() -> dict:
         ),
         "c3": _tier(
             provider="openrouter",
-            model="anthropic/claude-opus-5",
+            model="anthropic/claude-opus-5.5",
             description=(
                 "Highest-quality text reasoning model for difficult planning, deep review, complex "
                 "debugging, and high-stakes synthesis"
@@ -1559,6 +1560,21 @@ class AuxiliaryConfig(BaseSettings):
     tasks: dict[str, AuxiliaryTaskConfig] = Field(default_factory=dict)
 
 
+class SessionsConfig(BaseSettings):
+    """Behaviour of chat sessions that is not a turn-loop concern."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="AGENTOS_SESSIONS_",
+        env_nested_delimiter="__",
+    )
+
+    #: Name a new session from its first message using the auxiliary model
+    #: (task ``session_title``; override the model with
+    #: ``[auxiliary.tasks.session_title]`` or ``AGENTOS_SESSION_TITLE_MODEL``).
+    auto_title: bool = True
+    auto_title_timeout_seconds: float = Field(default=30.0, gt=0)
+
+
 class MCPServerEntry(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AGENTOS_MCP_SERVER_")
 
@@ -2055,6 +2071,86 @@ class UpdatesConfig(BaseModel):
     notify: bool = True
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+class TradingConfig(BaseSettings):
+    """Wallet + swap trading settings (``[trading]``).
+
+    The wallet vault, ledger and swap execution live in the engine
+    (``agentos.trading``); the desktop app and the ``wallet-trading`` skill
+    are clients of the same RPC surface. ``uniswap_api_key`` is redacted in
+    every public snapshot like any other ``*_api_key``; when empty the key is
+    read from the environment variable named by ``uniswap_api_key_env``.
+    Money limits are US dollars and apply to agent-initiated swaps only.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="AGENTOS_TRADING_",
+        validate_assignment=True,
+    )
+
+    enabled: bool = True
+    # Swap provider: the AgentOS Aggregator (default, no key) or Uniswap's
+    # Trading API (fallback, needs an API key).
+    provider: Literal["aggregator", "uniswap"] = "aggregator"
+    # Where the aggregator is served. Only change this to point at another
+    # deployment of the same API.
+    aggregator_base_url: str = "https://agg.useagentos.dev"
+    uniswap_api_key: str = ""
+    uniswap_api_key_env: str = "UNISWAP_API_KEY"
+    # Chain id (as a string, TOML keys are strings) -> JSON-RPC URL override.
+    # When a chain has no entry, RPC_BASE_URL / RPC_ROBINHOOD_URL are tried
+    # before the public default.
+    rpc_urls: dict[str, str] = Field(default_factory=dict)
+    approval_threshold_usd: float = Field(default=100.0, ge=0)
+    # 0 switches agent swaps off entirely; there is no "unlimited" value.
+    daily_cap_usd: float = Field(default=1000.0, ge=0)
+    approval_ttl_seconds: int = Field(default=900, ge=30)
+    # Agent orders above this price impact wait for approval even under the
+    # USD threshold; an agent asking for more slippage than this is refused.
+    agent_max_price_impact_pct: float = Field(default=5.0, ge=0, le=100)
+    agent_max_slippage_pct: float = Field(default=5.0, ge=0, le=50)
+    # None = let the Uniswap API pick (``autoSlippage: DEFAULT``).
+    default_slippage_pct: float | None = Field(default=None, ge=0, le=50)
+    unlock_mode: Literal["auto", "manual"] = "auto"
+    sync_interval_seconds: int = Field(default=30, ge=5)
+    price_ttl_seconds: int = Field(default=20, ge=1)
+
+    @field_validator("aggregator_base_url")
+    @classmethod
+    def _aggregator_url_must_be_https(cls, value: str) -> str:
+        """The aggregator hands back calldata the wallet signs: it must be
+        fetched over TLS. Plain ``http`` is allowed only for a loopback host
+        (a local mock or a dev deployment on this machine)."""
+        from urllib.parse import urlsplit
+
+        text = (value or "").strip()
+        parsed = urlsplit(text)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError("trading.aggregator_base_url must be an absolute http(s) URL")
+        scheme = parsed.scheme.lower()
+        if scheme == "https":
+            return text
+        host = (parsed.hostname or "").lower()
+        if scheme == "http" and host in _LOOPBACK_HOSTS:
+            return text
+        raise ValueError(
+            "trading.aggregator_base_url must use https (http is allowed only for "
+            "127.0.0.1, localhost or ::1)"
+        )
+
+    def resolved_uniswap_api_key(self) -> str:
+        """The API key to send: explicit config value, else the named env var."""
+        explicit = (self.uniswap_api_key or "").strip()
+        if explicit:
+            return explicit
+        env_name = (self.uniswap_api_key_env or "").strip()
+        if env_name:
+            return os.environ.get(env_name, "").strip()
+        return ""
+
+
 class BudgetsConfig(BaseModel):
     """Money spend ceilings — hard stop plus warn thresholds.
 
@@ -2258,6 +2354,7 @@ class GatewayConfig(BaseSettings):
     agent_token_saving: AgentTokenSavingConfig = Field(default_factory=AgentTokenSavingConfig)
     compaction: CompactionLlmConfig = Field(default_factory=CompactionLlmConfig)
     auxiliary: AuxiliaryConfig = Field(default_factory=AuxiliaryConfig)
+    sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     image_generation: ImageGenerationConfig = Field(default_factory=ImageGenerationConfig)
@@ -2273,6 +2370,7 @@ class GatewayConfig(BaseSettings):
     budgets: BudgetsConfig = Field(default_factory=BudgetsConfig)
 
     updates: UpdatesConfig = Field(default_factory=UpdatesConfig)
+    trading: TradingConfig = Field(default_factory=TradingConfig)
 
     # Component enable flags
     control_ui: ControlUiConfig = Field(default_factory=ControlUiConfig)
@@ -2827,11 +2925,24 @@ _PUBLIC_SECRET_EXACT_KEYS = frozenset(
 )
 _PUBLIC_SECRET_SUFFIXES = ("_token", "_secret", "_password", "_api_key")
 _REDACTED = "[redacted]"
+# Keys whose values are URLs that carry a provider key in the path or query
+# (dRPC, Alchemy, Infura, QuickNode all do). The host survives, the rest is cut.
+_PUBLIC_KEYED_URL_MAPS = frozenset({"rpc_urls"})
 
 
 def is_sensitive_config_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
     return normalized in _PUBLIC_SECRET_EXACT_KEYS or normalized.endswith(_PUBLIC_SECRET_SUFFIXES)
+
+
+def _redact_keyed_urls(value: Any) -> Any:
+    from agentos.trading.chains import redact_rpc_url
+
+    if isinstance(value, dict):
+        return {k: (redact_rpc_url(v) if isinstance(v, str) else v) for k, v in value.items()}
+    if isinstance(value, str):
+        return redact_rpc_url(value)
+    return value
 
 
 def redact_public_config(value: Any) -> Any:
@@ -2840,6 +2951,8 @@ def redact_public_config(value: Any) -> Any:
         for key, item in value.items():
             if is_sensitive_config_key(key) and item:
                 redacted[key] = _REDACTED
+            elif key.lower().replace("-", "_") in _PUBLIC_KEYED_URL_MAPS:
+                redacted[key] = _redact_keyed_urls(item)
             else:
                 redacted[key] = redact_public_config(item)
         return redacted

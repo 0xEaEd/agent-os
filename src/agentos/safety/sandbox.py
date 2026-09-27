@@ -21,6 +21,7 @@ that refuses to perform network I/O when the limit is ``'deny'``.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -109,6 +110,57 @@ def _filtered_env(whitelist: Sequence[str]) -> dict[str, str]:
     return {key: parent[key] for key in whitelist if key in parent}
 
 
+#: Grace period for draining stdout/stderr after a process-group kill, when
+#: something outside the killed group still holds the pipe open (see
+#: :func:`_kill_process_tree`). Short: by that point the run has already
+#: overshot ``wall_seconds`` once, so this is only bounding a second wait,
+#: not a normal-path cost.
+_KILL_DRAIN_GRACE_SECONDS: Final[float] = 2.0
+
+#: Popen kwargs that make the child the leader of a new process group (POSIX)
+#: or process-group-capable (Windows), so a timeout can reach every process
+#: the command spawned, not just the direct child. Built once at import time:
+#: the platform doesn't change between calls.
+_NEW_PROCESS_GROUP_KWARGS: Final[dict[str, Any]] = (
+    {"start_new_session": True}
+    if os.name == "posix"
+    else {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+)
+
+
+def _kill_process_tree(proc: subprocess.Popen[str]) -> tuple[str, str]:
+    """Kill *proc*'s whole process group and drain its pipes.
+
+    ``proc.kill()`` alone only signals the direct child. A command that
+    backgrounds a job — the ordinary ``cmd &`` shell idiom, not an
+    adversarial construct — leaves a grandchild holding the same stdout/
+    stderr pipes, so the plain ``communicate()`` call below blocks until
+    *that* process exits, past ``wall_seconds``, defeating the one limit
+    this module documents as reliable even without :mod:`resource`
+    (confirmed: ``sh -c "(sleep 10 &); exit 0"`` under a 1s wall limit took
+    10s to return before this fix). ``proc`` is the leader of its own
+    process group (see ``_NEW_PROCESS_GROUP_KWARGS``), so ``killpg`` reaches
+    every descendant that did not itself detach into a different one — a
+    command that explicitly backgrounds via ``setsid``/``nohup`` (and, as
+    that idiom requires to be useful, redirects its own stdio away from the
+    parent's pipes) was never blocking the drain in the first place.
+    """
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            proc.kill()
+    else:
+        proc.kill()
+    try:
+        stdout, stderr = proc.communicate(timeout=_KILL_DRAIN_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        # Something outside the killed group is still holding a pipe open.
+        # Give up on draining rather than hang the caller a second time.
+        stdout, stderr = "", ""
+    return stdout or "", stderr or ""
+
+
 def run_sandboxed(
     cmd: Sequence[str],
     limits: SandboxLimits | None = None,
@@ -142,6 +194,7 @@ def run_sandboxed(
             env=env,
             preexec_fn=_preexec(effective),  # noqa: PLW1509 — None off POSIX
             text=True,
+            **_NEW_PROCESS_GROUP_KWARGS,
         )
     except NotImplementedError as exc:
         # Hosts without process creation at all (WASI / Emscripten builds).
@@ -166,12 +219,11 @@ def run_sandboxed(
     try:
         stdout, stderr = proc.communicate(timeout=effective.wall_seconds)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        stdout, stderr = proc.communicate()
+        stdout, stderr = _kill_process_tree(proc)
         return SandboxResult(
             returncode=proc.returncode if proc.returncode is not None else -1,
-            stdout=stdout or "",
-            stderr=stderr or "",
+            stdout=stdout,
+            stderr=stderr,
             reason=REASON_WALL_LIMIT,
             limits=effective,
             notes=notes,

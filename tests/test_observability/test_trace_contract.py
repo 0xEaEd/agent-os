@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from agentos.observability.trace import (
@@ -122,6 +124,42 @@ def test_jsonl_trace_sink_persists_and_loads_by_trace_id(tmp_path) -> None:
     assert events[0].trace_id == "trace-a"
     assert events[0].context.session_key == "agent:main:test"
     assert events[0].context.turn_id == "turn-1"
+
+
+def test_load_trace_events_skips_a_truncated_line_and_recovers_the_rest(tmp_path) -> None:
+    """A crash or unclean shutdown mid-write can truncate the last line of a
+    JSONL log file. That one damaged line must not take out every other
+    event for every trace_id -- the `logs.trace` RPC handler that calls this
+    has no fallback if it does."""
+    write_trace_event(
+        TraceEvent(kind="turn_start", context=TraceContext.new(trace_id="trace-a"), seq=1),
+        log_dir=tmp_path,
+    )
+    [path] = list(tmp_path.glob("traces-*.jsonl"))
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"schema_version": 1, "kind": "turn_end", "trace\n')  # truncated mid-write
+    write_trace_event(
+        TraceEvent(kind="turn_end", context=TraceContext.new(trace_id="trace-a"), seq=2),
+        log_dir=tmp_path,
+    )
+
+    events = load_trace_events("trace-a", log_dir=tmp_path)
+
+    assert [event.seq for event in events] == [1, 2]
+
+
+def test_load_trace_events_skips_valid_json_missing_a_required_field(tmp_path) -> None:
+    """Valid JSON that doesn't satisfy this schema (e.g. missing `kind`) must
+    be skipped the same way a truncated line is, not raised."""
+    path = tmp_path / "traces-99999999.jsonl"
+    path.write_text(
+        json.dumps({"trace_id": "trace-a", "schema_version": 1}) + "\n",  # no "kind"
+        encoding="utf-8",
+    )
+
+    events = load_trace_events("trace-a", log_dir=tmp_path)
+
+    assert events == []
 
 
 @pytest.mark.parametrize(

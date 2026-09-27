@@ -4,13 +4,15 @@ The substitution picks the cheapest tier at or above the classified capability.
 It has to be the *final* step: the complaint upgrade, the kv-cache
 anti-downgrade and the routing-history record all reason about the tier the
 classifier actually chose. Applying it up front made the complaint upgrade step
-off an already-substituted tier (c1 -> c2 -> c3 on the shipped defaults, i.e. a
+off an already-substituted tier (c1 -> c2 -> c3, i.e. a
 far more expensive model on exactly the turns users complain on) and made
 ``base_tier`` / ``route_class`` report a tier no classifier ever returned.
 
-Default OpenRouter tier prices (USD/M, input + output) put c2 (0.561) below c1
-(1.45), so ``_get_cheapest_compatible_tier("c1")`` is ``"c2"`` out of the box —
-which is what makes the ordering observable here.
+The tests pin c1 and c2 to the previous OpenRouter defaults, whose prices
+(USD/M, input + output) put c2 (0.561) below c1 (1.45), so
+``_get_cheapest_compatible_tier("c1")`` is ``"c2"`` -- which is what makes the
+ordering observable here. On the current defaults c1 is already the cheapest
+tier at or above itself, and the substitution would never fire.
 """
 
 from __future__ import annotations
@@ -62,6 +64,8 @@ def _pin_strategy(monkeypatch: pytest.MonkeyPatch, tier: str) -> None:
 def _make_context(message: str) -> TurnContext:
     config = GatewayConfig()
     config.agentos_router.rollout_phase = "full"
+    config.agentos_router.tiers["c1"]["model"] = "openai/gpt-5.6-luna"
+    config.agentos_router.tiers["c2"]["model"] = "z-ai/glm-5.2"
     assert config.agentos_router.cost_aware is True
     return TurnContext(
         message=message,
@@ -87,7 +91,7 @@ async def test_cost_aware_override_does_not_inflate_the_complaint_upgrade(
 
     # The complaint upgrade steps up from the classified c1 -> c2, and the
     # cost-aware pass then keeps c2 (already the cheapest at/above c2).
-    # Stepping off a pre-substituted c2 would land on c3 (claude-opus-5).
+    # Stepping off a pre-substituted c2 would land on c3 (claude-opus-5.5).
     assert routed.metadata["routed_tier"] == "c2"
 
     extra = ctx.metadata["routing_extra"]
@@ -107,7 +111,7 @@ async def test_cost_aware_override_keeps_the_classified_tier_in_telemetry(
 
     routed = await apply_agentos_router(ctx)
 
-    # c2 is cheaper than c1 on the shipped defaults, so the override fires.
+    # c2 is priced below c1 here, so the override fires.
     assert routed.metadata["routed_tier"] == "c2"
 
     extra = ctx.metadata["routing_extra"]

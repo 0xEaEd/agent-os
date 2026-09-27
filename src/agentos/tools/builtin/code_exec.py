@@ -151,16 +151,34 @@ _SHELL_WRAPPER_PATTERN: str = (
     + _flag_group(set(_SHELL_OPTION_FLAGS_WITH_ARG), r"--?[a-zA-Z0-9][a-zA-Z0-9-]*")
     + r"*)"
 )
+# A wrapper is just as effective spelled with its absolute path, which is how
+# shebangs and CI scripts write it (`/usr/bin/env`, `/bin/nice`). The shell
+# branch of `_SHELL_WRAPPER_PATTERN` already allows that with its own
+# `(?:\S*[/\\])?`; the prefix commands below did not, so `/usr/bin/env rm -rf
+# /data` reached `execute_code` without an approval prompt while `env rm -rf
+# /data` was caught.
+_PATH_QUALIFIER: str = r"(?:\S*[/\\])?"
+
+# ``exec``, ``command`` and ``builtin`` are shell builtins rather than
+# executables, so they never carry a path and take no flags worth modelling
+# here -- they simply hand the rest of the line to the command that follows.
 _PREFIX_CMD_PATTERN: str = (
-    r"(?:"
+    r"(?:" + _PATH_QUALIFIER + r"(?:"
     r"sudo(?:\s+-[a-zA-Z0-9]+" + _FLAG_VALUE + r")*"
     r"|doas(?:\s+-[a-zA-Z0-9]+" + _FLAG_VALUE + r")*"
     r"|env(?:\s+-[a-zA-Z0-9]+)*(?:\s+[a-zA-Z_][a-zA-Z0-9_]*=\S*)*"
     r"|nice(?:\s+-[a-zA-Z0-9]+" + _FLAG_VALUE + r")*"
+    r"|ionice(?:\s+-[a-zA-Z0-9]+" + _FLAG_VALUE + r")*"
+    r"|stdbuf(?:\s+-[a-zA-Z0-9]+" + _FLAG_VALUE + r")*"
+    r"|setsid(?:\s+-[a-zA-Z0-9]+)*"
+    r"|chroot(?:\s+-[a-zA-Z0-9]+" + _FLAG_VALUE + r")*\s+\S+"
     r"|time(?:\s+-[a-zA-Z0-9]+)*"
     r"|timeout(?:\s+-[a-zA-Z0-9]+)*(?:\s+\d+[a-zA-Z]?)?"
     r"|xargs(?:\s+-[a-zA-Z0-9]+" + _FLAG_VALUE + r")*"
+    r"|busybox"
     r"|nohup"
+    r")"
+    r"|exec|command|builtin"
     r")"
 )
 _IN_QUOTE_CMD_PREFIX: str = (

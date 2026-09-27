@@ -122,7 +122,9 @@ fi
 tmp_dir="$(mktemp -d "$out_dir/.render_thumbs.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-if ! pdftoppm -jpeg -r "$dpi" "${range_args[@]}" \
+# ${arr[@]+"${arr[@]}"}: an empty array is an unbound variable under `set -u`
+# on bash 3.2 (the macOS system bash).
+if ! pdftoppm -jpeg -r "$dpi" ${range_args[@]+"${range_args[@]}"} \
     "$pdf_path" "$tmp_dir/page"; then
   echo "pdftoppm failed" >&2
   exit 4

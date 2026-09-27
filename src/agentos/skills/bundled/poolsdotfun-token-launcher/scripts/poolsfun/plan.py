@@ -100,6 +100,24 @@ def require_launchable(state: dict) -> None:
         raise RuntimeError("the factory has no locker configured; launches would revert.")
 
 
+def _node_fault_message(what: str, exc: RpcError) -> str:
+    """The message for a node fault a caller would otherwise read as a contract answer."""
+    return (
+        f"the RPC endpoint refused {what} ({exc}) — this is a node fault, not a "
+        "contract revert. Retry in a moment."
+    )
+
+
+def _simulation_failure(exc: RpcError) -> str:
+    """A failed launch simulation: only a revert is evidence about the contract."""
+    hint = explain_revert(exc.data)
+    if hint:
+        return hint
+    if exc.answered:
+        return f"simulation reverted: {exc}"
+    return _node_fault_message("the launch simulation", exc)
+
+
 def read_start_tick(client: Any, paired_asset: str,
                     factory: str = PARTY_FACTORY) -> tuple[int, bool]:
     """The tick a launch would use right now, and whether the live feed produced it.
@@ -112,7 +130,13 @@ def read_start_tick(client: Any, paired_asset: str,
         tick, live = client.read(factory, PARTY_FACTORY_ABI, "startTickFor", [paired_asset])
     except RpcError as exc:
         hint = explain_revert(exc.data)
-        raise RuntimeError(hint or f"startTickFor reverted for {paired_asset}") from exc
+        if hint:
+            raise RuntimeError(hint) from exc
+        if not exc.answered:
+            raise RuntimeError(
+                _node_fault_message(f"startTickFor for {paired_asset}", exc)
+            ) from exc
+        raise RuntimeError(f"startTickFor reverted for {paired_asset}") from exc
     return int(tick), bool(live)
 
 
@@ -185,11 +209,9 @@ def simulate_launch(client: Any, *, factory: str, name: str, symbol: str,
             try:
                 raw = client.request("eth_call", [call, "latest"])
             except RpcError as inner:
-                raise RuntimeError(
-                    explain_revert(inner.data) or f"simulation reverted: {inner}"
-                ) from inner
+                raise RuntimeError(_simulation_failure(inner)) from inner
         else:
-            raise RuntimeError(f"simulation reverted: {exc}") from exc
+            raise RuntimeError(_simulation_failure(exc)) from exc
     token, pool, dev_buy_out = decode(
         [{"type": "address"}, {"type": "address"}, {"type": "uint256"}], raw)
     return {"token": token, "pool": pool, "devBuyOut": int(dev_buy_out)}

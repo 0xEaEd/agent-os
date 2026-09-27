@@ -24,10 +24,12 @@ not the only gate.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -137,9 +139,7 @@ def resolve_script_path(script: str) -> Path:
     base_resolved = base.resolve()
 
     candidate = Path(raw).expanduser()
-    resolved = (
-        candidate.resolve() if candidate.is_absolute() else (base / candidate).resolve()
-    )
+    resolved = candidate.resolve() if candidate.is_absolute() else (base / candidate).resolve()
     try:
         resolved.relative_to(base_resolved)
     except ValueError:
@@ -256,6 +256,28 @@ def _python_invocation(python_exe: str) -> tuple[str, dict[str, str]]:
     return str(base_python), env_overlay
 
 
+async def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """SIGTERM the script's process group, then SIGKILL what is still there.
+
+    POSIX only (the child was started with ``start_new_session=True`` so its
+    group is its own). A group that is already gone is not an error.
+    """
+    if os.name != "posix":
+        return
+    killpg = getattr(os, "killpg", None)
+    if killpg is None:
+        return
+    try:
+        killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        return
+    await asyncio.sleep(0.5)
+    with contextlib.suppress(ProcessLookupError, OSError):
+        killpg(proc.pid, signal.SIGKILL)
+
+
 def _platform_popen_kwargs() -> dict[str, Any]:
     """Hide the child's console window on Windows; nothing to add elsewhere."""
     if sys.platform != "win32":
@@ -272,9 +294,13 @@ def _interpreter(path: Path) -> tuple[list[str], dict[str, str], str | None]:
     if path.suffix.lower() in _SHELL_SUFFIXES:
         bash = shutil.which("bash") or ("/bin/bash" if os.path.isfile("/bin/bash") else None)
         if bash is None:
-            return [], {}, (
-                f"Cannot run {path.name!r}: bash was not found on PATH. "
-                "Rewrite the script in Python (.py) or install bash."
+            return (
+                [],
+                {},
+                (
+                    f"Cannot run {path.name!r}: bash was not found on PATH. "
+                    "Rewrite the script in Python (.py) or install bash."
+                ),
             )
         return [bash, str(path)], {}, None
     python_exe, env_overlay = _python_invocation(sys.executable)
@@ -334,12 +360,21 @@ async def run_job_script(
     timeout: float,
     workdir: str = "",
     args: Sequence[str] = (),
+    session_key: str | None = None,
+    agent_id: str | None = None,
 ) -> tuple[bool, str]:
     """Run a cron job's script and capture its output.
 
     *args* are passed to the script as argv, exec'd directly with no shell, so
     a value containing spaces or shell metacharacters arrives as one argument
     and cannot start a second command.
+
+    The script runs as the agent's, not the operator's: it carries a gateway
+    minted ``AGENTOS_AGENT_TOKEN`` bound to *session_key*/*agent_id*, an exec
+    window is open for its whole lifetime, and it runs in its own process
+    group which is signalled when it ends so nothing it detached outlives it.
+    An ``agentos trade send`` from a cron script therefore obeys the trading
+    guardrails like any agent order.
 
     Returns ``(success, output)``. On failure *output* is the error text so the
     job can deliver it — a watchdog that breaks silently is worse than one that
@@ -363,36 +398,50 @@ async def run_job_script(
 
     # Imported here, not at module scope: the tool package imports this module
     # to validate script paths, so a top-level import would close a cycle.
+    from agentos.gateway.agent_surface import AGENT_TOKEN_ENV, get_agent_surface
     from agentos.tools.env_passthrough import build_subprocess_env
 
     cwd = _resolve_workdir(workdir, path.parent)
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-            env=build_subprocess_env(extra=env_overlay),
-            **_platform_popen_kwargs(),
-        )
-    except Exception as exc:
-        return False, f"Script execution failed: {exc}"
+    env = build_subprocess_env(extra=env_overlay)
+    surface = get_agent_surface()
+    env[AGENT_TOKEN_ENV] = surface.mint_token(session_key, agent_id)
+    popen_kwargs = _platform_popen_kwargs()
+    if os.name == "posix":
+        popen_kwargs["start_new_session"] = True
 
-    try:
-        raw_stdout, raw_stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except TimeoutError:
-        await _kill_and_reap(proc)
-        return False, f"Script timed out after {timeout:g}s: {path.name}"
-    except asyncio.CancelledError:
-        # The scheduler's outer ``execute_with_timeout`` deadline (or a
-        # shutdown) cancels this coroutine rather than raising the inner
-        # TimeoutError. The child is ours either way: kill and reap it before
-        # the cancellation propagates, so a run recorded as failed cannot keep
-        # writing behind the scheduler's back.
-        await _kill_and_reap(proc)
-        raise
-    except Exception as exc:
-        return False, f"Script execution failed: {exc}"
+    with surface.exec_window(session_key):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+                **popen_kwargs,
+            )
+        except Exception as exc:
+            return False, f"Script execution failed: {exc}"
+
+        try:
+            raw_stdout, raw_stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            await _kill_and_reap(proc)
+            return False, f"Script timed out after {timeout:g}s: {path.name}"
+        except asyncio.CancelledError:
+            # The scheduler's outer ``execute_with_timeout`` deadline (or a
+            # shutdown) cancels this coroutine rather than raising the inner
+            # TimeoutError. The child is ours either way: kill and reap it
+            # before the cancellation propagates, so a run recorded as failed
+            # cannot keep writing behind the scheduler's back.
+            await _kill_and_reap(proc)
+            raise
+        except Exception as exc:
+            return False, f"Script execution failed: {exc}"
+        finally:
+            # The script is done; anything it left behind in its process
+            # group (a detached ``agentos`` that would connect later, once
+            # the window has closed) goes with it.
+            await _kill_process_group(proc)
 
     stdout = _redact((raw_stdout or b"").decode("utf-8", errors="replace").strip())
     stderr = _redact((raw_stderr or b"").decode("utf-8", errors="replace").strip())

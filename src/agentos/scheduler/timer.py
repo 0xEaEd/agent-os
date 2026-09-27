@@ -16,6 +16,19 @@ logger = logging.getLogger(__name__)
 MIN_REFIRE_GAP_SECONDS = 2.0
 
 
+def _refire_gap_seconds(job: CronJob) -> float:
+    """Effective refire-gap floor for *job*.
+
+    MIN_REFIRE_GAP_SECONDS debounces a nudge landing right after an ordinary
+    tick already ran the job -- it is not meant to cap how often a job's own
+    schedule says it should fire. An EVERY job's configured interval is
+    always the tighter bound when it undercuts the flat floor.
+    """
+    if job.schedule_kind == ScheduleKind.EVERY and job.cron_expr.isdigit():
+        return min(MIN_REFIRE_GAP_SECONDS, float(job.cron_expr))
+    return MIN_REFIRE_GAP_SECONDS
+
+
 class SchedulerTimer:
     """The scheduler's tick loop — heart of execution orchestration.
 
@@ -159,11 +172,16 @@ class SchedulerTimer:
             due_jobs.append(job)
 
         # Refire gap guard — skip jobs that ran within MIN_REFIRE_GAP_SECONDS
-        # (primarily protects against nudge-triggered rapid re-execution)
-        refire_cutoff = now - timedelta(seconds=MIN_REFIRE_GAP_SECONDS)
+        # (primarily protects against nudge-triggered rapid re-execution).
+        # The floor is capped at the job's own configured EVERY interval, or
+        # an EVERY job whose interval is under MIN_REFIRE_GAP_SECONDS (only
+        # every_seconds=1, since ops.py rejects anything below 1) would be
+        # silently throttled to the floor's cadence on every ordinary tick,
+        # not just a nudge race (#3345).
         filtered = []
         for job in due_jobs:
-            if job.last_run_at and job.last_run_at > refire_cutoff:
+            gap = _refire_gap_seconds(job)
+            if job.last_run_at and job.last_run_at > now - timedelta(seconds=gap):
                 logger.warning("refire_gap_skip id=%s last_run=%s", job.id, job.last_run_at)
                 continue
             filtered.append(job)

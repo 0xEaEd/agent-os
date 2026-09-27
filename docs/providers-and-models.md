@@ -90,16 +90,16 @@ current catalog.
 
 OpenCAP defaults to `https://gw.capminal.ai/api/inference/v1` and uses one
 OpenAI-compatible key for inference. Its public model catalog is unauthenticated.
-The default direct/fallback model is the balanced `c1` model, `gpt-5.6-luna`. The `recommended`
+The default direct/fallback model is the balanced `c1` model, `gpt-6-luna`. The `recommended`
 router profile selects bare OpenCAP model IDs across
 [`c0`–`c3`](features/agentos-router.md#model-tiers) and the vision route:
 
 | Tier | Model | Role |
 | --- | --- | --- |
 | `c0` | `deepseek-v4.1-flash` | trivial chat, short rewrites, extraction |
-| `c1` | `gpt-5.6-luna` | default balanced route for normal agent work |
+| `c1` | `gpt-6-luna` | default balanced route for normal agent work |
 | `c2` | `glm-5.3` | multi-step coding, structured reasoning, larger synthesis |
-| `c3` | `claude-opus-5` | difficult planning, deep review, high-stakes synthesis |
+| `c3` | `claude-opus-5.5` | difficult planning, deep review, high-stakes synthesis |
 | `image_model` | `minimax-m3` | image attachments, screenshots, diagrams |
 
 These are OpenCAP's own defaults, not a copy of the Bankr profile — the two
@@ -132,16 +132,16 @@ so no wallet or on-chain payment support is required.
 
 It defaults to `https://api.surplusintelligence.ai/v1`. Its model catalog is
 public and unauthenticated. The default direct/fallback model is the balanced
-`c1` model, `gpt-5.6-luna`. The `recommended` router profile selects bare
+`c1` model, `gpt-6-luna`. The `recommended` router profile selects bare
 Surplus model IDs across
 [`c0`–`c3`](features/agentos-router.md#model-tiers) and the vision route:
 
 | Tier | Model | Role |
 | --- | --- | --- |
 | `c0` | `deepseek-v4.1-flash` | trivial chat, short rewrites, extraction |
-| `c1` | `gpt-5.6-luna` | default balanced route for normal agent work |
+| `c1` | `gpt-6-luna` | default balanced route for normal agent work |
 | `c2` | `glm-5.3` | multi-step coding, structured reasoning, larger context |
-| `c3` | `claude-opus-5` | difficult planning, deep review, high-stakes synthesis |
+| `c3` | `claude-opus-5.5` | difficult planning, deep review, high-stakes synthesis |
 | `image_model` | `glm-5.3-flash` | image attachments, screenshots, diagrams |
 
 The image tier differs from the OpenCAP profile: Surplus publishes `minimax-m3`

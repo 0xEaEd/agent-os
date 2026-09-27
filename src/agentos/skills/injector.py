@@ -14,7 +14,7 @@ from agentos.skills.types import SkillLayer, SkillSpec
 #: ahead of the shipped set's own descriptions — see
 #: ``test_the_lifted_value_fits_the_shipped_skills_in_full_mode``, which is what
 #: catches the budget going stale as bundled skills are added.
-DEFAULT_MAX_SKILLS_PROMPT_CHARS = 26_000
+DEFAULT_MAX_SKILLS_PROMPT_CHARS = 28_000
 
 #: How the block was rendered, widest first. Recorded per turn so a fall to a
 #: narrower mode is a visible fact rather than something an operator has to
