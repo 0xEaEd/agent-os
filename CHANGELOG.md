@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   things the chat does not show on its own.
 
 ### Fixed
+- Security: secret redaction and the payload guard matched connection strings
+  against a scheme list that carried `redis` and `amqp` but not their TLS
+  spellings, so `rediss://user:password@host` (what `REDIS_TLS_URL` holds) and
+  `amqps://…` reached the model -- and passed the guard -- verbatim while the
+  plain `redis://`/`amqp://` spellings were masked (#3373).
 - `docx` skill: an `edit_docx` op carrying a JSON `null` -- the way a caller
   clears a placeholder or empties a run -- wrote the literal word "None" into
   the document instead. `null` now resolves to an empty string, while every
