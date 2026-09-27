@@ -19,7 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   spellings, so `rediss://user:password@host` (what `REDIS_TLS_URL` holds) and
   `amqps://…` reached the model -- and passed the guard -- verbatim while the
   plain `redis://`/`amqp://` spellings were masked (#3373).
-
+- `docx` skill: an `edit_docx` op carrying a JSON `null` -- the way a caller
+  clears a placeholder or empties a run -- wrote the literal word "None" into
+  the document instead. `null` now resolves to an empty string, while every
+  other value keeps its `str()` so `0` and `false` still print as themselves
+  (#3417).
 - `memory_get`: the `from`/`lines` range now counts lines the way every other
   tool does and returns the file's own text. #3176 moved `grep_search` and
   `apply_patch` onto `split_lines` because `str.splitlines()` also breaks on a
