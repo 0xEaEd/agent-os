@@ -151,9 +151,7 @@ def test_answered_separates_a_revert_from_a_node_fault():
 def test_a_revert_blob_under_a_vm_exception_message_still_reports_reverted(capsys):
     """A blob is contract output even when the message does not name the revert."""
     rpc = _load("unilp.rpc")
-    exc = rpc.RpcError(
-        "eth_call", {"code": -32000, "message": "VM Exception", "data": REVERT_DATA}
-    )
+    exc = rpc.RpcError("eth_call", {"code": -32000, "message": "VM Exception", "data": REVERT_DATA})
     code, out = _run_plan(capsys, exc)
 
     assert code == 2

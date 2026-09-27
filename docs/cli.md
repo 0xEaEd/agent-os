@@ -29,6 +29,8 @@ available without `uv tool list` or `pip show`.
 | `agentos agent` | Run a single automation-friendly agent turn. |
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
+| `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
+| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL. |
 | `agentos skills` | List, search, view, install, update, publish, inspect, and tap skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
@@ -247,6 +249,36 @@ Useful automation flags:
 | `--session-db-path` | Persist session replay across invocations. |
 | `--json` | Emit machine-readable JSON output. |
 
+## Version
+
+```sh
+agentos --version     # or -V: prints the installed version, nothing else
+```
+
+Deliberately cheap (no config load, no gateway probe): the macOS app runs it
+at every launch to decide whether the engine it ships needs installing.
+
+## Installer stage protocol
+
+`install.sh` is also the engine installer behind the macOS app, which drives it
+stage by stage so it can show real progress and retry one step:
+
+```sh
+bash install.sh --manifest            # one JSON line: {"protocol_version":1,"stages":[…]}
+bash install.sh --stage uv --json     # run ONE stage; the last stdout line is the result frame
+                                      #   {"ok":true|false,"stage":"uv","skipped":bool[,"reason":"…"]}
+```
+
+Stages, in order: `prerequisites` (platform, curl/wget, reachability of
+github.com and astral.sh), `uv` (download-then-run the astral installer if uv is
+missing), `python` (`uv python install 3.12` if needed), `package`
+(`uv tool install --force` the version-pinned wheel, then smoke-test the entry
+point), `path` (append the uv tool bin dir to the login shell's rc file once),
+`complete`. Every `--stage` call is a separate process, each stage body runs in
+a subshell so a helper's `exit 1` still yields `{"ok":false}`, and
+`--non-interactive` makes a stage that would need input report `skipped:true`
+(none do today). A plain `bash install.sh` runs all stages in order as before.
+
 ## Upgrade
 
 `agentos upgrade` is the primary upgrade path. It detects how AgentOS was
@@ -261,21 +293,68 @@ run `bash scripts/install_source.sh` — that script is the only path that
 rebuilds the React control UI (`npm ci && npm run build`) before installing.
 
 ```sh
-agentos upgrade                 # upgrade, restart the gateway, verify
+agentos upgrade                 # snapshot, upgrade, restart the gateway, verify
 agentos upgrade --check         # is a newer release available? change nothing
 agentos upgrade --dry-run       # print the exact command that would run
 agentos upgrade --no-restart    # upgrade only; leave the gateway on OLD code
+agentos upgrade --source github # install the GitHub release asset, not PyPI
 agentos upgrade --timeout 900   # bound the upgrade subprocess (default 600s)
+agentos upgrade --verify-data   # only check the state databases
+agentos upgrade --restore-snapshot latest   # put the last snapshot back
 ```
 
 | Flag | Purpose |
 | --- | --- |
-| `--check` | Query PyPI for a newer release (5s timeout); offline prints `could not check (offline)`. Changes nothing. |
-| `--dry-run` | Print the upgrade command that would run and whether the gateway would be restarted; touch nothing. |
-| `--no-restart` | Upgrade the package but do not restart the gateway. Prints an unmissable warning that it still runs the old version; run `agentos gateway restart` yourself. |
+| `--check` | Ask PyPI and GitHub Releases for a newer release (5s timeout each); offline prints `could not check (offline)`. Changes nothing. `--json` adds `pypi`, `github` and the `source` an upgrade would use. |
+| `--dry-run` | Print the upgrade command that would run, whether a snapshot would be taken and whether the gateway would be restarted; touch nothing. |
+| `--source` | `auto` (default): PyPI, or the GitHub release wheel when GitHub is ahead or PyPI is unreachable. `pypi` / `github` force one. |
+| `--no-snapshot` | Skip the pre-upgrade snapshot (default: taken). |
+| `--no-restart` | Upgrade the package but do not restart the gateway. Prints an unmissable warning that it still runs the old version; run `agentos gateway restart` yourself. The data check is skipped too — only a restarted gateway has migrated anything. |
 | `--timeout` | Upgrade-subprocess timeout in seconds (default 600). On timeout the tool's process group is killed with recovery guidance — never a half-state. |
+| `--verify-data` | Run `PRAGMA quick_check` on every SQLite file under `~/.agentos/state/` and exit; nothing else happens. Exit 1 on a problem, naming the last snapshot. |
+| `--restore-snapshot DIR\|latest` | Copy a pre-upgrade snapshot back file for file. Refuses while a gateway answers on the configured endpoint (a live database would replay its journal over the restored file). |
 | `--config` | Target a specific config file for the gateway restart. |
 | `--json` | Machine-readable output. |
+
+### Release sources
+
+Every release is published twice — a wheel on PyPI and the same wheel attached
+to the GitHub release the tag created (`install.sh` installs from the latter).
+`--source auto` prefers PyPI and falls back to the GitHub asset only when GitHub
+is *ahead* (the "PyPI publish failed for this tag" case) or PyPI cannot be
+reached; the spec then becomes
+`use-agent-os[recommended] @ https://github.com/use-agent-os/agent-os/releases/download/v<version>/use_agent_os-<version>-py3-none-any.whl`,
+which `uv tool install` / `pipx install` accept as-is. `AGENTOS_REPOSITORY`
+(`owner/name`) points both `install.sh` and the upgrade at a fork.
+
+### Snapshot and data check
+
+Before the installer runs, `config.toml`, `auth.json`, `skills-lock.json` and
+every `*.db` / `*.sqlite` under `~/.agentos/state/` are copied into
+`~/.agentos/state/snapshots/pre-upgrade-<utc>/` (databases through SQLite's
+online-backup API, so a WAL-mode file the gateway is writing still yields a
+consistent copy; files over 1 GiB are skipped and listed; `.env` is never
+copied). The newest three snapshots are kept.
+
+After the restarted gateway has verifiably reported the new version — and so
+has run its config and schema migrations — every state database gets a
+`PRAGMA quick_check`. If one fails and there is a snapshot, the managed gateway
+is stopped, the snapshot restored, the gateway started again and the check
+repeated; the JSON output carries `data` and `restored`. A gateway this command
+does not manage is left alone and the exact `--restore-snapshot` command is
+printed instead.
+
+### From the Control UI and the desktop app
+
+The web console's update banner has an **Update now** button: it calls the
+`updates.apply` RPC, which spawns `agentos upgrade --json` as a detached job
+(it survives the gateway restart it causes) and records progress under
+`~/.agentos/state/upgrade_job.{json,log}`; `updates.status` reports
+`idle | running | done | failed` plus the log tail and the final JSON, from
+whichever gateway process is up. `updates.verifyData` runs the data check on
+demand. The macOS app runs `agentos upgrade --json --no-restart` itself,
+restarts the gateway it spawned, then confirms the version and data over RPC
+(Settings › About).
 
 Per install method:
 
@@ -327,7 +406,8 @@ AgentOS process, re-run the printed command from a fresh terminal, and — if
 
 Exit codes: **0** success (upgraded + verified, or `--check`/`--dry-run`);
 **3** this install method needs a manual command (printed); **1** the upgrade
-failed, timed out, or the post-restart version could not be verified.
+failed, timed out, the post-restart version could not be verified, or the data
+check failed; **2** an invalid `--source`.
 
 Config migrations run at gateway start and write a timestamped backup before
 rewriting any file, so `~/.agentos/` config and data are safe across upgrades.
@@ -763,6 +843,175 @@ stays on the CLI/Web UI surface.
 
 Read: [`sessions.md`](sessions.md)
 
+## Wallets and trading
+
+```sh
+agentos wallet status
+agentos wallet setup --mode auto            # once; auto = password in ~/.agentos/wallets/unlock.key (0600)
+agentos wallet setup --mode manual          # or: unlock per gateway session, keys only in RAM
+agentos wallet unlock / lock
+agentos wallet create --label main
+agentos wallet import --label cold --private-key-stdin < key.txt
+agentos wallet import --label cold --keystore wallet.json
+agentos wallet export <addr> --keystore --out backup.json
+agentos wallet export <addr> --private-key   # prints the raw key; always asks the vault password
+agentos wallet list / rename <addr> <label> / primary <addr> / remove <addr> --yes|-y
+agentos wallet balances [<addr>] [--chain base|robinhood] [--refresh] [--hidden] [--json]   # ledger view; --refresh re-reads the chain first (throttled to once per 10 s per wallet); --hidden lists junk tokens too
+
+agentos trade status                        # provider, API key, chains, limits, vault state; --json adds ledgerRepair ("full sync required") after a ledger repair migration
+agentos trade provider                      # show the swap provider (aggregator | uniswap)
+agentos trade provider uniswap              # switch it (= config set trading.provider uniswap)
+agentos trade probe [--provider aggregator|uniswap] [--api-key <key>]   # reachable? key valid? (--json exits 1 when not ok; --api-key is operator-only)
+agentos trade tokens --chain robinhood AAPL # search; verified Stock Tokens are marked ✓
+agentos trade quote --chain base --in ETH --out USDC (--amount 0.01 | --usd 5) [--wallet <addr>] [--slippage <pct>]
+agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --wait [--wait-seconds 1..900] [--slippage <pct>]
+agentos trade swap  --chain base --in ETH --out USDC --usd 5     # "$5 of ETH": the engine sizes it at the current price
+agentos trade swap  --chain robinhood --in ETH --out <addr> --amount 0.01 --wallet <a> --wallet <b>   # Robinhood Chain: --amount (no native USD price yet → --usd may answer trading.unpriced); bare USDC resolves to lookalikes there, use the verified address
+agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]   # the daily cap is per wallet: this spends up to N caps
+agentos trade swap  --chain base --in USDC --out ETH --amount 20 --client-id dca-eth-$(date +%Y%m%dT%H%M)   # idempotency key: one id per intended order, the same id on every retry; minute resolution so sub-daily jobs never collide
+agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --expected-out-raw <quote.expectedOutRaw> --min-out-raw <quote.minOutRaw>   # pin the fill to the quote shown; worse than 2× slippage → trading.price_moved
+agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--kind swap|send|revoke] [--limit N]
+agentos trade order <id> --wait --wait-seconds 600 / approve <id> / reject <id> [--reason <text>]   # --wait-seconds without --wait returns at once
+agentos trade send --chain base --token USDC --to <addr> --amount 25 [--wallet <addr>] [--note <text>] [--client-id <id>] [--wait] [--wait-seconds 1..900] [--as-agent]
+agentos trade send --chain base --token ETH --to <a> --to <b> --usd 5        # multisend: one batch, $5 of ETH to each
+agentos trade send --chain base --token USDC --to <a>=10 --to <b>=20 --file recipients.txt   # ADDR=AMOUNT per --to; file lines 'ADDR' or 'ADDR,AMOUNT'
+agentos trade allowances [--chain base|robinhood] [--wallet <addr>] [--full] [--wait/--no-wait] [--wait-seconds 1..3600]   # live ERC-20 allowances, spender labels, exposure; --wait polls until the scan has caught up
+agentos trade revoke --chain base --token <addr> --spender <addr> [--wallet <addr>] [--note <text>] [--wait] [--wait-seconds 1..900]   # approve(spender, 0)
+agentos trade decode --chain base <txhash> / --data <0x…> [--to <addr>]   # what a transaction called and what moved
+agentos trade network [--fresh]             # head block, block age, gas, RPC latency and health per chain
+agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden]
+agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
+agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
+agentos trade sync [--wallet <addr>] [--full]   # re-read the chain into the ledger; --full rebuilds it (operator-only) — run it once after an upgrade when `trade status` shows ledgerRepair
+agentos trade limits [<addr>]               # guardrails + today's agent spend (default: the primary wallet)
+```
+
+Every command takes `--json`. On success the JSON is on stdout; on failure
+stdout is empty and stderr carries `{"error": {"code": "…", "message": "…"}}`.
+Exit codes: 1 = gateway or provider error (`GATEWAY_UNAVAILABLE`,
+`trading.*`), 2 = bad input (`INVALID_ARGUMENT` — e.g. `--amount` and `--pct`
+together, `--pct` outside `(0, 100]` — `TOKEN_NOT_FOUND`, `TOKEN_UNVERIFIED`,
+`TOKEN_AMBIGUOUS`, `CONFIRMATION_REQUIRED`), 3 = conflict (`CONFLICT`,
+`VERSION_SKEW`).
+
+Wallets live in the engine's **vault** (`~/.agentos/wallets/`, keystore v3
+files encrypted with one vault password). Nothing here is tied to an OS
+keychain: `auto` mode keeps the password in `unlock.key` (mode 0600) so the
+gateway unlocks at boot and the agent can sign unattended; `manual` mode
+keeps keys only in the gateway's memory after `agentos wallet unlock`. Export
+always asks the vault password. Passwords are read from a hidden prompt or
+`AGENTOS_WALLET_PASSWORD` (`AGENTOS_KEYSTORE_PASSWORD` for an imported
+keystore) — never from the command line.
+
+Swaps run on Base (8453) and Robinhood Chain (4663) through one of two
+providers. The **AgentOS Aggregator** (the default,
+`trading.provider = "aggregator"`, served at `https://agg.useagentos.dev`)
+needs no key and no account: one GET returns the price *and* the unsigned
+calldata, including the ERC-20 approval when one is needed. It never signs
+and never broadcasts — your wallet does both — and it charges 20 bps on the
+swap, reported back in the quote. **Uniswap** (`agentos trade provider
+uniswap`) is the fallback and needs a key: `agentos config set
+trading.uniswap_api_key <key>`, or Settings › Trading in the desktop app.
+
+29 of the 34 listed tokens on Robinhood Chain (the tokenised stocks — AAPL,
+TSLA, SPY and the rest) cannot be routed at all: the aggregator answers
+`trading.token_not_tradeable`, a legal refusal upstream that no retry, size,
+address or time of day changes. ETH, WETH and USDG trade normally there.
+Robinhood Chain has no native USD price feed yet, so `--usd` may be refused
+with `trading.unpriced` (size with `--amount`), and the bare symbol `USDC`
+resolves to unverified lookalikes there (`TOKEN_UNVERIFIED`): use an
+address `agentos trade tokens --chain robinhood …` marks `verified: true`.
+
+`--in`/`--out` take `ETH`, an address, or a symbol; a symbol must resolve to
+exactly one *verified* token or the command exits 2 (`TOKEN_AMBIGUOUS`,
+`TOKEN_UNVERIFIED`, `TOKEN_NOT_FOUND`). Amounts are human units; `--pct`
+accepts fractions, and `--pct 100` on ETH keeps about 0.001 ETH back for
+gas. A quote does not check balance or gas — the swap does
+(`trading.insufficient_balance`) — and carries `expiresAt` (about 20 s for
+the aggregator, 30 s for Uniswap).
+
+Guardrails apply to **agent-initiated** swaps, and the **gateway** decides
+who is an agent: a shell spawned by an agent turn carries an agent token
+(`AGENTOS_AGENT_TOKEN`), a `cron --script` job carries one too, any
+connection opened while an agent shell is running counts as the agent's,
+and a connection that presents nothing is the agent's as well. The operator
+proves themself with a secret: the desktop app hands the gateway one at
+spawn, and the gateway writes its own to
+`~/.agentos/wallets/operator.secret` (mode 0600, rotated at every boot). The
+CLI reads that file on its own when `AGENTOS_AGENT_TOKEN` is not set and the
+gateway is local; against a remote gateway it presents nothing and gets the
+agent's rules. An agent-bound connection is an agent whatever it declares
+(`--as-agent` only forces the agent rules for a person). For the agent: an
+order above `trading.approval_threshold_usd` (default 100) or above
+`trading.agent_max_price_impact_pct` (default 5; "price impact" is the
+price vs reference, venue fee and feed skew included) waits as
+`awaiting_approval` for `trading.approval_ttl_seconds` (15 minutes); an
+order that would push a wallet past `trading.daily_cap_usd` (default 1,000
+per wallet per calendar day — `--all-wallets` spends up to N caps — with an
+order counted as max(in, out) in USD, orders in flight included; 0 switches
+agent swaps off) is
+rejected; `--slippage` above `trading.agent_max_slippage_pct` (default 5) is
+refused with `trading.slippage_too_high`. `agentos trade approve` /
+`reject`, `hide` / `unhide`, `probe --api-key`, `sync --full` and every
+vault command except `status`, `list` and `balances` fail from an agent's
+connection with `trading.operator_required`; `config set` on any `trading.`
+key is refused from an agent too (the gateway rejects the write as an
+invalid request). Those are the user's actions, in the app or their own
+terminal. `wallet status` and `trade status` leave out `vaultPath` for an
+agent. Swaps typed by a person are neither queued nor capped; if the price
+moves more than twice the slippage between quote and send they fail with
+`trading.price_moved` instead. `swap` also accepts the quote's
+`expectedOutRaw` / `minOutRaw` (`--expected-out-raw`, `--min-out-raw`) and
+refuses with `trading.price_moved` when the fill would be more than 2× the
+slippage worse than that quote. `--wait --wait-seconds N` blocks until each
+order settles (`confirmed`, `failed`, `rejected`, `expired`) or N seconds
+pass; `--wait-seconds` alone, without `--wait`, returns at once. A
+`submitted` order survives a gateway restart and is marked `failed` after 6
+hours without a receipt. `--client-id <id>` on `swap` and `send` is an
+idempotency key: a second call with the same id returns the existing order
+instead of placing another, so a retry after a timeout cannot trade twice
+— one id per intended order, the same id on every retry of it. After
+upgrading, if `agentos trade status --json` shows `ledgerRepair`, run
+`agentos trade sync --full` once. A swap's target and the
+approval's spender are pinned to the contracts the desk knows for the
+provider (a quote naming any other address is refused, not signed); the gas
+limit is the provider's or the estimate plus 20 %, and the order is refused
+up front when the wallet cannot cover value plus gas at the quoted fee.
+`--note` is stored as shown to the approver: control and bidi characters
+are dropped, whitespace collapses, and it is cut at 240 characters.
+
+Sends and revokes share the order pipeline (`kind` is `swap`, `send` or
+`revoke`). A send moves ETH by value or an ERC-20 by `transfer`, one plain
+transaction per recipient; several `--to` (up to 200, from flags or a
+`--file`) make one **batch** with a shared `batchId` that is judged,
+approved, rejected and reported as one. Guardrails differ from swaps on
+purpose: an **agent-initiated** send or revoke always waits for the user's
+approval — there is no threshold under which the agent sends alone — while
+the daily cap still counts the batch's total; a send typed by a person runs
+at once. Each leg is booked as a `withdraw` entry under its order. `trade
+allowances` scans the wallet's own `Approval` logs incrementally, reads
+every remembered (token, spender) allowance live, and shows what is at
+stake (`exposureUsd` = the smaller of the allowance and the balance, in
+dollars); `trade revoke` sends `approve(spender, 0)`. `trade decode` names
+the function behind a hash or calldata (ERC-20, WETH, Permit2 and the
+Uniswap routers are known; anything else is reported as its selector, never
+guessed) and lists the receipt's transfers and approvals with token
+metadata. `trade network` reads each chain's head block and gas and flags a
+head older than a minute — the sign of an RPC that is behind.
+
+`[trading]` config keys (each also an environment variable with the
+`AGENTOS_TRADING_` prefix): `enabled`, `provider` (`aggregator` |
+`uniswap`), `aggregator_base_url` (default
+`https://agg.useagentos.dev`), `uniswap_api_key`, `uniswap_api_key_env`
+(default `UNISWAP_API_KEY`), `rpc_urls` (chain id → JSON-RPC URL),
+`approval_threshold_usd`, `daily_cap_usd` (0 = agent swaps off),
+`approval_ttl_seconds`, `agent_max_price_impact_pct`,
+`agent_max_slippage_pct`, `default_slippage_pct` (unset = provider auto),
+`unlock_mode` (`auto` | `manual`), `sync_interval_seconds`,
+`price_ttl_seconds`.
+
+Read: [`features/trading.md`](features/trading.md)
+
 ## Memory
 
 ```sh
@@ -821,7 +1070,10 @@ default. `--script-arg` (repeatable) passes argv straight to
 the script — never through a shell. Non-empty stdout is delivered verbatim, empty stdout is a silent
 run, and a non-zero exit or `--timeout` delivers the error and fails the job.
 Secrets are masked in the output, and the gateway token is withheld from the
-child process. The bundled `cron-watchers` skill ships scripts for RSS, JSON
+child process. A script job runs under the agent's rules: the scheduler hands
+it an agent token, so an `agentos trade` command inside it is an agent order
+(threshold, daily cap, approval) and the operator-only commands fail in it.
+The bundled `cron-watchers` skill ships scripts for RSS, JSON
 endpoints, and GitHub repos that already follow this contract.
 
 #### Seeing what the script did

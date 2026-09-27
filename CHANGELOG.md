@@ -6,7 +6,262 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- Desktop: the mode pill reads Chat | Trade, and the strip no longer says
+  LIVE while a reply streams. The tab is a verb like its sibling, and the
+  streaming reply is visible in the chat itself; the word only repeated it.
+  AWAITING and RUNNING stay: a pending decision and a mission in flight are
+  things the chat does not show on its own.
+
 ### Fixed
+
+- `senior-unilp-manager`: a node that refuses the simulated `eth_call` — a
+  rate limit, a transient internal error, an HTTP-level failure — no longer
+  prints `result: REVERTED` with "Fix the parameters"; the dry-run reports
+  `REFUSED (node fault — not a contract revert)` and says to retry. Only a
+  contract that answered (code 3, a message naming a revert, or a non-empty
+  hex revert blob) may be reported as a revert (#3355)
+
+- `pptx` skill: `render_thumbs.sh --dpi` is now validated as a positive number
+  before `soffice` runs. A negative or zero value used to reach `pdftoppm -r`
+  unchecked and silently produce a 1x1 pixel "thumbnail" while the script
+  reported success; a non-numeric value errored, but only after a full
+  LibreOffice conversion, and under exit code 4 ("conversion failed") instead
+  of the script's own "bad arguments" code, 1 (#3327)
+
+- Zhipu/GLM provider: `glm-4.6` no longer silently loses reasoning support.
+  `get_capabilities`'s zai reasoning-shape prefix check listed `glm-4.5` and
+  `glm-4.7` but skipped `glm-4.6` — even though `engine/reasoning_hint.py`'s
+  own reasoning-family markers already list `glm-4.6` right next to
+  `glm-4.7` — so a request to `glm-4.6` got `supports_reasoning=False` and
+  never carried the `thinking` payload key, silently dropping a configured
+  `thinking_level` with no error anywhere (#2618).
+
+## [2026.9.26] - 2026-09-26
+
+### Changed
+- Desktop: a generated file shows as a file card in the chat instead of a
+  bare link that spelled out its mime type: a tile tinted and drawn by kind
+  (spreadsheet, document, PDF, presentation, archive, data, code, web page),
+  the file name, a plain subtitle such as "Spreadsheet · XLSX · 5 KB", and a
+  Download button. The shared transcript now stamps the kind, that subtitle
+  and the action label on the chip (`data-artifact-kind`, `-summary`,
+  `-action`) so a host can draw it as a card; the web console's chip is
+  unchanged.
+
+### Fixed
+- Desktop: a file the agent generated (an `.xlsx` from `create_xlsx`, a PDF,
+  a CSV) can be downloaded from its chip in the chat. Two things were wrong.
+  The shared transcript built every artifact URL relative to the page, which
+  is right for the console the gateway serves and wrong for the desktop
+  renderer, which loads from disk: the chip's link resolved to the dev server
+  (saving an HTML page under the Excel file's name) or to `file://` (saving
+  nothing), and the same relative URLs broke image previews, audio and chart
+  artifacts in the desktop. Off gateway the URLs now keep the gateway origin,
+  and a click on the chip goes through the authenticated fetch instead of a
+  cross-origin `download` link the shell refuses to navigate to; the file
+  then goes out through the normal save dialog, and a download the gateway
+  does not answer shows a toast rather than nothing. Second, that fetch — and
+  every other `fetch` the desktop makes to the gateway: bootstrap, the
+  approvals poll, file uploads — failed as a CORS error: the app presents the
+  gateway's own origin on loopback requests (the gateway refuses `file://`),
+  the gateway reflects it in `Access-Control-Allow-Origin`, and Chromium
+  compared that with the renderer's real origin. The main process now
+  translates the answer back to the renderer's origin.
+
+## [2026.9.25] - 2026-09-25
+
+### Fixed
+- Trading: a request to bridge funds between chains is answered in one
+  message as not supported, and nothing runs for it. AgentOS has no bridge,
+  but neither the desk's agent nor the `wallet-trading` skill said so. Asked
+  to "chuyển 0.001 ETH qua Robinhood chain", the desk read a send and asked
+  for a recipient address; asked to bridge from an ordinary chat, the agent
+  spent seven minutes on `--help` pages and web searches, then posted the
+  wallet's address to a bridge's quote API and recommended third-party
+  bridges. The desk's agent files move to v9, so the desktop rewrites them
+  once.
+
+## [2026.9.24.post1] - 2026-09-24
+
+### Fixed
+- The background memory review (the turn that runs every N user turns to
+  curate MEMORY.md) can no longer put an approval prompt in front of the
+  user. It ran with the full tool surface, so a model that "saved" through
+  `apply_patch` instead of the memory tool tripped the out-of-workspace gate
+  and the user was asked to approve a hash for a write they never requested.
+  The review now sees only the memory tools and runs unattended.
+
+- `apply_patch` approvals name the files being written, not just the
+  workspace: the prompt showed a patch fingerprint and the workspace path,
+  which was no basis for a decision. The gateway also logs
+  `build_services.workspace_in_temp_dir` when the configured workspace lives
+  under the OS temp directory, since that turns every ordinary write into an
+  out-of-workspace approval.
+
+- Desktop: the approval prompt rendered as bare text and unstyled buttons
+  over the chat. It reused the console's prompt, whose panel styling only
+  exists under the console's stylesheet. The desktop now has its own
+  alert-shaped dialog that lists the target files, drops the patch
+  fingerprint, and defaults to Deny.
+
+- `execute_code`: a delete behind a prefix command no longer skips the approval
+  prompt. `_check_code_destructive` gates the approval flow -- when it returns
+  nothing the tool runs the code without asking -- and `_PREFIX_CMD_PATTERN`
+  missed two cases. It matched only the bare spelling, so `env rm -rf /data` was
+  caught but `/usr/bin/env rm -rf /data` was not, although the shell branch
+  beside it already allows a path (`/bin/bash -c ...` was handled). And `exec`,
+  `command`, `builtin`, `setsid`, `stdbuf`, `ionice`, `chroot` and `busybox`
+  were not modelled at all. All are now recognised, with a test that a long run
+  of prefixes with no delete behind it still cannot backtrack.
+
+- Memory provider fencing: recalled text can no longer smuggle a
+  `<memory-context>` tag past `sanitize_context`. The function made a single
+  pass of each regex, and deleting a match rejoins what sat on either side of
+  it -- so `<<memory-context>memory-context>` contains exactly one tag, and
+  removing that tag spells a live one from the two halves left behind. The same
+  trick spells a closing tag, which ended the fenced block early and left the
+  rest of the recalled text outside it, where the model reads it as ordinary
+  context instead of as recalled reference data. The strip now repeats until
+  the text stops changing, capped at 16 passes with an angle-bracket fallback
+  so a deeply nested payload cannot make it rescan the string indefinitely. Of
+  200,000 randomised payloads, 341 came back carrying a live tag before this
+  change and none do now.
+
+- `xlsx` skill: `edit_xlsx.py`'s `merge_cells` op and `create_xlsx.py`'s
+  `merged` spec passed a range straight to openpyxl, which accepts one that
+  intersects an existing merge and writes intersecting `mergeCell` entries --
+  a file Excel reports as corrupt and repairs on open -- while the run reported
+  `{"applied": 1}`. A malformed range already failed loudly with nothing
+  written; an overlapping one now fails the same way, before `wb.save`, with a
+  `ValueError` naming the sheet and both ranges. An *identical* range stays the
+  no-op it has always been -- it produces the same workbook -- and the
+  malformed path is unchanged (#3280).
+- Scheduler: a cron job's next fire time is found by jumping a field at a time
+  instead of testing every minute for up to four years. A yearly schedule
+  cost ~1 s (1.4 s with a timezone), a leap-day one ~4 s and an impossible
+  date ~4 s before failing — on the gateway's event loop at every add, after
+  every run and for every job at boot. Results are unchanged, including the
+  daylight-saving edges (#3099)
+- Slack: `send_streaming` had no message-length rollover. `send()` splits a
+  long reply at `_SLACK_MESSAGE_TEXT_LIMIT`, but a streamed reply passed the
+  whole accumulated text to every `chat.update`, so past Slack's 40000-character
+  cap the update was rejected with `msg_too_long` and the reply failed part
+  way through. The open message is now edited up to the largest prefix that
+  fits, frozen there, and the rest opens a new message in the same thread --
+  the rollover Telegram, Discord and Teams already do. The final flush is also
+  skipped when nothing arrived after the last edit, as in those adapters, so a
+  short stream no longer ends with a `chat.update` that repeats the previous
+  one verbatim. A rollover inside a fenced code block keeps the block's text
+  intact: the splitter closes the fence on one message and reopens it on the
+  next, so the watermark advances by the source characters consumed rather
+  than by the closed head's length, and the reopener travels with the message
+  that continues the block (#3068).
+- `apply_patch`: the reason a patch was refused now reaches the model — the
+  missing marker, the offending line, the bad hunk header, the path outside the
+  workspace, the mismatched context — instead of "The tool received an invalid
+  argument". A context mismatch, which quotes a line of the target file, is
+  masked the way `read_file` output is (#2977)
+- `musebook` skill: `keygen --save` refuses to run when the identity file
+  already holds a secret, since replacing it in place would lose that muse
+  for good with no recovery. `--force` now offers a supported way to
+  intentionally replace the stored secret, named alongside `MUSE_STATE_DIR`
+  in the refusal message; it still refuses on an identity file that exists
+  but cannot be read as JSON. (#2668)
+
+## [2026.9.24] - 2026-09-24
+
+### Added
+
+- Desktop: the Settings → Pilot Router pane offers the experimental `jev`
+  router strategy beside Pilot and LLM judge. Picking it reveals a TypeSafe
+  API key field and a high-risk floor slider; the key is checked against
+  typesafe.ai on save and a bad key is refused with the server's message.
+  Leaving the key blank keeps the stored key or `TYPESAFE_API_KEY`.
+
+### Changed
+
+- Desktop: the release workflow (`desktop-release.yml`) can be run by hand
+  for any tag, builds from an explicit git ref, and publishes to a chosen
+  repository (default `use-agent-os/agent-os`) through the
+  `DESKTOP_RELEASE_TOKEN` secret when that is not the repository it runs in.
+  The bundled `app-update.yml` follows the publish target, and a build is
+  only published after `codesign --verify`, `stapler validate` and `spctl
+  --assess` pass and `latest-mac.yml` lists both architectures.
+
+- Desktop: one notice per release, for the engine and the app together.
+  The app checks both on its own (after launch, when the window regains
+  focus, and every 5 minutes) and announces a hit with a single toast and a
+  standing pill in the toolbar: "Update" installs the engine and downloads
+  the app, "Restart" relaunches on the downloaded build, and "Restart
+  gateway" appears when a terminal upgraded the engine under a running
+  gateway. Nothing downloads or installs without that click, and an Update
+  that would cut a live session opens Settings → About to ask first;
+  quitting the app no longer installs a downloaded build behind your back.
+  The restart is refused, with the reason shown, while the engine updater or
+  the first-run installer is still running. A download or restart that fails
+  stays visible as "Update failed" with Try again. Silent checks never show
+  an error banner.
+
+- The AgentOS Aggregator moved to `https://agg.useagentos.dev`. The old host,
+  `agg.404defi.capital`, no longer resolves, so the default
+  `trading.aggregator_base_url` now points at the new domain. An install that
+  pinned the old URL in `config.toml` must set the new one:
+  `agentos config set trading.aggregator_base_url https://agg.useagentos.dev`.
+
+- Router: the recommended tier profiles for Surplus, OpenCAP, OpenRouter and
+  Bankr move `c1`, `c2` and `c3` up a generation. `c1` is now `gpt-6-luna`
+  (`openai/gpt-6-luna` on OpenRouter), `c2` is `glm-5.3` (`z-ai/glm-5.3`), and
+  `c3` is `claude-opus-5.5` (`anthropic/claude-opus-5.5`). `c0` and
+  `image_model` are unchanged. The default `llm.model` and the `agentos init`
+  wizard default follow `c1`, and the legacy Opus 4.7/4.8 and GLM 5.1
+  migrations now land on the new ids. The new ids are registered with the
+  prices and windows their live catalogs publish. On the three gateway
+  profiles `gpt-6-luna` (0.10/0.50 per 1M) costs less than the `c0`
+  `deepseek-v4.1-flash` (0.15/0.60), so with `cost_aware` on (the default)
+  turns routed to `c0` there run on `c1` instead. Configs that pin tiers
+  explicitly are not rewritten.
+
+### Fixed
+
+- CI: the Control UI build failed on `qrcode-generator`, whose npm tarball
+  carries no license file. Its MIT text is vendored at
+  `frontend/vendor-licenses/qrcode-generator-LICENSE.txt` and appended to the
+  generated third-party ledger like `fancy-canvas` already was.
+
+- Release tooling: the version bump script now lives in the repository as
+  `scripts/pump_version.py` (it used to be a local-only skill file), and the
+  root `.gitignore` no longer swallows the desktop app icon and provider
+  logos.
+
+- Desktop: a `.postN` release could never be offered as an update.
+  electron-builder rewrote `2026.9.22.post1` to `2026.9.2-2.post1`, which
+  semver sorts before 2026.9.2, so electron-updater saw every `.post` build
+  as older. The packaged app is now versioned by a semver twin of the CalVer
+  (`2026.9.22.post1` → `2026.922.1`, month and day folded into the minor,
+  post number as the patch) while About, the menu, the engine installer and
+  the updater's own display keep showing the CalVer.
+
+- pptx `render_thumbs.sh` aborted with `range_args[@]: unbound variable` on
+  the macOS system bash (3.2) whenever `--range` was not given: an empty
+  array is unbound under `set -u` there. The expansion is now guarded, so the
+  script renders every slide again on a stock macOS install.
+
+- Pricing: `deepseek/deepseek-v4-flash`, the OpenRouter `c0` default, is now
+  pinned to DeepSeek's 0.14/0.28 rate like `deepseek/deepseek-v4-pro`.
+  OpenRouter often lists no DeepSeek-owned endpoint for it, so the live
+  lookup took whichever reseller came first, and that price moved between
+  fetches (0.54 on one, 1.10 on the next). Above `c1`'s 0.60 the cost-aware
+  router sent every `c0` turn to `openai/gpt-6-luna`, which also failed
+  the pilot golden-set test on main CI. The test suite now keeps
+  OpenRouter and Surplus price lookups offline by default, as it already did
+  for OpenCAP.
+
+- Pricing: the live OpenRouter price for a model now comes from the owner's
+  standard endpoint rather than whichever of its service tiers is listed
+  first. OpenRouter lists `openai/gpt-6-luna`'s `openai/flex` tier (0.05/0.25)
+  ahead of `openai` (0.10/0.50), and taking it made the cost-aware router
+  treat `c1` as cheaper than `c0` on the OpenRouter profile.
 
 - Provider: a genuinely failed tool result could reach the model as a bare
   digest with no failure information. `_final_hard_cap_payload_once` asked
@@ -58,6 +313,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `tests/test_skill_stdout_utf8.py` is parametrised over the bundled tree so
   a script added without the convention fails on its own (#2804; supersedes
   #2783, #2781, #2771, #2713, #2692, #2648, #2643, #2634).
+
 - Security: the sandbox denylist and the terminal-redaction gate kept
   separate lists of credential directories and had drifted -- `~/.azure`,
   `~/.config/gh`, `~/.anthropic` and `~/.openai` were blocked for
@@ -71,10 +327,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`type C:\dir\.aws\credentials`) was invisible to the gate because
   `shlex` ate the backslashes; it is now read literally as well
   (#2621).
+
 - `apply_patch`: an `*** Update File:` block with no `@@@ ` hunks — a
   unified-diff `@@ -1,1 +1,1 @@` header, a note, or nothing at all — is refused
   with the offending line named, instead of rewriting the file unchanged and
   reporting `1 file(s) modified` (#2837)
+
 - `code_exec` destructive check: a delete wrapped in a Unix shell
   (`bash -c 'rm -rf /x'`, `sh -c`, `zsh`/`dash`/`ksh`/`fish`/`csh`, path-prefixed
   or with `-o pipefail`) or behind a value-taking PowerShell flag
@@ -82,6 +340,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   flagged in both the argv and the string form. Flag values are matched per flag,
   so `bash -c 'git rm --cached x'` and `pwsh -File build.ps1 rm` stay allowed, and
   a long run of `sudo -x` flags no longer backtracks exponentially (#2096).
+
 - Security: `.pgpass` and `.netrc` are named credential files, the gate
   fired for `cat ~/.pgpass`, and the password still reached the model --
   the assignment pass only understands `name=value`, and neither format
@@ -316,6 +575,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   silently produced a valid-looking date thousands of years out -- so
   epoch-timestamp conversion now goes through plain `timedelta` arithmetic
   instead, which raises the same way on every platform (#2132).
+
 - CLI: `agentos config set KEY VALUE` now validates the value before printing
   the `export AGENTOS_GATEWAY_…` line, the way it already did with `--config`;
   `agentos gateway run` / `start` report an invalid setting as one line per
@@ -328,9 +588,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   members was missing — the same defect #1198 fixed for `c++`/`c#`/`.NET`.
   `go`, `c` and `r` are matched only in target position, since they are
   ordinary English words as well as language names. (#2968)
+
 - CLI: a copy-pasteable hint whose path holds `$` or a backtick is now escaped
   for PowerShell inside its double quotes; `"C:\home\Jo$hn\config.toml"`
   pasted into PowerShell used to expand `$hn` and open the wrong path (#2978)
+
 - Telegram: a Markdown table header or row label written as `*italic*` (or
   `***bold italic***`) no longer leaks its asterisks into the rendered
   `<b>…</b>`; the label path strips single-asterisk italics the way it already
@@ -358,14 +620,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   actual cause swallowed into the chained exception. `RpcError` now records
   `answered`, and the node-fault paths in `read_start_tick` / `simulate_launch`
   say the endpoint refused the call and that it is retryable instead.
-
-- `senior-unilp-manager`: a node that refuses the simulated `eth_call` — a
-  rate limit, a transient internal error, an HTTP-level failure — no longer
-  prints `result: REVERTED` with "Fix the parameters"; the dry-run reports
-  `REFUSED (node fault — not a contract revert)` and says to retry. Only a
-  contract that answered (code 3, a message naming a revert, or a non-empty
-  hex revert blob) may be reported as a revert (#3355)
-
 
 ## [2026.9.22.post1] - 2026-09-22
 
@@ -575,6 +829,209 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   unreachable from any JSON-RPC-level fault. `RpcError` now records whether the
   contract answered, and only an execution revert counts (#3253).
 
+- Chat could get stuck above the bottom of the transcript, with no way back but
+  dragging the scrollbar. Three causes, all fixed in web chat and the desktop
+  app (they share the transcript controller):
+  - Tail following was driven only by the seams that append rows, so anything
+    that changed the transcript's *height* without appending — a tool or
+    thinking `<details>` collapsing at the end of a turn, an image decoding, a
+    chart mounting a frame late, a window resize rewrapping every row — left the
+    reader stranded. A mutation/resize watch now re-pins whenever content grows
+    while following is active, and stays out of the way when it is not.
+  - Tail following is controller state that outlives a session switch, so a
+    reader who had scrolled up in one conversation carried the paused tail into
+    the next one — which then opened mid-transcript, at an offset belonging to a
+    different conversation. Every session switch now re-arms following.
+- Desktop chat: the copy/edit glyphs on a sent message sat on top of the
+  message itself. `.msg.user` IS the bubble — it carries the padding and the
+  background, with `.msg-body` inside it — so the shared "park the actions just
+  below the body" rule landed them in the bubble's own bottom padding, over the
+  last line of text and the rounded corner. They now sit in the outer gutter
+  beside the bubble, with a hover bridge so the pointer can reach them.
+- Desktop chat: the hover timestamp is drawn outside the message row, but the
+  transcript's minimum side padding was narrower than that overhang, so the
+  thread's horizontal clip sliced the stamp in half ("13:59" showed as "13:")
+  once the trading desk panel narrowed the chat column.
+- Trading desk: the instrument seats above the composer collapsed into stubs on
+  a narrow window — "Asks above $100.00 · $1,000.00/day" rendered as "A." and
+  the wallet seat as a bare circle. The quick-action chips do not shrink, so the
+  whole shortfall came out of the three seats; and the shrink chain that was
+  meant to prevent it never fired, because its selector looked for an element
+  around the chip labels (they were bare text nodes) and its first step matched
+  the route button as well as the permission button. The chips now wrap their
+  labels, each step addresses its seat by test id, the breakpoints are the row's
+  measured widths, and glyphs never shrink — so a squeezed seat degrades to a
+  readable icon with its tooltip and accessible name intact.
+- Trading desk: on a window too narrow to fit chat and the Book side by side,
+  every button on the Book's collapsed spine did nothing. The chat has a floor
+  it never yields, so the concession chain re-collapsed the panel on the very
+  next render — the open button ran its handler, wrote the preference, and left
+  the rail exactly as it was, with no way to say "not at this width". The spine
+  now knows when the frame cannot hold a split and offers the full Desk instead,
+  which is where the Book's content fits at that size, and says so in its label.
+- The mascot silently disabled whatever it stood on. It is a 192×208 sprite at
+  the top of the stacking order, and its artwork fills that box almost edge to
+  edge, so clipping the hit area to the drawn pixels would have won nothing
+  back: a sweep of the running app found it eating the composer's route button
+  and a ledger card's "Inspect tx" and "View transaction". It no longer takes
+  pointer events at all — a window listener claims a press only when no control
+  owns that point and nothing is stacked above the pet there — so dragging and
+  poking still work and every control under it responds again.
+- Trading desk: on a window narrow enough to turn the wallets rail into a
+  horizontal strip, the agent-budget tile was its last child and got pushed 230px
+  past the right edge, reachable only by scrolling the wallets out of the way
+  first. Worse, the sliver that did show was ellipsised mid-figure — "$1,000.00
+  left of $1,00" reads as a different, smaller cap. The tile is now pinned to
+  the right of the strip and sized to its content; it drops the approval
+  threshold (which the composer's permission seat also states) rather than
+  truncate a money figure, and its caption no longer collides with the wallet
+  name.
+
+### Added
+
+- A "Jump to latest" pill in chat: once you scroll away from the newest message
+  it appears at the bottom of the transcript, and clicking it both returns you
+  to the tail and resumes following the stream.
+
+- Bundled `token-burner` skill and a Burn tool on the desktop trading desk:
+  inventory the junk, dust and scam airdrops a wallet holds, revoke the
+  allowances they left behind, and — only on insistence — send them to
+  `0x…dEaD`. Native assets are refused, and the burn is gated on typing the
+  token's symbol back. The skill never calls a token's own `burn()`; it only
+  moves tokens out of the user's wallet.
+- The default skills-block budget (`skills.max_skills_prompt_chars`) is
+  28,000 characters, up from 26,000: the shipped set's own descriptions no
+  longer fit the old number, which silently dropped installs into a narrower
+  render. A saved config still carrying a previous default (8000, 24000 or
+  26000) is lifted at boot; a value chosen by hand is left alone.
+- Gateway boot no longer dies with a traceback when `agentos_router.strategy
+  = "pilot-v1"` is configured on an install without the `ml-router` /
+  `recommended` extra (no numpy). The asset probe reports the missing package
+  like any other missing asset, so the router degrades with a warning as
+  documented instead of the desktop showing "Gateway failed".
+- Engine wallet vault and trading subsystem (`agentos.trading`): keystore v3
+  wallets under `~/.agentos/wallets/` with `auto`/`manual` unlock, Uniswap
+  aggregator- or Uniswap-routed swaps on Base and Robinhood Chain, a chain-rebuildable SQLite
+  ledger with FIFO cost basis and PnL, and code-enforced agent guardrails
+  (per-order approval threshold, per-wallet daily cap, approval expiry).
+  Exposed as `wallet.*` / `trading.*` gateway RPCs, configured under
+  `[trading]`; new runtime dependency `eth-account`.
+- `agentos wallet` (vault: `setup`, `unlock`, `lock`, `create`, `import`,
+  `export`, `rename`, `remove`, `primary`, `balances`) and `agentos trade`
+  (`status`, `provider`, `probe`, `tokens`, `quote`, `swap`, `orders`,
+  `order`, `approve`, `reject`, `history`, `portfolio`, `sync`, `limits`):
+  thin clients over the new `wallet.*` / `trading.*` gateway RPCs. Two swap
+  providers: the AgentOS Aggregator (default, `https://agg.404defi.capital`,
+  no key — one GET returns the price and the unsigned calldata, including
+  the ERC-20 approval, and the engine refuses any quote whose approval names
+  a spender other than the swap target) and Uniswap
+  (`agentos trade provider uniswap`, needs `trading.uniswap_api_key`).
+  Tokens the venue refuses for legal reasons — the 29 tokenised stocks on
+  Robinhood Chain — fail with `trading.token_not_tradeable` rather than
+  being retried. Symbols resolve
+  to exactly one verified token or the command exits 2; passwords come from a
+  hidden prompt or `AGENTOS_WALLET_PASSWORD`; a swap run inside an agent turn
+  is agent-initiated and subject to the approval threshold and daily cap.
+- Bundled `wallet-trading` skill: teaches the agent to trade on Base and
+  Robinhood Chain from the vault (swap, DCA on cron, buy-the-dip, rebalance),
+  what each order status means, and which guardrails it cannot bypass.
+- The gateway decides which connections are an agent's
+  (`gateway.agent_surface`): a shell spawned by an agent turn carries an
+  `AGENTOS_AGENT_TOKEN`, any connection opened while an agent shell runs
+  counts as the agent's, and the desktop identifies itself with an operator
+  secret (`AGENTOS_OPERATOR_SECRET_FILE`). An agent-bound connection is
+  `initiator: agent` whatever it declares; approving/rejecting orders, every
+  vault mutation (`wallet.setup/unlock/lock/create/import/export/rename/
+  remove/setPrimary/…`), `trading.lot.setCost` and `config.set/patch` of any
+  `trading.*` key are operator-only and answer an agent with
+  `trading.operator_required`.
+- Trading guardrails: the daily cap counts orders still in flight and
+  `trading.daily_cap_usd = 0` switches agent swaps off; agent orders above
+  `trading.agent_max_price_impact_pct` (default 5) wait for approval even
+  under the USD threshold, and an agent asking for more slippage than
+  `trading.agent_max_slippage_pct` (default 5) is refused with
+  `trading.slippage_too_high`. `trading.limits` / `trading.status` report
+  both ceilings.
+- Provider transactions are validated before signing: an approval must be a
+  plain `approve` on the sold token to a known spender for no more than the
+  order, a swap must come from the signing wallet on the order's chain with
+  exactly the order's native value. A manual order whose price moved more
+  than twice the slippage
+  between quote and send fails with `trading.price_moved`; an approval
+  transaction not mined in time fails with `trading.tx_pending`.
+- `submitted` orders are recovered after a gateway restart or a dead confirm
+  task; one with no receipt after 6 hours is marked `failed`
+  ("transaction never mined").
+- `~/.agentos/wallets` and any `unlock.key` are sandbox sensitive paths: the
+  agent's file tools cannot read them.
+- `agentos trade` with `--json` reports argument errors as
+  `{"error":{"code":"INVALID_ARGUMENT",…}}` on stderr with exit 2 (`--pct`
+  accepts fractions in `(0, 100]`); `trade quote` sends the initiator so
+  `guard.decision` is meaningful inside an agent turn; `trade limits` takes
+  the wallet as an optional argument; quotes carry `expiresAt`.
+- `agentos upgrade` snapshots `config.toml`, `auth.json`, `skills-lock.json`
+  and every SQLite database under `~/.agentos/state/` before installing
+  (`state/snapshots/pre-upgrade-<utc>/`, newest three kept, databases copied
+  through SQLite's online-backup API), then runs `PRAGMA quick_check` on
+  every database once the restarted gateway has verifiably migrated them, and
+  restores the snapshot if a check fails. `--no-snapshot`, `--verify-data`
+  and `--restore-snapshot DIR|latest` expose the pieces.
+- `agentos upgrade --source auto|pypi|github`: the GitHub release wheel is used
+  when it is ahead of PyPI (a failed PyPI publish no longer strands the
+  upgrade) or PyPI is unreachable. `--check --json` reports both sources.
+- Gateway RPC `providers.probe`: try a provider with a key *before* it is
+  saved — list its models and send a 1-token turn — returning the verdict,
+  the model list and the error text (never the key). The macOS app's
+  provider form has a **Test key** button on it, fills the Default model menu
+  from the provider's own list, and links to the page where the key is
+  issued; the first-run "all set" screen uses the same probe.
+- Gateway RPCs `updates.apply` (runs `agentos upgrade` as a detached job that
+  survives the gateway restart), `updates.status` and `updates.verifyData`;
+  the Control UI's update banner gained an **Update now** button that follows
+  the job through the restart.
+- macOS app: first launch installs the engine. The app discovers the CLI
+  (`agentos --version`), installs this app's version when it is missing or
+  older by driving the bundled `install.sh` stage by stage (`--manifest`,
+  `--stage NAME --json`), shows per-stage progress with the installer's
+  output, and ends on the provider setup (OpenCAP first, tagged Recommended;
+  saving restarts the managed gateway by itself; Home shows a "Choose a
+  provider" card until one is set). "Connect to an existing gateway" skips
+  the install; Settings › Advanced can reinstall or remove the engine.
+- `agentos --version` / `-V` prints the installed version without loading
+  config; `install.sh --manifest` and `--stage NAME --json` expose the
+  installer's stages, each running in its own process and subshell so a
+  failure still yields a `{"ok":false}` frame.
+- macOS app: its own icon (the AgentOS mark on a dark squircle, rendered at
+  1024 px by `desktop/scripts/make-icon.py`) instead of Electron's, in the
+  DMG, Applications, the Dock and notifications.
+- macOS app: Settings › About updates the engine (runs `agentos upgrade
+  --no-restart`, restarts the gateway it spawned, confirms the version and
+  data over RPC, warns before interrupting active sessions) and the app
+  itself (`electron-updater` from the GitHub release of the same `v<CalVer>`
+  tag). Release builds are Developer ID signed and notarized by the new
+  `desktop-release.yml` workflow; `desktop/package.json` now shares the
+  project's CalVer and is bumped by the `pump-version` skill.
+
+### Fixed
+
+- Session auto-titles with reasoning models: the title call was capped at 32
+  output tokens, which a reasoning model spends thinking, so the visible
+  answer was empty and every fresh chat kept its placeholder name (or fell
+  back to the first words of the message). The cap is now 512 (the prompt
+  still keeps plain models at 3 to 6 words), and the word limit counts
+  Vietnamese syllables fairly (10 instead of 7).
+- macOS app: the managed gateway now gets its host and port as
+  `gateway run --bind/--port`. The `AGENTOS_GATEWAY__HOST/PORT` variables the
+  app used to set were never read by the gateway config (wrong prefix, and a
+  `port =` line in config.toml wins over the environment anyway), so a custom
+  port in Settings › Gateway spawned a gateway on 18791 and then waited for
+  the wrong one. The auth token env names now match `AuthConfig`
+  (`AGENTOS_AUTH_TOKEN`, `AGENTOS_AUTH_MODE`).
+- macOS app: the managed gateway's output is written to
+  `~/Library/Logs/AgentOS/gateway.log`; placeholder session names the
+  gateway seeds (`WebChat`, …) show as "New session" until the titler names
+  the chat, and the chat header re-reads a placeholder name for a while
+  after the run settles in case the rename event is missed.
 - In `robinhood-chain-stocks`, `chain_stocks.py` dropped genuine Stock Tokens
   whose 60-character-capped CoinGecko name had its `Robinhood Token` suffix
   truncated (such as IBM and SPYD), causing them to fail resolution; it now

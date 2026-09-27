@@ -25,6 +25,8 @@ root release README with task-oriented guides.
 - [`features.md`](features.md) - capability catalog.
 - [`features/agentic-trading.md`](features/agentic-trading.md) - trading
   connections, bundled trading skills, and the safety model.
+- [`features/trading.md`](features/trading.md) - engine-held wallets, Uniswap
+  swaps on Base and Robinhood Chain, ledger/PnL, and agent guardrails.
 - [`features/agentos-router.md`](features/agentos-router.md) - model routing.
 - [`features/tool-compression.md`](features/tool-compression.md) - compact tool
   results and handles.

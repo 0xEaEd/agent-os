@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ROUTER_FX_PREF_KEY } from './routerFx'
-import { createSeqGate, createStreamController } from './stream'
+import { AUTO_SCROLL_BOTTOM_GAP_PX, createSeqGate, createStreamController } from './stream'
 
 // The seq gate is the one pure, timing-independent core of the streaming
 // renderer. It is ported verbatim from legacy chat.js
@@ -193,5 +193,55 @@ describe('stream history-reconciliation state', () => {
     expect(bubble.isConnected).toBe(true)
     expect(user.nextElementSibling).toBe(bubble)
     controller.clearViewLocalStreamState('test_cleanup')
+  })
+})
+
+describe('tail following', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  function tailThread(scrollHeight: number, clientHeight: number): HTMLDivElement {
+    const thread = document.createElement('div')
+    thread.dataset.historyReady = 'true'
+    Object.defineProperty(thread, 'scrollHeight', { configurable: true, value: scrollHeight })
+    Object.defineProperty(thread, 'clientHeight', { configurable: true, value: clientHeight })
+    document.body.appendChild(thread)
+    return thread
+  }
+
+  it('pauses following once the reader is more than the legacy gap above the tail', () => {
+    const thread = tailThread(1000, 400)
+    const controller = createStreamController({ current: thread })
+    expect(controller.isAutoScrollEnabled()).toBe(true)
+
+    // Max scrollTop is 600; sit exactly at the threshold, then past it.
+    thread.scrollTop = 600 - (AUTO_SCROLL_BOTTOM_GAP_PX - 1)
+    controller.updateAutoScrollFromThread()
+    expect(controller.isAutoScrollEnabled()).toBe(true)
+
+    thread.scrollTop = 600 - (AUTO_SCROLL_BOTTOM_GAP_PX + 1)
+    controller.updateAutoScrollFromThread()
+    expect(controller.isAutoScrollEnabled()).toBe(false)
+  })
+
+  it('re-arms following on demand so a switched-away session does not inherit a paused tail', () => {
+    // The regression: `_autoScroll` is controller state and the controller
+    // outlives a session switch. A reader who scrolled up in session A used to
+    // carry `false` into session B, where it suppressed the reveal-time pin and
+    // pushed the history renderer onto its `preserveScroll` branch — so B opened
+    // stranded at an offset belonging to a different conversation.
+    const thread = tailThread(1000, 400)
+    const controller = createStreamController({ current: thread })
+
+    thread.scrollTop = 0
+    controller.updateAutoScrollFromThread()
+    expect(controller.isAutoScrollEnabled()).toBe(false)
+
+    controller.resetAutoScroll()
+    expect(controller.isAutoScrollEnabled()).toBe(true)
+
+    controller.scrollToBottom()
+    expect(thread.scrollTop).toBe(1000)
   })
 })

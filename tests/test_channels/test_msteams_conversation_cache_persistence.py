@@ -180,3 +180,38 @@ async def test_clean_stop_still_saves_the_cache(tmp_path: Path) -> None:
     await channel.stop()
 
     assert _cached_tags(tmp_path) == {"conversation-A": "conversation-A:seeded"}
+
+
+async def test_an_over_cap_cache_is_trimmed_on_load_keeping_the_most_recent(
+    tmp_path: Path,
+) -> None:
+    """A conversations.json saved before _references was capped (#3343) can
+    hold more than the cap. _on_turn evicts one entry per new one, so without
+    a trim on load it would stay over the cap for good."""
+    cap = msteams._MAX_CACHED_CONVERSATION_REFERENCES
+    total = cap + 3000
+    cache = _cache_file(tmp_path)
+    cache.parent.mkdir(parents=True)
+    # Saved oldest first, like _save_conversation_cache writes it.
+    cache.write_text(
+        json.dumps(
+            {
+                "schema_version": msteams._CONVERSATION_CACHE_SCHEMA_VERSION,
+                "conversations": {f"conv-{i}": {"tag": f"conv-{i}:t"} for i in range(total)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restarted = await _restarted(tmp_path)
+
+    assert len(restarted._references) == cap
+    assert "conv-2999" not in restarted._references
+    assert list(restarted._references)[0] == "conv-3000"
+    assert restarted._resolve_reference_key(None) == f"conv-{total - 1}"
+
+    # New conversations after the restart keep it at the cap, not cap + 3000.
+    for i in range(3):
+        await restarted._on_turn(_turn(f"new-{i}", f"n{i}"))
+    assert len(restarted._references) == cap
+    assert restarted._resolve_reference_key(None) == "new-2"

@@ -325,7 +325,7 @@ async def test_agentos_router_applies_hold_before_normal_classification(monkeypa
 
     out = await apply_agentos_router(ctx)
 
-    assert out.model == "anthropic/claude-opus-5"
+    assert out.model == "anthropic/claude-opus-5.5"
     assert out.metadata["routing_source"] == "router_control_hold"
     assert out.metadata["router_control_hold_applied"] is True
     assert out.metadata["router_control_target_tier"] == "c3"

@@ -1271,42 +1271,96 @@ class TaskRuntime:
             "error_class": error_class,
             "error_message": error_message,
         }
-        if (
-            (status == AgentTaskStatus.TIMEOUT and terminal_reason != "hard_deadline_exceeded")
-            or terminal_reason == "timeout"
-            or is_context_payload_too_large(terminal_payload)
-            or (terminal_reason == "output_truncated" or error_class == "provider_output_truncated")
-        ):
-            error_class, error_message = sanitize_agent_error(
-                terminal_payload,
-                fallback_error_class=error_class,
-                fallback_error_message=error_message or "Agent error",
-            )
-            terminal_payload["error_class"] = error_class
-            terminal_payload["error_message"] = error_message
-        await self._storage.update_agent_task(
-            task.task_id,
-            status=status,
-            finished_at=_epoch_time_ms(),
-            terminal_reason=terminal_reason,
-            error_class=error_class,
-            error_message=error_message,
-            **await self._terminal_details_update(
-                task,
+        try:
+            if (
+                (status == AgentTaskStatus.TIMEOUT and terminal_reason != "hard_deadline_exceeded")
+                or terminal_reason == "timeout"
+                or is_context_payload_too_large(terminal_payload)
+                or (
+                    terminal_reason == "output_truncated"
+                    or error_class == "provider_output_truncated"
+                )
+            ):
+                error_class, error_message = sanitize_agent_error(
+                    terminal_payload,
+                    fallback_error_class=error_class,
+                    fallback_error_message=error_message or "Agent error",
+                )
+                terminal_payload["error_class"] = error_class
+                terminal_payload["error_message"] = error_message
+            await self._storage.update_agent_task(
+                task.task_id,
                 status=status,
+                finished_at=_epoch_time_ms(),
                 terminal_reason=terminal_reason,
                 error_class=error_class,
                 error_message=error_message,
-            ),
-        )
+                **await self._terminal_details_update(
+                    task,
+                    status=status,
+                    terminal_reason=terminal_reason,
+                    error_class=error_class,
+                    error_message=error_message,
+                ),
+            )
+        except Exception:
+            # task.terminal_emitted is already claimed above, so a redundant
+            # call from another path (e.g. a DROP_OLDEST eviction racing this
+            # task's own cancellation) is now permanently a no-op -- if the
+            # write above never lands, nothing else will ever retry it and
+            # the record is stuck at its pre-terminal status forever, with
+            # task.done never set so every waiter hangs (#3353). Fall back to
+            # a minimal write with fewer moving parts (no sanitisation, no
+            # details-merge DB read) that is far less likely to fail the same
+            # way, so the record still reaches a terminal status in the
+            # common (transient-failure) case.
+            log.warning(
+                "task_runtime.mark_terminal_write_failed",
+                task_id=task.task_id,
+                status=status.value,
+                exc_info=True,
+            )
+            try:
+                await self._storage.update_agent_task(
+                    task.task_id,
+                    status=status,
+                    finished_at=_epoch_time_ms(),
+                    terminal_reason=terminal_reason,
+                    error_class=error_class,
+                    error_message=error_message,
+                )
+            except Exception:
+                log.warning(
+                    "task_runtime.mark_terminal_fallback_write_failed",
+                    task_id=task.task_id,
+                    status=status.value,
+                    exc_info=True,
+                )
         payload: dict[str, Any] = {
             "task_id": task.task_id,
             "session_key": task.envelope.session_key,
             "terminal_reason": terminal_reason,
         }
         if status != AgentTaskStatus.SUCCEEDED:
-            payload["terminal_message"] = build_terminal_reply(terminal_payload)
-        await self._emit(task.envelope.session_key, f"task.{status.value}", payload)
+            try:
+                payload["terminal_message"] = build_terminal_reply(terminal_payload)
+            except Exception:
+                log.warning(
+                    "task_runtime.mark_terminal_reply_build_failed",
+                    task_id=task.task_id,
+                    status=status.value,
+                    exc_info=True,
+                )
+                payload["terminal_message"] = error_message or "Agent error"
+        try:
+            await self._emit(task.envelope.session_key, f"task.{status.value}", payload)
+        except Exception:
+            log.warning(
+                "task_runtime.mark_terminal_emit_failed",
+                task_id=task.task_id,
+                status=status.value,
+                exc_info=True,
+            )
         await self._notify_task_lifecycle(
             TaskLifecycleEvent(
                 phase="terminal",

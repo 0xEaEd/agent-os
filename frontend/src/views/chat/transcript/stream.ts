@@ -67,6 +67,14 @@ export const STREAM_ACTIVE_MARK_DELAY_MS = 3500
 // chat.js:2577-2578 — remain pinned while the viewport is within 60px of the end.
 export const AUTO_SCROLL_BOTTOM_GAP_PX = 60
 
+/**
+ * How far above the tail the reader must be before the "jump to latest"
+ * affordance appears. Deliberately larger than `AUTO_SCROLL_BOTTOM_GAP_PX` so
+ * there is a dead band between "following paused" and "offer a way back" — a
+ * reader nudging a few lines up does not get a button flickering at them.
+ */
+export const JUMP_TO_TAIL_GAP_PX = 160
+
 /* ── Pure seq gate (ported verbatim from chat.js:1645-1682) ─────────────── */
 
 /**
@@ -1467,6 +1475,20 @@ export function createStreamController(
     _autoScroll = gap < AUTO_SCROLL_BOTTOM_GAP_PX
   }
 
+  /**
+   * Re-arm tail following.
+   *
+   * `_autoScroll` is controller state, and the controller outlives a session
+   * switch. Without this, a reader who had scrolled up in session A carried
+   * `false` into session B, where it suppressed BOTH the reveal-time pin
+   * (`revealTranscriptIfSettled`) and the history renderer's tail positioning —
+   * so B opened stranded mid-transcript, at a scroll offset that belonged to a
+   * different conversation. A session switch always starts at the tail.
+   */
+  function resetAutoScroll(): void {
+    _autoScroll = true
+  }
+
   /* ── web_search provider badge (chat.js:463-478) ──────────────────────── */
 
   function refreshRunningSearchProviderBadges(provider: string): void {
@@ -1607,6 +1629,7 @@ export function createStreamController(
     // scroll
     scrollToBottom,
     updateAutoScrollFromThread,
+    resetAutoScroll,
     isAutoScrollEnabled: () => _autoScroll,
     // tool activity + subagent disclosure (Task 4 — tools.ts)
     appendToolCall: toolRenderer.appendToolCall,

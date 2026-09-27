@@ -60,6 +60,9 @@ GEMINI.md
 # asset directories.
 !/assets/*.png
 !/frontend/src/assets/*.png
+!/desktop/src/renderer/src/assets/*.png
+!/desktop/src/renderer/src/assets/providers/*.png
+!/desktop/resources/*.png
 
 site/
 /plugins/

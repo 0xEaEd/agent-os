@@ -213,9 +213,7 @@ def create_gateway_app(
             try:
                 from agentos.provider.circuit_breaker import snapshot_payload
 
-                breakers = snapshot_payload(
-                    getattr(provider_selector, "circuit_breaker", None)
-                )
+                breakers = snapshot_payload(getattr(provider_selector, "circuit_breaker", None))
                 if provider_name:
                     active_breaker = next(
                         (row for row in breakers if row.get("provider") == provider_name),
@@ -273,6 +271,18 @@ def create_gateway_app(
         )
         if access is None:
             access = denied_access()
+        else:
+            from agentos.gateway.agent_surface import get_agent_surface
+
+            agent_auth: dict[str, str] = {}
+            if request is not None:
+                agent_token = request.headers.get("x-agentos-agent-token")
+                if agent_token:
+                    agent_auth["agentToken"] = agent_token
+                operator = request.headers.get("x-agentos-operator-secret")
+                if operator:
+                    agent_auth["operatorSecret"] = operator
+            access = get_agent_surface().attach(access, agent_auth)
         return RpcContext(
             conn_id="http",
             access=access,
