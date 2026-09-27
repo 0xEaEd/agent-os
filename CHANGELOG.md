@@ -157,6 +157,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   memory. `skipped_pages` lists at most 1000 pages and counts the rest under
   `skipped_pages_omitted`, and the open-ended ranges `N-` (to the last page)
   and `-M` (from page 1) are accepted (#2996).
+- Safety: `wrap_untrusted_boundary()` now entity-escapes a close marker that
+  carries attributes or a slash (`</untrusted foo>`, `</untrusted\tbar=1>`,
+  `</untrusted/>`), so fetched content can no longer appear to close the
+  untrusted envelope early. The pattern stays bounded on hostile input: a
+  1 MiB body of unterminated `</untrusted ` markers is scanned in tens of
+  milliseconds (#3017).
+- Gateway: the in-memory usage query applies `tool_name`, `start_date` and
+  `end_date`. A gateway's tracker has no database, so `usage.cost` with a tool
+  filter used to return every turn row; a tool filter now returns nothing,
+  and dates are read as the SQLite path reads them (#3034).
+- `git_diff` tool: before the first commit, the default staged + unstaged view
+  diffs against the empty tree (the SHA-1 or SHA-256 id, from the repository's
+  object format) instead of bare `--cached`, so edits made after staging are
+  no longer dropped (#3072).
+- Sandbox: `gh`'s Windows config directory (`%APPDATA%\GitHub CLI`, where
+  `hosts.yml` holds the token) is now on the sensitive-path denylist, and the
+  `~/AppData/Roaming` entries also follow a redirected `%APPDATA%`. A
+  `hosts.yml` anywhere else, such as an Ansible inventory, is masked when read
+  but not blocked (#3078).
 
 ## [2026.9.26] - 2026-09-26
 
