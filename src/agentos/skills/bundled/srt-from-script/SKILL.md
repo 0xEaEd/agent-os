@@ -47,8 +47,12 @@ cumulative shot durations.
   English stays English — no translation.
 - Cumulative timestamps: SHOT_1 starts at 00:00:00,000; SHOT_2 starts at
   SHOT_1.duration; etc.
-- End time of each cue = next-shot start − `gap_ms`, clamped to ≥ 800 ms
-  after start so very short voiceover lines remain readable.
+- End time of each cue = its shot's end (the next shot's start) − `gap_ms`,
+  raised to ≥ 800 ms after start so very short voiceover lines remain
+  readable — but never past the shot's own end, so cues never overlap.
+  A shot shorter than 800 ms therefore gets a cue spanning the whole shot
+  with no `gap_ms` tail; a shot shorter than 800 ms + `gap_ms` keeps the
+  800 ms floor and a shortened tail pad.
 
 ## Output
 
