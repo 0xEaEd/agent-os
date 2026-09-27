@@ -763,6 +763,119 @@ async def _trading_decode(params: dict | None, ctx: RpcContext) -> dict[str, Any
         raise _raise(exc) from exc
 
 
+# ── trading.lp.* (Uniswap V4 read-outs; payloads in docs/lp-cards.md) ─────
+#
+# Read-only, so an agent may call every one of them. Each runs the blocking V4
+# library in a worker thread (see ``agentos.trading.lp``).
+
+
+def _lp_target(p: dict[str, Any]) -> str:
+    value = _str(p, "target") or _str(p, "token") or _str(p, "poolId")
+    if not value:
+        raise ValueError("params.target (a token symbol, address or poolId) is required")
+    return value
+
+
+@_d.method("trading.lp.pool")
+async def _trading_lp_pool(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """A token's (deepest) V4 pool: reserves, launcher, lock status, biggest ranges."""
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p, required=False)
+    target = _lp_target(p)
+    service = _service(ctx)
+    try:
+        return await lp.lp_pool(service, chain=chain, target=target, quote=_str(p, "quote"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.lp.ranges")
+async def _trading_lp_ranges(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """A pool's liquidity distribution as contiguous tick segments."""
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p, required=False)
+    target = _lp_target(p)
+    service = _service(ctx)
+    try:
+        return await lp.lp_ranges(service, chain=chain, target=target, quote=_str(p, "quote"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.lp.position")
+async def _trading_lp_position(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """One V4 position NFT: range, status, principal, uncollected fees."""
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    token_id = _raw_amount(p, "tokenId")
+    if token_id is None or token_id <= 0:
+        raise ValueError("params.tokenId must be a positive integer")
+    service = _service(ctx)
+    try:
+        return await lp.lp_position(service, chain=chain, token_id=token_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.lp.positions")
+async def _trading_lp_positions(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Every V4 position of the vault's wallets (or ``wallets``) on one or both chains.
+
+    ``chainId`` (one) or ``chainIds`` (several); neither reads both chains.
+    ``budgetSeconds`` bounds the read (default 25, 5-300); past it the card is partial.
+    """
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p, required=False)
+    raw_chains = p.get("chainIds")
+    chains: list[ChainSpec] | None = [chain] if chain is not None else None
+    if raw_chains is not None:
+        if chain is not None:
+            raise ValueError("pass params.chainId or params.chainIds, not both")
+        if not isinstance(raw_chains, list) or not raw_chains:
+            raise ValueError("params.chainIds must be a non-empty list of chain ids")
+        chains = []
+        for value in raw_chains:
+            spec = _chain({"chainId": value})
+            assert spec is not None
+            if spec not in chains:
+                chains.append(spec)
+    raw_budget = p.get("budgetSeconds")
+    if raw_budget is not None and (
+        isinstance(raw_budget, bool) or not isinstance(raw_budget, int | float)
+    ):
+        raise ValueError("params.budgetSeconds must be a number of seconds")
+    raw_wallets = p.get("wallets")
+    if raw_wallets is None:
+        wallets: list[str] = []
+    elif isinstance(raw_wallets, list) and all(isinstance(w, str) for w in raw_wallets):
+        wallets = [w for w in raw_wallets if w.strip()]
+    else:
+        raise ValueError("params.wallets must be a list of addresses")
+    include_closed = p.get("all", False)
+    if not isinstance(include_closed, bool):
+        raise ValueError("params.all must be a boolean")
+    service = _service(ctx)
+    try:
+        return await lp.lp_positions(
+            service,
+            chains=chains,
+            wallets=wallets,
+            include_closed=include_closed,
+            budget_s=float(raw_budget) if raw_budget is not None else None,
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
 @_d.method("trading.network")
 async def _trading_network(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """Head block, block age, gas and RPC latency per chain (cached for a few seconds)."""

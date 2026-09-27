@@ -11,6 +11,7 @@ import { useTheme } from '@/stores/theme'
 import { chatMarkdown } from './markdown'
 import { createCardsMounter, type CardsMounter } from './transcript/cards'
 import { createChartMounter, type ChartMounter } from './transcript/chart'
+import { createLpMounter, type LpMounter } from './transcript/lp'
 import {
   createStreamController,
   JUMP_TO_TAIL_GAP_PX,
@@ -51,6 +52,7 @@ import {
   replayGapShouldWarn,
   sessionChangeIsTerminal,
   sessionRunStatus,
+  stripAssistantText,
   stripDirectiveTags,
   stripGeneratedArtifactMarkers,
   stripProtocolTextLeak,
@@ -481,6 +483,11 @@ export function useTranscript(opts: {
   const [cardsMounter] = useState<CardsMounter>(() =>
     createCardsMounter({ fetchPayload: fetchChartPayload }),
   )
+  // Uniswap V4 liquidity cards (lp.ts). Owns a once-a-minute clock for the
+  // "2m ago" stamps and the copy-button resets, both cleared on unmount.
+  const [lpMounter] = useState<LpMounter>(() =>
+    createLpMounter({ fetchPayload: fetchChartPayload }),
+  )
 
   // One seam for both inline-artifact renderers. The downstream deps (stream.ts,
   // history.ts, artifacts.ts) call this whenever new rows land; keeping a single
@@ -490,8 +497,9 @@ export function useTranscript(opts: {
     (container: HTMLElement) => {
       chartMounter.mountCharts(container)
       cardsMounter.mountCards(container)
+      lpMounter.mountLp(container)
     },
-    [chartMounter, cardsMounter],
+    [chartMounter, cardsMounter, lpMounter],
   )
 
   useEffect(() => {
@@ -500,8 +508,9 @@ export function useTranscript(opts: {
       unsubscribe()
       chartMounter.destroyAll()
       cardsMounter.destroyAll()
+      lpMounter.destroyAll()
     }
-  }, [chartMounter, cardsMounter])
+  }, [chartMounter, cardsMounter, lpMounter])
 
   // eslint-disable-next-line react-hooks/refs -- factory stores the refs and reads .current only later, inside methods invoked outside render (never at creation)
   const [controller] = useState<StreamController>(() =>
@@ -913,7 +922,7 @@ export function useTranscript(opts: {
       attachHoverActions: (row, role) => messageRendererRef.current?.attachHoverActions(row, role),
       reconstructToolCalls: (row, segments) =>
         controller.reconstructToolCalls(row, segments, {
-          stripText: (text) => stripDirectiveTags(stripProtocolTextLeak(text)),
+          stripText: stripAssistantText,
           renderText: (text, into) => {
             into.innerHTML = chatMarkdown.render(text)
             chatMarkdown.bindCopy(into)

@@ -16,15 +16,21 @@ agent out of them.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import time
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
+import click
 import typer
 from rich.table import Table
+from typer.core import TyperGroup
 
 from agentos.cli.gateway_rpc import run_gateway_sync
-from agentos.cli.output import emit_error, print_json
+from agentos.cli.output import emit_error, print_json, print_text
 from agentos.cli.ui import ACCENT, ACCENT_HEADER, console, markup_escape
 from agentos.cli.wallet_cmd import (
     NATIVE_ADDRESS,
@@ -1429,3 +1435,430 @@ def trade_limits(
     table.add_row("approval threshold", money(result.get("approvalThresholdUsd")))
     table.add_row("approval TTL", f"{result.get('approvalTtlSeconds', '—')} s")
     console.print(table)
+
+
+# ── trade lp: Uniswap V4 liquidity read-outs (docs/lp-cards.md) ────────────
+
+LP_MIME = "application/vnd.agentos.lp+json"
+#: Where ``trade lp --json`` writes its card payloads, relative to the working
+#: directory (an agent's shell runs in its workspace, which is what lets the
+#: gateway publish the file).
+LP_CARD_DIR = "lp-cards"
+#: Card files kept in ``LP_CARD_DIR``; older ones are deleted after each write.
+#: The gateway copies a published card into its artifact store, so the file in
+#: the workspace is only needed until the command's output has been read.
+LP_CARDS_KEPT = 20
+_LP_SLUG = re.compile(r"[^A-Za-z0-9._-]+")
+_LP_CARD_FILE = re.compile(r"^(pool|ranges|position|positions)-[A-Za-z0-9._-]*\.json$")
+#: Gateway error codes that mean "change the input", not "something broke".
+_LP_USAGE_CODES = frozenset(
+    {"trading.invalid", "trading.lp.not_a_wallet", "trading.lp.pool_key_unknown"}
+)
+
+
+class _LpGroup(TyperGroup):
+    """``trade lp``: a usage error under ``--json`` is a JSON error on stderr, exit 2.
+
+    Click reports a bad or missing option with a Rich usage panel, which an
+    agent reading stderr for ``{"error": …}`` cannot parse. The same error
+    without ``--json`` still gets the panel.
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        args = [*getattr(ctx, "_protected_args", []), *ctx.args]
+        try:
+            return super().invoke(ctx)
+        except click.UsageError as exc:
+            if "--json" not in args:
+                raise
+            _bad_argument(exc.format_message(), json_output=True)
+
+
+lp_app = typer.Typer(
+    cls=_LpGroup,
+    help=(
+        "Read Uniswap V4 liquidity on Base and Robinhood Chain: a token's pool, its "
+        "liquidity ranges, one position, or every position of your wallets. Read-only."
+    ),
+)
+app.add_typer(lp_app, name="lp")
+
+
+def _lp_chain(chains: list[str] | None, command: str, *, json_output: bool) -> int | None:
+    """The one ``--chain`` a single-card command takes; a repeat is refused, not truncated.
+
+    Click keeps only the last of a repeated option, so ``--chain base --chain
+    robinhood`` silently read Robinhood alone; the option is a list so the
+    repeat can be seen and refused.
+    """
+    values = [c for c in chains or [] if c.strip()]
+    if len(values) > 1:
+        _bad_argument(
+            f"`trade lp {command}` takes one --chain (got {', '.join(values)}); "
+            "omit it to try base, then robinhood",
+            json_output=json_output,
+        )
+    return chain_id_from_arg(values[0]) if values else None
+
+
+def _lp_chains(chains: list[str] | None) -> list[int]:
+    """Every ``--chain`` given, validated and de-duplicated, in order."""
+    return list(dict.fromkeys(chain_id_from_arg(c) for c in chains or [] if c.strip()))
+
+
+def _lp_call(method: str, params: dict[str, Any], *, json_output: bool) -> Any:
+    """Call a ``trading.lp.*`` method; an input the engine rejects exits 2, not 1."""
+
+    async def _run(client):
+        from agentos.cli.gateway_client import GatewayRPCError
+
+        try:
+            return await client.call(method, params)
+        except GatewayRPCError as exc:
+            if exc.code not in _LP_USAGE_CODES:
+                raise
+            emit_error(exc.message, json_output=json_output, code=exc.code, details=exc.data)
+            raise typer.Exit(2) from exc
+
+    return run_gateway_sync(_run, json_output=json_output)
+
+
+def _usd(value: Any) -> str:
+    """Dollars, keeping significant digits for sub-cent prices; "—" when unknown."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if 0 < abs(number) < 0.01:
+        return f"${number:.4g}"
+    return money(number)
+
+
+def _lp_card_name(result: dict[str, Any]) -> str:
+    kind = str(result.get("kind") or "lp")
+    if kind == "positions":
+        slug = "wallets"
+    elif kind == "position":
+        position = _dict(result.get("position"))
+        chain = _dict(position.get("chain")).get("key") or ""
+        slug = f"{position.get('tokenId') or ''}-{chain}"
+    else:
+        token = _dict(result.get("token"))
+        slug = f"{token.get('symbol') or 'token'}-{_dict(result.get('chain')).get('key') or ''}"
+    slug = _LP_SLUG.sub("", slug).strip("-") or kind
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{LP_CARD_DIR}/{kind}-{slug}-{stamp}.json"
+
+
+def _write_lp_card(result: dict[str, Any]) -> None:
+    """Write the card payload and announce it; the marker is the last line on stdout.
+
+    Never fatal: the reading has already been printed, and a card that could not
+    be written must not turn it into a failure.
+    """
+    name = _lp_card_name(result)
+    try:
+        path = Path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"[card not written: {exc}]", err=True)
+        return
+    _prune_lp_cards(path.parent)
+    print_text(f"publish_artifact path={name} mime={LP_MIME}")
+
+
+def _prune_lp_cards(directory: Path, keep: int = LP_CARDS_KEPT) -> None:
+    """Keep the ``keep`` newest card files in ``directory``; never touch anything else."""
+    try:
+        cards = [p for p in directory.iterdir() if p.is_file() and _LP_CARD_FILE.match(p.name)]
+        cards.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+        for old in cards[keep:]:
+            old.unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def _lp_emit(
+    result: Any, *, json_output: bool, no_card: bool, render: Callable[[dict[str, Any]], None]
+) -> None:
+    """``--json``: the payload, then the card and its marker. Otherwise the table only."""
+    payload = _dict(result)
+    if not json_output:
+        render(payload)
+        return
+    print_json(payload)
+    if not no_card and payload.get("kind"):
+        _write_lp_card(payload)
+
+
+def _lp_footer(result: dict[str, Any]) -> None:
+    if result.get("partialScan"):
+        console.print("[yellow]partial scan[/]: some liquidity or positions were not read")
+    for warning in result.get("warnings") or []:
+        console.print(f"• {markup_escape(str(warning))}")
+    console.print(f"as of block {result.get('asOfBlock')} · {result.get('fetchedAt')}")
+
+
+def _range_text(item: dict[str, Any]) -> str:
+    low, high = item.get("mcapLower"), item.get("mcapUpper")
+    if low is not None and high is not None:
+        return f"{_usd(low)} → {_usd(high)} mcap"
+    return f"{item.get('priceLower')} → {item.get('priceUpper')}"
+
+
+def _render_lp_pool(result: dict[str, Any]) -> None:
+    token, quote = _dict(result.get("token")), _dict(result.get("quote"))
+    pool, reserves = _dict(result.get("pool")), _dict(result.get("reserves"))
+    guard = _dict(result.get("safety"))
+    launcher = _dict(guard.get("launcher"))
+    locked = guard.get("locked")
+    table = Table(
+        title=f"{token.get('symbol')}/{quote.get('symbol')} · "
+        f"{_dict(result.get('chain')).get('name')} · {pool.get('feePct')}",
+        show_header=False,
+    )
+    table.add_column("Field", style=ACCENT)
+    table.add_column("Value")
+    for field, value in (
+        ("pool", pool.get("poolId")),
+        ("hook", pool.get("hook") or "none"),
+        ("price", _usd(pool.get("priceUsd"))),
+        ("market cap", _usd(pool.get("mcapUsd"))),
+        ("TVL", _usd(pool.get("tvlUsd"))),
+        (
+            f"reserve {token.get('symbol')}",
+            f"{_dict(reserves.get('base')).get('human')} "
+            f"({_usd(_dict(reserves.get('base')).get('usd'))})",
+        ),
+        (
+            f"reserve {quote.get('symbol')}",
+            f"{_dict(reserves.get('quote')).get('human')} "
+            f"({_usd(_dict(reserves.get('quote')).get('usd'))})",
+        ),
+        ("launcher", launcher.get("name") or "—"),
+        ("LP locked", "unknown" if locked is None else ("yes" if locked else "no")),
+        ("note", guard.get("note")),
+    ):
+        if value in (None, ""):
+            continue
+        table.add_row(field, markup_escape(str(value)))
+    console.print(table)
+    top = [r for r in result.get("topRanges") or [] if isinstance(r, dict)]
+    if top:
+        ranges = Table(title="Largest ranges", show_header=True, header_style=ACCENT_HEADER)
+        ranges.add_column("Range")
+        ranges.add_column("Share", justify="right")
+        ranges.add_column("Owner")
+        for r in top:
+            share = r.get("share")
+            ranges.add_row(
+                markup_escape(_range_text(r)),
+                "—" if share is None else f"{float(share) * 100:.1f}%",
+                short_address(r.get("owner")) or "—",
+            )
+        console.print(ranges)
+    _lp_footer(result)
+
+
+def _render_lp_ranges(result: dict[str, Any]) -> None:
+    token, quote = _dict(result.get("token")), _dict(result.get("quote"))
+    current = _dict(result.get("current"))
+    table = Table(
+        title=f"{token.get('symbol')}/{quote.get('symbol')} liquidity · "
+        f"now {_usd(current.get('priceUsd'))} ({_usd(current.get('mcapUsd'))} mcap)",
+        show_header=True,
+        header_style=ACCENT_HEADER,
+    )
+    table.add_column("Range")
+    table.add_column("Share", justify="right")
+    table.add_column(str(token.get("symbol") or "base"), justify="right")
+    table.add_column(str(quote.get("symbol") or "quote"), justify="right")
+    table.add_column("")
+    for seg in result.get("segments") or []:
+        if not isinstance(seg, dict):
+            continue
+        share = seg.get("share")
+        table.add_row(
+            markup_escape(_range_text(seg)),
+            "—" if share is None else f"{float(share) * 100:.1f}%",
+            str(_dict(seg.get("base")).get("human")),
+            str(_dict(seg.get("quote")).get("human")),
+            "◀ now" if seg.get("active") else "",
+        )
+    console.print(table)
+    _lp_footer(result)
+
+
+def _position_row(position: dict[str, Any]) -> list[str]:
+    token, quote = _dict(position.get("token")), _dict(position.get("quote"))
+    fees = _dict(position.get("fees"))
+    owner = _dict(position.get("owner"))
+    return [
+        f"#{position.get('tokenId')}",
+        chain_label(_dict(position.get("chain")).get("id")),
+        f"{token.get('symbol')}/{quote.get('symbol')}",
+        str(position.get("status") or ""),
+        str(position.get("band") or "—"),
+        _usd(position.get("valueUsd")),
+        _usd(fees.get("usd")) if fees else "—",
+        str(owner.get("label") or short_address(owner.get("address"))),
+    ]
+
+
+def _positions_table(positions: list[dict[str, Any]], title: str) -> Table:
+    table = Table(title=title, show_header=True, header_style=ACCENT_HEADER)
+    for column in ("Position", "Chain", "Pair", "Status", "Band"):
+        table.add_column(column)
+    table.add_column("Value", justify="right")
+    table.add_column("Fees", justify="right")
+    table.add_column("Owner")
+    for position in positions:
+        table.add_row(*(markup_escape(cell) for cell in _position_row(position)))
+    return table
+
+
+def _render_lp_position(result: dict[str, Any]) -> None:
+    position = _dict(result.get("position"))
+    console.print(_positions_table([position], "Position"))
+    principal = _dict(position.get("principal"))
+    token, quote = _dict(position.get("token")), _dict(position.get("quote"))
+    console.print(
+        f"principal {_dict(principal.get('base')).get('human')} {token.get('symbol')} + "
+        f"{_dict(principal.get('quote')).get('human')} {quote.get('symbol')}"
+    )
+    _lp_footer(result)
+
+
+def _render_lp_positions(result: dict[str, Any]) -> None:
+    positions = [p for p in result.get("positions") or [] if isinstance(p, dict)]
+    totals = _dict(result.get("totals"))
+    if not positions:
+        wallets = ", ".join(
+            str(w.get("label") or short_address(w.get("address")))
+            for w in result.get("wallets") or []
+            if isinstance(w, dict)
+        )
+        chains = ", ".join(
+            str(c.get("name")) for c in result.get("chains") or [] if isinstance(c, dict)
+        )
+        console.print(f"No Uniswap V4 positions in {wallets or 'no wallets'} on {chains}.")
+    else:
+        console.print(
+            _positions_table(
+                positions,
+                f"V4 positions · {totals.get('count')} · {_usd(totals.get('valueUsd'))} "
+                f"· {totals.get('outOfRange')} out of range",
+            )
+        )
+    _lp_footer(result)
+
+
+@lp_app.command("pool")
+def lp_pool(
+    target: str = typer.Argument(..., help="Token symbol or address, or a V4 poolId"),
+    chain: list[str] | None = typer.Option(
+        None, "--chain", help="base or robinhood (default: try both)"
+    ),
+    quote: str | None = typer.Option(None, "--quote", help="Only pools paired with this token"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """A token's deepest V4 pool: reserves, TVL, launcher, LP lock, biggest ranges."""
+
+    params: dict[str, Any] = {"target": target}
+    chain_id = _lp_chain(chain, "pool", json_output=json_output)
+    if chain_id is not None:
+        params["chainId"] = chain_id
+    if quote:
+        params["quote"] = quote
+
+    result = _lp_call("trading.lp.pool", params, json_output=json_output)
+    _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_pool)
+
+
+@lp_app.command("ranges")
+def lp_ranges(
+    target: str = typer.Argument(..., help="Token symbol or address, or a V4 poolId"),
+    chain: list[str] | None = typer.Option(
+        None, "--chain", help="base or robinhood (default: try both)"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """How a pool's liquidity is spread across price (market-cap) ranges."""
+
+    params: dict[str, Any] = {"target": target}
+    chain_id = _lp_chain(chain, "ranges", json_output=json_output)
+    if chain_id is not None:
+        params["chainId"] = chain_id
+
+    result = _lp_call("trading.lp.ranges", params, json_output=json_output)
+    _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_ranges)
+
+
+@lp_app.command("position")
+def lp_position(
+    token_id: str = typer.Argument(..., help="Position NFT id"),
+    chain: list[str] = typer.Option(..., "--chain", help="base or robinhood"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """One V4 position: range, in/out of range, principal, uncollected fees."""
+
+    text = token_id.strip().lstrip("#")
+    if not text.isdigit() or int(text) <= 0:
+        _bad_argument("tokenId must be a positive integer", json_output=json_output)
+    params = {"chainId": _lp_chain(chain, "position", json_output=json_output), "tokenId": text}
+
+    result = _lp_call("trading.lp.position", params, json_output=json_output)
+    _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_position)
+
+
+@lp_app.command("positions")
+def lp_positions(
+    wallet: list[str] | None = typer.Option(
+        None, "--wallet", help="Address (or vault label) to read; repeatable. Default: the vault"
+    ),
+    chain: list[str] | None = typer.Option(
+        None, "--chain", help="base or robinhood; repeatable (default: both)"
+    ),
+    include_closed: bool = typer.Option(False, "--all", help="Include closed (empty) positions"),
+    budget_seconds: float | None = typer.Option(
+        None,
+        "--budget-seconds",
+        help="Stop searching after this many seconds and answer with what was found "
+        "(default 25; 5-300)",
+        min=5,
+        max=300,
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """Every V4 position of your vault wallets (or --wallet), out-of-range first."""
+
+    params: dict[str, Any] = {}
+    chain_ids = _lp_chains(chain)
+    if len(chain_ids) == 1:
+        params["chainId"] = chain_ids[0]
+    elif chain_ids:
+        params["chainIds"] = chain_ids
+    if wallet:
+        params["wallets"] = list(wallet)
+    if include_closed:
+        params["all"] = True
+    if budget_seconds is not None:
+        params["budgetSeconds"] = budget_seconds
+
+    result = _lp_call("trading.lp.positions", params, json_output=json_output)
+    _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_positions)

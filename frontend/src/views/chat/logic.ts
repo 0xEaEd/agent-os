@@ -496,13 +496,21 @@ export function stripProtocolTextLeak(text: string): string {
   return value.slice(0, match.index).trimEnd()
 }
 
+/**
+ * The one display strip for assistant text: generated-artifact omission
+ * markers, reply directives, then any tool-protocol leak. Every path that puts
+ * assistant text on screen — a whole message, a streamed segment, a text
+ * segment rebuilt between tool calls — goes through this, so no path can
+ * forget a step (an interleaved history message once showed the literal
+ * "[generated artifact omitted: …]" because its segments skipped one).
+ */
+export function stripAssistantText(text: string): string {
+  return stripProtocolTextLeak(stripDirectiveTags(stripGeneratedArtifactMarkers(text || '')))
+}
+
 /** chat.js:5842-5846 — role-specific normalized text used by id-less history rows. */
 export function historyFallbackText(role: Role, text: string): string {
-  if (role === 'assistant') {
-    return stripProtocolTextLeak(
-      stripDirectiveTags(stripGeneratedArtifactMarkers(text || '')),
-    ).trim()
-  }
+  if (role === 'assistant') return stripAssistantText(text).trim()
   if (role === 'user') return stripTimePrefix(text || '').trim()
   return (text || '').trim()
 }

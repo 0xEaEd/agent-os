@@ -315,6 +315,7 @@ Every client goes through the same gateway methods:
 | `trading.orders.list`, `trading.orders.get`, `trading.orders.wait`, `trading.orders.batch` | orders (filter by status, wallet, `kind`); one order; block until it settles; every leg of a multisend by `batchId` |
 | `trading.orders.approve`, `trading.orders.reject` | the user's decision on a parked order (operator-only) |
 | `trading.decode` | explain a transaction hash or raw calldata |
+| `trading.lp.pool`, `trading.lp.ranges`, `trading.lp.position`, `trading.lp.positions` | Uniswap V4 read-outs (read-only, allowed for an agent): a token's deepest pool, its liquidity distribution, one position NFT, every position of the vault's (or given) wallets. Payloads: [`../lp-cards.md`](../lp-cards.md) |
 | `trading.history`, `trading.portfolio`, `trading.chart`, `trading.sync`, `trading.lot.setCost` | the ledger; holdings with PnL; price history for a token (GeckoTerminal on Base, the engine's own snapshots on Robinhood Chain); re-read the chain (`full`, a rebuild, is operator-only); correct a lot's cost basis (operator-only) |
 
 ## Ledger and PnL

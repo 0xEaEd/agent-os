@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi } from 'vitest'
+import { stripAssistantText } from '../logic'
 import {
   createToolRenderer,
   toolDisplayName,
@@ -283,6 +284,47 @@ describe('tool activity DOM states', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('reconstructToolCalls text segments', () => {
+  const MARKER =
+    '[generated artifact omitted: ranges-boar-base-20260927T105305Z.json (application/vnd.agentos.lp+json)]'
+
+  it('strips the generated-artifact marker from a text segment between tool calls', () => {
+    const { body, renderer } = createToolHarness()
+    const bubble = body.parentElement!
+    renderer.reconstructToolCalls(
+      bubble,
+      [
+        { type: 'text', text: 'Reading the pool.' },
+        {
+          type: 'tool_use',
+          tool_use_id: 'lp-1',
+          name: 'exec_command',
+          input: { command: 'agentos trade lp ranges boar --chain base --json' },
+        },
+        { type: 'tool_result', tool_use_id: 'lp-1', content: '{"version": 1}' },
+        { type: 'text', text: `Here is the distribution.\n\n${MARKER}` },
+        { type: 'text', text: MARKER },
+      ],
+      {
+        stripText: stripAssistantText,
+        renderText: (text, into) => {
+          into.textContent = text
+        },
+      },
+    )
+    const segments = [...body.querySelectorAll('.msg-text-seg')].map((n) => n.textContent)
+    expect(segments).toEqual(['Reading the pool.', 'Here is the distribution.'])
+    expect(body.textContent).not.toContain('generated artifact omitted')
+  })
+
+  it('is wired to the same strip the whole-message path uses', () => {
+    // The history renderer's segment strip once skipped the artifact marker
+    // while the whole-message path did not; both now share one helper.
+    const transcript = readFileSync('src/views/chat/useTranscript.ts', 'utf8')
+    expect(transcript).toMatch(/stripText: stripAssistantText,/)
   })
 })
 

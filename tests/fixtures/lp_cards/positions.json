@@ -1,0 +1,347 @@
+{
+  "version": 1,
+  "kind": "positions",
+  "chain": null,
+  "asOfBlock": 21044901,
+  "asOfBlocks": {
+    "base": 21044901
+  },
+  "fetchedAt": "2026-09-27T09:30:00Z",
+  "partialScan": false,
+  "warnings": [
+    "1 position(s) have no USD price and are left out of the total",
+    "uncollected fees of 1 position(s) have no USD price and are left out of the fees total"
+  ],
+  "wallets": [
+    {
+      "address": "0x1111111111111111111111111111111111111111",
+      "label": "Main",
+      "inApp": true
+    },
+    {
+      "address": "0x3333333333333333333333333333333333333333",
+      "label": null,
+      "inApp": false
+    }
+  ],
+  "chains": [
+    {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    }
+  ],
+  "positions": [
+    {
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "tokenId": "47100",
+      "owner": {
+        "address": "0x3333333333333333333333333333333333333333",
+        "label": null,
+        "inApp": false
+      },
+      "token": {
+        "address": "0x52b492a33E447Cdb854c7FC19F1e57E8BfA1777D",
+        "symbol": "PEPE",
+        "decimals": 18,
+        "priceUsd": 2.5148879334839752e-05
+      },
+      "quote": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18,
+        "priceUsd": 2512.37
+      },
+      "pool": {
+        "poolId": "0x5c2e4e9a3c4022757cdcdfab4e3a620063d12bfdae89b05d82fec8f89ceb63b5",
+        "hook": "0xb429d62f8f3bFFb98CdB9569533eA23bF0Ba28CC",
+        "tickSpacing": 200,
+        "feePct": "dynamic",
+        "tick": 184206,
+        "liquidity": "7500000000000000000000000",
+        "priceUsd": 2.5148879334839752e-05,
+        "mcapUsd": 2514887.9334839755,
+        "tvlUsd": null
+      },
+      "range": {
+        "tickLower": 170000,
+        "tickUpper": 184000,
+        "priceLower": 1.0218356662541856e-08,
+        "priceUpper": 4.143457927044117e-08,
+        "mcapLower": 2567229.2728270283,
+        "mcapUpper": 10409899.392167829
+      },
+      "status": "below-range",
+      "liquidity": "2000000000000000000000000",
+      "principal": {
+        "base": {
+          "raw": "9959794166311730045754693214",
+          "human": "9959794166.311730045754693214",
+          "usd": 250477.66168841458
+        },
+        "quote": {
+          "raw": "0",
+          "human": "0",
+          "usd": 0.0
+        },
+        "usd": 250477.66168841458
+      },
+      "fees": {
+        "base": {
+          "raw": "0",
+          "human": "0",
+          "usd": 0.0
+        },
+        "quote": {
+          "raw": "0",
+          "human": "0",
+          "usd": 0.0
+        },
+        "usd": 0.0
+      },
+      "valueUsd": 250477.66168841458,
+      "band": "$2.57M → $10.41M",
+      "distancePct": 2.04
+    },
+    {
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "tokenId": "48213",
+      "owner": {
+        "address": "0x1111111111111111111111111111111111111111",
+        "label": "Main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0x52b492a33E447Cdb854c7FC19F1e57E8BfA1777D",
+        "symbol": "PEPE",
+        "decimals": 18,
+        "priceUsd": 2.5148879334839752e-05
+      },
+      "quote": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18,
+        "priceUsd": 2512.37
+      },
+      "pool": {
+        "poolId": "0x5c2e4e9a3c4022757cdcdfab4e3a620063d12bfdae89b05d82fec8f89ceb63b5",
+        "hook": "0xb429d62f8f3bFFb98CdB9569533eA23bF0Ba28CC",
+        "tickSpacing": 200,
+        "feePct": "dynamic",
+        "tick": 184206,
+        "liquidity": "7500000000000000000000000",
+        "priceUsd": 2.5148879334839752e-05,
+        "mcapUsd": 2514887.9334839755,
+        "tvlUsd": null
+      },
+      "range": {
+        "tickLower": 186000,
+        "tickUpper": 190000,
+        "priceLower": 5.608121268061238e-09,
+        "priceUpper": 8.366166501212042e-09,
+        "mcapLower": 1408967.5630239013,
+        "mcapUpper": 2101890.5732650096
+      },
+      "status": "above-range",
+      "liquidity": "800000000000000000000000",
+      "principal": {
+        "base": {
+          "raw": "0",
+          "human": "0",
+          "usd": 0.0
+        },
+        "quote": {
+          "raw": "13263488171990570310",
+          "human": "13.26348817199057031",
+          "usd": 33322.789778663944
+        },
+        "usd": 33322.789778663944
+      },
+      "fees": {
+        "base": {
+          "raw": "0",
+          "human": "0",
+          "usd": 0.0
+        },
+        "quote": {
+          "raw": "0",
+          "human": "0",
+          "usd": 0.0
+        },
+        "usd": 0.0
+      },
+      "valueUsd": 33322.789778663944,
+      "band": "$1.41M → $2.10M",
+      "distancePct": 19.65
+    },
+    {
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "tokenId": "48214",
+      "owner": {
+        "address": "0x1111111111111111111111111111111111111111",
+        "label": "Main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0x52b492a33E447Cdb854c7FC19F1e57E8BfA1777D",
+        "symbol": "PEPE",
+        "decimals": 18,
+        "priceUsd": 2.5148879334839752e-05
+      },
+      "quote": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18,
+        "priceUsd": 2512.37
+      },
+      "pool": {
+        "poolId": "0x5c2e4e9a3c4022757cdcdfab4e3a620063d12bfdae89b05d82fec8f89ceb63b5",
+        "hook": "0xb429d62f8f3bFFb98CdB9569533eA23bF0Ba28CC",
+        "tickSpacing": 200,
+        "feePct": "dynamic",
+        "tick": 184206,
+        "liquidity": "7500000000000000000000000",
+        "priceUsd": 2.5148879334839752e-05,
+        "mcapUsd": 2514887.9334839755,
+        "tvlUsd": null
+      },
+      "range": {
+        "tickLower": 183000,
+        "tickUpper": 186000,
+        "priceLower": 8.366166501212042e-09,
+        "priceUpper": 1.1292974152717928e-08,
+        "mcapLower": 2101890.5732650096,
+        "mcapUpper": 2837212.9472063943
+      },
+      "status": "in-range",
+      "liquidity": "1500000000000000000000000",
+      "principal": {
+        "base": {
+          "raw": "877287220391833329551423246",
+          "human": "877287220.391833329551423246",
+          "usd": 22062.790447631185
+        },
+        "quote": {
+          "raw": "12875021064757368309",
+          "human": "12.875021064757368309",
+          "usd": 32346.816672464465
+        },
+        "usd": 54409.60712009565
+      },
+      "fees": {
+        "base": {
+          "raw": "1850000000000000000000000",
+          "human": "1850000",
+          "usd": 46.52542676945354
+        },
+        "quote": {
+          "raw": "42000000000000000",
+          "human": "0.042",
+          "usd": 105.51954
+        },
+        "usd": 152.04496676945354
+      },
+      "valueUsd": 54561.652086865106,
+      "band": "$2.10M → $2.84M",
+      "distancePct": null
+    },
+    {
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "tokenId": "48215",
+      "owner": {
+        "address": "0x1111111111111111111111111111111111111111",
+        "label": "Main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0xba7ba7bA7bA7Ba7BA7BA7bA7bA7bA7Ba7Ba7BA7b",
+        "symbol": "BAR",
+        "decimals": 6,
+        "priceUsd": null
+      },
+      "quote": {
+        "address": "0xf00Df00dF00dF00dF00DF00Df00df00df00Df00d",
+        "symbol": "FOO",
+        "decimals": 18,
+        "priceUsd": null
+      },
+      "pool": {
+        "poolId": "0x15fb6911b91cf2e80c1275e1ba3fb6984d679fc0376355da73abbcc16ae7f308",
+        "hook": null,
+        "tickSpacing": 60,
+        "feePct": "0.3%",
+        "tick": 303390,
+        "liquidity": "1000000000000000000",
+        "priceUsd": null,
+        "mcapUsd": null,
+        "tvlUsd": null
+      },
+      "range": {
+        "tickLower": 300000,
+        "tickUpper": 306000,
+        "priceLower": 10.67045795289291,
+        "priceUpper": 19.44225880711205,
+        "mcapLower": null,
+        "mcapUpper": null
+      },
+      "status": "in-range",
+      "liquidity": "1000000000000000000",
+      "principal": {
+        "base": {
+          "raw": "31612572192",
+          "human": "31612.572192",
+          "usd": null
+        },
+        "quote": {
+          "raw": "603342404976262823261934",
+          "human": "603342.404976262823261934",
+          "usd": null
+        },
+        "usd": null
+      },
+      "fees": {
+        "base": {
+          "raw": "5000000",
+          "human": "5",
+          "usd": null
+        },
+        "quote": {
+          "raw": "200000000000000000000",
+          "human": "200",
+          "usd": null
+        },
+        "usd": null
+      },
+      "valueUsd": null,
+      "band": null,
+      "distancePct": null
+    }
+  ],
+  "totals": {
+    "valueUsd": 338362.1035539436,
+    "feesUsd": 152.04496676945354,
+    "count": 4,
+    "outOfRange": 2
+  }
+}

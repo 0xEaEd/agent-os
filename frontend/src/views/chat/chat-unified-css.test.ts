@@ -173,3 +173,153 @@ describe('unified Chat CSS contract', () => {
     )
   })
 })
+
+/**
+ * Columns `repeat(auto-fit, minmax(clamp(A, (700px - 100%) * 999, B), 1fr))`
+ * yields for four stats in a strip `width` px wide with a `gap` px column gap:
+ * the most tracks n such that n·min + (n − 1)·gap ≤ width, capped at 4.
+ */
+function stripColumns(block: string, width: number, gap: number): number {
+  const px = (v: string): number => (v.endsWith('rem') ? parseFloat(v) * 16 : parseFloat(v))
+  const m =
+    /minmax\(clamp\(calc\((\d+)% - ([\d.]+(?:px|rem))\), calc\(\((\d+)px - 100%\) \* (\d+)\), calc\((\d+)% - ([\d.]+(?:px|rem))\)\), 1fr\)/.exec(
+      block.replace(/\s+/g, ' '),
+    )
+  if (!m) throw new Error('strip columns are not the quarter/half clamp')
+  const lo = (Number(m[1]) / 100) * width - px(m[2]!)
+  const flip = (Number(m[3]) - width) * Number(m[4])
+  const hi = (Number(m[5]) / 100) * width - px(m[6]!)
+  const min = Math.min(Math.max(flip, lo), hi)
+  return Math.min(4, Math.floor((width + gap) / (min + gap)))
+}
+
+describe('LP card CSS contract', () => {
+  const block = (selector: string): string | undefined =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+    )?.[0]
+
+  it('never changes the case of a token symbol', () => {
+    const pair = block('.chat-surface .lp-card__pair')
+    expect(pair).toBeTruthy()
+    expect(pair).not.toMatch(/text-transform/)
+    expect(block('.chat-surface .lp-chart__caption')).not.toMatch(/text-transform/)
+  })
+
+  it('hangs the range bounds on the band edges and styles both copy outcomes', () => {
+    expect(css).toMatch(
+      /\.chat-surface \.lp-range__lower,\s*\.chat-surface \.lp-range__upper \{[\s\S]*?position: absolute;/,
+    )
+    expect(block(".chat-surface .lp-card__copy[data-lp-copied='true']")).toMatch(/var\(--ok\)/)
+    expect(block(".chat-surface .lp-card__copy[data-lp-copied='failed']")).toMatch(
+      /var\(--danger\)/,
+    )
+  })
+
+  it('lays position rows out in two lines until the card measures dense, clipping only the owner', () => {
+    // Stacked (the default): status | pair+owner | value+fees, shared by every row.
+    expect(block('.chat-surface .lp-rows')).toMatch(
+      /grid-template-columns: max-content minmax\(0, 1fr\) max-content;/,
+    )
+    const row = block('.chat-surface .lp-row')
+    expect(row).toMatch(/grid-template-columns: subgrid;/)
+    expect(row).toMatch(/grid-column: 1 \/ -1;/)
+    // Dense: six columns, only behind the mounter's measured stamp.
+    const dense = block(".chat-surface .lp-card[data-lp-layout='dense'] .lp-rows")
+    expect(
+      dense
+        ?.match(/grid-template-columns:\s*([^;]+);/)?.[1]
+        ?.trim()
+        .split(/\s+(?![^(]*\))/),
+    ).toHaveLength(6)
+    expect(block('.chat-surface .lp-row__chain')).toMatch(/grid-area: 2 \/ 1;/)
+    expect(css).toMatch(/^\.chat-surface \.lp-row__wallet \{\s*grid-area: 2 \/ 2;/m)
+    expect(block('.chat-surface .lp-row__fees')).toMatch(/grid-area: 2 \/ 3;/)
+    expect(block(".chat-surface .lp-card[data-lp-layout='dense'] .lp-row__value")).toMatch(
+      /grid-area: 1 \/ 6;/,
+    )
+    // Only the owner may ellipsize; the status, distance, pair and figures never do.
+    const ellipsized = [
+      ...css.matchAll(/^(\.chat-surface \.lp-row[^{]*) \{[^}]*text-overflow: ellipsis/gm),
+    ].map((m) => m[1])
+    expect(ellipsized).toEqual(['.chat-surface .lp-row__wallet'])
+    expect(block('.chat-surface .lp-row__status')).not.toMatch(/overflow: hidden/)
+    // The phone rule no longer hides the chain, owner and fees: line two has room.
+    expect(css).not.toMatch(/\.lp-row__chain,\s*\.chat-surface \.lp-row__wallet,[^}]*display: none/)
+  })
+
+  it('gives a narrow card (< 440px) three lines per row, nothing overlapping or cut', () => {
+    const n = ".chat-surface .lp-card[data-lp-layout='narrow']"
+    // Rows stop sharing the book's columns: each sizes its own three.
+    expect(block(`${n} .lp-rows`)).toMatch(/grid-template-columns: minmax\(0, 1fr\);/)
+    const row = block(`${n} .lp-row`)
+    expect(row).toMatch(/grid-template-columns: max-content minmax\(0, 1fr\) max-content;/)
+    expect(row).toMatch(/column-gap:/)
+    // Line 1: status · distance | value. Line 2: pair · fee | fees. Line 3: chain | owner.
+    expect(block(`${n} .lp-row__status`)).toMatch(/grid-area: 1 \/ 1 \/ 2 \/ 3;/)
+    expect(block(`${n} .lp-row__value`)).toMatch(/grid-area: 1 \/ 3;/)
+    const pair = block(`${n} .lp-row__pair`)
+    expect(pair).toMatch(/grid-area: 2 \/ 1 \/ 3 \/ 3;/)
+    // The pair wraps rather than clipping under the value.
+    expect(pair).toMatch(/overflow: visible;/)
+    expect(pair).toMatch(/white-space: normal;/)
+    expect(block(`${n} .lp-row__fees`)).toMatch(/grid-area: 2 \/ 3;/)
+    expect(block(`${n} .lp-row__chain`)).toMatch(/grid-area: 3 \/ 1;/)
+    expect(block(`${n} .lp-row__wallet`)).toMatch(/grid-area: 3 \/ 2 \/ 4 \/ 4;/)
+    // Strip: 2×2 with smaller figures.
+    expect(block(`${n} .lp-card__stats.lp-totals`)).toMatch(
+      /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/,
+    )
+    expect(block(`${n} .lp-stat__value`)).toMatch(/font-size: 0\.8125rem;/)
+    // Still only the owner ellipsizes.
+    expect(css).not.toMatch(/data-lp-layout='narrow'\][^{]*\{[^}]*text-overflow: ellipsis/)
+  })
+
+  it('styles the measured label states the mounter stamps', () => {
+    expect(block(".chat-surface .lp-range[data-lp-bounds='stacked'] .lp-range__upper")).toMatch(
+      /bottom: calc\(100% \+/,
+    )
+    expect(block('.chat-surface .lp-range[data-lp-now-wrap] .lp-range__now-side')).toMatch(
+      /display: block;/,
+    )
+    expect(block('.chat-surface .lp-range[data-lp-now-wrap] .lp-range__row')).toMatch(
+      /padding-bottom:/,
+    )
+    expect(block('.chat-surface .lp-chart__tick[data-lp-hidden]')).toMatch(/visibility: hidden;/)
+  })
+
+  it('lays the positions strip out 4-up from 700px and 2×2 below, never 3 + 1', () => {
+    const strip = block('.chat-surface .lp-card__stats.lp-totals')
+    expect(strip).toBeTruthy()
+    const gap = 8 // .lp-card__stats gap: 0.5rem
+    // The live report: a 608px card (576px strip) wrapped FEES onto its own line.
+    expect(stripColumns(strip!, 576, gap)).toBe(2)
+    expect(stripColumns(strip!, 699, gap)).toBe(2)
+    expect(stripColumns(strip!, 700, gap)).toBe(4)
+    expect(stripColumns(strip!, 1000, gap)).toBe(4)
+    for (let w = 240; w <= 1400; w += 1) expect(stripColumns(strip!, w, gap)).not.toBe(3)
+  })
+
+  it('greens unclaimed fees only when there are some', () => {
+    expect(block('.chat-surface .lp-row__fees')).toMatch(/color: var\(--muted-foreground\);/)
+    expect(block(".chat-surface .lp-row__fees[data-lp-fees='positive']")).toMatch(
+      /color: var\(--ok\);/,
+    )
+    expect(
+      block(".chat-surface .lp-hero[data-lp-hero='fees'] .lp-hero__value[data-lp-fees='positive']"),
+    ).toMatch(/color: var\(--ok\);/)
+    expect(
+      block(".chat-surface .lp-hero[data-lp-hero='fees'] .lp-hero__value[data-lp-fees='zero']"),
+    ).toMatch(/color: var\(--muted-foreground\);/)
+    // No rule greens a fees figure merely for having a price.
+    expect(css).not.toMatch(/lp-hero__value:not\(\[data-lp-no-price\]\)/)
+  })
+
+  it('keeps card links out of the transcript link colour', () => {
+    expect(css).toContain(
+      '.chat-surface .msg-body .lp-card a:is(.lp-card__action, .lp-row__wallet) {',
+    )
+    expect(css).toContain('.chat-surface a.lp-row__wallet::after {')
+    expect(css).not.toMatch(/\.msg-artifact-lp\[data-lp-kind/)
+  })
+})

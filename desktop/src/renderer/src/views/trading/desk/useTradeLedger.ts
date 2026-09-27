@@ -8,6 +8,7 @@ import { providerLabel } from '../types'
 import {
   commandFromToolInput,
   LEDGER_GROUP_MIN,
+  lpCallFromResult,
   parseTradeCommand,
   parseTradeResult,
   type TradeCall,
@@ -158,7 +159,8 @@ function renderRow(
   const titleBits = [call.title]
   if (outcome?.provider) titleBits.push(providerLabel(outcome.provider))
   const title = el('div', 'trd-ledger__title', titleBits.join(' · '))
-  if (call.detail) title.appendChild(el('span', 'trd-ledger__detail', call.detail))
+  const detail = outcome?.detail || call.detail
+  if (detail) title.appendChild(el('span', 'trd-ledger__detail', detail))
   main.appendChild(title)
   const summaryText = timing.running
     ? t('trading.ledger.running')
@@ -354,7 +356,9 @@ export function useTradeLedger(
       let call = known?.call ?? null
       if (!call) {
         const input = details.querySelector('.chat-tool-input')?.textContent ?? ''
-        call = parseTradeCommand(commandFromToolInput(input))
+        call =
+          parseTradeCommand(commandFromToolInput(input)) ??
+          lpCallFromResult(details.querySelector('.chat-tool-result-preview')?.textContent ?? '')
         if (!call) return
       }
       const running = details.classList.contains('chat-tools-collapse--running')
@@ -371,7 +375,7 @@ export function useTradeLedger(
         details.hidden = true
       }
       const measured = details.querySelector('.chat-tools-status')?.textContent?.trim() ?? ''
-      const signature = `${running}|${outcome?.summary ?? ''}|${outcome?.status ?? ''}|${measured}`
+      const signature = `${running}|${outcome?.detail ?? ''}|${outcome?.summary ?? ''}|${outcome?.status ?? ''}|${measured}`
       if (row.dataset.sig !== signature) {
         row.dataset.sig = signature
         renderRow(row, call, outcome, { running }, (orderId) => focusRef.current(orderId), details)
@@ -442,7 +446,10 @@ export function useTradeLedger(
           startedAt: null,
           finishedAt: null,
         }
-        entry.call = entry.call ?? parseTradeCommand(commandFromToolInput(toolInput(payload)))
+        entry.call =
+          entry.call ??
+          parseTradeCommand(commandFromToolInput(toolInput(payload))) ??
+          lpCallFromResult(toolResultText(payload))
         if (!entry.call) {
           live.current.delete(id)
           return

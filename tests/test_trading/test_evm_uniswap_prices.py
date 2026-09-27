@@ -8,7 +8,7 @@ import pytest
 from agentos.trading import evm as evm_mod
 from agentos.trading.chains import BASE, NATIVE_ADDRESS, ROBINHOOD
 from agentos.trading.evm import EvmClient, EvmRpcError, EvmTransportError
-from agentos.trading.prices import PriceService
+from agentos.trading.prices import TOKEN_LIST_EMPTY_HOLD_S, PriceService
 from agentos.trading.uniswap import UniswapAuthError, UniswapClient, UniswapError
 from tests.test_trading.fakes import (
     AAPL,
@@ -442,6 +442,55 @@ class TestPriceService:
     async def test_missing_price_is_none(self, svc: PriceService) -> None:
         assert await svc.price(BASE, OTHER) is None
 
+    async def test_an_unanswered_chunk_is_held_briefly_then_asked_again(
+        self, fake: FakePrices, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 429 was never cached, so every ``prices()`` inside the TTL re-sent the
+        same chunk: the portfolio poll plus desk turns made it a retry loop."""
+        from agentos.trading import prices as prices_mod
+
+        monkeypatch.setattr(prices_mod, "UNAVAILABLE_JITTER_S", 0.0)
+        throttled = {"on": True}
+
+        def limited(request: httpx.Request) -> httpx.Response:
+            if throttled["on"] and request.url.host == "api.dexscreener.com":
+                fake.requests.append(request)
+                return httpx.Response(429)
+            return fake.handle(request)
+
+        clock = {"now": 1_000_000.0}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(limited)) as http:
+            svc = PriceService(http=http, ttl_s=20, now=lambda: clock["now"])
+            first = (await svc.prices(BASE, [USDC]))[USDC]
+            assert first.unavailable and first.price_usd is None
+            assert first.retry_in_s == prices_mod.UNAVAILABLE_HOLD_S
+            asked = len(fake.requests)
+            # Inside the hold: the same miss, and nothing is sent.
+            clock["now"] += 1.0
+            held = (await svc.prices(BASE, [USDC]))[USDC]
+            assert held.unavailable and held.retry_in_s == pytest.approx(2.0)
+            assert len(fake.requests) == asked
+            # After it: asked again, and the answer is cached for the full TTL.
+            throttled["on"] = False
+            clock["now"] += 2.5
+            again = (await svc.prices(BASE, [USDC]))[USDC]
+            assert again.price_usd == 1.0 and not again.unavailable
+            assert len(fake.requests) == asked + 1
+            clock["now"] += 10
+            assert (await svc.prices(BASE, [USDC]))[USDC].price_usd == 1.0
+            assert len(fake.requests) == asked + 1
+
+    async def test_the_hold_is_jittered_once_per_chunk(self) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(503))
+        ) as http:
+            got = await PriceService(http=http).prices(BASE, [USDC, WETH])
+        holds = {info.retry_in_s for info in got.values()}
+        # One hold for the chunk (its tokens come back together), within the jitter.
+        assert len(holds) == 1 and all(info.unavailable for info in got.values())
+        (hold,) = holds
+        assert 2.0 <= hold <= 4.0
+
     async def test_native_of_an_eth_chain_borrows_base_eth(
         self, svc: PriceService, fake: FakePrices
     ) -> None:
@@ -472,6 +521,23 @@ class TestPriceService:
         assert (await svc.find_by_symbol(BASE, "eth"))[0].native is True
         assert await svc.known_token(BASE, USDC) is not None
         assert await svc.known_token(BASE, OTHER) is None
+
+    async def test_failed_token_list_download_is_retried_soon(
+        self, svc: PriceService, fake: FakePrices
+    ) -> None:
+        # A gateway that booted while CoinGecko was down answered "Unknown token
+        # symbol 'BONER' on Robinhood Chain" for a whole day: the empty list had
+        # been cached for TOKEN_LIST_TTL_S. An empty download is held briefly.
+        saved = fake.lists.pop("robinhood")
+        assert await svc.token_list(ROBINHOOD) == {}
+        calls = len(fake.requests)
+        assert await svc.token_list(ROBINHOOD) == {}
+        assert len(fake.requests) == calls  # held: no hammering inside the hold
+        fake.lists["robinhood"] = saved
+        svc.clock["now"] += TOKEN_LIST_EMPTY_HOLD_S + 1  # type: ignore[attr-defined]
+        tokens = await svc.token_list(ROBINHOOD)
+        assert AAPL in tokens
+        assert len(fake.requests) == calls + 1
 
     async def test_search(self, svc: PriceService) -> None:
         rows = await svc.search(ROBINHOOD, "AAPL")

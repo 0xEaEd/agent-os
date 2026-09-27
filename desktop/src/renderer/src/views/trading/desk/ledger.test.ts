@@ -3,6 +3,7 @@ import {
   commandFromToolInput,
   exitCodeOf,
   ledgerRuns,
+  lpCallFromResult,
   parseTradeCommand,
   parseTradeResult,
 } from './ledger'
@@ -333,5 +334,203 @@ describe('sends, allowances, decode and network rows', () => {
     )
     expect(probe.summary).toBe('Base ✓ 2s · Robinhood Chain ✗ 90s')
     expect(probe.error).toBe('1 chain unhealthy')
+  })
+})
+
+describe('liquidity reads (agentos trade lp)', () => {
+  const MARKER =
+    'publish_artifact path=.agentos/lp/ranges-boar-base-20260927T105305Z.json mime=application/vnd.agentos.lp+json'
+
+  it('names the call instead of calling it a generic trade call', () => {
+    const call = parseTradeCommand('agentos trade lp pool boar --chain base --json')!
+    expect(call).toMatchObject({ kind: 'lp', title: 'Liquidity read', detail: 'pool boar · Base' })
+    expect(
+      parseTradeCommand('cd /w && uv run agentos trade lp positions --wallet 0xabc --json'),
+    ).toMatchObject({ kind: 'lp', detail: 'positions' })
+  })
+
+  it('labels the result by kind, subject and chain, never by its JSON', () => {
+    const call = parseTradeCommand('agentos trade lp pool boar --chain base --json')!
+    const body = {
+      version: 1,
+      kind: 'pool',
+      chain: { id: 8453, key: 'base', name: 'Base', explorer: 'https://basescan.org' },
+      token: { address: '0x1', symbol: 'boar', decimals: 18, priceUsd: 0.0001 },
+      pool: { poolId: '0x2', tvlUsd: 1_447_702, mcapUsd: 2_514_887 },
+    }
+    const out = parseTradeResult(call, `exit_code=0\n${JSON.stringify(body, null, 2)}\n${MARKER}`)
+    expect(out.detail).toBe('pool boar (Base)')
+    expect(out.summary).not.toContain('{')
+    expect(out.summary).toBe('TVL $1.4M · mcap $2.5M')
+    expect(out.error).toBeNull()
+  })
+
+  it('summarises a multi-chain positions read', () => {
+    const call = parseTradeCommand('agentos trade lp positions --json')!
+    const body = {
+      version: 1,
+      kind: 'positions',
+      chain: null,
+      wallets: [{ address: '0x1' }, { address: '0x2' }],
+      chains: [
+        { key: 'base', name: 'Base' },
+        { key: 'robinhood', name: 'Robinhood' },
+      ],
+      positions: [],
+      totals: { valueUsd: null, feesUsd: null, count: 3, outOfRange: 1 },
+    }
+    const out = parseTradeResult(call, JSON.stringify(body))
+    expect(out.detail).toBe('positions · 2 wallets (Base + Robinhood)')
+    expect(out.summary).toBe('3 open · 1 out of range')
+  })
+
+  describe('positions chain label never comes from a row', () => {
+    const row = (key: string, name: string) =>
+      `{"chain": {"id": 4663, "key": "${key}", "name": "${name}", "explorer": "https://x"}, "tokenId": "7"`
+    const prefix =
+      '{"version": 1, "kind": "positions", "chain": null, "asOfBlock": 5, ' +
+      '"asOfBlocks": {"base": 5, "robinhood": 9}, "wallets": [{"address": "0xde93"}], ' +
+      '"chains": [{"id": 8453, "key": "base", "name": "Base"}, {"id": 4663, "key": "robinhood", "name": "Robinhood Chain"}], ' +
+      `"positions": [${row('robinhood', 'Robinhood Chain')}, "own`
+
+    it('names every scanned chain from asOfBlocks when the JSON is truncated', () => {
+      const call = parseTradeCommand('agentos trade lp positions --wallet 0xde93 --json')!
+      const out = parseTradeResult(call, prefix)
+      expect(out.detail).toBe('positions (Base + Robinhood)')
+    })
+
+    it('names the chains from the envelope when the JSON parses', () => {
+      const call = parseTradeCommand('agentos trade lp positions --wallet 0xde93 --json')!
+      const body = {
+        version: 1,
+        kind: 'positions',
+        chain: null,
+        asOfBlocks: { base: 5, robinhood: 9 },
+        wallets: [{ address: '0xde93' }],
+        chains: [
+          { key: 'base', name: 'Base' },
+          { key: 'robinhood', name: 'Robinhood Chain' },
+        ],
+        positions: [{ chain: { key: 'robinhood', name: 'Robinhood Chain' }, tokenId: '7' }],
+        totals: { valueUsd: 12, feesUsd: 0, count: 1, outOfRange: 0 },
+      }
+      const out = parseTradeResult(call, JSON.stringify(body))
+      expect(out.detail).toBe('positions · 1 wallet (Base + Robinhood)')
+    })
+
+    it('falls back to the command line when even asOfBlocks was cut', () => {
+      const cut = `{"version": 1, "kind": "positions", "chain": null, "asOfBlo`
+      const both = parseTradeCommand('agentos trade lp positions --wallet 0xde93 --json')!
+      expect(parseTradeResult(both, cut).detail).toBe('positions (Base + Robinhood)')
+      const one = parseTradeCommand(
+        'agentos trade lp positions --wallet 0xde93 --chain base --json',
+      )!
+      expect(parseTradeResult(one, cut).detail).toBe('positions (Base)')
+      const two = parseTradeCommand(
+        'agentos trade lp positions --chain robinhood --chain=base --json',
+      )!
+      expect(parseTradeResult(two, cut).detail).toBe('positions (Robinhood + Base)')
+    })
+
+    it('uses the command flags over a row when asOfBlocks is gone', () => {
+      const call = parseTradeCommand('agentos trade lp positions --chain base --json')!
+      const noBlocks = `{"version": 1, "kind": "positions", "chain": null, "positions": [${row('robinhood', 'Robinhood Chain')}`
+      expect(parseTradeResult(call, noBlocks).detail).toBe('positions (Base)')
+    })
+
+    it('omits the chain when neither the result nor the command names it', () => {
+      const call = lpCallFromResult(`${prefix.slice(0, 60)}\n${MARKER}`)!
+      const cut = `{"version": 1, "kind": "positions", "chain": null, "positions": [${row('robinhood', 'Robinhood Chain')}`
+      expect(parseTradeResult(call, cut).detail).toBe('positions')
+    })
+  })
+
+  it('still labels a result truncated past valid JSON', () => {
+    const call = parseTradeCommand('agentos trade lp ranges boar --chain base --json')!
+    const truncated =
+      '{"version": 1, "kind": "ranges", "chain": {"id": 8453, "key": "base", "name": "Base", ' +
+      '"explorer": "https://basescan.org"}, "asOfBlock": 1, "token": {"address": "0x1", "symbol": "boar", "dec'
+    const out = parseTradeResult(call, truncated)
+    expect(out.detail).toBe('ranges boar (Base)')
+    expect(out.summary).not.toContain('{')
+  })
+
+  it('reports an lp error as an error', () => {
+    const call = parseTradeCommand('agentos trade lp pool nope --chain base --json')!
+    const out = parseTradeResult(
+      call,
+      'exit_code=1\n{"error": {"code": "trading.lp.pool_not_found", "message": "no V4 pool for nope"}}',
+    )
+    expect(out.error).toBe('no V4 pool for nope')
+  })
+
+  it('recognises a liquidity read from the card announcement alone', () => {
+    expect(lpCallFromResult(`{"kind": "pool"}\n${MARKER}`)).toMatchObject({
+      kind: 'lp',
+      title: 'Liquidity read',
+    })
+    expect(
+      lpCallFromResult(
+        '[generated artifact omitted: pool-boar-base-1.json (application/vnd.agentos.lp+json)]',
+      ),
+    ).not.toBeNull()
+    expect(lpCallFromResult('publish_artifact path=a.png mime=image/png')).toBeNull()
+    expect(lpCallFromResult('{"kind": "pool"}')).toBeNull()
+  })
+
+  it('recognises all three shapes of the card line: raw, live-rewritten, projected', () => {
+    const body = '{"version": 1, "kind": "positions"'
+    // What the CLI prints.
+    expect(lpCallFromResult(`${body}\n${MARKER}`)).not.toBeNull()
+    // What a live tool result carries: publish_inline_artifacts rewrote the line (no mime).
+    const live =
+      '[inline artifact published and already rendered for the user: ' +
+      'lp-cards/positions-wallets-20260927T105305Z.json. Do not call publish_artifact for it.]'
+    expect(lpCallFromResult(`${body}\n${live}`)).toMatchObject({
+      kind: 'lp',
+      title: 'Liquidity read',
+    })
+    expect(
+      lpCallFromResult(
+        '[inline artifact published and already rendered for the user: ' +
+          '/w/lp-cards/pool-boar-base-1.json. Do not call publish_artifact for it.]',
+      ),
+    ).not.toBeNull()
+    // What a history projection leaves.
+    expect(
+      lpCallFromResult(
+        `${body}\n[generated artifact omitted: positions-wallets-1.json (application/vnd.agentos.lp+json)]`,
+      ),
+    ).not.toBeNull()
+    // Some other inline artifact is not a liquidity read.
+    expect(
+      lpCallFromResult(
+        '[inline artifact published and already rendered for the user: charts/boar.png. Do not call publish_artifact for it.]',
+      ),
+    ).toBeNull()
+    expect(lpCallFromResult('[inline artifact not published: no such file]')).toBeNull()
+  })
+
+  it('keeps only the subject in the command detail, never a flag value', () => {
+    expect(parseTradeCommand('agentos trade lp positions --budget-seconds 60 --json')!.detail).toBe(
+      'positions',
+    )
+    expect(
+      parseTradeCommand('agentos trade lp positions --budget-seconds=60 --all --wallet 0xabc')!
+        .detail,
+    ).toBe('positions')
+    expect(
+      parseTradeCommand('agentos trade lp pool --quote USDC --json boar --no-card --chain base')!
+        .detail,
+    ).toBe('pool boar · Base')
+    expect(parseTradeCommand('agentos trade lp position --chain=base 12345 --json')!.detail).toBe(
+      'position 12345 · Base',
+    )
+  })
+
+  it('keeps the full chain name when a positions read spans one chain', () => {
+    const call = parseTradeCommand('agentos trade lp positions --chain robinhood --json')!
+    const cut = '{"version": 1, "kind": "positions", "chain": null, "asOfBlo'
+    expect(parseTradeResult(call, cut).detail).toBe('positions (Robinhood Chain)')
   })
 })
