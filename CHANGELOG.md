@@ -15,6 +15,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Approval queue: a process that shares a state directory with a live gateway
+  but has no approval surface of its own can no longer queue approvals there.
+  A test or probe script that imported the shell tool and drove
+  `_check_exec_approval` wrote every gated command — including
+  `bash -c "rm -rf /etc"` — as a pending row in `~/.agentos/state/
+  approval_queue.sqlite`, and the running desktop app popped "Approval needed
+  for exec" at a user who never issued it. `ApprovalQueue.request()` now
+  checks `gateway.pid` and the OS lock on `gateway.pid.lock` (the same
+  liveness test the gateway uses to refuse a second instance) and raises
+  `ApprovalQueueOwnedByGatewayError` naming the owning pid and the
+  `AGENTOS_STATE_DIR` fix. The CLI claims a local surface at startup, so
+  `agentos chat --standalone` and `agentos agent` keep working beside a
+  running gateway; a stale pid file from a crashed gateway does not block.
+
 - `senior-unilp-manager`: a node that refuses the simulated `eth_call` — a
   rate limit, a transient internal error, an HTTP-level failure — no longer
   prints `result: REVERTED` with "Fix the parameters"; the dry-run reports
