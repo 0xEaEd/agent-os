@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- Desktop: the mode pill reads Chat | Trade, and the strip no longer says
+  LIVE while a reply streams. The tab is a verb like its sibling, and the
+  streaming reply is visible in the chat itself; the word only repeated it.
+  AWAITING and RUNNING stay: a pending decision and a mission in flight are
+  things the chat does not show on its own.
+
 ## [2026.9.25] - 2026-09-25
 
 ### Fixed

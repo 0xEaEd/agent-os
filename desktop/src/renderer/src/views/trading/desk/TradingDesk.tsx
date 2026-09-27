@@ -119,7 +119,6 @@ export function useDeskFrame(input: {
   // chat's instruments get it through `desk`.
   const missions = useMissions(sessionKey, active)
   const globalPending = usePendingApprovals(active)
-  const [streaming, setStreaming] = useState(false)
   const [sessionPending, setSessionPending] = useState(0)
   const reportPending = useCallback(
     (n: number) => {
@@ -282,7 +281,6 @@ export function useDeskFrame(input: {
     onFirstSend: session.ensureFiled,
     onStartFresh: startFresh,
     onOpenBookTab: openBookTab,
-    onStreaming: setStreaming,
     onSessionPending: reportPending,
     onBindReject: bindReject,
   }
@@ -296,7 +294,6 @@ export function useDeskFrame(input: {
         running={missions.running}
         sessionPending={sessionPending}
         globalPending={globalPending > 0 ? globalPending : null}
-        streaming={streaming}
         deskMode={fullDesk}
         onToggleDesk={() => setDeskMode(!fullDesk)}
         onOpenApprovals={() => {
