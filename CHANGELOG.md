@@ -19,6 +19,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the document instead. `null` now resolves to an empty string, while every
   other value keeps its `str()` so `0` and `false` still print as themselves
   (#3417).
+- `memory_get`: the `from`/`lines` range now counts lines the way every other
+  tool does and returns the file's own text. #3176 moved `grep_search` and
+  `apply_patch` onto `split_lines` because `str.splitlines()` also breaks on a
+  form feed, NEL and U+2028, which `read_file` does not; `memory_get` kept
+  `str.splitlines()`, so it numbered lines no other tool numbers and the slice
+  was rejoined with `"\n"` -- turning each of those characters into a newline.
+  The same tool therefore returned different text for the same file depending
+  on whether a range was passed. It now slices `split_lines_keepends` and joins
+  on `""`, so a full-file range equals the file. A range also keeps the line
+  terminators it has on disk, where the last line of a range previously lost
+  its newline.
+
 - Secret redaction: a connection string with an empty username no longer
   reaches the model with its password intact. `_DB_CONNSTR_RE` lists
   `postgres`, `mysql`, `mongodb`, `redis` and `amqp` deliberately, but required
