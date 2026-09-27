@@ -62,6 +62,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   readability floor was applied without checking the shot boundary, so a shot
   shorter than 800 ms emitted a cue that overlapped the next one; such a shot
   now gets a cue spanning the whole shot (#2588).
+- `apply_patch`: a hunk whose start line lies past the end of the file is
+  rejected with `Hunk start line N exceeds file length (M lines)` and the file
+  is left untouched. A hunk of only `+` lines never reached the bounds check,
+  so it was appended at EOF and reported as applied. Appending right after the
+  last line still works (#2632).
+- `nano-banana-pro` skill: the sleep between retries no longer drops back to
+  2 s when the schedule moves on to a fallback model. The backoff used the
+  per-model attempt count, which restarts at 1 for each fallback; it now uses
+  the overall attempt number, so the waits run 2 s, 4 s, 8 s instead of 2 s,
+  4 s, 2 s (#2637).
+- Memory: the curated store's `add` refuses a `MEMORY.md`/`USER.md` that an
+  external writer has left out of the store's own format, as `replace`,
+  `remove` and batch already did, instead of rewriting it with no sign the
+  drift existed. `add`'s rewrite never lost data (the parser keeps every
+  non-empty segment), so what this adds is the signal; the cost is that a
+  whitespace-only hand edit, such as a blank line before a `§`, now blocks
+  every memory write until the file is fixed by hand. A refused retry against
+  an unchanged file reuses the existing `.bak` snapshot, and the error no
+  longer tells the model to recover the entries via `add` (#2952).
+- `pdf-toolkit` skill: `split.py` clamps a `--pages` range to the document
+  before expanding it, so `1-100000000` on a five-page PDF no longer exhausts
+  memory. `skipped_pages` lists at most 1000 pages and counts the rest under
+  `skipped_pages_omitted`, and the open-ended ranges `N-` (to the last page)
+  and `-M` (from page 1) are accepted (#2996).
 
 ## [2026.9.26] - 2026-09-26
 
