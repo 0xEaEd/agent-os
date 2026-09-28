@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import structlog
@@ -35,6 +36,11 @@ class Hunk:
     new_start: int
     new_count: int
     lines: list[str] = field(default_factory=list)  # each line keeps its +/-/space prefix
+    # False for a context-anchored hunk (``@@`` / ``@@ <anchor>``): it carries
+    # no line numbers, and ``_locate_hunks`` fills them in from the file.
+    located: bool = True
+    anchor: str | None = None  # the text after ``@@``, a line to search past
+    eof: bool = False  # followed by ``*** End of File``: must match at the end
 
 
 @dataclass
@@ -132,6 +138,12 @@ def _marker_span(lines: list[str]) -> tuple[int, int]:
 
 
 _SECTION_DIRECTIVES = ("*** Add File: ", "*** Update File: ", "*** Delete File: ")
+_END_OF_FILE = "*** End of File"
+_HUNK_FORMS = (
+    "Open each hunk with '@@' (or '@@ <an existing line to search past>') and "
+    "give the ' '/'-' lines exactly as the file has them, or with a numbered "
+    "'@@@ -old_start,count +new_start,count @@@' header."
+)
 
 
 def _dedent_body(body: list[str]) -> list[str]:
@@ -210,14 +222,33 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
             path = line[len("*** Update File: ") :].strip()
             i += 1
             hunks: list[Hunk] = []
-            while i < len(body) and not body[i].startswith("*** "):
+            while i < len(body) and (
+                not body[i].startswith("*** ") or body[i].rstrip() == _END_OF_FILE
+            ):
                 hunk_line = body[i]
-                if hunk_line.startswith("@@@ "):
-                    hunk = _parse_hunk_header(hunk_line)
+                if hunk_line.rstrip() == _END_OF_FILE:
+                    if not hunks:
+                        raise PatchError(
+                            f"'{_END_OF_FILE}' in '*** Update File: {path}' block before any hunk"
+                        )
+                    hunks[-1].eof = True
                     i += 1
+                    continue
+                # The first hunk may open without a header, the way the
+                # context-anchored format allows; any later one needs its '@@'.
+                headerless = (
+                    not hunks and hunk_line[:1] in (" ", "-", "+") and bool(hunk_line.strip())
+                )
+                if hunk_line.startswith("@@") or headerless:
+                    if headerless:
+                        hunk = Hunk(old_start=0, old_count=0, new_start=0, new_count=0)
+                        hunk.located = False
+                    else:
+                        hunk = _parse_hunk_header(hunk_line)
+                        i += 1
                     while (
                         i < len(body)
-                        and not body[i].startswith("@@@ ")
+                        and not body[i].startswith("@@")
                         and not body[i].startswith("*** ")
                     ):
                         raw = body[i]
@@ -243,21 +274,15 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
                 else:
                     # Skipping this line used to leave an update with no hunks,
                     # which was then "applied" by rewriting the file unchanged
-                    # and reported as modified (#2837). The unified-diff header
-                    # is the usual shape, so it gets named.
-                    hint = (
-                        " (that is a unified-diff header; hunks here open with '@@@')"
-                        if hunk_line.startswith("@@ ")
-                        else ""
-                    )
+                    # and reported as modified (#2837).
                     raise PatchError(
                         f"Invalid line in '*** Update File: {path}' block "
-                        f"(expected a '@@@ ' hunk header): {hunk_line!r}{hint}"
+                        f"(expected an '@@' hunk header): {hunk_line!r}"
                     )
             if not hunks:
                 raise PatchError(
                     f"No hunks found in '*** Update File: {path}' block: expected at "
-                    "least one '@@@ -old_start,count +new_start,count @@@' hunk header"
+                    f"least one hunk. {_HUNK_FORMS}"
                 )
             ops.append(UpdateFile(path=path, hunks=hunks))
 
@@ -305,24 +330,51 @@ def _trim_trailing_separators(hunk: Hunk) -> None:
     ``_split_hunk_line``), but a blank line that merely separates the hunk
     from the next ``@@@`` / ``***`` marker is formatting, not context. The
     header's old-side count tells the two apart: a trailing blank the count
-    does not account for is a separator.
+    does not account for is a separator. A context-anchored hunk has no
+    count, so every trailing bare blank is taken as a separator -- dropping
+    one only trims context, keeping a spurious one fails the match.
     """
+    if not hunk.located:
+        while hunk.lines and hunk.lines[-1] == "":
+            hunk.lines.pop()
+        return
     while hunk.lines and hunk.lines[-1] == "" and _old_side_line_count(hunk.lines) > hunk.old_count:
         hunk.lines.pop()
 
 
-def _parse_hunk_header(header: str) -> Hunk:
-    """Parse '@@@ -old_start[,old_count] +new_start[,new_count] @@@'."""
-    # Format: @@@ -10,3 +10,4 @@@ or @@@ -10 +10,4 @@@
-    import re
+# '@@@ -10,3 +10,4 @@@', and the unified-diff '@@ -10,3 +10,4 @@' (optionally
+# followed by the section text git appends). The closing run must match the
+# opening one.
+_NUMBERED_HUNK_HEADER = re.compile(r"(@@@?)\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+\1(?!@)")
 
-    m = re.match(r"@@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@@", header.strip())
+
+def _parse_hunk_header(header: str) -> Hunk:
+    """Parse one hunk header.
+
+    Two families are accepted:
+
+    * numbered -- ``@@@ -old_start[,old_count] +new_start[,new_count] @@@``,
+      or the same with ``@@`` as a unified diff writes it;
+    * context-anchored -- a bare ``@@``, or ``@@ <line>`` naming an existing
+      line to search past. This is the ``*** Begin Patch`` format as OpenAI's
+      models write it, with no line numbers; ``_locate_hunks`` finds the hunk
+      by its context and removed lines. Every patch a GPT model sent used to
+      be refused on this line.
+    """
+    stripped = header.strip()
+    m = _NUMBERED_HUNK_HEADER.match(stripped)
     if not m:
+        if stripped == "@@@" or (stripped.startswith("@@") and not stripped.startswith("@@@")):
+            anchor = "" if stripped == "@@@" else stripped[2:].strip()
+            hunk = Hunk(old_start=0, old_count=0, new_start=0, new_count=0)
+            hunk.located = False
+            hunk.anchor = anchor or None
+            return hunk
         raise PatchError(f"Invalid hunk header: {header!r}")
-    old_start = int(m.group(1))
-    old_count = int(m.group(2)) if m.group(2) is not None else (0 if old_start == 0 else 1)
-    new_start = int(m.group(3))
-    new_count = int(m.group(4)) if m.group(4) is not None else (0 if new_start == 0 else 1)
+    old_start = int(m.group(2))
+    old_count = int(m.group(3)) if m.group(3) is not None else (0 if old_start == 0 else 1)
+    new_start = int(m.group(4))
+    new_count = int(m.group(5)) if m.group(5) is not None else (0 if new_start == 0 else 1)
     return Hunk(
         old_start=old_start,
         old_count=old_count,
@@ -755,6 +807,86 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk, newline: str = "\n") -> list[
     return result[:pos] + new_lines + result[src_pos:]
 
 
+def _find_block(text: list[str], block: list[str], start: int) -> int | None:
+    """First index at or after *start* where *block* occurs in *text*."""
+    first = block[0]
+    for pos in range(start, len(text) - len(block) + 1):
+        if text[pos] == first and text[pos : pos + len(block)] == block:
+            return pos
+    return None
+
+
+def _locate_hunks(file_lines: list[str], hunks: list[Hunk]) -> list[Hunk]:
+    """Give every context-anchored hunk the line numbers ``_apply_hunk`` needs.
+
+    Hunks are located in patch order against the original file, each search
+    starting where the previous hunk ended, so repeated snippets resolve to
+    successive occurrences. An ``@@ <anchor>`` hunk first finds the anchor line
+    (compared stripped, since it only steers the search) and matches after it.
+    The context and removed lines themselves must match the file exactly --
+    ``_apply_hunk`` checks them again against the resolved position.
+
+    A hunk with nothing to match -- only ``+`` lines -- goes right after its
+    anchor line, or at the end of the file when it has none.
+    """
+    text = [line.rstrip("\r\n") for line in file_lines]
+    cursor = 0
+    located: list[Hunk] = []
+    for hunk in hunks:
+        old = [
+            content.rstrip("\r\n")
+            for prefix, content in map(_split_hunk_line, hunk.lines)
+            if prefix in (" ", "-")
+        ]
+        if hunk.located:
+            located.append(hunk)
+            cursor = max(cursor, hunk.old_start - 1 + len(old))
+            continue
+        start = cursor
+        if hunk.anchor is not None:
+            anchor = hunk.anchor.strip()
+            found = next(
+                (n for n in range(cursor, len(text)) if text[n].strip() == anchor),
+                None,
+            )
+            if found is None:
+                raise PatchError(f"Anchor line not found: '@@ {hunk.anchor}'")
+            start = found + 1
+        if not old:
+            pos = start if hunk.anchor is not None and not hunk.eof else len(text)
+        elif hunk.eof:
+            tail = len(text) - len(old)
+            pos = tail if tail >= start and text[tail:] == old else -1
+            if pos < 0:
+                raise PatchError(
+                    f"Hunk marked '{_END_OF_FILE}' does not match the last "
+                    f"{len(old)} line(s) of the file; its first line is {old[0]!r}"
+                )
+        else:
+            match = _find_block(text, old, start)
+            if match is None:
+                where = f" after '@@ {hunk.anchor}'" if hunk.anchor is not None else ""
+                raise PatchError(
+                    f"Hunk context not found{where}: no run of {len(old)} line(s) "
+                    f"starting with {old[0]!r} matches the file exactly. Re-read the "
+                    "file and copy the ' ' and '-' lines verbatim."
+                )
+            pos = match
+        cursor = pos + len(old)
+        new_count = sum(1 for raw in hunk.lines if _split_hunk_line(raw)[0] in (" ", "+"))
+        located.append(
+            replace(
+                hunk,
+                old_start=pos + 1,
+                old_count=len(old),
+                new_start=pos + 1,
+                new_count=new_count,
+                located=True,
+            )
+        )
+    return located
+
+
 def _updated_text(text: str, hunks: list[Hunk]) -> str:
     """Return *text* with every hunk applied, without touching the filesystem."""
     # Newlines only. `str.splitlines()` also breaks on \f, a lone \r, \x85 and
@@ -765,9 +897,14 @@ def _updated_text(text: str, hunks: list[Hunk]) -> str:
     # wrong offset when the shifted context happened to match.
     lines = split_lines_keepends(text)
     newline = _detect_newline(lines)
-    # Apply hunks in reverse order so earlier line numbers stay valid
-    for hunk in sorted(hunks, key=lambda h: h.old_start, reverse=True):
-        lines = _apply_hunk(lines, hunk, newline)
+    hunks = _locate_hunks(lines, hunks)
+    # Apply hunks in reverse order so earlier line numbers stay valid. Two
+    # hunks can share a start -- a pure addition after an anchor line, then a
+    # hunk whose context begins right there -- and the later one must go first
+    # or it would be matched against the lines the earlier one inserted.
+    order = sorted(range(len(hunks)), key=lambda n: (hunks[n].old_start, n), reverse=True)
+    for n in order:
+        lines = _apply_hunk(lines, hunks[n], newline)
     # Only the last line may go without a terminator. Context lines are copied
     # verbatim, so a file whose last line had none keeps it that way even once
     # a hunk has appended after it — and the next line lands on the same line.
@@ -950,7 +1087,7 @@ def _apply_ops(ops: list[PatchOp], root: Path | None = None) -> tuple[int, int, 
     name="apply_patch",
     description=(
         "Apply a structured patch to files. Supports adding, modifying, and deleting files "
-        "using Begin Patch / End Patch markers with @@@ hunk headers."
+        "using Begin Patch / End Patch markers."
     ),
     params={
         "patch": {
@@ -958,8 +1095,12 @@ def _apply_ops(ops: list[PatchOp], root: Path | None = None) -> tuple[int, int, 
             "description": (
                 "Patch text in Begin Patch format. "
                 "Use '*** Begin Patch' / '*** End Patch' markers. "
-                "Sections: '*** Add File: path', '*** Update File: path' with @@@ hunks, "
-                "'*** Delete File: path'."
+                "Sections: '*** Add File: path' (every line prefixed '+'), "
+                "'*** Update File: path' with hunks, '*** Delete File: path'. "
+                "A hunk opens with '@@' (or '@@ <an existing line to search past>') "
+                "and holds ' ' context, '-' removed and '+' added lines; context and "
+                "removed lines must match the file exactly. A numbered "
+                "'@@@ -old_start,count +new_start,count @@@' header also works."
             ),
         },
         "approval_id": {
