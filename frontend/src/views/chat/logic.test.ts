@@ -212,6 +212,9 @@ describe('historyFallbackMessageIdentity', () => {
     expect(stripAssistantText(`Done.\n\n${lp}`)).toBe('Done.')
     expect(stripAssistantText(`[[reply_to_current]] Done. ${lp}`)).toBe('Done.')
     expect(stripAssistantText(lp)).toBe('')
+    const dca =
+      '[generated artifact omitted: mandate-eth-20260928T054800Z.json (application/vnd.agentos.dca+json)]'
+    expect(stripAssistantText(`Started.\n\n${dca}`)).toBe('Started.')
     expect(
       stripAssistantText('Done.\n<invoke name="exec_command"><parameter name="command">pwd'),
     ).toBe('Done.')

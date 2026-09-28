@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "kind": "mandate",
+  "fetchedAt": "2026-09-28T05:48:00Z",
+  "warnings": ["USDC balance covers 14 more buys"],
+  "request": {
+    "kind": "get",
+    "params": {
+      "mandateId": "dca_9e8f7a6b"
+    }
+  },
+  "mandate": {
+    "id": "dca_9e8f7a6b",
+    "name": "DCA ETH 6h",
+    "status": "awaiting_approval",
+    "statusReason": null,
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0x89e0c3a5f1b2d4e6a7c8b9d0e1f2a3b4c5d6da97",
+      "label": "Key main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+      "symbol": "ETH",
+      "decimals": 18,
+      "priceUsd": 2980
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1
+    },
+    "schedule": {
+      "everySeconds": 21600,
+      "label": "every 6 hours",
+      "startNow": true,
+      "anchorAt": null,
+      "nextRunAt": null,
+      "lastRunAt": null
+    },
+    "budget": {
+      "usdPerRun": 25,
+      "capUsd": 500,
+      "spentUsd": 0,
+      "reservedUsd": 0,
+      "remainingUsd": 500,
+      "progress": 0
+    },
+    "runs": {
+      "done": 0,
+      "max": null,
+      "skipped": 0,
+      "failed": 0,
+      "attempts": 0
+    },
+    "guards": {
+      "maxPriceUsd": null,
+      "approvalThresholdUsd": 100,
+      "dailyCapUsd": 1000,
+      "slippagePct": 1,
+      "buysNeedApproval": false
+    },
+    "acquired": {
+      "amount": {
+        "raw": "0",
+        "human": "0",
+        "usd": 0
+      },
+      "avgPriceUsd": null,
+      "currentPriceUsd": 2980,
+      "vsAvgPct": null,
+      "unrealizedUsd": null,
+      "gasUsd": 0
+    },
+    "history": [],
+    "initiator": "agent",
+    "sessionKey": "agent:main:desk:main",
+    "createdAt": "2026-09-28T05:31:00Z",
+    "updatedAt": "2026-09-28T05:31:00Z",
+    "approvedAt": null,
+    "expiresAt": "2026-09-29T05:31:00Z"
+  }
+}

@@ -323,3 +323,104 @@ describe('LP card CSS contract', () => {
     expect(css).not.toMatch(/\.msg-artifact-lp\[data-lp-kind/)
   })
 })
+
+describe('DCA card CSS contract', () => {
+  const block = (selector: string): string | undefined =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+    )?.[0]
+
+  it('styles the placeholder and its own group', () => {
+    expect(block('.chat-surface .msg-artifact-dca-group')).toMatch(/display: grid;/)
+    expect(block('.chat-surface .msg-artifact-dca__body:empty')).toMatch(/display: none;/)
+    expect(block('.chat-surface .msg-artifact-dca__status[hidden]')).toMatch(/display: none;/)
+    expect(css).not.toMatch(/\.msg-artifact-dca\[data-dca-kind/)
+  })
+
+  it('tones every status through theme tokens, the pill included', () => {
+    for (const [status, token] of [
+      ['awaiting_approval', '--warn'],
+      ['active', '--ok'],
+      ['completed', '--info'],
+      ['paused', '--dim'],
+    ]) {
+      expect(css).toContain(`.chat-surface .dca-pill[data-status='${status}'] {`)
+      expect(css).toMatch(
+        new RegExp(
+          `\\.dca-pill\\[data-status='${status}'\\] \\{\\s*--dca-tone: var\\(${token}\\);`,
+        ),
+      )
+    }
+    expect(css).toMatch(/\.dca-pill:is\(\s*\[data-status='stopped'\],/)
+    expect(block('.chat-surface .dca-pill')).toMatch(/color: var\(--dca-tone\);/)
+  })
+
+  it('pulses a pending proposal and a buy in flight softly, and not at all under reduced motion', () => {
+    expect(
+      block(".chat-surface .dca-pill[data-status='awaiting_approval'] .dca-pill__dot"),
+    ).toMatch(/animation: dca-pulse/)
+    expect(block('.chat-surface .dca-chart__pending')).toMatch(/animation: dca-pending/)
+    expect(block(".chat-surface .dca-run[data-dca-run-status='pending'] .dca-run__status")).toMatch(
+      /animation: dca-pending/,
+    )
+    const reduced = css.match(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.chat-surface \.dca-pill[^{]*\{[^}]*\}/,
+    )?.[0]
+    expect(reduced).toContain(
+      ".chat-surface .dca-pill[data-status='awaiting_approval'] .dca-pill__dot",
+    )
+    expect(reduced).toContain('.chat-surface .dca-chart__pending')
+    expect(reduced).toContain(
+      ".chat-surface .dca-run[data-dca-run-status='pending'] .dca-run__status",
+    )
+    expect(reduced).toMatch(/animation: none;/)
+  })
+
+  it('hatches the reserved slice after the spent one', () => {
+    expect(block('.chat-surface .dca-progress__spent')).toMatch(/background: var\(--dca-tone\);/)
+    expect(block('.chat-surface .dca-progress__reserved')).toMatch(/repeating-linear-gradient\(/)
+  })
+
+  it('puts the stats 2×2, and 4 across once the card is wide', () => {
+    expect(block('.chat-surface .dca-card__stats')).toMatch(
+      /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/,
+    )
+    expect(block(".chat-surface .dca-card[data-dca-layout='wide'] .dca-card__stats")).toMatch(
+      /grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/,
+    )
+  })
+
+  it('tints gains and losses, and dims an unpriced figure', () => {
+    expect(block(".chat-surface .dca-card [data-dca-tone='up']")).toMatch(/color: var\(--ok\);/)
+    expect(block(".chat-surface .dca-card [data-dca-tone='down']")).toMatch(
+      /color: var\(--danger\);/,
+    )
+    expect(block('.chat-surface .dca-card [data-dca-no-price]')).toMatch(
+      /color: var\(--muted-foreground\);/,
+    )
+  })
+
+  it('draws the chart lines dashed (average) and dotted (current price)', () => {
+    expect(block('.chat-surface .dca-chart__avg-line')).toMatch(/stroke-dasharray: 6 4;/)
+    expect(block('.chat-surface .dca-chart__now-line')).toMatch(/stroke-dasharray: 1 3;/)
+    expect(block('.chat-surface .dca-chart__skip')).toMatch(/fill: none;/)
+    expect(block('.chat-surface .dca-chart__tooltip[hidden]')).toMatch(/display: none;/)
+    // Labels anchor to the SVG height, which the plot box declares.
+    const plot = block('.chat-surface .dca-chart__plot')
+    expect(plot).toMatch(/--dca-plot-pad: /)
+    expect(plot).toMatch(/--dca-plot-h: /)
+    expect(block('.chat-surface .dca-chart__svg')).toMatch(/height: var\(--dca-plot-h\);/)
+  })
+
+  it('shows controls with an armed Stop and an inline error, and keeps links out of the link colour', () => {
+    expect(block(".chat-surface .dca-action[data-dca-tone='primary']")).toMatch(
+      /background: var\(--primary\);/,
+    )
+    expect(block('.chat-surface .dca-action[data-dca-confirm]')).toMatch(/var\(--danger\)/)
+    expect(block('.chat-surface .dca-actions__error')).toMatch(/color: var\(--danger\);/)
+    expect(block('.chat-surface .dca-actions__error[hidden]')).toMatch(/display: none;/)
+    expect(css).toContain(
+      '.chat-surface .msg-body .dca-card a:is(.dca-run__link, .dca-chart__tx) {',
+    )
+  })
+})
