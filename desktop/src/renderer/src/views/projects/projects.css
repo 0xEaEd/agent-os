@@ -149,7 +149,8 @@
   cursor: default;
 }
 
-/* The inline new-folder row. */
+/* The inline new-folder row. The tint groups it; the field's own focus ring
+   is the only outline, so the row carries no border of its own. */
 .proj-new {
   display: flex;
   flex-direction: column;
@@ -158,7 +159,6 @@
   padding: 4px 6px 6px;
   border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--sidebar-accent) 70%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
 }
 .proj-new[data-busy='true'] {
   opacity: 0.6;
