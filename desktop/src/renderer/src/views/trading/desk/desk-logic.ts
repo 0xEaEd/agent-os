@@ -1,17 +1,29 @@
 import type { RawJob, RawRun } from '@/views/cron/logic'
 import {
   chainName,
+  chainShort,
   clampSymbol,
   compareAmounts,
   formatAmount,
   formatPct,
+  formatPrice,
   formatUsd,
   fromRaw,
   sameAddress,
   shortAddress,
   toRaw,
 } from '../logic'
-import { CHAINS, providerLabel, type Order, type OrderKind, type Wallet } from '../types'
+import {
+  CHAINS,
+  isLpKind,
+  NATIVE_ADDRESS,
+  providerLabel,
+  type LpPlan,
+  type LpPlanAmount,
+  type Order,
+  type OrderKind,
+  type Wallet,
+} from '../types'
 import { TRADING_AGENT_ID } from './agent'
 
 /**
@@ -55,6 +67,8 @@ export function riskStamp(order: Pick<Order, 'valueUsd' | 'priceImpactPct' | 'ki
   if (order.priceImpactPct !== null && order.priceImpactPct >= HIGH_RISK_IMPACT_PCT) return 'high'
   // A send nobody could price is not "small": it is unknown, and gone once it mines.
   if (orderKind(order) === 'send' && order.valueUsd === null) return 'high'
+  // Nor is a deposit into a pool nobody could price.
+  if (orderKind(order) === 'lp_add' && order.valueUsd === null) return 'high'
   return 'normal'
 }
 
@@ -247,6 +261,14 @@ export function approvalFacts(
   push('wallet', walletDisplay(order.wallet, wallets))
   push('chain', chainName(order.chainId))
   const kind = orderKind(order)
+  if (isLpKind(kind)) {
+    for (const f of lpFacts(order, labels)) facts.push(f)
+    const gas = order.gasUsd ?? order.plan?.gasUsd ?? null
+    if (gas !== null) push('gas', formatUsd(gas))
+    push('order', order.orderId)
+    if (order.expiresAt) push('expires', formatExpiryShort(order.expiresAt, now, locale))
+    return facts
+  }
   if (kind === 'send') {
     // Where the money goes is the one fact that may never be shortened.
     push('to', addressFact(order), undefined, true)
@@ -413,12 +435,14 @@ export function orderLine(
   order: Pick<
     Order,
     'kind' | 'amountIn' | 'tokenIn' | 'tokenOut' | 'recipient' | 'recipientLabel' | 'batchId'
-  >,
+  > &
+    Partial<Pick<Order, 'plan' | 'valueUsd' | 'tokenId'>>,
   legs?: readonly Pick<Order, 'amountIn' | 'tokenIn'>[],
   recipientsWord = 'recipients',
 ): string {
   const kind = orderKind(order)
   const symbol = order.tokenIn?.symbol ?? ''
+  if (isLpKind(kind)) return lpOrderLine(order)
   if (kind === 'revoke') {
     const spender = order.recipientLabel || shortAddress(order.recipient ?? '')
     return `${symbol || shortAddress(order.tokenIn?.address ?? '')} ⛨ ${spender}`.trim()
@@ -434,11 +458,11 @@ export function orderLine(
   return `${formatAmount(order.amountIn)} ${symbol} → ${order.tokenOut?.symbol ?? ''}`.trim()
 }
 
-/** The word a toast or notification leads with: Swap, Send, Multisend, Revoke. */
+/** The word a toast or notification leads with: Swap, Send, Multisend, Revoke, Collect fees… */
 export function orderKindWord(
   order: Pick<Order, 'kind' | 'batchId'>,
   legs = 1,
-): 'swap' | 'send' | 'multisend' | 'revoke' {
+): OrderKind | 'multisend' {
   const kind = orderKind(order)
   if (kind === 'send' && order.batchId && legs > 1) return 'multisend'
   return kind
@@ -459,10 +483,317 @@ export function rejectionMessage(
   const what =
     order.batchId && legs > 1
       ? `batch ${order.batchId} (${legs} sends)`
-      : `${orderKind(order) === 'swap' ? 'order' : orderKind(order)} ${order.orderId}`
+      : isLpKind(orderKind(order))
+        ? `${orderKind(order).replace('_', ' ')} order ${order.orderId}`
+        : `${orderKind(order) === 'swap' ? 'order' : orderKind(order)} ${order.orderId}`
   return clean
     ? `Rejected ${what}: ${clean}`
     : `Rejected ${what}. Do not retry it without asking first.`
+}
+
+/* ── LP writes (docs/lp-write.md) ────────────────────────────────────────── */
+
+/** Where the pool's price sits against the plan's range; null when the plan does not say. */
+export type LpRangeStatus = 'in-range' | 'above-range' | 'below-range'
+
+/**
+ * In range when `tickLower <= tick < tickUpper` (V4's own rule). Outside it,
+ * "above" means the price in quote per base is past the upper bound — which
+ * is the high-tick side when the base token is currency0, the low-tick side
+ * when it is currency1.
+ */
+export function lpRangeStatus(plan: LpPlan): LpRangeStatus | null {
+  if (plan.status === 'in-range' || plan.status === 'above-range' || plan.status === 'below-range')
+    return plan.status
+  const tick = plan.pool?.tick
+  const { tickLower, tickUpper } = plan.range ?? {}
+  if (typeof tick !== 'number' || typeof tickLower !== 'number' || typeof tickUpper !== 'number')
+    return null
+  if (tick >= tickLower && tick < tickUpper) return 'in-range'
+  const currency0 = plan.pool.poolKey?.currency0
+  const baseIsCurrency1 = Boolean(
+    currency0 && plan.token?.address && !sameAddress(currency0, plan.token.address),
+  )
+  const highTick = tick >= tickUpper
+  return highTick !== baseIsCurrency1 ? 'above-range' : 'below-range'
+}
+
+/** A quote-per-base price without the dollar sign formatPrice gives it. */
+function formatRatio(value: number | null): string {
+  return formatPrice(value).replace(/^(−?)\$/, '$1')
+}
+
+/**
+ * The range as the card prints it: market cap when both bounds are known
+ * ("$2.1M – $9.8M mcap"), else the price in quote per base
+ * ("0.0₈19 – 0.0₇154 WETH per PEPE").
+ */
+export function lpRangeText(plan: LpPlan, words: { mcap: string; per: string }): string {
+  const r = plan.range
+  if (!r) return ''
+  if (typeof r.mcapLower === 'number' && typeof r.mcapUpper === 'number') {
+    return `${formatUsd(r.mcapLower, { compact: true })} – ${formatUsd(r.mcapUpper, {
+      compact: true,
+    })} ${words.mcap}`
+  }
+  if (typeof r.priceLower !== 'number' || typeof r.priceUpper !== 'number') return ''
+  return `${formatRatio(r.priceLower)} – ${formatRatio(r.priceUpper)} ${clampSymbol(
+    plan.quote?.symbol ?? '',
+  )} ${words.per} ${clampSymbol(plan.token?.symbol ?? '')}`.trim()
+}
+
+/** The position the order acts on: `#48213`, or null for a fresh mint. */
+export function lpTokenId(order: Pick<Order, 'plan' | 'tokenId'>): string | null {
+  return order.tokenId || order.plan?.tokenId || null
+}
+
+/** "PEPE / WETH": the plan's pair, else the order's two tokens. */
+function lpPair(order: Pick<Order, 'plan' | 'tokenIn' | 'tokenOut'>): string {
+  const base = order.plan?.token?.symbol ?? order.tokenIn?.symbol ?? ''
+  const quote = order.plan?.quote?.symbol ?? order.tokenOut?.symbol ?? ''
+  return `${clampSymbol(base)} / ${clampSymbol(quote)}`
+}
+
+/**
+ * The card's position line: `#48213 · PEPE / WETH · Base · 1%`. A mint has
+ * no id yet and leads with the pair.
+ */
+export function lpPositionLine(
+  order: Pick<Order, 'plan' | 'tokenId' | 'tokenIn' | 'tokenOut' | 'chainId'>,
+  newPosition: string,
+): string {
+  const id = lpTokenId(order)
+  return [
+    id ? `#${id}` : newPosition,
+    lpPair(order),
+    chainShort(order.chainId),
+    order.plan?.pool?.feePct ?? '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/**
+ * One line for a toast or a notification: "#48213 · PEPE / WETH",
+ * "#48213 · 100% · PEPE / WETH", "PEPE / WETH · $50.00".
+ */
+export function lpOrderLine(
+  order: Partial<Pick<Order, 'kind' | 'plan' | 'tokenId' | 'valueUsd' | 'tokenIn' | 'tokenOut'>>,
+  /** Leave the add's dollar figure out (a row that shows the deposit says it there). */
+  opts: { usd?: boolean } = {},
+): string {
+  const kind = order.kind
+  const plan = order.plan ?? null
+  const pair = lpPair({
+    plan,
+    tokenIn: order.tokenIn ?? ({ symbol: '' } as Order['tokenIn']),
+    tokenOut: order.tokenOut ?? ({ symbol: '' } as Order['tokenOut']),
+  })
+  const id = order.tokenId || plan?.tokenId || null
+  if (kind === 'lp_add') {
+    const usd = opts.usd === false ? null : (order.valueUsd ?? plan?.expected?.usd ?? null)
+    return [pair, usd !== null ? formatUsd(usd) : '', id ? `→ #${id}` : '']
+      .filter(Boolean)
+      .join(' · ')
+  }
+  const pct = kind === 'lp_remove' && typeof plan?.pct === 'number' ? `${plan.pct}%` : ''
+  return [id ? `#${id}` : '', pct, pair].filter(Boolean).join(' · ')
+}
+
+/** "1,240,000 PEPE + 0.00184 WETH · $38.11": a zero side is left out unless both are. */
+function lpAmounts(
+  base: LpPlanAmount | null | undefined,
+  baseSymbol: string,
+  quote: LpPlanAmount | null | undefined,
+  quoteSymbol: string,
+  usd: number | null | undefined,
+): [string, string | undefined] {
+  const sides: [string, string][] = []
+  const zero = (a: LpPlanAmount | null | undefined) => !a || !(Number(a.human) > 0)
+  if (!zero(base) || (zero(base) && zero(quote)))
+    sides.push([formatAmount(base?.human ?? '0'), baseSymbol])
+  if (!zero(quote) || (zero(base) && zero(quote)))
+    sides.push([formatAmount(quote?.human ?? '0'), quoteSymbol])
+  const tail = usd !== null && usd !== undefined ? ` · ${formatUsd(usd)}` : ''
+  const shown = sides.map(([a, sym]) => `${a} ${clampSymbol(sym)}`).join(' + ') + tail
+  const whole = sides.map(([a, sym]) => `${a} ${sym}`).join(' + ') + tail
+  return [shown, shown === whole ? undefined : whole]
+}
+
+/** A raw bound in the token's units, or null when it cannot be read. */
+function rawHuman(raw: string | null | undefined, decimals: number): string | null {
+  if (raw === null || raw === undefined || raw === '') return null
+  try {
+    return fromRaw(BigInt(raw), decimals)
+  } catch {
+    return null
+  }
+}
+
+/** The slippage bounds as a line: both sides, or only the side that is not zero. */
+function lpBounds(plan: LpPlan): [string, string | undefined] | null {
+  const base = rawHuman(plan.bounds?.base, plan.token?.decimals ?? 18)
+  const quote = rawHuman(plan.bounds?.quote, plan.quote?.decimals ?? 18)
+  if (base === null && quote === null) return null
+  const amount = (human: string | null): LpPlanAmount => ({
+    raw: '',
+    human: human ?? '0',
+    usd: null,
+  })
+  return lpAmounts(amount(base), plan.token.symbol, amount(quote), plan.quote.symbol, null)
+}
+
+/**
+ * The LP facts, in the order the card lists them: what comes back (collect,
+ * remove) or goes in (add), the fees a remove includes, the slippage bound,
+ * the approvals an add will set first.
+ */
+function lpFacts(order: Order, labels: Record<string, string>): Fact[] {
+  const plan = order.plan
+  const facts: Fact[] = []
+  const push = (key: string, pair: [string, string | undefined] | null, tone?: Fact['tone']) => {
+    if (!pair || !pair[0]) return
+    facts.push({
+      key,
+      label: labels[key] ?? key,
+      value: pair[0],
+      ...(tone ? { tone } : {}),
+      ...(pair[1] ? { full: pair[1] } : {}),
+    })
+  }
+  if (!plan) {
+    if (order.valueUsd !== null) push('value', [formatUsd(order.valueUsd), undefined])
+    return facts
+  }
+  const baseSym = plan.token?.symbol ?? order.tokenIn.symbol
+  const quoteSym = plan.quote?.symbol ?? order.tokenOut.symbol
+  const kind = orderKind(order)
+  const confirmed = order.status === 'confirmed'
+  if (kind === 'lp_add') {
+    const spent = confirmed ? order.spent : null
+    push(
+      'lpDeposit',
+      spent
+        ? lpAmounts(spent.base, baseSym, spent.quote, quoteSym, null)
+        : lpAmounts(
+            plan.expected?.base,
+            baseSym,
+            plan.expected?.quote,
+            quoteSym,
+            plan.expected?.usd ?? order.valueUsd,
+          ),
+    )
+    if (!confirmed) push('lpMaximum', lpBounds(plan))
+    const needed = (plan.approvals ?? []).filter((a) => a.needed)
+    if (!confirmed) {
+      push('lpApprovals', [
+        needed.length
+          ? needed
+              .map(
+                (a) =>
+                  `${clampSymbol(a.symbol)} ${a.step === 'erc20->permit2' ? '→ Permit2' : '→ PositionManager'}`,
+              )
+              .join(', ')
+          : (labels.none ?? 'none'),
+        undefined,
+      ])
+    }
+  } else {
+    const received = confirmed ? order.received : null
+    push(
+      'lpReceive',
+      received
+        ? lpAmounts(received.base, baseSym, received.quote, quoteSym, null)
+        : lpAmounts(
+            plan.expected?.base,
+            baseSym,
+            plan.expected?.quote,
+            quoteSym,
+            plan.expected?.usd ?? order.valueUsd,
+          ),
+    )
+    if (kind === 'lp_remove' && plan.fees) {
+      push('lpFees', lpAmounts(plan.fees.base, baseSym, plan.fees.quote, quoteSym, plan.fees.usd))
+    }
+    if (kind === 'lp_remove' && !confirmed) push('lpMinimum', lpBounds(plan))
+  }
+  if (kind !== 'lp_collect') {
+    const slippage = order.slippagePct ?? plan.slippagePct
+    if (typeof slippage === 'number') push('lpSlippage', [formatPct(slippage), undefined])
+  }
+  return facts
+}
+
+/**
+ * What an LP order moves, for a list row — never `amountIn`, which on an LP
+ * order is the liquidity (raw L), not a token amount. An add's deposit, a
+ * collect's or remove's take: the receipt once confirmed, else the plan's
+ * expectation with its USD. Null without a plan (an older engine's order).
+ */
+export function lpOrderAmounts(
+  order: Pick<Order, 'kind' | 'plan' | 'status' | 'valueUsd' | 'tokenIn' | 'tokenOut'> &
+    Partial<Pick<Order, 'spent' | 'received'>>,
+): { side: 'deposit' | 'receive'; text: string; full?: string } | null {
+  const plan = order.plan
+  if (!plan) return null
+  const baseSym = plan.token?.symbol ?? order.tokenIn.symbol
+  const quoteSym = plan.quote?.symbol ?? order.tokenOut.symbol
+  const side = orderKind(order) === 'lp_add' ? 'deposit' : 'receive'
+  const moved =
+    order.status === 'confirmed' ? (side === 'deposit' ? order.spent : order.received) : null
+  const [text, full] = moved
+    ? lpAmounts(moved.base, baseSym, moved.quote, quoteSym, null)
+    : lpAmounts(
+        plan.expected?.base,
+        baseSym,
+        plan.expected?.quote,
+        quoteSym,
+        plan.expected?.usd ?? order.valueUsd,
+      )
+  return full ? { side, text, full } : { side, text }
+}
+
+/** The hook the pool calls, or null for a hook-less pool. */
+export function lpHook(plan: LpPlan | null | undefined): string | null {
+  const hooks = plan?.pool?.hook || plan?.pool?.poolKey?.hooks
+  if (!hooks || sameAddress(hooks, NATIVE_ADDRESS)) return null
+  return hooks
+}
+
+export type LpStampKey = 'burns' | 'oneSided' | 'hook' | 'noFees'
+
+/**
+ * The warnings an LP card wears: a full remove burns the position NFT, a
+ * one-sided add deposits one token only, a pool with a hook runs someone
+ * else's code on every change of the position, and a collect with nothing
+ * owed only pays gas.
+ */
+export function lpStamps(
+  order: Pick<Order, 'kind' | 'plan'>,
+): { key: LpStampKey; token?: string }[] {
+  const plan = order.plan
+  if (!plan) return []
+  const kind = orderKind(order)
+  const out: { key: LpStampKey; token?: string }[] = []
+  if (kind === 'lp_remove' && (plan.burn === true || plan.pct === 100)) out.push({ key: 'burns' })
+  if (kind === 'lp_add' && plan.oneSided) {
+    const token = plan.oneSided === 'base' ? plan.token?.symbol : plan.quote?.symbol
+    out.push({ key: 'oneSided', token: clampSymbol(token ?? '') })
+  }
+  if (kind === 'lp_collect' && lpNothingOwed(plan)) out.push({ key: 'noFees' })
+  if (lpHook(plan)) out.push({ key: 'hook' })
+  return out
+}
+
+/**
+ * A collect's plan owes nothing: the fees are worth exactly $0, or both raw
+ * sides are "0". Unknown fees (no figure at all) are not nothing.
+ */
+function lpNothingOwed(plan: LpPlan): boolean {
+  const fees = plan.fees ?? plan.expected
+  if (!fees) return false
+  if (fees.usd === 0) return true
+  return fees.base?.raw === '0' && fees.quote?.raw === '0'
 }
 
 /* ── Send prompt ─────────────────────────────────────────────────────────── */

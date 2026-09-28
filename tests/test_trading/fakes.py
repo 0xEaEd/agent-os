@@ -139,6 +139,12 @@ class FakeChain:
     fail_balance_of: set[str] = field(default_factory=set)
     # JSON-RPC methods that fail outright (a node outage for that method).
     fail_methods: set[str] = field(default_factory=set)
+    #: Receipts as the sealed block has them, keyed by lowercase hash: until
+    #: the head is past the receipt's block, ``receipts`` answers instead
+    #: (Base's flashblock preconfirmation, whose ``l1Fee`` is provisional).
+    sealed: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Blocks the head moves on every ``eth_blockNumber`` (0 = a still chain).
+    head_step: int = 0
     _seq: int = 0
 
     def set_native(self, address: str, wei: int) -> None:
@@ -240,6 +246,7 @@ class FakeChain:
         if method == "eth_chainId":
             return hex(self.chain_id)
         if method == "eth_blockNumber":
+            self.block += self.head_step
             return hex(self.block)
         if method == "eth_getBalance":
             address = str(params[0]).lower()
@@ -278,7 +285,11 @@ class FakeChain:
             self._seq += 1
             return "0x" + format(0xABC000 + self._seq, "x").rjust(64, "0")
         if method == "eth_getTransactionReceipt":
-            return self.receipts.get(str(params[0]).lower())
+            key = str(params[0]).lower()
+            final = self.sealed.get(key)
+            if final is not None and self.block > int(str(final["blockNumber"]), 16):
+                return final
+            return self.receipts.get(key)
         if method == "eth_getTransactionByHash":
             return self.transactions.get(str(params[0]).lower())
         if method == "eth_getCode":

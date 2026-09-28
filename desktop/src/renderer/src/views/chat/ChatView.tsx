@@ -26,6 +26,7 @@ import { useApprovalPending } from '@/views/chat/useApprovalPending'
 import { usePendingQueue, type PendingComposerBridge } from '@/views/chat/usePendingQueue'
 import { useRoutePin } from '@/views/chat/useRoutePin'
 import { useSlashCommands } from '@/views/chat/useSlashCommands'
+import type { LpActions } from '@/views/chat/transcript/lp'
 import { useTranscript } from '@/views/chat/useTranscript'
 import { t as tw } from '@/i18n'
 import '@/i18n/en/chat'
@@ -229,6 +230,26 @@ function ConnectedChat({
   }, [])
   const ledger = useTradeLedger(onFocusApproval, sessionKey)
 
+  // At the desk an LP card's Collect/Remove calls the write RPC over this
+  // (operator) connection; the order parks, and its approval card joins the
+  // desk's own asks — it has no session, so the desk is told its id. A plain
+  // chat hands the transcript nothing, and the cards carry no buttons.
+  const [ownOrderIds, setOwnOrderIds] = useState<ReadonlySet<string>>(() => new Set())
+  const atDesk = desk !== null
+  const lpActions = useMemo<LpActions | null>(
+    () =>
+      atDesk
+        ? {
+            call: (method, params) => rpc.call(method, params),
+            onOrder: (orderId) => {
+              setOwnOrderIds((prev) => new Set(prev).add(orderId))
+              setFocusOrderId(orderId)
+            },
+          }
+        : null,
+    [atDesk, rpc],
+  )
+
   const {
     containerRef,
     routerFxDockRef,
@@ -252,6 +273,7 @@ function ConnectedChat({
     onRegenerateMessage: regenerateMessage,
     onSessionKeyResolved: switchToSession,
     routePinned: route.isPinned,
+    lpActions,
   })
   const attachments = useAttachments()
   useEffect(() => {
@@ -498,6 +520,7 @@ function ConnectedChat({
     hasMessages,
     focusOrderId,
     setFocusOrderId,
+    ownOrderIds,
   })
   const lastSentRef = useRef('')
   useEffect(() => {
@@ -689,6 +712,23 @@ function ConnectedChat({
         </div>
         {instruments.emptyHint}
 
+        {/* Zero-height dock at the foot of the transcript — above the desk's
+            approvals region, whose cards (and their notes) it used to cover,
+            and above the composer block when there is none. The pill floats
+            over the tail of the thread and never takes layout space. */}
+        <div className="chat-jump-dock" data-visible={pinnedToTail ? 'false' : 'true'}>
+          <button
+            type="button"
+            className="chat-jump-to-latest"
+            tabIndex={pinnedToTail ? -1 : 0}
+            onClick={scrollToTail}
+            title={tw('chat.jumpToLatest')}
+          >
+            <ArrowDown className="size-3.5" strokeWidth={2} aria-hidden />
+            <span>{tw('chat.jumpToLatest')}</span>
+          </button>
+        </div>
+
         {instruments.region}
 
         <AnimatePresence initial={false}>
@@ -712,21 +752,6 @@ function ConnectedChat({
           className={docked ? 'shrink-0' : 'flex flex-1 flex-col justify-center pt-24'}
         >
           <motion.div layout="position" transition={snap ? { duration: 0 } : spring}>
-            {/* Zero-height dock at the top of the composer block: the pill floats
-                over the tail of the transcript, clear of the desk toolbar, and
-                never takes layout space from either. */}
-            <div className="chat-jump-dock" data-visible={pinnedToTail ? 'false' : 'true'}>
-              <button
-                type="button"
-                className="chat-jump-to-latest"
-                tabIndex={pinnedToTail ? -1 : 0}
-                onClick={scrollToTail}
-                title={tw('chat.jumpToLatest')}
-              >
-                <ArrowDown className="size-3.5" strokeWidth={2} aria-hidden />
-                <span>{tw('chat.jumpToLatest')}</span>
-              </button>
-            </div>
             {instruments.dockAbove}
             <PendingQueue
               queue={pending.queue}

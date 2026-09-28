@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { History, isRevokeEntry } from './History'
+import { t } from '~/i18n'
+import { History, isRevokeEntry, kindLabel } from './History'
 import { renderDesk, USDC, WALLET } from './test-utils'
 import type { Entry } from './types'
 
@@ -164,5 +165,100 @@ describe('History · errors and paging', () => {
     await waitFor(() => expect(screen.getAllByTestId('history-entry')).toHaveLength(2))
     // The engine said that was the last page: the button is gone.
     expect(screen.queryByTestId('history-more')).toBeNull()
+  })
+})
+
+describe('History · liquidity entries', () => {
+  it('renders an lp_add row: its label, its glyph, and what left the wallet', () => {
+    renderDesk(
+      <History
+        entries={[
+          entry({
+            kind: 'lp_add',
+            amountIn: '25',
+            note: 'Add liquidity · WETH/USDC · $50.00',
+          }),
+        ]}
+        loading={false}
+        now={Date.now()}
+        showWallet={false}
+      />,
+    )
+    const row = screen.getByTestId('history-entry')
+    expect(row).toHaveAttribute('data-kind', 'lp_add')
+    expect(row.querySelector('.trd-entry__kind')).toHaveTextContent('Add liquidity')
+    expect(row.querySelector('.trd-entry__glyph svg.lucide-plus')).not.toBeNull()
+    expect(row.querySelector('.trd-entry__out')).toHaveTextContent('−25')
+    expect(row.querySelector('.trd-entry__in')).toBeNull()
+  })
+
+  it('renders collect and remove rows as what came back in', () => {
+    renderDesk(
+      <History
+        entries={[
+          entry({
+            id: 'c',
+            kind: 'lp_collect',
+            tokenIn: null,
+            amountIn: null,
+            tokenOut: USDC,
+            amountOut: '3',
+          }),
+          entry({
+            id: 'r',
+            kind: 'lp_remove',
+            tokenIn: null,
+            amountIn: null,
+            tokenOut: USDC,
+            amountOut: '10',
+          }),
+        ]}
+        loading={false}
+        now={Date.now()}
+        showWallet={false}
+      />,
+    )
+    const [collect, remove] = screen.getAllByTestId('history-entry') as [HTMLElement, HTMLElement]
+    expect(collect.querySelector('.trd-entry__kind')).toHaveTextContent('Collect fees')
+    expect(collect.querySelector('.trd-entry__glyph svg.lucide-coins')).not.toBeNull()
+    expect(collect.querySelector('.trd-entry__in')).toHaveTextContent('+3')
+    expect(remove.querySelector('.trd-entry__kind')).toHaveTextContent('Remove liquidity')
+    expect(remove.querySelector('.trd-entry__glyph svg.lucide-minus')).not.toBeNull()
+    expect(remove.querySelector('.trd-entry__in')).toHaveTextContent('+10')
+  })
+
+  it('renders a kind this build does not know with a fallback glyph and the raw kind', () => {
+    renderDesk(
+      <History
+        entries={[entry({ kind: 'lp_migrate' as Entry['kind'], amountIn: '1' })]}
+        loading={false}
+        now={Date.now()}
+        showWallet={false}
+      />,
+    )
+    const row = screen.getByTestId('history-entry')
+    expect(row.querySelector('.trd-entry__kind')).toHaveTextContent('lp_migrate')
+    expect(row.querySelector('.trd-entry__glyph svg')).not.toBeNull()
+  })
+
+  it('has a catalogue label for every entry kind', () => {
+    const kinds: Entry['kind'][] = [
+      'swap',
+      'deposit',
+      'withdraw',
+      'approval',
+      'gas',
+      'unwrap',
+      'lp_add',
+      'lp_collect',
+      'lp_remove',
+    ]
+    for (const kind of kinds) {
+      expect(t(`trading.history.kind.${kind}`), kind).toBeTruthy()
+    }
+    expect(kindLabel('lp_add')).toBe('Add liquidity')
+    expect(kindLabel('lp_collect')).toBe('Collect fees')
+    expect(kindLabel('lp_remove')).toBe('Remove liquidity')
+    expect(kindLabel('nope')).toBe('nope')
   })
 })

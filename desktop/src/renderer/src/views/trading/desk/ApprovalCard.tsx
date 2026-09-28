@@ -1,20 +1,26 @@
 import { ExternalLink, ShieldAlert, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { copyLpText } from '@/views/chat/transcript/lp'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
-import { desktopApi } from '~/lib/desktop-api'
 import { formatAmount, initiatorKey, isAwaitingApproval, shortAddress, shortHash } from '../logic'
 import { StatusPill, Sym } from '../parts'
-import type { Order, Wallet } from '../types'
+import { isLpKind, type Order, type Wallet } from '../types'
 import {
   approvalFacts,
   askRisk,
   batchFacts,
+  lpHook,
+  lpPositionLine,
+  lpRangeStatus,
+  lpRangeText,
+  lpStamps,
   orderKind,
   recipientDisplay,
   sumAmounts,
   type Ask,
   type Fact,
+  type LpStampKey,
 } from './desk-logic'
 
 const ARM_RESET_MS = 4000
@@ -41,6 +47,14 @@ const FACT_KEYS = [
   'total',
   'batch',
   'unlimited',
+  'lpReceive',
+  'lpFees',
+  'lpDeposit',
+  'lpMinimum',
+  'lpMaximum',
+  'lpApprovals',
+  'lpSlippage',
+  'none',
 ] as const
 
 /** The fact labels, from the catalogue (read inside the component, never at module scope). */
@@ -150,6 +164,10 @@ export function ApprovalCard({
   }
 
   const live = isAwaitingApproval(order)
+  // The reason reaches an agent only through the session that asked.
+  const reasonPrompt = order.sessionKey
+    ? t('trading.card.reasonPlaceholder')
+    : t('trading.card.reasonPlaceholder.optional')
   const titleKind = ask.batch ? 'multisend' : kind
   const title = live
     ? titleKind === 'swap'
@@ -186,6 +204,19 @@ export function ApprovalCard({
               {t('trading.card.irreversible')}
             </span>
           ) : null}
+          {live
+            ? lpStamps(order).map((stamp) => (
+                <span
+                  key={stamp.key}
+                  className="trd-stamp"
+                  data-tone="warn"
+                  data-testid={`stamp-lp-${stamp.key}`}
+                  title={stamp.key === 'hook' ? (lpHook(order.plan) ?? undefined) : undefined}
+                >
+                  {lpStampText(stamp.key, stamp.token)}
+                </span>
+              ))
+            : null}
           {risk === 'high' ? (
             <span className="trd-stamp" data-tone="danger" data-testid="risk-high">
               <ShieldAlert className="size-3" strokeWidth={2} aria-hidden />
@@ -260,8 +291,8 @@ export function ApprovalCard({
             <input
               ref={reasonRef}
               className="mac-input trd-card__reason"
-              placeholder={t('trading.card.reasonPlaceholder')}
-              aria-label={t('trading.card.reasonPlaceholder')}
+              placeholder={reasonPrompt}
+              aria-label={reasonPrompt}
               value={reason}
               maxLength={240}
               onChange={(e) => setReason(e.target.value)}
@@ -284,7 +315,9 @@ export function ApprovalCard({
             onClick={reject}
             data-testid="card-reject"
           >
-            {rejecting ? t('trading.card.rejectSend') : t('trading.approvals.reject')}
+            {rejecting && reason.trim()
+              ? t('trading.card.rejectSend')
+              : t('trading.approvals.reject')}
           </Button>
           <Button
             variant="primary"
@@ -306,22 +339,103 @@ export function ApprovalCard({
   )
 }
 
+/**
+ * A settled card's tx hash, the same as the ledger row's: with an explorer
+ * page it is a real link (a new tab, which the shell hands to the default
+ * browser) — hover shows where it goes and it can be copied as a link;
+ * without one it copies the hash, so it never does nothing.
+ */
 function TxLink({ hash, url }: { hash: string; url: string | null }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const id = window.setTimeout(() => setCopied(false), 1_500)
+    return () => window.clearTimeout(id)
+  }, [copied])
+  if (url) {
+    return (
+      <a
+        className="trd-card__link app-no-drag"
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={`${t('trading.ledger.openTx')} · ${hash}`}
+        data-testid="card-tx"
+        data-tx="link"
+      >
+        {shortHash(hash)}
+        <ExternalLink className="size-3" strokeWidth={1.75} aria-hidden />
+      </a>
+    )
+  }
   return (
     <button
       type="button"
       className="trd-card__link app-no-drag"
-      onClick={() => url && void desktopApi().app.openExternal(url)}
+      title={`${t('trading.ledger.copyTx')} · ${hash}`}
+      data-testid="card-tx"
+      data-tx="copy"
+      onClick={() =>
+        void copyLpText(hash).then(
+          () => setCopied(true),
+          () => {},
+        )
+      }
     >
-      {shortHash(hash)}
-      <ExternalLink className="size-3" strokeWidth={1.75} aria-hidden />
+      {copied ? t('trading.ledger.copied') : shortHash(hash)}
     </button>
+  )
+}
+
+function lpStampText(key: LpStampKey, token?: string): string {
+  if (key === 'burns') return t('trading.card.lp.burns')
+  if (key === 'hook') return t('trading.card.lp.hook')
+  if (key === 'noFees') return t('trading.card.lp.noFees')
+  return t('trading.card.lp.oneSided').replace('{token}', token ?? '')
+}
+
+const LP_STATUS_WORD = {
+  'in-range': 'trading.card.lp.inRange',
+  'above-range': 'trading.card.lp.aboveRange',
+  'below-range': 'trading.card.lp.belowRange',
+} as const
+
+/**
+ * An LP write's headline: the position it acts on (`#48213 · PEPE / WETH ·
+ * Base · 1%`), then the range with where the price sits against it.
+ */
+function LpLegs({ order }: { order: Order }) {
+  const plan = order.plan
+  const status = plan ? lpRangeStatus(plan) : null
+  const range = plan
+    ? lpRangeText(plan, { mcap: t('trading.card.lp.mcap'), per: t('trading.card.lp.per') })
+    : ''
+  return (
+    <div className="trd-card__lp" data-testid="card-legs">
+      <p className="trd-card__legs trd-num" data-testid="card-lp-position">
+        <b>{lpPositionLine(order, t('trading.card.lp.newPosition'))}</b>
+        {orderKind(order) === 'lp_remove' && typeof plan?.pct === 'number' ? (
+          <span className="trd-card__lp-pct">{plan.pct}%</span>
+        ) : null}
+      </p>
+      {range ? (
+        <p className="trd-card__lp-range trd-mono" data-testid="card-lp-range">
+          <span>{range}</span>
+          {status ? (
+            <span className="trd-card__lp-pill" data-status={status} data-testid="card-lp-status">
+              {t(LP_STATUS_WORD[status])}
+            </span>
+          ) : null}
+        </p>
+      ) : null}
+    </div>
   )
 }
 
 /** The headline: what moves, to where. */
 function Legs({ ask }: { ask: Ask }) {
   const lead = ask.lead
+  if (isLpKind(ask.kind)) return <LpLegs order={lead} />
   if (ask.kind === 'revoke') {
     return (
       <p className="trd-card__legs trd-num" data-testid="card-legs">

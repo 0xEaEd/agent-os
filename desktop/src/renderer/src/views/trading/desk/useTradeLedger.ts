@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { copyLpText } from '@/views/chat/transcript/lp'
 import type { StreamEventPayload } from '@/views/chat/types'
 import type { TranscriptEventSeams } from '@/views/chat/useTranscript'
 import { t } from '~/i18n'
-import { desktopApi } from '~/lib/desktop-api'
+import { TRADING_KEYS } from '~/stores/trading'
 import { providerMark } from '../ProviderMark'
-import { providerLabel } from '../types'
+import { providerLabel, type TradingStatus } from '../types'
 import {
   commandFromToolInput,
   LEDGER_GROUP_MIN,
   lpCallFromResult,
   parseTradeCommand,
   parseTradeResult,
+  txExplorerUrl,
   type TradeCall,
   type TradeOutcome,
 } from './ledger'
@@ -102,6 +105,10 @@ function glyphFor(call: TradeCall, outcome: TradeOutcome | null): string {
       return '⌕'
     case 'network':
       return '◉'
+    case 'lp_collect':
+    case 'lp_remove':
+    case 'lp_add':
+      return '◇'
     default:
       return '›'
   }
@@ -122,6 +129,45 @@ function clock(ts: number): string {
   return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(ts)
 }
 
+/** The chain's explorer base URL by chain id, or null when it is not known. */
+export type ExplorerFor = (chainId: number) => string | null | undefined
+
+/**
+ * A row's tx hash. With an explorer page it is a link — a new tab, which the
+ * shell hands to the default browser — and without one (a truncated result on
+ * a chain the desk has not loaded) it copies the hash, so it never does nothing.
+ */
+export function txHashNode(hash: string, url: string | null): HTMLElement {
+  const short = hash.slice(0, 8) + '…'
+  if (url) {
+    const link = el('a', 'trd-ledger__link app-no-drag', short)
+    link.href = url
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    link.title = `${t('trading.ledger.openTx')} · ${hash}`
+    link.dataset.tx = 'link'
+    // The row sits inside a folded group's <details>: the click opens the link, nothing else.
+    link.addEventListener('click', (e) => e.stopPropagation())
+    return link
+  }
+  const button = el('button', 'trd-ledger__link app-no-drag', short)
+  button.type = 'button'
+  button.title = `${t('trading.ledger.copyTx')} · ${hash}`
+  button.dataset.tx = 'copy'
+  button.addEventListener('click', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    void copyLpText(hash).then(
+      () => {
+        button.textContent = t('trading.ledger.copied')
+        setTimeout(() => (button.textContent = short), 1_500)
+      },
+      () => {},
+    )
+  })
+  return button
+}
+
 /** Build (or rebuild) the ledger row for one call. */
 function renderRow(
   row: HTMLElement,
@@ -130,6 +176,7 @@ function renderRow(
   timing: { running: boolean },
   onFocusApproval: (orderId: string | null) => void,
   details: HTMLElement,
+  explorerFor: ExplorerFor,
 ): void {
   row.textContent = ''
   row.dataset.kind = call.kind
@@ -188,16 +235,7 @@ function renderRow(
     side.appendChild(stamp)
   }
   if (outcome?.txHash) {
-    const link = el('button', 'trd-ledger__link app-no-drag', outcome.txHash.slice(0, 8) + '…')
-    link.type = 'button'
-    link.title = outcome.txHash
-    const url = outcome.explorerUrl
-    link.addEventListener('click', (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      if (url) void desktopApi().app.openExternal(url)
-    })
-    side.appendChild(link)
+    side.appendChild(txHashNode(outcome.txHash, txExplorerUrl(outcome, explorerFor)))
   }
   // The market clock: when the figures in this result were read.
   if (outcome?.marketAt) {
@@ -341,6 +379,16 @@ export function useTradeLedger(
   useEffect(() => {
     focusRef.current = onFocusApproval
   }, [onFocusApproval])
+  // The desk keeps trading.status cached; a hash without its own link borrows
+  // its chain's explorer from there, read at draw time.
+  const queryClient = useQueryClient()
+  const explorerFor = useRef<ExplorerFor>(() => null)
+  useEffect(() => {
+    explorerFor.current = (chainId) =>
+      queryClient
+        .getQueryData<TradingStatus>(TRADING_KEYS.status)
+        ?.chains?.find((c) => c.chainId === chainId)?.explorer ?? null
+  }, [queryClient])
   // Tool ids are per session; another session's rows are rebuilt from its
   // own blocks, and a map that only ever grew held every call ever seen.
   useEffect(() => {
@@ -378,7 +426,15 @@ export function useTradeLedger(
       const signature = `${running}|${outcome?.detail ?? ''}|${outcome?.summary ?? ''}|${outcome?.status ?? ''}|${measured}`
       if (row.dataset.sig !== signature) {
         row.dataset.sig = signature
-        renderRow(row, call, outcome, { running }, (orderId) => focusRef.current(orderId), details)
+        renderRow(
+          row,
+          call,
+          outcome,
+          { running },
+          (orderId) => focusRef.current(orderId),
+          details,
+          (chainId) => explorerFor.current(chainId),
+        )
       }
       const body = details.closest<HTMLElement>('.msg-body')
       if (body) touched.add(body)

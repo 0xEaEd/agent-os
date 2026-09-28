@@ -776,6 +776,26 @@ def _lp_target(p: dict[str, Any]) -> str:
     return value
 
 
+def _with_request(result: dict[str, Any], kind: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Echo ``request: {kind, params}`` into a card payload so the card can re-run itself.
+
+    ``params`` are what ``trading.lp.<kind>`` takes, normalised; ``None`` values
+    are left out. A single-chain read that found its pool on one chain names
+    that chain, so a refresh reads the same pool rather than probing again.
+    """
+    if not isinstance(result, dict):  # a test double may answer with anything
+        return result
+    clean = {k: v for k, v in params.items() if v is not None}
+    return {**result, "request": {"kind": kind, "params": clean}}
+
+
+def _read_chain_id(result: Any, chain: ChainSpec | None) -> int | None:
+    found = result.get("chain") if isinstance(result, dict) else None
+    if isinstance(found, dict) and isinstance(found.get("id"), int):
+        return int(found["id"])
+    return chain.chain_id if chain is not None else None
+
+
 @_d.method("trading.lp.pool")
 async def _trading_lp_pool(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """A token's (deepest) V4 pool: reserves, launcher, lock status, biggest ranges."""
@@ -784,11 +804,20 @@ async def _trading_lp_pool(params: dict | None, ctx: RpcContext) -> dict[str, An
     p = _params(params)
     chain = _chain(p, required=False)
     target = _lp_target(p)
+    quote = _str(p, "quote")
     service = _service(ctx)
     try:
-        return await lp.lp_pool(service, chain=chain, target=target, quote=_str(p, "quote"))
+        fee = lp.parse_fee(p.get("feePct"))
+        result = await lp.lp_pool(service, chain=chain, target=target, quote=quote, fee=fee)
     except Exception as exc:
         raise _raise(exc) from exc
+    echo = {
+        "target": target,
+        "chainId": _read_chain_id(result, chain),
+        "quote": quote,
+        "feePct": lp.fee_label(fee) if fee is not None else None,
+    }
+    return _with_request(result, "pool", echo)
 
 
 @_d.method("trading.lp.ranges")
@@ -799,11 +828,20 @@ async def _trading_lp_ranges(params: dict | None, ctx: RpcContext) -> dict[str, 
     p = _params(params)
     chain = _chain(p, required=False)
     target = _lp_target(p)
+    quote = _str(p, "quote")
     service = _service(ctx)
     try:
-        return await lp.lp_ranges(service, chain=chain, target=target, quote=_str(p, "quote"))
+        fee = lp.parse_fee(p.get("feePct"))
+        result = await lp.lp_ranges(service, chain=chain, target=target, quote=quote, fee=fee)
     except Exception as exc:
         raise _raise(exc) from exc
+    echo = {
+        "target": target,
+        "chainId": _read_chain_id(result, chain),
+        "quote": quote,
+        "feePct": lp.fee_label(fee) if fee is not None else None,
+    }
+    return _with_request(result, "ranges", echo)
 
 
 @_d.method("trading.lp.position")
@@ -819,9 +857,11 @@ async def _trading_lp_position(params: dict | None, ctx: RpcContext) -> dict[str
         raise ValueError("params.tokenId must be a positive integer")
     service = _service(ctx)
     try:
-        return await lp.lp_position(service, chain=chain, token_id=token_id)
+        result = await lp.lp_position(service, chain=chain, token_id=token_id)
     except Exception as exc:
         raise _raise(exc) from exc
+    echo = {"tokenId": str(token_id), "chainId": chain.chain_id}
+    return _with_request(result, "position", echo)
 
 
 @_d.method("trading.lp.positions")
@@ -865,7 +905,7 @@ async def _trading_lp_positions(params: dict | None, ctx: RpcContext) -> dict[st
         raise ValueError("params.all must be a boolean")
     service = _service(ctx)
     try:
-        return await lp.lp_positions(
+        result = await lp.lp_positions(
             service,
             chains=chains,
             wallets=wallets,
@@ -874,6 +914,148 @@ async def _trading_lp_positions(params: dict | None, ctx: RpcContext) -> dict[st
         )
     except Exception as exc:
         raise _raise(exc) from exc
+    echo: dict[str, Any] = {
+        "chainIds": [c.chain_id for c in chains] if chains else None,
+        "wallets": wallets or None,
+        "all": True if include_closed else None,
+        "budgetSeconds": float(raw_budget) if raw_budget is not None else None,
+    }
+    return _with_request(result, "positions", echo)
+
+
+# ── trading.lp.collect|remove|add (docs/lp-write.md) ─────────────────────────
+#
+# An agent may call these: each only creates an order, and every LP write parks
+# as ``awaiting_approval`` whoever asked. Approving, rejecting and waiting stay
+# on ``trading.orders.approve|reject|wait`` (approve/reject are operator-only).
+
+
+def _lp_token_id(p: dict[str, Any], key: str, *, required: bool) -> int | None:
+    value = p.get(key)
+    if value is None or value == "":
+        if required:
+            raise ValueError(f"params.{key} is required")
+        return None
+    if isinstance(value, bool) or isinstance(value, float):
+        raise ValueError(f"params.{key} must be a positive integer")
+    text = str(value).strip().lstrip("#")
+    if not text.isdigit() or int(text) <= 0:
+        raise ValueError(f"params.{key} must be a positive integer")
+    return int(text)
+
+
+def _decimal_text(p: dict[str, Any], key: str) -> str | None:
+    value = p.get(key)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        raise ValueError(f"params.{key} must be a decimal string")
+    return str(value).strip()
+
+
+@_d.method("trading.lp.collect")
+async def _trading_lp_collect(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Collect a V4 position's fees: creates an order that always awaits approval.
+
+    A position with nothing uncollected is refused (``trading.lp.nothing_to_collect``)
+    unless ``allowEmpty`` is true.
+    """
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    token_id = _lp_token_id(p, "tokenId", required=True)
+    assert token_id is not None
+    allow_empty = p.get("allowEmpty", False)
+    if not isinstance(allow_empty, bool):
+        raise ValueError("params.allowEmpty must be a boolean")
+    initiator, session_key = _initiator(ctx, p)
+    service = _service(ctx)
+    try:
+        order = await service.lp_collect(
+            chain=chain,
+            token_id=token_id,
+            allow_empty=allow_empty,
+            initiator=initiator,  # type: ignore[arg-type]
+            session_key=session_key,
+            note=_note(p),
+            **_client_order_id(service, "lp_collect", p),
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    return {"order": order}
+
+
+@_d.method("trading.lp.remove")
+async def _trading_lp_remove(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Remove ``pct`` % (default 100: burn) of a V4 position; always awaits approval."""
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    token_id = _lp_token_id(p, "tokenId", required=True)
+    assert token_id is not None
+    pct = _number(p, "pct")
+    initiator, session_key = _initiator(ctx, p)
+    service = _service(ctx)
+    try:
+        order = await service.lp_remove(
+            chain=chain,
+            token_id=token_id,
+            pct=100.0 if pct is None else pct,
+            slippage_pct=_number(p, "slippagePct"),
+            initiator=initiator,  # type: ignore[arg-type]
+            session_key=session_key,
+            note=_note(p),
+            **_client_order_id(service, "lp_remove", p),
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    return {"order": order}
+
+
+@_d.method("trading.lp.add")
+async def _trading_lp_add(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Mint a V4 position (or add to ``toPosition``) from a deposit; always awaits approval.
+
+    ``token`` (or ``target``/``poolId``) names the pool -- a ``TOKEN/QUOTE``
+    pair, or a token with ``quote``; ``feePct`` (``0.05``, ``0.3%``, ``500``)
+    picks the fee tier; sized by ``usd`` or by ``amountBase`` and/or
+    ``amountQuote``; ``range`` is ``mcap:LO-HI``, ``pct:N``, ``above[:N]``
+    (all base token, from just above the price up N %), ``below[:N]`` (all
+    quote token, from just below it down N %; N defaults to 20), ``full`` or
+    ``ticks:LO:HI`` (default ``pct:20``).
+    """
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    target = _str(p, "token") or _str(p, "target") or _str(p, "poolId")
+    to_position = _lp_token_id(p, "toPosition", required=False)
+    if not target and to_position is None:
+        raise ValueError("params.token (a token or poolId) or params.toPosition is required")
+    initiator, session_key = _initiator(ctx, p)
+    service = _service(ctx)
+    try:
+        order = await service.lp_add(
+            chain=chain,
+            target=target,
+            quote=_str(p, "quote"),
+            fee=lp.parse_fee(p.get("feePct")),
+            usd=_number(p, "usd"),
+            amount_base=_decimal_text(p, "amountBase"),
+            amount_quote=_decimal_text(p, "amountQuote"),
+            range_spec=_str(p, "range"),
+            to_position=to_position,
+            wallet=_str(p, "wallet"),
+            slippage_pct=_number(p, "slippagePct"),
+            initiator=initiator,  # type: ignore[arg-type]
+            session_key=session_key,
+            note=_note(p),
+            **_client_order_id(service, "lp_add", p),
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    return {"order": order}
 
 
 @_d.method("trading.network")

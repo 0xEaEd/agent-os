@@ -1,12 +1,12 @@
 import { KeyRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router'
-import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import type { RawJob } from '@/views/cron/logic'
 import { Button } from '~/components/ui/button'
 import { sessionPath } from '~/components/sidebar/SessionRow'
 import { t } from '~/i18n'
+import { toastOrder, toastOrderRejected, toastOrderSending } from '~/lib/order-toasts'
 import { useNow } from '~/lib/use-now'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -32,7 +32,6 @@ import {
   missionStatus,
   orderKindWord,
   orderLine,
-  ordersForSession,
   rejectionMessage,
   withBatchLegs,
   type MissionForm,
@@ -52,6 +51,7 @@ import { DecodeSheet } from '../DecodeSheet'
 const ROTATE_MS = 6000
 const NO_JOBS: RawJob[] = []
 const NO_RUNS: ReadonlySet<string> = new Set()
+const NO_ORDERS: ReadonlySet<string> = new Set()
 /** A settled ask stays in the region this long as a stamp. */
 const STAMP_TTL_MS = 10 * 60_000
 
@@ -123,6 +123,11 @@ export function useDeskInstruments(
     hasMessages: boolean
     focusOrderId: string | null
     setFocusOrderId: (id: string | null) => void
+    /**
+     * Orders you placed from this chat yourself (an LP card's Collect/Remove):
+     * they carry no session, yet their approval card belongs here.
+     */
+    ownOrderIds?: ReadonlySet<string>
   },
 ): DeskInstruments {
   const rpc = useRpc()
@@ -145,6 +150,7 @@ export function useDeskInstruments(
     focusOrderId,
   } = ctx
   const { setFocusOrderId } = ctx
+  const ownOrderIds = ctx.ownOrderIds ?? NO_ORDERS
 
   // The mutation callbacks below read the flag at completion time, not at
   // the render that started them.
@@ -166,9 +172,27 @@ export function useDeskInstruments(
   // from the recent page, where the outcome lands.
   const awaiting = useOrders('awaiting_approval', enabled, 100)
   const recent = useOrders(undefined, enabled, 100)
+  // An order placed with no session at all (the CLI, the operator) is nobody's
+  // chat's ask: it belongs to the operator by definition, so every desk shows
+  // its full card — not only a row in the BOOK's Orders tab.
   const sessionAwaiting = useMemo(
-    () => ordersForSession(awaiting.orders, sessionKey).filter(isAwaitingApproval),
-    [awaiting.orders, sessionKey],
+    () =>
+      awaiting.orders
+        .filter((o) => o.sessionKey === sessionKey || !o.sessionKey || ownOrderIds.has(o.orderId))
+        .filter(isAwaitingApproval),
+    [awaiting.orders, sessionKey, ownOrderIds],
+  )
+  // Operator asks this desk has shown: once decided they stamp here like your
+  // own orders, and a rejection tells no agent (none asked).
+  // Adjusted while rendering (React's "state from props" pattern), not in an effect.
+  const [operatorAsks, setOperatorAsks] = useState<ReadonlySet<string>>(() => new Set())
+  const freshOperatorAsks = sessionAwaiting
+    .filter((o) => !o.sessionKey && !operatorAsks.has(o.orderId))
+    .map((o) => o.orderId)
+  if (freshOperatorAsks.length) setOperatorAsks(new Set([...operatorAsks, ...freshOperatorAsks]))
+  const adoptedIds = useMemo(
+    () => (operatorAsks.size ? new Set([...ownOrderIds, ...operatorAsks]) : ownOrderIds),
+    [ownOrderIds, operatorAsks],
   )
   const batchIds = useMemo(() => batchIdsOf(sessionAwaiting), [sessionAwaiting])
   const batches = useBatchLegs(batchIds, enabled)
@@ -177,8 +201,8 @@ export function useDeskInstruments(
     [sessionAwaiting, batches],
   )
   const sessionOrders = useMemo(
-    () => ordersForSession(recent.orders, sessionKey),
-    [recent.orders, sessionKey],
+    () => recent.orders.filter((o) => o.sessionKey === sessionKey || adoptedIds.has(o.orderId)),
+    [recent.orders, sessionKey, adoptedIds],
   )
   useEffect(() => {
     if (desk) desk.onSessionPending(pendingOrders.length)
@@ -196,12 +220,13 @@ export function useDeskInstruments(
       sessionOrders.filter(
         (o) =>
           !isAwaitingApproval(o) &&
-          o.initiator === 'agent' &&
-          o.createdAt >= mountedAt &&
+          (o.initiator === 'agent' || adoptedIds.has(o.orderId)) &&
+          // An operator ask may predate this desk; it was shown here, so it stamps.
+          (o.createdAt >= mountedAt || operatorAsks.has(o.orderId)) &&
           now - o.updatedAt < STAMP_TTL_MS &&
           !dismissed.has(o.orderId),
       ),
-    [sessionOrders, now, mountedAt, dismissed],
+    [sessionOrders, now, mountedAt, dismissed, adoptedIds, operatorAsks],
   )
   const decide = useOrderDecision()
   // The toast names what was decided — "Send rejected · 0.00001 ETH →
@@ -236,21 +261,16 @@ export function useDeskInstruments(
       decide.mutate(
         { orderId: order.orderId, approve: true },
         {
-          onSuccess: () =>
-            toast.success(decisionToast(order, 'approved'), { id: `trd-order-${order.orderId}` }),
+          onSuccess: () => toastOrderSending(order.orderId, decisionToast(order, 'approved')),
           onError: (err) => {
             // A second decision on an order already decided (two clicks, a
             // decision from the BOOK, the agent's own) is not a failure.
             const text = errorText(err)
             if (alreadyDecided(text)) {
-              toast.info(t('trading.approvals.alreadyDecided'), {
-                id: `trd-order-${order.orderId}`,
-              })
+              toastOrder('info', order.orderId, t('trading.approvals.alreadyDecided'))
               return
             }
-            toast.error(`${t('trading.approvals.failed')}: ${text}`, {
-              id: `trd-order-${order.orderId}`,
-            })
+            toastOrder('error', order.orderId, `${t('trading.approvals.failed')}: ${text}`)
           },
         },
       ),
@@ -260,24 +280,33 @@ export function useDeskInstruments(
   // Enter on the reason cannot reject twice and post two chat messages. The
   // ref closes the gap before React has re-rendered with `isPending`.
   const rejectInFlight = useRef(false)
+  const ownOrdersRef = useRef(adoptedIds)
+  useEffect(() => {
+    ownOrdersRef.current = adoptedIds
+  }, [adoptedIds])
   const reject = useMutation({
+    // No note, no reason: the engine records a bare "user" rejection. Sending
+    // a placeholder stored it as "user: user".
     mutationFn: ({ order, reason }: { order: Order; reason: string }) =>
-      rpc.call('trading.orders.reject', { orderId: order.orderId, reason: reason || 'user' }),
+      rpc.call(
+        'trading.orders.reject',
+        reason ? { orderId: order.orderId, reason } : { orderId: order.orderId },
+      ),
     onSuccess: (_res, { order, reason }) => {
-      toast.success(decisionToast(order, 'rejected'), { id: `trd-order-${order.orderId}` })
+      toastOrderRejected(order.orderId, decisionToast(order, 'rejected'))
       // The agent reads the reason where it asked. Rejecting one leg of a
-      // multisend rejects the batch, and the message says so.
-      postToAgent(rejectionMessage(order, reason, legsOf(order).length))
+      // multisend rejects the batch, and the message says so. An order you
+      // placed yourself from a card was nobody's ask: nothing to tell.
+      if (order.sessionKey && !ownOrdersRef.current.has(order.orderId))
+        postToAgent(rejectionMessage(order, reason, legsOf(order).length))
     },
     onError: (err, { order }) => {
       const text = errorText(err)
       if (alreadyDecided(text)) {
-        toast.info(t('trading.approvals.alreadyDecided'), { id: `trd-order-${order.orderId}` })
+        toastOrder('info', order.orderId, t('trading.approvals.alreadyDecided'))
         return
       }
-      toast.error(`${t('trading.approvals.failed')}: ${text}`, {
-        id: `trd-order-${order.orderId}`,
-      })
+      toastOrder('error', order.orderId, `${t('trading.approvals.failed')}: ${text}`)
     },
     onSettled: () => {
       rejectInFlight.current = false

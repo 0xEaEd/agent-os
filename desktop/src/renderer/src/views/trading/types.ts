@@ -70,8 +70,96 @@ export type OrderStatus =
 export type Initiator = 'manual' | 'agent' | 'external'
 
 /** A swap trades through a provider; a send moves one token to an address;
- *  a revoke sets an ERC-20 allowance to zero. Older engines omit `kind`. */
-export type OrderKind = 'swap' | 'send' | 'revoke'
+ *  a revoke sets an ERC-20 allowance to zero; the three `lp_*` kinds collect
+ *  fees from, take liquidity out of, or put liquidity into a Uniswap V4
+ *  position (docs/lp-write.md). Older engines omit `kind`. */
+export type OrderKind = 'swap' | 'send' | 'revoke' | 'lp_collect' | 'lp_remove' | 'lp_add'
+
+/** A chain value as the LP plan carries it: raw base units, the decimal string, USD or null. */
+export interface LpPlanAmount {
+  raw: string
+  human: string
+  usd: number | null
+}
+
+export interface LpPlanToken {
+  address: string
+  symbol: string
+  decimals: number
+  priceUsd: number | null
+}
+
+/**
+ * What an LP write will do, as the engine planned it (`LpPlan` in
+ * docs/lp-write.md). `base` is the token the user named, `quote` the other
+ * side; bounds are raw integers — maxima on an add, minima on a remove.
+ */
+export interface LpPlan {
+  op: 'collect' | 'remove' | 'add'
+  chain?: { id: number; key: string; name: string; explorer?: string } | null
+  /** Null for a fresh mint until it confirms. */
+  tokenId: string | null
+  /** add: true when the deposit goes into an existing position. */
+  increase?: boolean
+  pool: {
+    poolId: string
+    poolKey?: {
+      currency0: string
+      currency1: string
+      fee: number
+      tickSpacing: number
+      hooks: string
+    } | null
+    tick: number | null
+    sqrtPriceX96?: string | null
+    feePct: string
+    /** The pool's hook, null for a hook-less pool (the engine's shortcut for poolKey.hooks). */
+    hook?: string | null
+  }
+  token: LpPlanToken
+  quote: LpPlanToken
+  range: {
+    tickLower: number
+    tickUpper: number
+    priceLower: number | null
+    priceUpper: number | null
+    mcapLower: number | null
+    mcapUpper: number | null
+  }
+  liquidity: string
+  /** Where the price sits against the range, when the engine says; else derived from the ticks. */
+  status?: 'in-range' | 'above-range' | 'below-range' | 'closed' | null
+  /** remove only: the share of the position's liquidity taken out. */
+  pct?: number | null
+  /** remove only: the position NFT is burnt (a 100 % remove). */
+  burn?: boolean
+  expected: { base: LpPlanAmount; quote: LpPlanAmount; usd: number | null }
+  bounds: { base: string; quote: string }
+  /** collect/remove: fees owed at plan time (included in `expected`). */
+  fees?: { base: LpPlanAmount; quote: LpPlanAmount; usd: number | null } | null
+  positionValueUsd?: number | null
+  /** add only: the allowances the approve step will set, in order. */
+  approvals?: {
+    token: string
+    symbol: string
+    step: 'erc20->permit2' | 'permit2->posm'
+    amountRaw: string
+    needed: boolean
+    txHash?: string | null
+  }[]
+  /** add: the range sits entirely on one side of the price, so one token is deposited. */
+  oneSided?: 'base' | 'quote' | null
+  simulation?: {
+    ok: boolean
+    gasUsed: number | null
+    method: string
+    revert: string | null
+  } | null
+  gasUsd?: number | null
+  slippagePct?: number | null
+  planHash?: string
+  createdAtBlock?: number
+}
 
 export interface Order {
   orderId: string
@@ -114,9 +202,29 @@ export interface Order {
   provider?: ProviderId
   /** The caller's idempotency key, when it gave one. */
   clientOrderId?: string | null
+  slippagePct?: number | null
+  /** lp_* orders: what the engine planned (docs/lp-write.md). */
+  plan?: LpPlan | null
+  /** lp_* orders, once confirmed: the position (a mint's new id) and what the receipt moved. */
+  tokenId?: string | null
+  received?: { base: LpPlanAmount; quote: LpPlanAmount } | null
+  spent?: { base: LpPlanAmount; quote: LpPlanAmount } | null
 }
 
-export type EntryKind = 'swap' | 'deposit' | 'withdraw' | 'approval' | 'gas' | 'unwrap'
+export function isLpKind(kind: OrderKind | undefined | null): boolean {
+  return kind === 'lp_collect' || kind === 'lp_remove' || kind === 'lp_add'
+}
+
+export type EntryKind =
+  | 'swap'
+  | 'deposit'
+  | 'withdraw'
+  | 'approval'
+  | 'gas'
+  | 'unwrap'
+  | 'lp_add'
+  | 'lp_collect'
+  | 'lp_remove'
 
 /** A wrapped-ETH holding an L2 handed back: one click turns it into ETH. */
 export function isWrappedEth(token: Pick<Token, 'symbol' | 'native'>): boolean {

@@ -68,6 +68,8 @@ class TestAbiHelpers:
         receipt = {"status": "0x1", "gasUsed": "0x10", "effectiveGasPrice": "0x2", "logs": []}
         assert evm_mod.receipt_succeeded(receipt)
         assert evm_mod.receipt_gas_wei(receipt) == 32
+        # OP-stack receipts add the L1 data fee on top of gasUsed × price.
+        assert evm_mod.receipt_gas_wei({**receipt, "l1Fee": "0x10"}) == 48
         assert not evm_mod.receipt_succeeded({"status": "0x0"})
         assert not evm_mod.receipt_succeeded(None)
 
@@ -205,6 +207,66 @@ class TestEvmClient:
         chain.receipt(tx_hash, status=1)
         receipt = await client.wait_for_receipt(tx_hash, timeout_s=1, interval_s=0.001)
         assert receipt is not None and evm_mod.receipt_succeeded(receipt)
+
+    async def test_sealed_receipt_replaces_a_provisional_l1_fee(
+        self, client: EvmClient, chain: FakeChain
+    ) -> None:
+        # Base's flashblock preconfirmation: the first receipt carries l1Fee A,
+        # the one in the sealed block l1Fee B.
+        tx_hash = "0x" + "ab" * 32
+        first = chain.receipt(tx_hash, gas_used=100, gas_price=2)
+        first["l1Fee"] = hex(2_957_077_405)
+        chain.sealed[tx_hash] = {**first, "l1Fee": hex(5_063_072_155)}
+        chain.head_step = 1
+        receipt = await client.wait_for_sealed_receipt(tx_hash, timeout_s=1, interval_s=0.001)
+        assert receipt is not None
+        assert evm_mod.receipt_gas_wei(receipt) == 200 + 5_063_072_155
+        # The re-read happened only once the head was past the receipt's block.
+        assert chain.block > int(first["blockNumber"], 16)
+
+    async def test_sealed_receipt_keeps_the_first_when_the_head_stalls(
+        self, client: EvmClient, chain: FakeChain
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        tx_hash = "0x" + "cd" * 32
+        first = chain.receipt(tx_hash, gas_used=100, gas_price=2)
+        first["l1Fee"] = hex(10_543_899_578)
+        chain.sealed[tx_hash] = {**first, "l1Fee": hex(5_637_609_152)}
+        with capture_logs() as logs:
+            receipt = await evm_mod.sealed_receipt(
+                client, tx_hash, first, timeout_s=0.02, interval_s=0.001
+            )
+        assert receipt is first
+        assert evm_mod.receipt_gas_wei(receipt) == 200 + 10_543_899_578
+        assert [e["event"] for e in logs] == ["trading.receipt_provisional"]
+        assert logs[0]["reason"] == "head did not advance"
+
+    async def test_sealed_receipt_skips_chains_without_an_l1_fee(
+        self, client: EvmClient, chain: FakeChain
+    ) -> None:
+        tx_hash = "0x" + "ef" * 32
+        first = chain.receipt(tx_hash)
+        before = len(chain.calls)
+        assert await evm_mod.sealed_receipt(client, tx_hash, first) is first
+        assert len(chain.calls) == before  # not even a head read
+
+    async def test_sealed_receipt_survives_a_failing_re_read(
+        self, client: EvmClient, chain: FakeChain
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        tx_hash = "0x" + "12" * 32
+        first = chain.receipt(tx_hash)
+        first["l1Fee"] = "0x10"
+        chain.head_step = 1
+        chain.fail_methods.add("eth_getTransactionReceipt")
+        with capture_logs() as logs:
+            receipt = await evm_mod.sealed_receipt(
+                client, tx_hash, first, timeout_s=0.02, interval_s=0.001
+            )
+        assert receipt is first
+        assert logs and "re-read failed" in logs[-1]["reason"]
 
 
 class TestUniswapClient:

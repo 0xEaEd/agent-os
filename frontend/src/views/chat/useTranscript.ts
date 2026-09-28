@@ -11,7 +11,7 @@ import { useTheme } from '@/stores/theme'
 import { chatMarkdown } from './markdown'
 import { createCardsMounter, type CardsMounter } from './transcript/cards'
 import { createChartMounter, type ChartMounter } from './transcript/chart'
-import { createLpMounter, type LpMounter } from './transcript/lp'
+import { createLpMounter, type LpActions, type LpMounter } from './transcript/lp'
 import {
   createStreamController,
   JUMP_TO_TAIL_GAP_PX,
@@ -240,6 +240,13 @@ export function useTranscript(opts: {
    * duration — see `isRoutePinned` in `createRouterFxRenderer`.
    */
   routePinned?: boolean
+  /**
+   * Collect/Remove on the user's own LP positions (lp.ts). Only an operator
+   * connection can have those orders approved, so only the desktop's desk
+   * passes it; without it the cards carry no write buttons. Read live, so it
+   * may come and go without remounting the transcript.
+   */
+  lpActions?: LpActions | null
 }): {
   containerRef: React.RefObject<HTMLDivElement | null>
   routerFxDockRef: React.RefObject<HTMLDivElement | null>
@@ -484,9 +491,29 @@ export function useTranscript(opts: {
     createCardsMounter({ fetchPayload: fetchChartPayload }),
   )
   // Uniswap V4 liquidity cards (lp.ts). Owns a once-a-minute clock for the
-  // "2m ago" stamps and the copy-button resets, both cleared on unmount.
+  // "2m ago" stamps and the copy-button resets, both cleared on unmount. ↻
+  // re-runs a card's read over this connection (the reads are agent-callable);
+  // the write buttons exist only while the caller hands over `lpActions`.
+  const lpActionsRef = useRef<LpActions | null>(opts.lpActions ?? null)
+  useEffect(() => {
+    lpActionsRef.current = opts.lpActions ?? null
+  }, [opts.lpActions])
+  // eslint-disable-next-line react-hooks/refs -- the factory stores the getters and reads .current only later, inside click handlers and renders outside React's render
   const [lpMounter] = useState<LpMounter>(() =>
-    createLpMounter({ fetchPayload: fetchChartPayload }),
+    createLpMounter({
+      fetchPayload: fetchChartPayload,
+      call: (method, params) => rpc.call(method, params),
+      actions: () => lpActionsRef.current,
+    }),
+  )
+  // A parked LP write's button waits for its order to settle.
+  useEffect(
+    () =>
+      rpc.on('trading.order.finished', (payload: unknown) => {
+        const order = (payload as { order?: { orderId?: unknown } } | null)?.order
+        if (typeof order?.orderId === 'string') lpMounter.orderFinished(order.orderId)
+      }),
+    [rpc, lpMounter],
   )
 
   // One seam for both inline-artifact renderers. The downstream deps (stream.ts,

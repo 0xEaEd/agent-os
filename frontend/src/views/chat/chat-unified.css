@@ -878,6 +878,14 @@
   text-align: center;
 }
 
+/* A closed position: its figures are gone, so one muted line says when it was last seen. */
+.chat-surface .lp-card__closed-note {
+  margin: 0;
+  padding: 0.25rem 0;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+
 /* Distribution chart: plain SVG bars stretched to the plot box; every label is
    HTML positioned in % so text never scales with the viewBox. */
 .chat-surface .lp-chart {
@@ -1424,6 +1432,22 @@
 }
 
 .chat-surface .lp-card__copy[data-lp-copied='failed'] {
+  color: var(--danger);
+}
+
+/* ↻ keeps the old figures on screen, dimmed, until the re-read lands. */
+.chat-surface .lp-card[data-lp-refreshing] > :not(.lp-card__foot) {
+  opacity: 0.5;
+  transition: opacity 160ms ease-out;
+}
+
+.chat-surface .lp-card__refresh:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.chat-surface .lp-card__refresh-error {
+  flex-basis: 100%;
   color: var(--danger);
 }
 

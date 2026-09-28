@@ -44,12 +44,27 @@ REPAIR_PENDING_MESSAGE = "full sync required"
 
 OPENING_NOTE = "opening balance"
 
-ENTRY_KINDS = ("swap", "deposit", "withdraw", "approval", "gas", "unwrap")
+ENTRY_KINDS = (
+    "swap",
+    "deposit",
+    "withdraw",
+    "approval",
+    "gas",
+    "unwrap",
+    "lp_collect",
+    "lp_remove",
+    "lp_add",
+)
 # What an order does. A swap trades one token for another through a
 # provider; a send moves one token to an address the user named; a revoke
 # sets an ERC-20 allowance back to zero. Sends in one multisend share a
-# batch_id and are decided together.
-ORDER_KINDS = ("swap", "send", "revoke")
+# batch_id and are decided together. The lp_* kinds are Uniswap V4 position
+# writes (docs/lp-write.md): their plan lives in quote_json.
+LP_ORDER_KINDS = ("lp_collect", "lp_remove", "lp_add")
+ORDER_KINDS = ("swap", "send", "revoke", *LP_ORDER_KINDS)
+# LP orders that bring tokens in: they spend nothing, so they never count
+# toward an agent's daily cap while they are in flight.
+_NON_SPENDING_KINDS = ("lp_collect", "lp_remove")
 ORDER_STATUSES = (
     "quoted",
     "awaiting_approval",
@@ -1360,12 +1375,20 @@ class Ledger:
         """
         ts = time.time() if now is None else now
         placeholders = ", ".join("?" for _ in ORDER_OPEN_STATUSES)
+        free = ", ".join("?" for _ in _NON_SPENDING_KINDS)
         with self._lock:
             row = self._conn.execute(
                 "SELECT COALESCE(SUM(value_usd), 0) AS usd FROM orders "
                 "WHERE wallet = ? AND initiator = 'agent' AND order_id != ? AND "
+                f"kind NOT IN ({free}) AND "
                 f"(status IN ({placeholders}) OR (status = 'quoted' AND created_at > ?))",
-                (wallet.lower(), exclude_order_id or "", *sorted(ORDER_OPEN_STATUSES), ts - 3600),
+                (
+                    wallet.lower(),
+                    exclude_order_id or "",
+                    *_NON_SPENDING_KINDS,
+                    *sorted(ORDER_OPEN_STATUSES),
+                    ts - 3600,
+                ),
             ).fetchone()
         return float(row["usd"]) if row and row["usd"] is not None else 0.0
 

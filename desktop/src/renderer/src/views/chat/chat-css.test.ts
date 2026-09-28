@@ -48,6 +48,8 @@ describe('desktop chat CSS geometry contract', () => {
     const dock = css.match(/\.chat-jump-dock \{[\s\S]*?\n\}/)?.[0]
     expect(dock).toMatch(/height: 0;/)
     expect(dock).toMatch(/pointer-events: none;/)
+    // A flex item of `.chat-stage` now (above the approvals region): it may not grow.
+    expect(dock).toMatch(/flex: none;/)
     expect(css).toMatch(/\.chat-jump-dock\[data-visible='false'\] \{[\s\S]*?visibility: hidden;/)
   })
 })

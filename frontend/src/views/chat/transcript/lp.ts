@@ -35,6 +35,9 @@ export const LP_CLOCK_MS = 60_000
 /** How long the copy button reads "copied". */
 export const LP_COPIED_MS = 1_500
 
+/** How long a failed write or refresh says why, under its button. */
+export const LP_ERROR_MS = 4_000
+
 /* ── Payload shape (docs/lp-cards.md) ───────────────────────────────────── */
 
 export type LpKind = 'pool' | 'ranges' | 'position' | 'positions'
@@ -125,6 +128,16 @@ export interface LpChainBlock {
   block: number
 }
 
+/**
+ * What produced the card, echoed by the engine so the card can re-run itself
+ * (phase 2): `kind` names the read RPC (`trading.lp.<kind>`), `params` are its
+ * params verbatim.
+ */
+export interface LpRequest {
+  kind: LpKind
+  params: Record<string, unknown>
+}
+
 interface LpEnvelope {
   version: number
   chain: LpChain | null
@@ -134,6 +147,8 @@ interface LpEnvelope {
   fetchedAt: string
   partialScan: boolean
   warnings: string[]
+  /** How to re-run this read; null when the payload does not say (no ↻ then). */
+  request: LpRequest | null
 }
 
 export interface LpPoolPayload extends LpEnvelope {
@@ -163,6 +178,11 @@ export interface LpRangesPayload extends LpEnvelope {
 export interface LpPositionPayload extends LpEnvelope {
   kind: 'position'
   position: LpPosition
+  /**
+   * Client-side only: the block the position was last read open at, set when
+   * a later read found it burned. The card then says "last seen at block N".
+   */
+  lastSeenBlock?: number
 }
 
 export interface LpPositionsPayload extends LpEnvelope {
@@ -332,6 +352,17 @@ function normPosition(value: unknown, fallbackChain: LpChain | null): LpPosition
   }
 }
 
+const KINDS = new Set<LpKind>(['pool', 'ranges', 'position', 'positions'])
+
+/** The read to re-run, or null. Only the four read kinds pass: the method is built from it. */
+export function normalizeLpRequest(value: unknown): LpRequest | null {
+  const row = obj(value)
+  if (!row) return null
+  const kind = text(row.kind) as LpKind
+  if (!KINDS.has(kind)) return null
+  return { kind, params: { ...(obj(row.params) ?? {}) } }
+}
+
 function list<T>(value: unknown, fn: (item: unknown) => T | null): T[] {
   return Array.isArray(value) ? value.map(fn).filter((item): item is T => item !== null) : []
 }
@@ -355,6 +386,7 @@ export function normalizeLpPayload(raw: unknown): LpPayload | null {
     fetchedAt: text(body.fetchedAt),
     partialScan: body.partialScan === true,
     warnings: list(body.warnings, (w) => text(w) || null),
+    request: normalizeLpRequest(body.request),
   }
 
   if (kind === 'pool' || kind === 'ranges') {
@@ -1135,6 +1167,14 @@ export interface LpRenderContext {
   copyText: (value: string) => void | Promise<void>
   /** A cancellable timer the mounter clears on unmount. */
   setTimer: (fn: () => void, ms: number) => void
+  /** Offer ↻ on a card whose payload says how to re-run it. */
+  readonly canRefresh?: boolean
+  /**
+   * Offer Collect fees / Remove… on the user's own open positions. Only an
+   * operator connection (the desktop) can have its orders approved, so the
+   * web console never sets it.
+   */
+  readonly canWrite?: boolean
 }
 
 /** Something the footer offers to copy: shown short, copied whole. */
@@ -1152,6 +1192,11 @@ interface FooterSpec {
   copies: CopyTarget[]
   explorer: string
   explorerName: string
+  /**
+   * A closed card: no "as of block" (the note says which block), and the
+   * stamp reads "checked 2m ago" — when the card last looked, not what it shows.
+   */
+  checked?: boolean
 }
 
 function chainLabel(payload: LpPayload, key: string): string {
@@ -1233,7 +1278,7 @@ function footer(payload: LpPayload, spec: FooterSpec, ctx: LpRenderContext): HTM
   const foot = el('footer', 'lp-card__foot')
   const meta = el('span', 'lp-card__foot-meta')
   const parts = [...spec.parts]
-  const asOf = asOfText(payload)
+  const asOf = spec.checked ? '' : asOfText(payload)
   if (asOf) parts.push(asOf)
   meta.textContent = parts.join(' · ')
   const ago = relativeTime(payload.fetchedAt, ctx.now())
@@ -1243,6 +1288,7 @@ function footer(payload: LpPayload, spec: FooterSpec, ctx: LpRenderContext): HTM
     time.dataset.lpFetchedAt = payload.fetchedAt
     time.title = payload.fetchedAt
     if (parts.length) meta.append(el('span', 'lp-sep', ' · '))
+    if (spec.checked) meta.append(el('span', 'lp-card__checked', `${t('chat.lpChecked')} `))
     meta.append(time)
   }
   foot.append(meta)
@@ -1263,8 +1309,96 @@ function footer(payload: LpPayload, spec: FooterSpec, ctx: LpRenderContext): HTM
     link.append(glyph, el('span', 'lp-card__action-label', t('chat.lpExplorer')))
     actions.append(link)
   }
+  if (ctx.canRefresh && payload.request) actions.append(refreshButton())
   if (actions.childElementCount) foot.append(actions)
   return foot
+}
+
+/** ↻: re-run the card's read. The mounter's click handler does the work. */
+function refreshButton(): HTMLElement {
+  const button = el('button', 'lp-card__action lp-card__refresh') as HTMLButtonElement
+  button.type = 'button'
+  button.dataset.lpAction = 'refresh'
+  button.title = t('chat.lpRefreshTitle')
+  button.setAttribute('aria-label', t('chat.lpRefreshTitle'))
+  const glyph = el('span', 'lp-card__action-glyph', '↻')
+  glyph.setAttribute('aria-hidden', 'true')
+  button.append(glyph, el('span', 'lp-card__action-label', t('chat.lpRefresh')))
+  return button
+}
+
+/** A position the user can act on: in the vault, still open, and addressable. */
+function writable(position: LpPosition): boolean {
+  return (
+    position.owner.inApp &&
+    position.status !== 'closed' &&
+    /^\d+$/.test(position.tokenId) &&
+    (position.chain?.id ?? 0) > 0
+  )
+}
+
+/** True only when the position reports zero owed on both sides — never for unknown fees. */
+function noFeesOwed(position: Pick<LpPosition, 'fees'>): boolean {
+  return position.fees.base.raw === '0' && position.fees.quote.raw === '0'
+}
+
+/**
+ * Collect fees / Remove… (50 % or 100 %) for one position. Plain markup keyed
+ * by `data-lp-token-id` + `data-lp-chain-id`; the mounter's click handler
+ * calls the write RPC and drives `data-lp-write` (pending → awaiting).
+ */
+function writeActions(position: LpPosition, className: string): HTMLElement {
+  const group = el('div', `lp-writes ${className}`)
+  group.dataset.lpWrites = 'true'
+  group.dataset.lpTokenId = position.tokenId
+  group.dataset.lpChainId = String(position.chain?.id ?? 0)
+  const button = (action: string, label: string, title: string): HTMLButtonElement => {
+    const b = el('button', 'lp-card__action lp-writes__button', label) as HTMLButtonElement
+    b.type = 'button'
+    b.dataset.lpAction = action
+    b.title = title
+    return b
+  }
+  const collect = button(
+    'collect',
+    t('chat.lpCollectFees'),
+    t('chat.lpCollectTitle', { id: position.tokenId }),
+  )
+  // Both sides owe exactly zero: a collect would only pay gas. Unknown fees
+  // (an empty raw) are not zero — the button stays.
+  if (noFeesOwed(position)) {
+    collect.dataset.lpNoFees = 'true'
+    collect.disabled = true
+    collect.title = t('chat.lpNoFeesYet')
+  }
+  const remove = button('remove', t('chat.lpRemove'), t('chat.lpRemoveTitle'))
+  remove.setAttribute('aria-expanded', 'false')
+  const choice = el('span', 'lp-writes__choice')
+  choice.dataset.lpChoice = 'remove'
+  choice.hidden = true
+  choice.setAttribute('role', 'group')
+  choice.setAttribute('aria-label', t('chat.lpRemoveChoice'))
+  for (const pct of [50, 100]) {
+    const b = button(
+      'remove-pct',
+      `${pct}%`,
+      t('chat.lpRemovePctTitle', { pct: String(pct), id: position.tokenId }),
+    )
+    b.dataset.lpPct = String(pct)
+    if (pct === 100) b.dataset.lpTone = 'warn'
+    choice.append(b)
+  }
+  const state = el('span', 'lp-writes__state')
+  state.dataset.lpState = 'true'
+  state.setAttribute('role', 'status')
+  state.setAttribute('aria-live', 'polite')
+  state.hidden = true
+  const error = el('p', 'lp-writes__error')
+  error.dataset.lpError = 'true'
+  error.setAttribute('role', 'alert')
+  error.hidden = true
+  group.append(collect, remove, choice, state, error)
+  return group
 }
 
 function explorerName(chain: LpChain | null): string {
@@ -1685,8 +1819,79 @@ function walletName(wallet: LpWallet): string {
   return wallet.label ?? shortAddress(wallet.address)
 }
 
+/** The one line a closed position card says instead of its figures. */
+function closedNoteText(payload: LpPositionPayload): string {
+  const lastSeen = payload.lastSeenBlock ?? 0
+  if (lastSeen > 0) return t('chat.lpClosedBurned', { block: lastSeen })
+  if (payload.asOfBlock > 0) return t('chat.lpClosedEmpty', { block: payload.asOfBlock })
+  return t('chat.lpClosedNote')
+}
+
+function positionFooter(
+  payload: LpPositionPayload,
+  ctx: LpRenderContext,
+  checked = false,
+): HTMLElement {
+  const position = payload.position
+  return footer(
+    payload,
+    {
+      // The owner is the copy chip (copy + explorer), never repeated as text.
+      parts: position.tokenId ? [`#${position.tokenId}`] : [],
+      copies: [
+        {
+          label: t('chat.lpCopyOwner'),
+          value: position.owner.address,
+          name: position.owner.label,
+        },
+      ],
+      explorer: explorerUrl(position.chain, 'address', position.owner.address),
+      explorerName: explorerName(position.chain),
+      checked,
+    },
+    ctx,
+  )
+}
+
+/**
+ * A position the chain no longer holds open — burned, or emptied to zero
+ * liquidity. Its value, fees, amounts and range belong to a position that is
+ * gone, so the card keeps only who it was (pair, chain, fee, `#id`) and says
+ * when it was last seen.
+ */
+function buildClosedPosition(payload: LpPositionPayload, ctx: LpRenderContext): HTMLElement {
+  const position = payload.position
+  const card = shell(payload, 'closed')
+  card.append(
+    header(position.token, position.quote, position.chain, position.pool, [statusPill('closed')]),
+  )
+  const note = el('p', 'lp-card__closed-note', closedNoteText(payload))
+  note.dataset.lpClosedNote = 'true'
+  card.append(note, positionFooter(payload, ctx, true))
+  return card
+}
+
+/**
+ * The closed version of an open position card, for when a later read (or a
+ * write) found it gone: last seen at the block it was drawn from, checked now.
+ */
+export function closedPositionPayload(
+  payload: LpPositionPayload,
+  checkedAt: string,
+): LpPositionPayload {
+  return {
+    ...payload,
+    position: { ...payload.position, status: 'closed', distancePct: null },
+    lastSeenBlock: payload.lastSeenBlock ?? payload.asOfBlock,
+    fetchedAt: checkedAt,
+    partialScan: false,
+    warnings: [],
+  }
+}
+
 function buildPosition(payload: LpPositionPayload, ctx: LpRenderContext): HTMLElement {
   const position = payload.position
+  if (position.status === 'closed') return buildClosedPosition(payload, ctx)
   const card = shell(payload, position.status)
   const badge = partialBadge(payload)
   const trailing = [statusPill(position.status)]
@@ -1734,34 +1939,17 @@ function buildPosition(payload: LpPositionPayload, ctx: LpRenderContext): HTMLEl
   feeAmounts.dataset.lpRow = 'fees'
   feeAmounts.prepend(el('span', 'lp-card__row-label', `${t('chat.lpFees')} `))
   card.append(feeAmounts)
+  if (ctx.canWrite && writable(position)) card.append(writeActions(position, 'lp-card__writes'))
 
   const warnings = warningsNode(payload.warnings)
   if (warnings) card.append(warnings)
-  card.append(
-    footer(
-      payload,
-      {
-        // The owner is the copy chip (copy + explorer), never repeated as text.
-        parts: position.tokenId ? [`#${position.tokenId}`] : [],
-        copies: [
-          {
-            label: t('chat.lpCopyOwner'),
-            value: position.owner.address,
-            name: position.owner.label,
-          },
-        ],
-        explorer: explorerUrl(position.chain, 'address', position.owner.address),
-        explorerName: explorerName(position.chain),
-      },
-      ctx,
-    ),
-  )
+  card.append(positionFooter(payload, ctx))
   return card
 }
 
 /* ── kind = positions ── */
 
-function positionRow(position: LpPosition): HTMLElement {
+function positionRow(position: LpPosition, ctx: LpRenderContext): HTMLElement {
   const row = el('li', 'lp-row')
   row.dataset.lpStatus = position.status
   if (position.chain?.key) row.dataset.lpChain = position.chain.key
@@ -1828,6 +2016,7 @@ function positionRow(position: LpPosition): HTMLElement {
     value.append(el('span', 'lp-row__value-num', formatUsd(position.valueUsd)))
   }
   row.append(status, pair, chain, wallet, fees, value)
+  if (ctx.canWrite && writable(position)) row.append(writeActions(position, 'lp-row__writes'))
   if (position.band) row.title = position.band
   return row
 }
@@ -1885,7 +2074,7 @@ function buildPositions(payload: LpPositionsPayload, ctx: LpRenderContext): HTML
     const rows = el('ul', 'lp-rows')
     // The engine's order is the contract (out-of-range first, then by value);
     // never re-sort here.
-    payload.positions.forEach((position) => rows.append(positionRow(position)))
+    payload.positions.forEach((position) => rows.append(positionRow(position, ctx)))
     card.append(rows)
   }
 
@@ -2046,9 +2235,107 @@ export function layoutLpCard(card: HTMLElement): void {
 
 /* ── Mounter ────────────────────────────────────────────────────────────── */
 
+/** A gateway RPC call: `rpc.call(method, params)`. */
+export type LpCall = (method: string, params: Record<string, unknown>) => Promise<unknown>
+
+/**
+ * The write capability the desktop hands the mounter for its operator
+ * connection. Absent (the web console) → no Collect/Remove buttons at all.
+ */
+export interface LpActions {
+  /** Calls `trading.lp.collect` / `trading.lp.remove` on the operator connection. */
+  call: LpCall
+  /** An order was parked for approval (the desk can show its card). */
+  onOrder?: (orderId: string) => void
+}
+
+/** What a write button is doing for one position (`<chainId>:<tokenId>`). */
+interface WriteState {
+  phase: 'pending' | 'awaiting'
+  action: 'collect' | 'remove'
+  pct?: number
+  orderId?: string
+  /** The card the click came from: it re-reads itself once the order settles. */
+  host: HTMLElement
+}
+
+/** The read RPC a request re-runs: only the four phase-1 reads. */
+export function lpReadMethod(request: LpRequest): string {
+  return `trading.lp.${request.kind}`
+}
+
+/** An RPC error's code and message, whatever shape it arrived in. */
+function rpcError(error: unknown): { code: string; message: string } {
+  const e = error as { code?: unknown; message?: unknown } | null
+  return {
+    code: typeof e?.code === 'string' ? e.code : '',
+    message: typeof e?.message === 'string' ? e.message : String(error),
+  }
+}
+
+/** What a failed write says under its button. */
+export function lpWriteErrorText(error: unknown): string {
+  const { code, message } = rpcError(error)
+  if (code === 'trading.lp.not_owner') return t('chat.lpErrNotOwner')
+  if (code === 'trading.operator_required') return t('chat.lpErrOperator')
+  if (code === 'trading.lp.position_closed') return t('chat.lpErrClosed')
+  return t('chat.lpErrFailed', { message: message || code || 'error' })
+}
+
+/** The order an LP write RPC answered with: bare, or under `order`. */
+function orderOf(value: unknown): { orderId: string; status: string; reason: string } | null {
+  const row = obj(value)
+  const order = obj(row?.order) ?? row
+  const orderId = text(order?.orderId)
+  if (!order || !orderId) return null
+  return { orderId, status: text(order.status), reason: text(order.reason) }
+}
+
+/** `lpo_c41a9e…`: an order id short enough for a chip; the title carries it whole. */
+function shortOrder(orderId: string): string {
+  return orderId.length > 12 ? `${orderId.slice(0, 10)}…` : orderId
+}
+
+/** `<chainId>:<tokenId>` for a position, the key the write groups carry. */
+function positionKey(position: LpPosition): string {
+  return `${position.chain?.id ?? 0}:${position.tokenId}`
+}
+
+/**
+ * The positions a re-read shows closed: those it says are closed, and — for a
+ * complete wallet scan — those the earlier read listed that are gone now
+ * (a burned position no longer shows up at all).
+ */
+function closedBy(before: LpPayload, after: LpPayload): string[] {
+  if (after.kind === 'position') {
+    return after.position.status === 'closed' ? [positionKey(after.position)] : []
+  }
+  if (after.kind !== 'positions') return []
+  const out = after.positions.filter((p) => p.status === 'closed').map(positionKey)
+  if (before.kind === 'positions' && !after.partialScan) {
+    const now = new Set(after.positions.map(positionKey))
+    before.positions
+      .filter((p) => p.tokenId && !now.has(positionKey(p)))
+      .forEach((p) => out.push(positionKey(p)))
+  }
+  return out
+}
+
 export interface LpMounterDeps {
   /** Fetch an LP artifact body from its (authenticated) URL. */
   fetchPayload: (url: string) => Promise<unknown>
+  /**
+   * The gateway call ↻ re-runs a card's read through (`trading.lp.*` reads
+   * are agent-callable, so the web console passes it too). Default: none, no ↻
+   * — unless `actions` is given, whose call then serves.
+   */
+  call?: LpCall
+  /**
+   * Collect/Remove on the user's own positions. An object, or a getter read
+   * at render and click time (the desktop's chat becomes the desk without
+   * remounting the transcript). Absent → no write buttons.
+   */
+  actions?: LpActions | (() => LpActions | null | undefined) | null
   /** Copy an address. Default: `copyLpText` (Clipboard API, then execCommand). */
   copyText?: (value: string) => void | Promise<void>
   /** Clock. Default: Date.now. */
@@ -2076,8 +2363,27 @@ export function createLpMounter(deps: LpMounterDeps) {
   const diag = deps.diag ?? ((): void => {})
   const now = deps.now ?? ((): number => Date.now())
   const copyText = deps.copyText ?? copyLpText
+  const getActions = (): LpActions | null => {
+    const value = typeof deps.actions === 'function' ? deps.actions() : deps.actions
+    return value && typeof value.call === 'function' ? value : null
+  }
+  const readCall = (): LpCall | null => deps.call ?? getActions()?.call ?? null
   const claimed = new Set<HTMLElement>()
   const rendered = new Set<HTMLElement>()
+  /** The payload each rendered host shows, so ↻ knows what to re-run. */
+  const payloads = new Map<HTMLElement, LpPayload>()
+  const refreshing = new Set<HTMLElement>()
+  const wired = new WeakSet<HTMLElement>()
+  /** In-flight writes by `<chainId>:<tokenId>`; they outlive a re-render. */
+  const writes = new Map<string, WriteState>()
+  /** Orders that finished before their write RPC answered. */
+  const finishedEarly = new Set<string>()
+  /**
+   * Positions (`<chainId>:<tokenId>`) a read or a write found closed or gone.
+   * Every card still drawing one of them — an older position card, a positions
+   * row — keeps its buttons disabled and wears the closed pill.
+   */
+  const closed = new Set<string>()
   const timers = new Set<ReturnType<typeof setTimeout>>()
   let clock: ReturnType<typeof setInterval> | null = null
   const cards = new Map<HTMLElement, HTMLElement>()
@@ -2141,6 +2447,302 @@ export function createLpMounter(deps: LpMounterDeps) {
       }, ms)
       timers.add(id)
     },
+    get canRefresh() {
+      return readCall() !== null
+    },
+    get canWrite() {
+      return getActions() !== null
+    },
+  }
+
+  /* ── ↻ refresh ── */
+
+  /** Show a line under the footer (a failed refresh) for LP_ERROR_MS. */
+  function flashFootError(host: HTMLElement, message: string): void {
+    const foot = host.querySelector<HTMLElement>('.lp-card__foot')
+    if (!foot) return
+    let line = foot.querySelector<HTMLElement>('[data-lp-refresh-error]')
+    if (!line) {
+      line = el('span', 'lp-card__refresh-error')
+      line.dataset.lpRefreshError = 'true'
+      line.setAttribute('role', 'alert')
+      foot.append(line)
+    }
+    line.textContent = message
+    const shown = line
+    ctx.setTimer(() => shown.remove(), LP_ERROR_MS)
+  }
+
+  async function refreshHost(host: HTMLElement): Promise<void> {
+    const current = payloads.get(host)
+    const call = readCall()
+    const request = current?.request
+    if (!current || !request || !call || refreshing.has(host)) return
+    refreshing.add(host)
+    const card = host.querySelector<HTMLElement>('.lp-card')
+    card?.setAttribute('data-lp-refreshing', 'true')
+    card?.setAttribute('aria-busy', 'true')
+    const button = host.querySelector<HTMLButtonElement>('[data-lp-action="refresh"]')
+    if (button) button.disabled = true
+    diag('lp.refresh.start', { kind: request.kind })
+    try {
+      const raw = await call(lpReadMethod(request), request.params)
+      const next = normalizeLpPayload(raw)
+      if (!next) throw new Error(t('chat.lpUnreadable'))
+      if (!host.isConnected || !rendered.has(host)) return
+      // The engine echoes the request; an older one does not, and ↻ must keep working.
+      if (!next.request) next.request = request
+      if (!next.fetchedAt) next.fetchedAt = new Date(now()).toISOString()
+      closedBy(current, next).forEach((key) => closed.add(key))
+      show(host, next)
+      paintAll()
+      diag('lp.refresh.done', { kind: next.kind })
+    } catch (error) {
+      card?.removeAttribute('data-lp-refreshing')
+      card?.removeAttribute('aria-busy')
+      if (button) button.disabled = false
+      const { code, message } = rpcError(error)
+      // A position read that finds nothing: burned (or never there). The card
+      // says so and its buttons stop offering a write that cannot happen.
+      const gone =
+        request.kind === 'position' &&
+        (code === 'trading.lp.not_found' || code === 'trading.lp.position_closed')
+      if (gone) {
+        closed.add(
+          `${String(request.params.chainId ?? '')}:${String(request.params.tokenId ?? '')}`,
+        )
+        paintAll()
+      }
+      // A card redrawn closed says so itself; anything else explains under its footer.
+      const shown = payloads.get(host)
+      const redrawn = shown?.kind === 'position' && shown.position.status === 'closed'
+      if (!redrawn) {
+        flashFootError(host, gone ? t('chat.lpErrClosed') : t('chat.lpRefreshFailed', { message }))
+      }
+      diag('lp.refresh.error', { error: String(error) })
+    } finally {
+      refreshing.delete(host)
+    }
+  }
+
+  /* ── Collect / Remove ── */
+
+  function writeKey(group: HTMLElement): string {
+    return `${group.dataset.lpChainId ?? ''}:${group.dataset.lpTokenId ?? ''}`
+  }
+
+  /** Draw one write group from the state its position is in. */
+  function paintWrites(group: HTMLElement): void {
+    const key = writeKey(group)
+    const state = writes.get(key)
+    const buttons = group.querySelectorAll<HTMLButtonElement>('button[data-lp-action]')
+    const label = group.querySelector<HTMLElement>('[data-lp-state]')
+    const choice = group.querySelector<HTMLElement>('[data-lp-choice]')
+    if (closed.has(key) && !state) {
+      paintClosed(group, buttons)
+      if (choice) choice.hidden = true
+      if (label) {
+        label.hidden = true
+        label.textContent = ''
+        label.removeAttribute('title')
+      }
+      return
+    }
+    // Pending or awaiting approval: no second write on the same position.
+    // A collect with nothing owed stays off whatever the write state says.
+    buttons.forEach((b) => (b.disabled = Boolean(state) || b.dataset.lpNoFees === 'true'))
+    if (!state) {
+      delete group.dataset.lpWrite
+      delete group.dataset.lpWriteAction
+      if (label) {
+        label.hidden = true
+        label.textContent = ''
+        label.removeAttribute('title')
+      }
+      return
+    }
+    group.dataset.lpWrite = state.phase
+    group.dataset.lpWriteAction = state.action
+    if (choice) choice.hidden = true
+    group
+      .querySelector<HTMLElement>('[data-lp-action="remove"]')
+      ?.setAttribute('aria-expanded', 'false')
+    if (label) {
+      label.hidden = false
+      if (state.phase === 'pending') {
+        label.textContent = t('chat.lpWritePending')
+        label.removeAttribute('title')
+      } else {
+        label.textContent = t('chat.lpAwaiting', { order: shortOrder(state.orderId ?? '') })
+        label.title = t('chat.lpAwaitingTitle', { order: state.orderId ?? '' })
+      }
+    }
+  }
+
+  /** A closed position: every button off with the reason, the closed pill on its card or row. */
+  function paintClosed(group: HTMLElement, buttons: NodeListOf<HTMLButtonElement>): void {
+    group.dataset.lpWrite = 'closed'
+    delete group.dataset.lpWriteAction
+    buttons.forEach((b) => {
+      b.disabled = true
+      b.title = t('chat.lpPositionClosed')
+    })
+    group
+      .querySelector<HTMLElement>('[data-lp-action="remove"]')
+      ?.setAttribute('aria-expanded', 'false')
+    // The row of a positions card, else the position card itself.
+    const owner =
+      group.closest<HTMLElement>('.lp-row') ?? group.closest<HTMLElement>('.lp-card') ?? null
+    if (!owner || owner.dataset.lpStatus === 'closed') return
+    owner.dataset.lpStatus = 'closed'
+    const pill = owner.querySelector<HTMLElement>('.lp-pill')
+    pill?.replaceWith(statusPill('closed'))
+    owner.querySelector('.lp-row__distance')?.remove()
+  }
+
+  /**
+   * Redraw every open position card whose position is now known closed (and
+   * has no write in flight) as a closed card: the figures it shows are gone.
+   */
+  function closeCards(): void {
+    rendered.forEach((host) => {
+      const shown = payloads.get(host)
+      if (shown?.kind !== 'position' || shown.position.status === 'closed') return
+      const key = positionKey(shown.position)
+      if (!closed.has(key) || writes.has(key)) return
+      show(host, closedPositionPayload(shown, new Date(now()).toISOString()))
+    })
+  }
+
+  function paintAll(): void {
+    closeCards()
+    rendered.forEach((host) =>
+      host.querySelectorAll<HTMLElement>('[data-lp-writes]').forEach(paintWrites),
+    )
+  }
+
+  function flashWriteError(key: string, message: string): void {
+    rendered.forEach((host) =>
+      host.querySelectorAll<HTMLElement>('[data-lp-writes]').forEach((group) => {
+        if (writeKey(group) !== key) return
+        const line = group.querySelector<HTMLElement>('[data-lp-error]')
+        if (!line) return
+        line.textContent = message
+        line.hidden = false
+        ctx.setTimer(() => {
+          if (line.textContent === message) {
+            line.hidden = true
+            line.textContent = ''
+          }
+        }, LP_ERROR_MS)
+      }),
+    )
+  }
+
+  async function write(
+    host: HTMLElement,
+    group: HTMLElement,
+    action: 'collect' | 'remove',
+    pct?: number,
+  ): Promise<void> {
+    const actions = getActions()
+    const key = writeKey(group)
+    if (!actions || writes.has(key)) return
+    const tokenId = group.dataset.lpTokenId ?? ''
+    const chainId = Number(group.dataset.lpChainId)
+    const params: Record<string, unknown> = { tokenId, chainId }
+    if (action === 'remove') params.pct = pct ?? 100
+    writes.set(key, { phase: 'pending', action, pct, host })
+    paintAll()
+    diag('lp.write.start', { action, tokenId, chainId, pct })
+    try {
+      const order = orderOf(await actions.call(`trading.lp.${action}`, params))
+      if (!order) throw new Error(t('chat.lpErrNoOrder'))
+      const parked =
+        order.status === '' ||
+        order.status === 'awaiting_approval' ||
+        order.status === 'approved' ||
+        order.status === 'submitted'
+      if (!parked || finishedEarly.delete(order.orderId)) {
+        // Settled (or refused) without waiting: say how, and free the buttons.
+        writes.delete(key)
+        paintAll()
+        if (!parked) {
+          flashWriteError(
+            key,
+            t('chat.lpWriteEnded', {
+              order: order.orderId,
+              status: order.reason || order.status,
+            }),
+          )
+        }
+        return
+      }
+      writes.set(key, { phase: 'awaiting', action, pct, host, orderId: order.orderId })
+      paintAll()
+      actions.onOrder?.(order.orderId)
+      diag('lp.write.parked', { action, orderId: order.orderId })
+    } catch (error) {
+      writes.delete(key)
+      if (rpcError(error).code === 'trading.lp.position_closed') closed.add(key)
+      paintAll()
+      flashWriteError(key, lpWriteErrorText(error))
+      diag('lp.write.error', { action, error: String(error) })
+    }
+  }
+
+  /** One click handler per host: refresh, collect, the remove choice. */
+  function wire(host: HTMLElement): void {
+    if (wired.has(host)) return
+    wired.add(host)
+    host.addEventListener('click', (event) => {
+      const target = (event.target as Element | null)?.closest<HTMLElement>('[data-lp-action]')
+      if (!target || !host.contains(target) || (target as HTMLButtonElement).disabled) return
+      const action = target.dataset.lpAction
+      if (action === 'refresh') {
+        void refreshHost(host)
+        return
+      }
+      const group = target.closest<HTMLElement>('[data-lp-writes]')
+      if (!group) return
+      if (action === 'collect') {
+        void write(host, group, 'collect')
+      } else if (action === 'remove') {
+        const choice = group.querySelector<HTMLElement>('[data-lp-choice]')
+        if (!choice) return
+        choice.hidden = !choice.hidden
+        target.setAttribute('aria-expanded', choice.hidden ? 'false' : 'true')
+      } else if (action === 'remove-pct') {
+        void write(host, group, 'remove', Number(target.dataset.lpPct) || 100)
+      }
+    })
+  }
+
+  /** Render (or re-render) a payload into its host and keep it fitted. */
+  function show(host: HTMLElement, payload: LpPayload): void {
+    renderLp(host, payload, ctx)
+    payloads.set(host, payload)
+    host.querySelectorAll<HTMLElement>('[data-lp-writes]').forEach(paintWrites)
+    watch(host)
+  }
+
+  /**
+   * `trading.order.finished` for an order a write button parked: the buttons
+   * come back and the card it was clicked on reads itself again.
+   */
+  function orderFinished(orderId: string): void {
+    if (!orderId) return
+    let matched = false
+    for (const [key, state] of [...writes]) {
+      if (state.orderId !== orderId) continue
+      matched = true
+      writes.delete(key)
+      paintAll()
+      if (state.host.isConnected && rendered.has(state.host)) void refreshHost(state.host)
+    }
+    if (!matched && [...writes.values()].some((w) => w.phase === 'pending')) {
+      finishedEarly.add(orderId)
+    }
   }
 
   function stopClock(): void {
@@ -2167,6 +2769,7 @@ export function createLpMounter(deps: LpMounterDeps) {
       if (!host.isConnected) {
         claimed.delete(host)
         rendered.delete(host)
+        payloads.delete(host)
         unwatch(host)
       }
     }
@@ -2199,10 +2802,10 @@ export function createLpMounter(deps: LpMounterDeps) {
         claimed.delete(host)
         return
       }
-      renderLp(host, payload, ctx)
-      setStatus(host, '')
+      wire(host)
       rendered.add(host)
-      watch(host)
+      show(host, payload)
+      setStatus(host, '')
       startClock()
       diag('lp.mount.done', { url, kind: payload.kind })
     } catch (error) {
@@ -2226,6 +2829,11 @@ export function createLpMounter(deps: LpMounterDeps) {
   function destroyAll(): void {
     claimed.clear()
     rendered.clear()
+    payloads.clear()
+    refreshing.clear()
+    writes.clear()
+    finishedEarly.clear()
+    closed.clear()
     stopClock()
     observer?.disconnect()
     cards.clear()
@@ -2237,7 +2845,7 @@ export function createLpMounter(deps: LpMounterDeps) {
     timers.clear()
   }
 
-  return { mountLp, destroyAll, pruneDetached }
+  return { mountLp, destroyAll, pruneDetached, orderFinished, refresh: refreshHost }
 }
 
 export type LpMounter = ReturnType<typeof createLpMounter>

@@ -6,6 +6,7 @@
   "fetchedAt": "2026-09-27T09:30:00Z",
   "partialScan": false,
   "warnings": [],
+  "request": { "kind": "position", "params": { "tokenId": "48213", "chainId": 8453 } },
   "position": {
     "chain": { "id": 8453, "key": "base", "name": "Base", "explorer": "https://basescan.org" },
     "tokenId": "48213",

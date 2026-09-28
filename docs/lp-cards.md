@@ -54,7 +54,8 @@ JSON numbers or `null` when no price is known — never `0` for "unknown".
   "asOfBlock": 21044901,          // block the reads were made against (0 if unknown)
   "fetchedAt": "2026-09-27T09:30:00Z",
   "partialScan": false,           // true when any scan was truncated; the card shows a badge
-  "warnings": ["string"]          // human-readable, may be empty
+  "warnings": ["string"],         // human-readable, may be empty
+  "request": { "kind": "pool", "params": { "target": "0x…", "chainId": 8453 } }  // what ↻ refresh re-runs: the read RPC's own params (position: tokenId+chainId; positions: chainIds/wallets/all/budgetSeconds)
 }
 ```
 

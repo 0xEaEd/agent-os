@@ -109,3 +109,39 @@ async def test_positions_take_several_chains_and_a_budget(
     ((_, kwargs),) = seen
     assert [c.key for c in kwargs["chains"]] == ["base", "robinhood"]
     assert kwargs["budget_s"] == 40.0
+
+
+async def test_pool_and_ranges_take_a_fee_tier(
+    ctx: RpcContext,  # noqa: F811
+    seen: list[tuple[str, dict[str, Any]]],
+) -> None:
+    res = await call(
+        "trading.lp.pool", {"chainId": 8453, "target": "ETH/USDC", "feePct": "0.05"}, ctx
+    )
+    assert res.ok, res.error
+    res = await call(
+        "trading.lp.ranges",
+        {"chainId": 8453, "target": "ETH", "quote": "USDC", "feePct": 3000},
+        ctx,
+    )
+    assert res.ok, res.error
+    (_, pool), (_, ranges) = seen
+    assert pool["target"] == "ETH/USDC" and pool["quote"] is None and pool["fee"] == 500
+    assert ranges["quote"] == "USDC" and ranges["fee"] == 3000
+    # A tier that is not one is refused before the engine is asked.
+    res = await call("trading.lp.pool", {"target": "ETH", "feePct": "fast"}, ctx)
+    assert res.ok is False and res.error.code == "trading.invalid"
+    assert len(seen) == 2
+
+
+async def test_the_echoed_request_keeps_the_fee(
+    ctx: RpcContext,  # noqa: F811
+    seen: list[tuple[str, dict[str, Any]]],
+) -> None:
+    res = await call("trading.lp.pool", {"chainId": 8453, "target": "ETH", "feePct": "500"}, ctx)
+    assert res.ok, res.error
+    assert res.payload["request"]["params"] == {
+        "target": "ETH",
+        "chainId": 8453,
+        "feePct": "0.05%",
+    }

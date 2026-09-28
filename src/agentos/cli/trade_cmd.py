@@ -172,7 +172,43 @@ def _order_legs(order: dict[str, Any]) -> str:
     if kind == "revoke":
         who = order.get("recipientLabel") or short_address(order.get("recipient"))
         return f"revoke {token_symbol(order.get('tokenIn'))} for {who}"
+    if kind in LP_KINDS:
+        return _lp_legs(order)
     return f"{amount} → {token_symbol(order.get('tokenOut'))}"
+
+
+#: Order kinds of the Uniswap V4 LP writes (``trade lp collect|remove|add``).
+LP_KINDS = ("lp_collect", "lp_remove", "lp_add")
+ORDER_KINDS = ("swap", "send", "revoke", *LP_KINDS)
+
+
+def _lp_pair(order: dict[str, Any]) -> str:
+    return f"{token_symbol(order.get('tokenIn'))}/{token_symbol(order.get('tokenOut'))}"
+
+
+def _lp_legs(order: dict[str, Any]) -> str:
+    """The order in words: "Collect fees · #48213", "Remove liquidity · #48213 · 100%"."""
+    kind = str(order.get("kind") or "")
+    plan = _dict(order.get("plan"))
+    token_id = order.get("tokenId") or plan.get("tokenId")
+    where = f" · #{token_id}" if token_id else ""
+    if kind == "lp_collect":
+        return f"Collect fees{where}"
+    if kind == "lp_remove":
+        pct = plan.get("pct")
+        return f"Remove liquidity{where}" + (f" · {float(pct):g}%" if pct is not None else "")
+    return f"Add liquidity · {_lp_pair(order)}{where}"
+
+
+def _lp_amounts(pair: Any) -> str | None:
+    """``{base, quote}`` Amounts as "1.2 PEPE + 0.01 WETH"; None when both are zero."""
+    legs = _dict(pair)
+    parts = []
+    for key in ("base", "quote"):
+        leg = _dict(legs.get(key))
+        if leg.get("raw") not in (None, "0"):
+            parts.append(f"{leg.get('human')} {leg.get('symbol') or key}")
+    return " + ".join(parts) or None
 
 
 def _order_table(orders: list[dict[str, Any]], title: str = "Orders") -> Table:
@@ -203,6 +239,9 @@ def _print_order(order: dict[str, Any]) -> None:
     table.add_column("Field", style=ACCENT)
     table.add_column("Value")
     kind = str(order.get("kind") or "swap")
+    if kind in LP_KINDS:
+        _print_lp_order(order, table)
+        return
     recipient = order.get("recipient")
     if recipient and order.get("recipientLabel"):
         recipient = f"{recipient} ({order['recipientLabel']})"
@@ -235,6 +274,83 @@ def _print_order(order: dict[str, Any]) -> None:
         ("note", order.get("note")),
     ):
         if value in (None, "", "—"):
+            continue
+        table.add_row(field, markup_escape(str(value)))
+    console.print(table)
+
+
+def _named(pair: Any, plan: dict[str, Any]) -> dict[str, Any]:
+    """Amounts with their token symbols (the plan's ``token``/``quote``) attached."""
+    out = {}
+    for key, which in (("base", "token"), ("quote", "quote")):
+        leg = dict(_dict(_dict(pair).get(key)))
+        leg["symbol"] = _dict(plan.get(which)).get("symbol")
+        out[key] = leg
+    return out
+
+
+def _print_lp_order(order: dict[str, Any], table: Table) -> None:
+    plan = _dict(order.get("plan"))
+    rng = _dict(plan.get("range"))
+    pool = _dict(plan.get("pool"))
+    expected = _dict(plan.get("expected"))
+    sim = _dict(plan.get("simulation"))
+    op = str(plan.get("op") or "")
+    moves = "you receive" if op in ("collect", "remove") else "you deposit"
+    bound = "minimum" if op == "remove" else ("maximum" if op == "add" else None)
+    approvals = [
+        f"{a.get('symbol')} {a.get('step')}" + (f" ({a['txHash']})" if a.get("txHash") else "")
+        for a in plan.get("approvals") or []
+        if isinstance(a, dict) and (a.get("needed") or a.get("txHash"))
+    ]
+    bounds = _dict(plan.get("bounds"))
+    rows = (
+        ("kind", _lp_legs(order)),
+        ("status", order.get("status")),
+        ("reason", order.get("reason")),
+        ("chain", chain_label(order.get("chainId"))),
+        ("wallet", order.get("wallet")),
+        ("pool", f"{_lp_pair(order)} · {pool.get('feePct')} · {pool.get('poolId')}"),
+        ("hook", pool.get("hook")),
+        (
+            "range",
+            f"{rng.get('tickLower')} → {rng.get('tickUpper')} ({_range_text(rng)})"
+            + (f" · {plan.get('rangeSpec')}" if plan.get("rangeSpec") else "")
+            if rng
+            else None,
+        ),
+        ("one-sided", plan.get("oneSided")),
+        (moves, _lp_amounts(_named(expected, plan))),
+        ("worth", _usd(expected.get("usd")) if expected else None),
+        (
+            "fees included" if op == "remove" else "fees",
+            _lp_amounts(_named(plan.get("fees"), plan)),
+        ),
+        (
+            bound,
+            _lp_amounts(
+                _named(
+                    {k: {"raw": v, "human": v} for k, v in bounds.items()},
+                    plan,
+                )
+            )
+            if bound
+            else None,
+        ),
+        ("approvals", ", ".join(approvals) or None),
+        ("simulation", f"{sim.get('method')}: {'ok' if sim.get('ok') else sim.get('revert')}"),
+        ("gas", _usd(order.get("gasUsd"))),
+        ("received", _lp_amounts(_named(order.get("received"), plan))),
+        ("spent", _lp_amounts(_named(order.get("spent"), plan))),
+        ("initiator", order.get("initiator")),
+        ("plan", plan.get("planHash")),
+        ("tx", order.get("txHash")),
+        ("explorer", order.get("explorerUrl")),
+        ("expires", order.get("expiresAt")),
+        ("note", order.get("note")),
+    )
+    for field, value in rows:
+        if field is None or value in (None, "", "—"):
             continue
         table.add_row(field, markup_escape(str(value)))
     console.print(table)
@@ -1142,7 +1258,9 @@ def trade_network(
 def trade_orders(
     status: str | None = typer.Option(None, "--status", help="Filter by status"),
     wallet: str | None = typer.Option(None, "--wallet", help="Filter by wallet address"),
-    kind: str | None = typer.Option(None, "--kind", help="swap, send or revoke"),
+    kind: str | None = typer.Option(
+        None, "--kind", help="swap, send, revoke, lp_collect, lp_remove or lp_add"
+    ),
     limit: int = typer.Option(50, "--limit", help="Max rows", min=1, max=500),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
@@ -1154,8 +1272,10 @@ def trade_orders(
     if wallet:
         params["wallet"] = wallet
     if kind:
-        if kind not in ("swap", "send", "revoke"):
-            _bad_argument("--kind must be swap, send or revoke", json_output=json_output)
+        if kind not in ORDER_KINDS:
+            _bad_argument(
+                f"--kind must be one of {', '.join(ORDER_KINDS)}", json_output=json_output
+            )
         params["kind"] = kind
 
     async def _run(client):
@@ -1203,10 +1323,11 @@ def trade_approve(
     order_id: str = typer.Argument(..., help="Order id awaiting approval"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
-    """Approve a parked agent order.
+    """Approve a parked order.
 
     Agent swaps park above the approval threshold or the price-impact ceiling,
-    or when the engine cannot price them; agent sends and revokes always park.
+    or when the engine cannot price them; agent sends and revokes always park,
+    and so does every LP write (``trade lp collect|remove|add``), whoever asked.
     """
 
     async def _run(client):
@@ -1247,7 +1368,11 @@ def trade_reject(
 def trade_history(
     wallet: str | None = typer.Option(None, "--wallet", help="Filter by wallet address"),
     chain: str | None = typer.Option(None, "--chain", help="base or robinhood"),
-    kind: str | None = typer.Option(None, "--kind", help="swap, deposit, withdraw, gas, approval"),
+    kind: str | None = typer.Option(
+        None,
+        "--kind",
+        help="swap, deposit, withdraw, gas, approval, unwrap, lp_add, lp_collect, lp_remove",
+    ),
     limit: int = typer.Option(100, "--limit", help="Max rows", min=1, max=1000),
     hidden: bool = typer.Option(False, "--hidden", help="Include entries of hidden (junk) tokens"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
@@ -1477,8 +1602,9 @@ class _LpGroup(TyperGroup):
 lp_app = typer.Typer(
     cls=_LpGroup,
     help=(
-        "Read Uniswap V4 liquidity on Base and Robinhood Chain: a token's pool, its "
-        "liquidity ranges, one position, or every position of your wallets. Read-only."
+        "Uniswap V4 liquidity on Base and Robinhood Chain: read a token's pool, its "
+        "liquidity ranges, one position or every position of your wallets; collect fees, "
+        "remove or add liquidity (every write waits for your approval)."
     ),
 )
 app.add_typer(lp_app, name="lp")
@@ -1756,13 +1882,30 @@ def _render_lp_positions(result: dict[str, Any]) -> None:
     _lp_footer(result)
 
 
+_PAIR_TARGET_HELP = "Token symbol or address, a TOKEN/QUOTE pair (ETH/USDC), or a V4 poolId"
+_QUOTE_HELP = "Only pools paired with this token (same as writing TOKEN/QUOTE)"
+_FEE_HELP = (
+    "Only pools on this fee tier: a percent (0.05, 0.3%, 1) or V4 units (500, 3000), "
+    "or 'dynamic'; the deepest wins if several share it"
+)
+
+
+def _lp_pool_params(params: dict[str, Any], quote: str | None, fee: str | None) -> dict[str, Any]:
+    if quote:
+        params["quote"] = quote
+    if fee is not None and fee.strip():
+        params["feePct"] = fee.strip()
+    return params
+
+
 @lp_app.command("pool")
 def lp_pool(
-    target: str = typer.Argument(..., help="Token symbol or address, or a V4 poolId"),
+    target: str = typer.Argument(..., help=_PAIR_TARGET_HELP),
     chain: list[str] | None = typer.Option(
         None, "--chain", help="base or robinhood (default: try both)"
     ),
-    quote: str | None = typer.Option(None, "--quote", help="Only pools paired with this token"),
+    quote: str | None = typer.Option(None, "--quote", help=_QUOTE_HELP),
+    fee: str | None = typer.Option(None, "--fee", help=_FEE_HELP),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
     no_card: bool = typer.Option(
         False, "--no-card", help="With --json: do not write the chat card"
@@ -1774,8 +1917,7 @@ def lp_pool(
     chain_id = _lp_chain(chain, "pool", json_output=json_output)
     if chain_id is not None:
         params["chainId"] = chain_id
-    if quote:
-        params["quote"] = quote
+    _lp_pool_params(params, quote, fee)
 
     result = _lp_call("trading.lp.pool", params, json_output=json_output)
     _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_pool)
@@ -1783,10 +1925,12 @@ def lp_pool(
 
 @lp_app.command("ranges")
 def lp_ranges(
-    target: str = typer.Argument(..., help="Token symbol or address, or a V4 poolId"),
+    target: str = typer.Argument(..., help=_PAIR_TARGET_HELP),
     chain: list[str] | None = typer.Option(
         None, "--chain", help="base or robinhood (default: try both)"
     ),
+    quote: str | None = typer.Option(None, "--quote", help=_QUOTE_HELP),
+    fee: str | None = typer.Option(None, "--fee", help=_FEE_HELP),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
     no_card: bool = typer.Option(
         False, "--no-card", help="With --json: do not write the chat card"
@@ -1798,6 +1942,7 @@ def lp_ranges(
     chain_id = _lp_chain(chain, "ranges", json_output=json_output)
     if chain_id is not None:
         params["chainId"] = chain_id
+    _lp_pool_params(params, quote, fee)
 
     result = _lp_call("trading.lp.ranges", params, json_output=json_output)
     _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_ranges)
@@ -1862,3 +2007,305 @@ def lp_positions(
 
     result = _lp_call("trading.lp.positions", params, json_output=json_output)
     _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_positions)
+
+
+# ── trade lp collect|remove|add: LP writes (docs/lp-write.md) ──────────────
+
+#: Engine codes that mean "change the input" for an LP write: exit 2, not 1.
+_LP_WRITE_USAGE_CODES = frozenset(
+    {
+        "trading.invalid",
+        "trading.lp.range_invalid",
+        "trading.lp.not_owner",
+        "trading.lp.position_closed",
+        "trading.lp.nothing_to_collect",
+        "trading.lp.not_found",
+        "trading.lp.pool_key_unknown",
+        "trading.slippage_too_high",
+        "trading.unknown_token",
+    }
+)
+
+
+def _lp_token_id(value: str, name: str, *, json_output: bool) -> str:
+    text = value.strip().lstrip("#")
+    if not text.isdigit() or int(text) <= 0:
+        _bad_argument(f"{name} must be a positive integer", json_output=json_output)
+    return text
+
+
+async def _lp_card_after(client: Any, order: dict[str, Any]) -> dict[str, Any] | None:
+    """The refreshed card for a confirmed write: the position, or (after a burn) the wallet's."""
+    plan = _dict(order.get("plan"))
+    chain_id = order.get("chainId")
+    try:
+        if plan.get("op") == "remove" and plan.get("burn"):
+            payload = await client.call(
+                "trading.lp.positions", {"chainId": chain_id, "wallets": [order.get("wallet")]}
+            )
+        else:
+            token_id = order.get("tokenId") or plan.get("tokenId")
+            if not token_id:
+                return None
+            payload = await client.call(
+                "trading.lp.position", {"chainId": chain_id, "tokenId": str(token_id)}
+            )
+    except Exception as exc:  # noqa: BLE001 - the order is confirmed; the card is a bonus
+        typer.echo(f"[card not refreshed: {exc}]", err=True)
+        return None
+    return payload if isinstance(payload, dict) and payload.get("kind") else None
+
+
+def _lp_write(
+    method: str,
+    params: dict[str, Any],
+    *,
+    wait: bool,
+    wait_seconds: int,
+    json_output: bool,
+    no_card: bool,
+) -> None:
+    """Create an LP write order, optionally wait for it, and print it like ``trade send``.
+
+    With ``--json`` a *confirmed* order is followed by the refreshed position
+    card (``lp position``; after a burn, the wallet's ``lp positions``) written
+    to ``lp-cards/`` and announced by the marker, the last line on stdout.
+    """
+    session_key = os.environ.get("AGENTOS_SESSION_KEY", "").strip()
+    params = {**params, "initiator": initiator_for(False)}
+    if session_key:
+        params["sessionKey"] = session_key
+
+    async def _run(client):
+        from agentos.cli.gateway_client import GatewayRPCError
+
+        try:
+            result = await client.call(method, params)
+        except GatewayRPCError as exc:
+            if exc.code not in _LP_WRITE_USAGE_CODES:
+                raise
+            emit_error(exc.message, json_output=json_output, code=exc.code, details=exc.data)
+            raise typer.Exit(2) from exc
+        order = _dict(result).get("order")
+        if wait and isinstance(order, dict) and order.get("status") in _PENDING_STATUSES:
+            waited = await client.call(
+                "trading.orders.wait",
+                {"orderId": order.get("orderId"), "timeoutSeconds": wait_seconds},
+            )
+            if isinstance(waited, dict) and isinstance(waited.get("order"), dict):
+                result, order = waited, waited["order"]
+        card = None
+        if json_output and not no_card and _dict(order).get("status") == "confirmed":
+            card = await _lp_card_after(client, _dict(order))
+        return {"result": result, "card": card}
+
+    out = run_gateway_sync(_run, json_output=json_output)
+    result = _dict(out).get("result")
+    if json_output:
+        print_json(result)
+        card = _dict(out).get("card")
+        if card:
+            _write_lp_card(card)
+        return
+    order = _dict(_dict(result).get("order"))
+    _print_order(order)
+    if order.get("status") == "awaiting_approval":
+        console.print(
+            f"Waiting for approval in the app (or: agentos trade approve {order.get('orderId')})."
+        )
+
+
+def _lp_common(params: dict[str, Any], note: str | None, client_id: str | None) -> dict[str, Any]:
+    if note:
+        params["note"] = note
+    if client_id:
+        params["clientOrderId"] = client_id.strip()
+    return params
+
+
+_CLIENT_ID_HELP = (
+    "Idempotency key; re-running with the same id returns the same order instead of a second one"
+)
+
+
+@lp_app.command("collect")
+def lp_collect(
+    token_id: str = typer.Argument(..., help="Position NFT id"),
+    chain: list[str] = typer.Option(..., "--chain", help="base or robinhood"),
+    allow_empty: bool = typer.Option(
+        False,
+        "--allow-empty",
+        help="Collect even when the position has no uncollected fees (refused otherwise)",
+    ),
+    note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
+    client_id: str | None = typer.Option(None, "--client-id", help=_CLIENT_ID_HELP),
+    wait: bool = typer.Option(False, "--wait", help="Block until the order is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the refreshed position card"
+    ),
+) -> None:
+    """Collect a position's uncollected fees. Always waits for your approval.
+
+    A position with no uncollected fees is refused (it would only pay gas)
+    unless --allow-empty.
+    """
+
+    params: dict[str, Any] = {
+        "chainId": _lp_chain(chain, "collect", json_output=json_output),
+        "tokenId": _lp_token_id(token_id, "tokenId", json_output=json_output),
+    }
+    if allow_empty:
+        params["allowEmpty"] = True
+    _lp_write(
+        "trading.lp.collect",
+        _lp_common(params, note, client_id),
+        wait=wait,
+        wait_seconds=wait_seconds,
+        json_output=json_output,
+        no_card=no_card,
+    )
+
+
+@lp_app.command("remove")
+def lp_remove(
+    token_id: str = typer.Argument(..., help="Position NFT id"),
+    chain: list[str] = typer.Option(..., "--chain", help="base or robinhood"),
+    pct: float = typer.Option(
+        100.0, "--pct", help="Share of the liquidity to take out; 100 (default) burns the NFT"
+    ),
+    slippage: float | None = typer.Option(
+        None, "--slippage", help="Slippage % below today's amounts (default 1)"
+    ),
+    note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
+    client_id: str | None = typer.Option(None, "--client-id", help=_CLIENT_ID_HELP),
+    wait: bool = typer.Option(False, "--wait", help="Block until the order is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the refreshed position card"
+    ),
+) -> None:
+    """Remove liquidity (fees included) from a position. Always waits for your approval."""
+
+    if not 0 < pct <= 100:
+        _bad_argument("--pct must be above 0 and at most 100", json_output=json_output)
+    params: dict[str, Any] = {
+        "chainId": _lp_chain(chain, "remove", json_output=json_output),
+        "tokenId": _lp_token_id(token_id, "tokenId", json_output=json_output),
+        "pct": pct,
+    }
+    if slippage is not None:
+        params["slippagePct"] = slippage
+    _lp_write(
+        "trading.lp.remove",
+        _lp_common(params, note, client_id),
+        wait=wait,
+        wait_seconds=wait_seconds,
+        json_output=json_output,
+        no_card=no_card,
+    )
+
+
+@lp_app.command("add")
+def lp_add(
+    target: str | None = typer.Argument(
+        None,
+        help=(
+            "Token symbol or address, a TOKEN/QUOTE pair (ETH/USDC), or a V4 poolId "
+            "(optional with --to-position)"
+        ),
+    ),
+    chain: list[str] = typer.Option(..., "--chain", help="base or robinhood"),
+    quote: str | None = typer.Option(None, "--quote", help=_QUOTE_HELP),
+    fee: str | None = typer.Option(None, "--fee", help=_FEE_HELP),
+    usd: float | None = typer.Option(
+        None, "--usd", help="Deposit this many US dollars, split as the range needs"
+    ),
+    amount_base: str | None = typer.Option(
+        None, "--amount-base", help="Deposit this much of the token (human units)"
+    ),
+    amount_quote: str | None = typer.Option(
+        None, "--amount-quote", help="Deposit this much of the quote token (human units)"
+    ),
+    range_spec: str | None = typer.Option(
+        None,
+        "--range",
+        help=(
+            "mcap:2M-10M | pct:20 | above[:20] | below[:20] | full | ticks:LO:HI "
+            "(default pct:20 around the price; above = all token, from just above the "
+            "price up N %; below = all quote, from just below it down N %; N defaults to 20)"
+        ),
+    ),
+    to_position: str | None = typer.Option(
+        None, "--to-position", help="Add to this position (its range) instead of minting"
+    ),
+    wallet: str | None = typer.Option(
+        None, "--wallet", help="Vault wallet address or label (default primary)"
+    ),
+    slippage: float | None = typer.Option(
+        None, "--slippage", help="Slippage % above today's amounts (default 1)"
+    ),
+    note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
+    client_id: str | None = typer.Option(None, "--client-id", help=_CLIENT_ID_HELP),
+    wait: bool = typer.Option(False, "--wait", help="Block until the order is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the refreshed position card"
+    ),
+) -> None:
+    """Add liquidity: mint a position, or top one up. Always waits for your approval.
+
+    No swap is made for you: a wallet short of a side the range needs is refused.
+    A range entirely above or below the price needs only one token.
+    """
+
+    if usd is not None and (amount_base is not None or amount_quote is not None):
+        _bad_argument(
+            "Use --usd or --amount-base/--amount-quote, not both", json_output=json_output
+        )
+    if usd is None and amount_base is None and amount_quote is None:
+        _bad_argument(
+            "Size the deposit with --usd or --amount-base (and/or --amount-quote)",
+            json_output=json_output,
+        )
+    if usd is not None and usd <= 0:
+        _bad_argument("--usd must be above 0", json_output=json_output)
+    if not target and to_position is None:
+        _bad_argument("Name a token or poolId, or pass --to-position", json_output=json_output)
+    if to_position is not None and range_spec:
+        _bad_argument("--range cannot change an existing position's range", json_output=json_output)
+    params: dict[str, Any] = {"chainId": _lp_chain(chain, "add", json_output=json_output)}
+    if target:
+        params["token"] = target
+    _lp_pool_params(params, quote, fee)
+    if usd is not None:
+        params["usd"] = usd
+    if amount_base is not None:
+        params["amountBase"] = amount_base
+    if amount_quote is not None:
+        params["amountQuote"] = amount_quote
+    if range_spec:
+        params["range"] = range_spec
+    if to_position is not None:
+        params["toPosition"] = _lp_token_id(to_position, "--to-position", json_output=json_output)
+    if wallet:
+        params["wallet"] = wallet
+    if slippage is not None:
+        params["slippagePct"] = slippage
+    _lp_write(
+        "trading.lp.add",
+        _lp_common(params, note, client_id),
+        wait=wait,
+        wait_seconds=wait_seconds,
+        json_output=json_output,
+        no_card=no_card,
+    )

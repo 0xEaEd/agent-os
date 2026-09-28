@@ -120,7 +120,9 @@ describe('tradingAgentFiles · reading an order', () => {
     expect(agents).toMatch(/reuse the same `--client-id <id>`/)
     expect(agents).toMatch(/instead of trading twice/)
     expect(tools).toMatch(/no `&`, `nohup`, `setsid`/)
-    expect(tools).toMatch(/`--client-id <id>` on `swap` and `send` is the order's idempotency key/)
+    expect(tools).toMatch(
+      /`--client-id <id>` on `swap`, `send` and `lp collect\|remove\|add` is\s+the order's idempotency key/,
+    )
     // Both command lines the agent copies carry the flag.
     expect(tools).toMatch(/agentos trade swap .*--client-id <id> --wait/)
     expect(tools).toMatch(/agentos trade send .*--client-id <id> --wait/)

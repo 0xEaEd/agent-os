@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { act, fireEvent, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { order, renderDesk, USDC, WALLET } from '../test-utils'
@@ -109,6 +110,26 @@ describe('ApprovalCard', () => {
       expect.objectContaining({ orderId: 'o1' }),
       'slippage too high',
     )
+    // An agent's order (it came from a session): the reason goes back to it.
+    expect(reason).toHaveAttribute('placeholder', 'Why? (the agent reads this)')
+  })
+
+  it('asks for an optional reason on an order no agent asked for', () => {
+    renderDesk(
+      <ApprovalCard
+        order={order({ sessionKey: null, initiator: 'manual' })}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('card-reject'))
+    const reason = screen.getByTestId('reject-reason')
+    expect(reason).toHaveAttribute('placeholder', 'Why? (optional)')
+    expect(reason).toHaveAttribute('aria-label', 'Why? (optional)')
+    expect(reason).not.toHaveAttribute('placeholder', expect.stringContaining('agent'))
   })
 
   it('sends the note once on Enter and ignores a second Enter while the decision is in flight', () => {
@@ -158,8 +179,59 @@ describe('ApprovalCard', () => {
     // heading must not claim an approval that was never requested.
     expect(settled).not.toHaveTextContent('Approval needed')
     expect(settled.querySelector('.trd-card__title')).toHaveTextContent('Swap')
-    fireEvent.click(screen.getByText(/0xabcd/))
-    expect(openExternal).toHaveBeenCalledWith('https://basescan.org/tx/0xabcdef1234')
+    // The hash is a real link, as on the ledger row: href, a new tab, no opener.
+    const link = screen.getByTestId('card-tx')
+    expect(link.tagName).toBe('A')
+    expect(link).toHaveTextContent(/0xabcd/)
+    expect(link).toHaveAttribute('href', 'https://basescan.org/tx/0xabcdef1234')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(link).toHaveAttribute('data-tx', 'link')
+  })
+
+  it('without an explorer page the settled hash copies, and never pretends to be a link', () => {
+    renderDesk(
+      <ApprovalCard
+        order={order({ status: 'confirmed', txHash: '0xabcdef1234', explorerUrl: null })}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    const tx = screen.getByTestId('card-tx')
+    expect(tx.tagName).toBe('BUTTON')
+    expect(tx).not.toHaveAttribute('href')
+    expect(tx).toHaveAttribute('data-tx', 'copy')
+  })
+
+  it('reads "Reject" until a note is typed, then "Reject with note"', () => {
+    const onReject = vi.fn()
+    renderDesk(
+      <ApprovalCard
+        order={order()}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={onReject}
+        focusOnMount={false}
+      />,
+    )
+    const reject = screen.getByTestId('card-reject')
+    expect(reject).toHaveTextContent(/^Reject$/)
+    fireEvent.click(reject)
+    // The note field is open but empty: nothing is sent "with a note".
+    expect(screen.getByTestId('reject-reason')).toBeInTheDocument()
+    expect(reject).toHaveTextContent(/^Reject$/)
+    fireEvent.change(screen.getByTestId('reject-reason'), { target: { value: '   ' } })
+    expect(reject).toHaveTextContent(/^Reject$/)
+    fireEvent.change(screen.getByTestId('reject-reason'), { target: { value: 'too wide' } })
+    expect(reject).toHaveTextContent('Reject with note')
+    fireEvent.change(screen.getByTestId('reject-reason'), { target: { value: '' } })
+    expect(reject).toHaveTextContent(/^Reject$/)
+    fireEvent.click(reject)
+    expect(onReject).toHaveBeenCalledWith(expect.objectContaining({ orderId: 'o1' }), '')
   })
 })
 
@@ -436,5 +508,38 @@ describe('ApprovalCard · the note and the symbols are data, not facts', () => {
       el.querySelector('dt')?.textContent?.startsWith('Pay'),
     )
     expect(pay?.querySelector('dd')).not.toHaveAttribute('title')
+  })
+})
+
+describe('approvals region CSS contract', () => {
+  // Innermost rules with comments dropped, keyed by selector.
+  const deskCss = readFileSync('src/renderer/src/views/trading/desk/desk.css', 'utf8')
+  const rules = [...deskCss.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(
+    ([, selector = '', body = '']) => ({ selector: selector.trim(), body }),
+  )
+  const rule = (selector: string) => rules.find((r) => r.selector === selector)?.body ?? ''
+
+  it('caps the region at a share of the window that fits an LP add card at 1200×800', () => {
+    const region = rule('.trd-asks')
+    const vh = Number(/max-height: min\((\d+)vh, [\d.]+rem\);/.exec(region)?.[1])
+    // An LP add card is ~356px; 40vh (320px at 800px) clipped its buttons.
+    expect(vh).toBeGreaterThanOrEqual(50)
+    expect((vh / 100) * 800).toBeGreaterThan(356)
+    expect(region).toMatch(/overflow-y: auto;/)
+    // Its own layer above the composer block, and a gap before the chips.
+    expect(region).toMatch(/position: relative;/)
+    expect(Number(/z-index: (\d+);/.exec(region)?.[1])).toBeGreaterThan(0)
+    expect(region).toMatch(/margin: 0 auto \d+px;/)
+    expect(region).not.toMatch(/max-height: \d+(px|vh);/)
+  })
+
+  it('pins the decision row: the card body scrolls, Approve/Reject do not', () => {
+    const actions = rule('.trd-card__actions')
+    expect(actions).toMatch(/position: sticky;/)
+    expect(actions).toMatch(/bottom: 0;/)
+    // Opaque, so facts scrolling beneath do not read through the buttons.
+    expect(actions).toMatch(/background: var\(--elevated\);/)
+    // A settled stamp's tx row is not pinned.
+    expect(rule('.trd-asks__stamp .trd-card__actions')).toMatch(/position: static;/)
   })
 })

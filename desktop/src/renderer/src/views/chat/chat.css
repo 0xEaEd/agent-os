@@ -1681,6 +1681,13 @@
 .lp-card__empty {
   padding: 10px 0;
 }
+/* A closed position: its figures are gone, so one muted line says when it was last seen. */
+.lp-card__closed-note {
+  margin: 0;
+  padding: 6px 0 2px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
 /* Distribution chart. Bars are info-tinted; the one live segment is lime. */
 .lp-chart {
   display: grid;
@@ -2156,6 +2163,105 @@
 }
 .msg-body .lp-card__copy[data-lp-copied='failed'] {
   color: var(--danger);
+}
+/* ↻ re-reads the card in place: the old figures stay, dimmed, until the new
+   ones land, so the card never collapses to a spinner. */
+.lp-card__refresh .lp-card__action-glyph {
+  display: inline-block;
+}
+.lp-card[data-lp-refreshing] > :not(.lp-card__foot) {
+  opacity: 0.45;
+  transition: opacity 160ms ease-out;
+}
+.lp-card[data-lp-refreshing] .lp-card__refresh .lp-card__action-glyph {
+  animation: lp-refresh-spin 900ms linear infinite;
+}
+@keyframes lp-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-card[data-lp-refreshing] .lp-card__refresh .lp-card__action-glyph {
+    animation: none;
+  }
+}
+.lp-card__refresh-error {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+/* Collect fees / Remove… on your own positions (desk only: the renderer
+   draws them only for an operator connection). Ghost buttons in the same
+   language as copy/explorer; the one that parks an order turns into an amber
+   "awaiting approval" chip until the order settles. */
+.lp-writes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.lp-card__writes {
+  padding-top: 2px;
+}
+.lp-card .lp-row__writes {
+  grid-column: 1 / -1;
+  padding: 0 0 4px;
+}
+.msg-body .lp-writes .lp-card__action {
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--foreground);
+}
+.msg-body .lp-writes .lp-card__action:disabled {
+  color: var(--dim);
+  background: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hairline) 60%, transparent);
+}
+.msg-body .lp-writes .lp-card__action[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.lp-writes__choice {
+  display: inline-flex;
+  gap: 2px;
+}
+.lp-writes__choice[hidden] {
+  display: none;
+}
+.msg-body .lp-writes .lp-card__action[data-lp-tone='warn'] {
+  color: var(--warn);
+}
+.lp-writes__state {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  max-width: 100%;
+  padding: 0 7px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.lp-writes__state[hidden] {
+  display: none;
+}
+.lp-writes[data-lp-write='awaiting'] .lp-writes__state {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.lp-writes__error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 11px;
+  color: var(--danger);
+}
+.lp-writes__error[hidden] {
+  display: none;
 }
 
 /* ── Ask / plan cards ────────────────────────────────────────────────────── */
@@ -2809,13 +2915,17 @@
 /* ── Jump to latest ──────────────────────────────────────────────────────────
    Tail-following pauses the moment the reader scrolls up; without an explicit
    way back, a long transcript could only be returned to the bottom by dragging.
-   The dock is zero-height and sits at the thread/composer seam, so the pill
-   hovers over the last bubble instead of taking a row from the conversation.
+   The dock is zero-height and sits at the foot of the thread — above the
+   desk's approvals region (`.trd-asks`) when there is one, so the pill never
+   lands on a card — and hovers over the last bubble instead of taking a row
+   from the conversation. It is a flex item of `.chat-stage`: `flex: none`
+   keeps it at zero height whatever the column does.
    Desktop vocabulary: a frosted control pill, one lime signal on the glyph. */
 .chat-jump-dock {
   position: relative;
   z-index: 4;
   display: flex;
+  flex: none;
   height: 0;
   justify-content: center;
   overflow: visible;
