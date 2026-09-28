@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { render } from '../markdown'
 import { createMessageRenderer, historyTurnMeta } from './message'
 import { createThinkingBlock } from './thinking'
 
@@ -140,6 +141,41 @@ describe('message renderer', () => {
     row.querySelector<HTMLButtonElement>('.msg-action[data-action="copy"]')!.click()
     await Promise.resolve()
     expect(writeText).toHaveBeenCalledWith('the reply')
+  })
+
+  it('copies a markdown reply with the line breaks it is drawn with', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const { renderer } = makeRenderer({
+      markdown: { render, bindCopy: vi.fn(), bindHighlight: vi.fn() },
+    })
+    const reply =
+      'AgentOS 2026.9.28 🧢\n🦄 Uniswap V4 LP\n🍎 Native builds\n\n```bash\nuv sync\n```'
+    const row = renderer.addMessage('assistant', reply, '2026-07-22T12:34:00Z')!
+
+    row.querySelector<HTMLButtonElement>('.msg-action[data-action="copy"]')!.click()
+    await Promise.resolve()
+    // The fenced block's language label and its own Copy button stay out.
+    expect(writeText).toHaveBeenCalledWith(
+      'AgentOS 2026.9.28 🧢\n🦄 Uniswap V4 LP\n🍎 Native builds\n\nuv sync',
+    )
+  })
+
+  it('copies a user bubble verbatim', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const { renderer } = makeRenderer()
+    const row = renderer.addMessage('user', 'first line\n\n  second   line')!
+
+    row.querySelector<HTMLButtonElement>('.msg-action[data-action="copy"]')!.click()
+    await Promise.resolve()
+    expect(writeText).toHaveBeenCalledWith('first line\n\n  second   line')
   })
 
   it('does not render the retired savings or combo UI from usage payloads', () => {
