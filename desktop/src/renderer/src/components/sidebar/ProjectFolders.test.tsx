@@ -41,8 +41,8 @@ function mount({ path = '/sessions', rows = [] }: { path?: string; rows?: Sessio
       </QueryClientProvider>
     </MemoryRouter>,
   )
-  // The name, then the folder's chat count when it has any.
-  return screen.getByRole('link', { name: /^Roadmap/ })
+  // The count sits beside the link, with the "+", so the link is the name alone.
+  return screen.getByRole('link', { name: 'Roadmap' })
 }
 
 function openMenu(link: HTMLElement) {
@@ -241,5 +241,95 @@ describe('ProjectFolders: the folder context menu', () => {
     fireEvent.contextMenu(screen.getByRole('link', { name: 'Filed chat' }))
     expect(screen.getAllByRole('menu')).toHaveLength(1)
     expect(screen.getByRole('menu', { name: 'Session' })).toBeInTheDocument()
+  })
+})
+
+describe('ProjectFolders: the "+" on a folder row', () => {
+  const FILED: SessionRow = {
+    key: 'agent:main:webchat:s1',
+    title: 'Filed chat',
+    updatedAt: 0,
+    live: false,
+    raw: { key: 'agent:main:webchat:s1', project_id: 'p1' },
+  }
+
+  function plus() {
+    return screen.getByRole('button', { name: 'New chat in Roadmap' })
+  }
+
+  it('sits beside the link, not inside it, just left of the count', () => {
+    const link = mount({ rows: [FILED] })
+    const button = plus()
+    expect(link).not.toContainElement(button)
+    expect(button.closest('.proj-folder__row')).toBe(link.closest('.proj-folder__row'))
+    expect(button).toHaveAttribute('title', 'New chat in Roadmap')
+    // Reachable with Tab.
+    expect(button).not.toHaveAttribute('tabindex', '-1')
+    const count = button.nextElementSibling
+    expect(count).toHaveClass('proj-folder__count')
+    expect(count).toHaveTextContent('1')
+  })
+
+  it("starts a chat in the project with its agent, opens it, and lets go of the row's focus", async () => {
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    rpcCall.mockResolvedValue({ key: 'agent:main:webchat:new' })
+    mount({ path: '/sessions/agent%3Amain%3As1' })
+    const button = plus()
+    button.focus()
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(rpcCall).toHaveBeenCalledWith('sessions.create', { agentId: 'main', projectId: 'p1' }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('where').textContent).toBe(
+        `/sessions/${encodeURIComponent('agent:main:webchat:new')}`,
+      ),
+    )
+    expect(useUi.getState().openFolders.has('p1')).toBe(true)
+    // Left on the "+", Return in the new chat would start yet another one.
+    expect(button).not.toHaveFocus()
+  })
+
+  it('neither opens the project page nor toggles the folder on the click itself', () => {
+    rpcCall.mockImplementation(() => new Promise(() => {}))
+    mount()
+    fireEvent.click(plus())
+    expect(screen.getByTestId('where').textContent).toBe('/sessions')
+    expect(useUi.getState().openFolders.has('p1')).toBe(false)
+  })
+
+  it('creates one session for a quick double click', async () => {
+    rpcCall.mockImplementation(() => new Promise(() => {}))
+    mount()
+    const button = plus()
+    fireEvent.click(button)
+    await waitFor(() => expect(button).toBeDisabled())
+    fireEvent.click(button)
+    expect(rpcCall.mock.calls.filter(([method]) => method === 'sessions.create')).toHaveLength(1)
+  })
+
+  it('names the project verbatim, "$" and all', () => {
+    const project = { ...PROJECT, project_id: 'p9', name: "Cash $$ plan $& x$'y" }
+    const client = new QueryClient()
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={client}>
+          <ProjectFolders
+            projects={[project]}
+            filed={{ byProject: new Map(), unfiled: [] }}
+            loading={false}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    )
+    expect(
+      screen.getByRole('button', { name: "New chat in Cash $$ plan $& x$'y" }),
+    ).toBeInTheDocument()
+  })
+
+  it('goes away while the folder is being renamed', () => {
+    const link = mount({ rows: [FILED] })
+    fireEvent.click(within(openMenu(link)).getByRole('menuitem', { name: 'Rename…' }))
+    expect(screen.queryByRole('button', { name: 'New chat in Roadmap' })).toBeNull()
   })
 })
