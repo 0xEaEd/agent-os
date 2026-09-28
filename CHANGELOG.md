@@ -39,6 +39,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   things the chat does not show on its own.
 
 ### Fixed
+- Chat (desktop and Web UI): a message queued while a turn was running no
+  longer follows you into the next session and gets sent there. The pending
+  queue is now kept per session — switching sessions (or starting a new chat)
+  leaves it with its own session, which sends it once that turn ends (on
+  return, if the turn finished while you were elsewhere).
 - Security: secret redaction and the payload guard matched connection strings
   against a scheme list that carried `redis` and `amqp` but not their TLS
   spellings, so `rediss://user:password@host` (what `REDIS_TLS_URL` holds) and

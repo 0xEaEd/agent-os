@@ -9,6 +9,8 @@ import {
   type PendingItem,
 } from './logic'
 
+const EMPTY_QUEUE: PendingItem[] = []
+
 /**
  * The composer accessors the queue hook writes through when it drains / recovers
  * a pending item back into the input (chat.js: the legacy `_pendingQueue`
@@ -76,15 +78,19 @@ export interface UsePendingQueue {
  * lives in logic.ts (TDD'd); this hook layers the React state + the composer/
  * attachment writes + the debounce timer on top.
  */
-export function usePendingQueue(bridge: PendingComposerBridge): UsePendingQueue {
-  const [queue, setQueue] = useState<PendingItem[]>([])
-  // Mirror the queue in a ref so the debounce-timer callback + the terminal
-  // delegates read the latest without re-arming on every queue change. Written
-  // in an effect (never during render) per the rules-of-refs lint.
-  const queueRef = useRef<PendingItem[]>(queue)
-  useEffect(() => {
-    queueRef.current = queue
-  }, [queue])
+export function usePendingQueue(bridge: PendingComposerBridge, sessionKey = ''): UsePendingQueue {
+  // One queue per session. The chat route element stays mounted across a
+  // session switch, so a single queue would follow the user into the next
+  // session and drain there on its first terminal frame — including the
+  // `.done` the gateway replays on subscribe. Each session keeps its own, and
+  // a queue left behind drains when its session's turn ends while it is shown.
+  const [queues, setQueues] = useState<ReadonlyMap<string, PendingItem[]>>(() => new Map())
+  const queue = queues.get(sessionKey) ?? EMPTY_QUEUE
+  // Mirror the queues + the shown key in refs so the debounce-timer callback +
+  // the terminal delegates read the latest without re-arming on every change.
+  // The queues ref is written only by `writeQueue`, never during render.
+  const queuesRef = useRef<ReadonlyMap<string, PendingItem[]>>(queues)
+  const sessionKeyRef = useRef(sessionKey)
 
   // The bridge is re-created each render; keep the latest in a ref so the stable
   // callbacks below always call through to fresh composer/attachment accessors.
@@ -102,85 +108,102 @@ export function usePendingQueue(bridge: PendingComposerBridge): UsePendingQueue 
     }
   }, [])
 
+  // A drain armed for the outgoing session must not fire into the next one.
+  useEffect(() => {
+    sessionKeyRef.current = sessionKey
+    clearDrainTimer()
+  }, [sessionKey, clearDrainTimer])
+
+  const currentQueue = useCallback(
+    () => queuesRef.current.get(sessionKeyRef.current) ?? EMPTY_QUEUE,
+    [],
+  )
+  const writeQueue = useCallback((next: PendingItem[]) => {
+    const map = new Map(queuesRef.current)
+    if (next.length) map.set(sessionKeyRef.current, next)
+    else map.delete(sessionKeyRef.current)
+    queuesRef.current = map
+    setQueues(map)
+  }, [])
+
   // chat.js:8505-8533 `_enqueuePendingInput` — queue a send, clearing the
   // composer + attachments + intent on success (the payload has moved to the
   // queue). Full → reject + toast (chat.js:8511-8517).
-  const enqueue = useCallback<UsePendingQueue['enqueue']>((item, opts) => {
-    const cur = queueRef.current
-    const res = enqueuePending(cur, item)
-    if (!res.ok) {
-      toast.warning(
-        `Pending queue full (${MAX_PENDING}). Wait for ${opts?.waitReason ?? 'the current response'} or clear.`,
-        { duration: 3000 },
-      )
-      return false
-    }
-    setQueue(res.queue)
-    // chat.js:8525-8528 — the composer + attachments + intent are now empty.
-    bridgeRef.current.setComposerText('')
-    bridgeRef.current.setAttachments([])
-    bridgeRef.current.setIntent(null)
-    toast.info(opts?.toastMessage ?? `Queued (${res.queue.length}/${MAX_PENDING})`, {
-      duration: 1500,
-    })
-    return true
-  }, [])
+  const enqueue = useCallback<UsePendingQueue['enqueue']>(
+    (item, opts) => {
+      const res = enqueuePending(currentQueue(), item)
+      if (!res.ok) {
+        toast.warning(
+          `Pending queue full (${MAX_PENDING}). Wait for ${opts?.waitReason ?? 'the current response'} or clear.`,
+          { duration: 3000 },
+        )
+        return false
+      }
+      writeQueue(res.queue)
+      // chat.js:8525-8528 — the composer + attachments + intent are now empty.
+      bridgeRef.current.setComposerText('')
+      bridgeRef.current.setAttachments([])
+      bridgeRef.current.setIntent(null)
+      toast.info(opts?.toastMessage ?? `Queued (${res.queue.length}/${MAX_PENDING})`, {
+        duration: 1500,
+      })
+      return true
+    },
+    [currentQueue, writeQueue],
+  )
 
   // chat.js:8455-8463 — remove one chip.
-  const remove = useCallback((idx: number) => {
-    setQueue((prev) => {
-      if (idx < 0 || idx >= prev.length) return prev
+  const remove = useCallback(
+    (idx: number) => {
+      const prev = currentQueue()
+      if (idx < 0 || idx >= prev.length) return
       const next = prev.slice()
       next.splice(idx, 1)
-      return next
-    })
-  }, [])
+      writeQueue(next)
+    },
+    [currentQueue, writeQueue],
+  )
 
   // chat.js:8466-8471 — clear-all also cancels the pending-drain timer.
   const clearAll = useCallback(() => {
     clearDrainTimer()
-    setQueue([])
-  }, [clearDrainTimer])
+    writeQueue([])
+  }, [clearDrainTimer, writeQueue])
 
   // chat.js:8596-8626 `_popAllPendingIntoComposer` — recover the whole queue.
   const popAllIntoComposer = useCallback((): boolean => {
     clearDrainTimer()
     const b = bridgeRef.current
-    const out = popAllModel(
-      queueRef.current,
-      b.getComposerText(),
-      b.getAttachments(),
-      b.getIntent(),
-    )
+    const out = popAllModel(currentQueue(), b.getComposerText(), b.getAttachments(), b.getIntent())
     if (!out.recovered) return false
-    setQueue(out.queue)
+    writeQueue(out.queue)
     b.setComposerText(out.text)
     b.setAttachments(out.attachments)
     b.setIntent(out.intent)
     return true
-  }, [clearDrainTimer])
+  }, [clearDrainTimer, currentQueue, writeQueue])
 
   // chat.js:8560-8570 `_popPendingTail` — Alt+↑ recover the tail.
   const popTail = useCallback(() => {
-    const out = popTailModel(queueRef.current)
+    const out = popTailModel(currentQueue())
     if (!out.recovered) return
-    setQueue(out.queue)
+    writeQueue(out.queue)
     const b = bridgeRef.current
     b.setComposerText(out.text)
     b.setAttachments(out.attachments)
     b.setIntent(out.intent)
-  }, [])
+  }, [currentQueue, writeQueue])
 
   // chat.js:8535-8558 `_drainQueueHead` — FIFO shift → send the head, preserving
   // (and restoring after) any draft the user typed while the turn ran. Only fires
   // on a natural (non-aborted) terminal event, via the debounce below.
   const drainQueueHead = useCallback(() => {
     clearDrainTimer()
-    const cur = queueRef.current
+    const cur = currentQueue()
     if (cur.length === 0) return
     const [head, ...rest] = cur
     if (!head) return
-    setQueue(rest)
+    writeQueue(rest)
     const b = bridgeRef.current
     // chat.js:8542-8544 — snapshot the in-progress draft.
     const draftText = b.getComposerText()
@@ -194,21 +217,21 @@ export function usePendingQueue(bridge: PendingComposerBridge): UsePendingQueue 
       b.setAttachments(draftAttachments)
       b.setIntent(draftIntent)
     }
-  }, [clearDrainTimer])
+  }, [clearDrainTimer, currentQueue, writeQueue])
 
   // chat.js:8644-8652 `_schedulePendingDrainAfterTerminal` — 50ms debounce, then
   // re-check that no stream/compaction resumed and the queue is non-empty before
   // draining the head.
   const scheduleDrainAfterTerminal = useCallback(() => {
-    if (queueRef.current.length === 0) return
+    if (currentQueue().length === 0) return
     clearDrainTimer()
     drainTimerRef.current = setTimeout(() => {
       drainTimerRef.current = null
       const b = bridgeRef.current
-      if (b.isStreaming() || b.isCompactInFlight() || queueRef.current.length === 0) return
+      if (b.isStreaming() || b.isCompactInFlight() || currentQueue().length === 0) return
       drainQueueHead()
     }, 50)
-  }, [clearDrainTimer, drainQueueHead])
+  }, [clearDrainTimer, currentQueue, drainQueueHead])
 
   // Tear down the timer on unmount.
   useEffect(() => clearDrainTimer, [clearDrainTimer])

@@ -405,7 +405,7 @@ export function ChatPage() {
     isStreaming: () => busy,
     isCompactInFlight: () => isCompactInFlightForCurrentSession(),
   }
-  const pending = usePendingQueue(bridge)
+  const pending = usePendingQueue(bridge, sessionKey)
 
   // chat.js:4685-4693 + 6216-6233 — the inline-approval gate. When an approval is
   // pending for THIS session (shared `useApprovals` store — no divergent state),
@@ -456,14 +456,14 @@ export function ChatPage() {
   // `useTranscript`, which parks the outgoing session's stream, unsubscribes,
   // re-subscribes the new (empty) session, and reloads its (empty) history —
   // exactly the unsubscribe → park → new key → reset → subscribe sequence legacy
-  // did inline (chat.js:2694-2712). Pending work is cleared and the next-send
-  // intent is stamped here; the slash-command caller has already cleared its
+  // did inline (chat.js:2694-2712). The outgoing session keeps its pending
+  // queue (usePendingQueue is keyed per session); the next-send intent is
+  // stamped here; the slash-command caller has already cleared its
   // command text, while the header action preserves any draft for the new chat.
   const onSessionAction = useCallback(
     (action: string) => {
       if (action === 'new_chat') {
         const key = genSessionKey(sessionKey)
-        pending.clearAll()
         pendingIntentRef.current = 'new_chat'
         switchToSession(key)
         toast.info('New chat session in the current agent: ' + key)
@@ -471,7 +471,7 @@ export function ChatPage() {
       // `compact_context` stays delegated to the compaction controller (Task 7)
       // via the hook's own RPC fallback — not a session-swap concern.
     },
-    [pending, sessionKey, switchToSession],
+    [sessionKey, switchToSession],
   )
 
   const startNewChat = useCallback(() => {
