@@ -443,3 +443,88 @@ def test_run_human_output_shows_the_run(client: _Client) -> None:
     result = runner.invoke(trade_cmd.app, ["dca", "run", MID])
     assert result.exit_code == 0, result.output
     assert "Run: #9" in result.stdout and "awaiting approval" in result.stdout
+
+
+@pytest.fixture
+def utc_clock(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Pin the local zone to UTC so ``HH:MM`` in the run lines is deterministic."""
+    import time
+
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (None, "—"),
+        (-0.004, "$0.00"),
+        (0.004, "$0.00"),
+        (-0.0, "$0.00"),
+        (0.0, "$0.00"),
+        (5.44526, "$5.45"),
+        (-1.206, "-$1.21"),
+        (-0.005001, "-$0.01"),
+    ],
+)
+def test_signed_usd_never_prints_minus_zero(value: Any, text: str) -> None:
+    assert trade_cmd._signed_usd(value) == text
+
+
+def test_run_lines_by_status(utc_clock: Any) -> None:
+    from datetime import UTC, datetime
+
+    history = _fixture("mandate-active")["mandate"]["history"]
+    by_n = {run["n"]: run for run in history}
+    now = datetime(2026, 9, 25, 18, 0, tzinfo=UTC)
+    line = trade_cmd._dca_run_line
+    assert line(by_n[6], "WETH", now) == (
+        "#6 · 09:09 · $10.00 → 0.00434783 WETH @ $2,300.00 · tx 0x0000…ed09"
+    )
+    assert line(by_n[5], "WETH", now).startswith("#5 · Sep 24 09:08 · $10.00 → ")
+    assert line(by_n[7], "WETH", now) == (
+        "#7 · Sep 26 09:10 · skipped · WETH at $2,700 above $2,600"
+    )
+    assert line(by_n[8], "WETH", now) == (
+        "#8 · Sep 27 09:01 · $10.00 awaiting approval · ord_00000000000a"
+    )
+    failed = {**by_n[7], "status": "failed", "reason": "quote expired"}
+    assert line(failed, "WETH", now).endswith(" · failed · quote expired")
+    pending = {**by_n[8], "status": "pending", "manual": True}
+    assert line(pending, "WETH", now) == (
+        "#8 · Sep 27 09:01 · buy now · $10.00 pending, waiting to fill · ord_00000000000a"
+    )
+
+
+def test_show_panel_gas_and_unrealised(client: _Client, utc_clock: Any) -> None:
+    payload = _fixture("mandate-active")
+    payload["mandate"]["acquired"].update(unrealizedUsd=-0.0031, gasUsd=0.0059)
+    client.responses["trading.dca.get"] = payload
+    result = runner.invoke(trade_cmd.app, ["dca", "show", MID])
+    assert result.exit_code == 0, result.output
+    assert "unrealised $0.00 · gas $0.0059" in result.stdout
+    assert "-$0.00" not in result.stdout
+    assert "Sep 26 09:10 · skipped · WETH at $2,700 above $2,600" in result.stdout
+    assert "tx 0x0000…ed09" in result.stdout
+
+    payload["mandate"]["acquired"].update(unrealizedUsd=None, gasUsd=0.13)
+    result = runner.invoke(trade_cmd.app, ["dca", "show", MID])
+    assert "unrealised — · gas $0.13" in result.stdout
+
+
+def test_list_table_leads_with_the_name(client: _Client) -> None:
+    result = runner.invoke(trade_cmd.app, ["dca", "list"])
+    assert result.exit_code == 0, result.output
+    header = next(line for line in result.stdout.splitlines() if "Pair" in line)
+    columns = ["Name", "Pair", "Cadence", "Status", "Progress", "Buys", "Next buy"]
+    positions = [header.index(column) for column in columns]
+    assert positions == sorted(positions), header
+    assert "Mandate" not in header
+    row = next(line for line in result.stdout.splitlines() if "Weekly ETH" in line)
+    assert "$150.00 every week" in row and "$0.00 / $1,500.00" in row
+    assert "dca_9c0d1e2f" in result.stdout  # the id rides under the name
+    active = next(line for line in result.stdout.splitlines() if "DCA ETH" in line)
+    assert "$60.00 / $300.00" in active

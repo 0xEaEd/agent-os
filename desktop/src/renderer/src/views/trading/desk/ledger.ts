@@ -382,6 +382,14 @@ export interface TradeOutcome {
   error: string | null
   /** When the market figures in the result were read, if the result says. */
   marketAt: number | null
+  /** A DCA row: the mandate it names, and the status its result recorded (docs/dca.md). */
+  mandateId?: string | null
+  mandateStatus?: string | null
+  /**
+   * The mandate's status as the live list has it now, set only by
+   * `withLiveMandate`: the row's pill follows it instead of the recorded one.
+   */
+  mandateLive?: string | null
 }
 
 const EMPTY: TradeOutcome = {
@@ -409,6 +417,23 @@ const sym = (v: unknown): string =>
 export function exitCodeOf(text: string): number | null {
   const m = /^\s*exit_code=(-?\d+)/.exec(text)
   return m ? Number(m[1]) : null
+}
+
+/**
+ * `trade status --json` cut past valid JSON (a stored result keeps ~2,000
+ * characters; the chain and provider rows run past that). `provider` is the
+ * third key, so it survives; `unlocked` comes after the chains and usually
+ * does not. Null when the text is not a status document at all.
+ */
+function statusFromTruncated(text: string): TradeOutcome | null {
+  if (!/^\s*(?:exit_code=\d+\s*)?\{\s*"enabled"\s*:/.test(text)) return null
+  const provider = jsonString(text, 'provider')
+  const unlocked = /"unlocked"\s*:\s*(true|false)/.exec(text)?.[1]
+  const bits: string[] = []
+  if (provider) bits.push(`via ${providerLabel(provider)}`)
+  if (unlocked === 'true') bits.push('vault unlocked')
+  if (unlocked === 'false') bits.push('vault locked')
+  return { ...EMPTY, summary: bits.join(' · '), provider: provider as ProviderId | null }
 }
 
 /** The JSON document inside a tool result, ignoring the exit-code line and stray output. */
@@ -704,6 +729,8 @@ function parseDcaResult(call: TradeCall, text: string, data: unknown): TradeOutc
       ...(name ? { detail: name } : {}),
       summary: bits.filter(Boolean).join(' · ') || 'result truncated',
       awaiting: status === 'awaiting_approval',
+      mandateId: id ?? namedMandate(call),
+      mandateStatus: status,
     }
   }
   const line = dcaMandateLine(m)
@@ -737,7 +764,40 @@ function parseDcaResult(call: TradeCall, text: string, data: unknown): TradeOutc
     awaiting,
     confirmed: Boolean(run && run.status === 'filled' && txHash),
     error: run && run.status === 'failed' ? (str(run.reason) ?? 'failed') : null,
+    mandateId: str(m.id) ?? namedMandate(call),
+    mandateStatus: str(m.status),
   }
+}
+
+/** The mandate id a `trade dca <sub> <id>` command names, when it names one. */
+function namedMandate(call: TradeCall): string | null {
+  return /^dca_[0-9a-zA-Z]+$/.test(call.detail) ? call.detail : null
+}
+
+/**
+ * A DCA row read against the live mandate list. The result recorded the
+ * mandate as it was when the command ran ("awaiting approval" on a Start
+ * DCA row); once the list knows it, the row's pill and status word follow
+ * the mandate instead. A row that fronts one buy's order (a parked or filled
+ * run) keeps the order's pill, and an unknown mandate stays as recorded.
+ */
+export function withLiveMandate(
+  outcome: TradeOutcome,
+  live: string | null | undefined,
+): TradeOutcome {
+  if (!live || !outcome.mandateId || outcome.orderId || outcome.error) return outcome
+  const recorded = outcome.mandateStatus ? DCA_STATUS_WORDS[outcome.mandateStatus] : null
+  const now = DCA_STATUS_WORDS[live] ?? live
+  let summary = outcome.summary
+  if (recorded && recorded !== now) {
+    const bits = summary.split(' · ')
+    const at = bits.indexOf(recorded)
+    if (at >= 0) {
+      bits[at] = now
+      summary = bits.join(' · ')
+    }
+  }
+  return { ...outcome, summary, awaiting: live === 'awaiting_approval', mandateLive: live }
 }
 
 const LP_STATUS_WORDS: Record<string, string> = {
@@ -1018,6 +1078,10 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
     if (call.kind === 'lp_collect' || call.kind === 'lp_remove' || call.kind === 'lp_add') {
       const lp = lpWriteFromTruncated(call, text)
       if (lp) return lp
+    }
+    if (call.kind === 'status' && (code === null || code === 0)) {
+      const status = statusFromTruncated(text)
+      if (status) return status
     }
     const first = (lines[0] ?? '').slice(0, 140)
     if (code !== null && code !== 0)

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   DCA_ARTIFACT_MIME,
+  DCA_CHART_MIN_PAD,
   DCA_CONFIRM_MS,
   DCA_COPIED_MS,
   DCA_MINUTE_MS,
@@ -12,6 +13,7 @@ import {
   buildDcaChartModel,
   createDcaMounter,
   dcaActionsFor,
+  dcaAxisLabels,
   dcaChangedPayload,
   dcaErrorText,
   dcaLayoutFor,
@@ -614,7 +616,7 @@ describe('buildDcaCard — mandate', () => {
     expect(filled.querySelector('.dca-runs__title')).toHaveTextContent(/^Recent buys$/)
   })
 
-  it('draws "—" for avg, vs now and unrealised before the first filled buy', () => {
+  it('draws "—" for acquired, avg, vs now and unrealised before the first filled buy', () => {
     const raw = activeWith((m) => {
       ;(m.runs as Json).done = 0
       ;(m.budget as Json).spentUsd = 0
@@ -631,6 +633,10 @@ describe('buildDcaCard — mandate', () => {
     const card = render(normalizeDcaPayload(raw)!)
     const value = (key: string) =>
       card.querySelector<HTMLElement>(`[data-dca-stat="${key}"] .dca-stat__value`)!
+    // Not "0 ETH / $0.00".
+    expect(value('acquired')).toHaveTextContent(/^—$/)
+    expect(value('acquired')).toHaveAttribute('data-dca-no-price', 'true')
+    expect(card.querySelector('[data-dca-stat="acquired"] .dca-stat__sub')).toBeNull()
     expect(value('avg')).toHaveTextContent(/^—$/)
     expect(value('avg')).toHaveAttribute('data-dca-no-price', 'true')
     expect(value('unrealized')).toHaveTextContent(/^—$/)
@@ -854,11 +860,85 @@ describe('buys chart', () => {
   })
 })
 
+describe('buys chart axes', () => {
+  /** Two fills 0.02 % apart, both on 28 Sep (UTC noon, so one local day anywhere). */
+  function nearFlat(): DcaMandatePayload {
+    const p = withHistory([
+      { ...filledRun(2, 2500.5), at: '2026-09-28T12:10:00Z' },
+      { ...filledRun(1, 2500), at: '2026-09-28T12:00:00Z' },
+    ])
+    p.mandate.acquired.avgPriceUsd = 2500.25
+    p.mandate.acquired.currentPriceUsd = 2500.4
+    return p
+  }
+
+  it('pads a near-flat range so near-equal prices draw near-equal bars', () => {
+    const model = buildDcaChartModel(nearFlat().mandate)!
+    const [a, b] = model.columns.map((c) => 100 - c.y!)
+    expect(a).toBeGreaterThan(20)
+    expect(a! / b!).toBeGreaterThan(0.9)
+    // At least ±0.5 % of the average past the data.
+    expect(model.lo).toBeLessThanOrEqual(2500 - 2500.25 * DCA_CHART_MIN_PAD + 1e-9)
+    expect(model.hi).toBeGreaterThanOrEqual(2500.5 + 2500.25 * DCA_CHART_MIN_PAD - 1e-9)
+    // A real spread pads by its own range, well past the ±0.5 % floor.
+    const wide = buildDcaChartModel(payload<DcaMandatePayload>('mandate-active').mandate)!
+    expect(2701.8 - wide.lo).toBeGreaterThan((3092.9 - 2701.8) * 0.35)
+  })
+
+  it('labels the top and bottom of the price axis', () => {
+    const p = nearFlat()
+    const model = buildDcaChartModel(p.mandate)!
+    const card = render(p)
+    const y = card.querySelector<HTMLElement>('.dca-chart__y')!
+    expect(y).toHaveAttribute('aria-hidden', 'true')
+    const labels = [...y.querySelectorAll<HTMLElement>('.dca-chart__ylabel')]
+    expect(labels.map((l) => l.dataset.edge)).toEqual(['top', 'bottom'])
+    expect(labels.map((l) => l.textContent)).toEqual([
+      formatDcaPrice(model.hi),
+      formatDcaPrice(model.lo),
+    ])
+    expect(labels.map((l) => l.textContent)).toEqual(['$2,513', '$2,487'])
+    expect(labels[0]!.style.top).toContain('var(--dca-plot-pad)')
+  })
+
+  it('shows times, not the same date twice, when every run fell on one day', () => {
+    const sameDay = buildDcaChartModel(nearFlat().mandate)!
+    const [first, last] = dcaAxisLabels(sameDay)
+    expect(first).toMatch(/^\d{2}:\d{2}$/)
+    expect(last).toMatch(/^\d{2}:\d{2}$/)
+    expect(first).not.toBe(last)
+    const card = render(nearFlat())
+    expect(texts(card, '.dca-chart__date')).toEqual([first, last])
+    // Runs on different days keep their dates.
+    const days = dcaAxisLabels(
+      buildDcaChartModel(payload<DcaMandatePayload>('mandate-active').mandate)!,
+    )
+    expect(days[0]).toMatch(/^Sep \d+$/)
+    expect(days[1]).toMatch(/^Sep \d+$/)
+  })
+
+  it('opens the tooltip under the columns, never over the stats above', () => {
+    const card = render(payload('mandate-active'))
+    const tooltip = card.querySelector<HTMLElement>('.dca-chart__tooltip')!
+    expect(tooltip.dataset.dcaPlace).toBe('below')
+    expect(tooltip.style.top).toBe('calc(100% + 4px)')
+    expect(tooltip.style.bottom).toBe('auto')
+    // Still clamped at the edges.
+    card
+      .querySelectorAll<SVGGElement>('.dca-chart__col')[0]!
+      .dispatchEvent(new MouseEvent('mouseenter'))
+    expect(tooltip.dataset.align).toBe('start')
+  })
+})
+
 /* ── list ──────────────────────────────────────────────────────────────── */
 
 describe('buildDcaCard — mandates', () => {
   it('lists every mandate with a mini bar and its next line', () => {
-    const card = render(payload('mandates'))
+    const p = payload<DcaMandatesPayload>('mandates')
+    const names = new Map(p.mandates.map((m) => [m.id, m.name]))
+    expect(new Set(names.values()).size).toBe(3)
+    const card = render(p)
     expect(card.dataset.dcaKind).toBe('mandates')
     expect(card.querySelector('.dca-card__title')).toHaveTextContent('DCA · 3 mandates')
     expect(card.querySelector('.dca-card__name')).toHaveTextContent('1 active')
@@ -866,6 +946,11 @@ describe('buildDcaCard — mandates', () => {
     const rows = [...card.querySelectorAll<HTMLElement>('.dca-row')]
     expect(rows.map((r) => r.dataset.dcaStatus)).toEqual(['active', 'awaiting_approval', 'paused'])
     expect(rows[0]!.dataset.dcaId).toBe('dca_1a2b3c4d')
+    // The name leads the row; pair · plan · state is its second line.
+    const main = rows[0]!.querySelector('.dca-row__main')!
+    expect(main.firstElementChild).toHaveClass('dca-row__name')
+    expect(main.firstElementChild!.nextElementSibling).toHaveClass('dca-row__top')
+    expect(texts(card, '.dca-row__name')).toEqual(rows.map((r) => names.get(r.dataset.dcaId!)))
     expect(rows[0]!.querySelector('.dca-row__pair')).toHaveTextContent('ETH ← USDC')
     expect(rows[0]!.querySelector('.dca-row__plan')).toHaveTextContent('every day · $10')
     expect(rows[0]!.querySelector('.dca-row__state')).toHaveTextContent('Active')
@@ -1060,10 +1145,9 @@ describe('control → RPC → payload swap', () => {
   })
 
   it('shows a refusal inline and frees the buttons', async () => {
+    // Not a state refusal (those re-read the card, below): the card stays as it is.
     const call = vi.fn(() =>
-      Promise.reject(
-        Object.assign(new Error('mandate is not active'), { code: 'trading.dca.bad_state' }),
-      ),
+      Promise.reject(Object.assign(new Error('mandate is not active'), { code: 'trading.failed' })),
     )
     const { host, mounter } = mountWith(fixture('mandate-active'), call)
     await flush()
@@ -1220,6 +1304,9 @@ describe('refresh and events', () => {
     })
     mounter.mountDca(document.body)
     await flush()
+    // The mount's own live read.
+    expect(read).toHaveBeenCalledTimes(1)
+    read.mockClear()
     mounter.orderFinished('ord_unrelated')
     expect(read).not.toHaveBeenCalled()
     // The parked "buy now" (#14) settles.
@@ -1227,6 +1314,226 @@ describe('refresh and events', () => {
     await flush()
     expect(read).toHaveBeenCalledWith('trading.dca.get', { mandateId: 'dca_1a2b3c4d' })
     expect(host.querySelector('.dca-card')).not.toBeNull()
+    mounter.destroyAll()
+  })
+})
+
+describe('live state over the artifact snapshot', () => {
+  function completedFor(name: string): Json {
+    const raw = fixture(name)
+    ;(raw.mandate as Json).status = 'completed'
+    return raw
+  }
+
+  function activeFor(name: string): Json {
+    const raw = fixture(name)
+    ;(raw.mandate as Json).status = 'active'
+    return raw
+  }
+
+  it('re-reads on mount; the snapshot is a placeholder with its controls off', async () => {
+    const answer = deferred<unknown>()
+    const read = vi.fn(() => answer.promise)
+    const host = placeholder()
+    const mounter = createDcaMounter({
+      fetchPayload: () => Promise.resolve(fixture('mandate-awaiting')),
+      call: read,
+      actions: { call: vi.fn() },
+      now: () => FETCHED_AT,
+    })
+    mounter.mountDca(document.body)
+    await flush()
+    expect(read).toHaveBeenCalledWith('trading.dca.get', { mandateId: 'dca_9e8f7a6b' })
+    const snapshot = host.querySelector<HTMLElement>('.dca-card')!
+    expect(snapshot.dataset.dcaStatus).toBe('awaiting_approval')
+    expect(snapshot.dataset.dcaStale).toBe('checking')
+    // The mount's read is quiet: no dimming, no hint yet.
+    expect(snapshot).not.toHaveAttribute('data-dca-refreshing')
+    expect(snapshot.querySelector('.dca-card__stale')).toBeNull()
+    expect(button(host, 'approve').disabled).toBe(true)
+    expect(button(host, 'reject').disabled).toBe(true)
+
+    answer.resolve(completedFor('mandate-awaiting'))
+    await flush()
+    const card = host.querySelector<HTMLElement>('.dca-card')!
+    expect(card.dataset.dcaStatus).toBe('completed')
+    expect(card).not.toHaveAttribute('data-dca-stale')
+    expect(card.querySelector('.dca-actions')).toBeNull()
+    mounter.destroyAll()
+  })
+
+  it('keeps the snapshot with its controls off and says so when the read fails', async () => {
+    const read = vi.fn((): Promise<unknown> => Promise.reject(new Error('gateway down')))
+    const host = placeholder()
+    const mounter = createDcaMounter({
+      fetchPayload: () => Promise.resolve(fixture('mandate-awaiting')),
+      call: read,
+      actions: { call: vi.fn() },
+      now: () => FETCHED_AT,
+    })
+    mounter.mountDca(document.body)
+    await flush()
+    const card = host.querySelector<HTMLElement>('.dca-card')!
+    expect(card.dataset.dcaStatus).toBe('awaiting_approval')
+    expect(card.dataset.dcaStale).toBe('failed')
+    expect(button(host, 'approve').disabled).toBe(true)
+    const hint = card.querySelector<HTMLElement>('.dca-card__stale')!
+    expect(hint).toHaveTextContent('state may be stale · ↻')
+    // It sits right above the footer; a quiet read flashes no footer error.
+    expect(hint.nextElementSibling).toHaveClass('dca-card__foot')
+    expect(card.querySelector('.dca-card__refresh-error')).toBeNull()
+
+    // The hint's ↻ re-reads; a success lifts the stale state.
+    read.mockImplementationOnce(() => Promise.resolve(activeFor('mandate-awaiting')))
+    hint.querySelector<HTMLButtonElement>('.dca-card__stale-refresh')!.click()
+    await flush()
+    const live = host.querySelector<HTMLElement>('.dca-card')!
+    expect(live.dataset.dcaStatus).toBe('active')
+    expect(live).not.toHaveAttribute('data-dca-stale')
+    expect(live.querySelector('.dca-card__stale')).toBeNull()
+    expect(button(host, 'pause').disabled).toBe(false)
+    mounter.destroyAll()
+  })
+
+  it('draws a re-mounted card from the newest state it has seen, then re-reads it', async () => {
+    const read = vi.fn((): Promise<unknown> => Promise.resolve(activeFor('mandate-awaiting')))
+    const first = placeholder('/a')
+    const mounter = createDcaMounter({
+      fetchPayload: () => Promise.resolve(fixture('mandate-awaiting')),
+      call: read,
+      actions: { call: vi.fn() },
+      now: () => FETCHED_AT,
+    })
+    mounter.mountDca(document.body)
+    await flush()
+    expect(first.querySelector('.dca-card')).toHaveAttribute('data-dca-status', 'active')
+
+    // The transcript re-renders: a new placeholder for the same artifact.
+    first.remove()
+    const later = deferred<unknown>()
+    read.mockImplementationOnce(() => later.promise)
+    const second = placeholder('/a')
+    mounter.mountDca(document.body)
+    await flush()
+    // No flash of the stale snapshot: the cached live state, controls on.
+    const card = second.querySelector<HTMLElement>('.dca-card')!
+    expect(card.dataset.dcaStatus).toBe('active')
+    expect(card).not.toHaveAttribute('data-dca-stale')
+    expect(button(second, 'pause').disabled).toBe(false)
+    // …and the live read still runs in the background.
+    expect(read).toHaveBeenCalledTimes(2)
+    later.resolve(completedFor('mandate-awaiting'))
+    await flush()
+    expect(second.querySelector('.dca-card')).toHaveAttribute('data-dca-status', 'completed')
+
+    // `trading.dca.changed` feeds the cache too, and the cache outlives
+    // destroyAll (it holds no DOM): the same mounter re-mounts from it.
+    const paused = fixture('mandate-awaiting')
+    ;(paused.mandate as Json).status = 'paused'
+    mounter.mandateChanged(paused)
+    mounter.destroyAll()
+    second.remove()
+    read.mockImplementation(() => new Promise(() => {}))
+    const third = placeholder('/a')
+    mounter.mountDca(document.body)
+    await flush()
+    expect(third.querySelector('.dca-card')).toHaveAttribute('data-dca-status', 'paused')
+    expect(third.querySelector('.dca-card')).not.toHaveAttribute('data-dca-stale')
+    mounter.destroyAll()
+
+    // A fresh mounter has no cache: the snapshot, controls off, re-reading.
+    third.remove()
+    const fourth = placeholder('/a')
+    const fresh = createDcaMounter({
+      fetchPayload: () => Promise.resolve(fixture('mandate-awaiting')),
+      call: read,
+      now: () => FETCHED_AT,
+    })
+    fresh.mountDca(document.body)
+    await flush()
+    expect(fourth.querySelector('.dca-card')).toHaveAttribute(
+      'data-dca-status',
+      'awaiting_approval',
+    )
+    expect(fourth.querySelector('.dca-card')).toHaveAttribute('data-dca-stale', 'checking')
+    fresh.destroyAll()
+  })
+
+  it('swaps cached rows into a re-mounted list card', async () => {
+    const read = vi.fn(() => new Promise<unknown>(() => {}))
+    const mounter = createDcaMounter({
+      fetchPayload: () => Promise.resolve(fixture('mandates')),
+      call: read,
+      now: () => FETCHED_AT,
+    })
+    mounter.mandateChanged(mandatePayloadFor('paused'))
+    const host = placeholder()
+    mounter.mountDca(document.body)
+    await flush()
+    const card = host.querySelector<HTMLElement>('.dca-card')!
+    expect(card.querySelector('.dca-row[data-dca-id="dca_1a2b3c4d"]')).toHaveAttribute(
+      'data-dca-status',
+      'paused',
+    )
+    // Two of three rows are still snapshot state.
+    expect(card.dataset.dcaStale).toBe('checking')
+    mounter.destroyAll()
+  })
+
+  it('re-reads the card after a control is refused as out of date', async () => {
+    const act = vi.fn(() =>
+      Promise.reject(
+        Object.assign(new Error('cannot approve dca_9e8f7a6b: it is completed'), {
+          code: 'trading.dca.bad_state',
+        }),
+      ),
+    )
+    const answers = [fixture('mandate-awaiting'), completedFor('mandate-awaiting')]
+    const read = vi.fn(() => Promise.resolve(answers.shift()))
+    const host = placeholder()
+    const mounter = createDcaMounter({
+      fetchPayload: () => Promise.resolve(fixture('mandate-awaiting')),
+      call: read,
+      actions: { call: act },
+      now: () => FETCHED_AT,
+    })
+    mounter.mountDca(document.body)
+    await flush()
+    // The mount's read still said awaiting (the engine moved on after it).
+    expect(button(host, 'approve').disabled).toBe(false)
+    button(host, 'approve').click()
+    await flush()
+    expect(act).toHaveBeenCalledWith('trading.dca.approve', { mandateId: 'dca_9e8f7a6b' })
+    expect(read).toHaveBeenCalledTimes(2)
+    const card = host.querySelector<HTMLElement>('.dca-card')!
+    expect(card.dataset.dcaStatus).toBe('completed')
+    expect(card).not.toHaveAttribute('data-dca-stale')
+    expect(card.querySelector('.dca-actions')).toBeNull()
+    mounter.destroyAll()
+  })
+
+  it('also re-reads after not_found, and leaves other refusals alone', async () => {
+    const codes = ['trading.dca.not_found', 'trading.failed']
+    const act = vi.fn(() =>
+      Promise.reject(Object.assign(new Error('nope'), { code: codes.shift() })),
+    )
+    const read = vi.fn(() => Promise.resolve(fixture('mandate-active')))
+    const host = placeholder()
+    const mounter = createDcaMounter({
+      fetchPayload: () => Promise.resolve(fixture('mandate-active')),
+      call: read,
+      actions: { call: act },
+      now: () => FETCHED_AT,
+    })
+    mounter.mountDca(document.body)
+    await flush()
+    button(host, 'pause').click()
+    await flush()
+    expect(read).toHaveBeenCalledTimes(2)
+    button(host, 'pause').click()
+    await flush()
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(host.querySelector('.dca-actions__error')).toHaveTextContent('nope')
     mounter.destroyAll()
   })
 })

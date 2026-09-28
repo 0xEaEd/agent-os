@@ -9,6 +9,7 @@ import {
   lpCallFromResult,
   parseTradeCommand,
   parseTradeResult,
+  withLiveMandate,
 } from './ledger'
 
 describe('commandFromToolInput', () => {
@@ -538,6 +539,38 @@ describe('liquidity reads (agentos trade lp)', () => {
   })
 })
 
+describe('trade status from history', () => {
+  it('reads a status cut past valid JSON as the route, never the raw JSON', () => {
+    const call = parseTradeCommand('agentos trade status --json')!
+    const full = {
+      enabled: true,
+      version: '2026.9.27',
+      provider: 'aggregator',
+      providers: [{ id: 'aggregator', label: 'AgentOS Aggregator', active: true }],
+      apiKeyConfigured: true,
+      chains: Array.from({ length: 30 }, (_, i) => ({ chainId: i, name: `chain ${i}` })),
+      unlocked: true,
+    }
+    const whole = parseTradeResult(call, JSON.stringify(full, null, 2))
+    expect(whole.provider).toBe('aggregator')
+    expect(whole.summary).toBe('via AgentOS Aggregator · vault unlocked')
+    for (const cut of [
+      JSON.stringify(full).slice(0, 400),
+      `exit_code=0\n${JSON.stringify(full, null, 2).slice(0, 400)}`,
+    ]) {
+      const out = parseTradeResult(call, cut)
+      expect(out.provider).toBe('aggregator')
+      expect(out.summary).toBe('via AgentOS Aggregator')
+      expect(out.summary).not.toContain('{')
+      expect(out.error).toBeNull()
+    }
+    // A failed status still reads as its error line.
+    expect(parseTradeResult(call, 'exit_code=1\ngateway unreachable').error).toBe(
+      'gateway unreachable',
+    )
+  })
+})
+
 describe('DCA mandates (agentos trade dca)', () => {
   const FIXTURE = readFileSync(
     'src/renderer/src/views/trading/desk/__fixtures__/dca/mandate.json',
@@ -644,6 +677,47 @@ describe('DCA mandates (agentos trade dca)', () => {
     expect(out.detail).toBe('DCA ETH')
     expect(out.summary).toBe('awaiting approval · dca_1a2b3c4d')
     expect(out.awaiting).toBe(true)
+  })
+
+  it('lets a Start DCA row follow its mandate in the live list, else stay as recorded', () => {
+    const call = parseTradeCommand(
+      'agentos trade dca create ETH --usd 10 --every 1d --cap 300 --json',
+    )!
+    const payload = JSON.parse(FIXTURE) as { mandate: Record<string, unknown> }
+    const proposed = { ...payload, mandate: { ...payload.mandate, status: 'awaiting_approval' } }
+    const out = parseTradeResult(call, JSON.stringify(proposed))
+    expect(out.mandateId).toBe('dca_1a2b3c4d')
+    expect(out.mandateStatus).toBe('awaiting_approval')
+    expect(out.awaiting).toBe(true)
+    // Not in any loaded list: exactly as recorded.
+    expect(withLiveMandate(out, undefined)).toBe(out)
+    // Completed since: the pill and the status word follow the mandate.
+    const done = withLiveMandate(out, 'completed')
+    expect(done.awaiting).toBe(false)
+    expect(done.mandateLive).toBe('completed')
+    expect(done.summary.startsWith('done · ')).toBe(true)
+    expect(withLiveMandate(out, 'active').summary.startsWith('active · ')).toBe(true)
+    const still = withLiveMandate(out, 'awaiting_approval')
+    expect(still.awaiting).toBe(true)
+    expect(still.summary).toBe(out.summary)
+    // A truncated result keeps the id too.
+    const cut = FIXTURE.replace('"active"', '"awaiting_approval"').slice(0, 900)
+    const truncated = withLiveMandate(parseTradeResult(call, cut), 'stopped')
+    expect(truncated.summary).toBe('stopped · dca_1a2b3c4d')
+    expect(truncated.awaiting).toBe(false)
+    // A projected result on a command that names the mandate: the id is the command's.
+    const pause = parseTradeCommand('agentos trade dca pause dca_1a2b3c4d --json')!
+    const projected = parseTradeResult(pause, '{"version": 1, "kind": "mandate", "mandate": {')
+    expect(projected.mandateId).toBe('dca_1a2b3c4d')
+    // A Buy now that parked an order keeps the order's pill.
+    const parked = parseTradeResult(
+      parseTradeCommand('agentos trade dca run dca_1a2b3c4d --json')!,
+      JSON.stringify({
+        ...payload,
+        run: (payload.mandate as { history: unknown[] }).history[0],
+      }),
+    )
+    expect(withLiveMandate(parked, 'active')).toBe(parked)
   })
 
   it('reports an operator-only refusal plainly', () => {

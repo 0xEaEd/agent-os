@@ -167,6 +167,10 @@ describe('mandate logic', () => {
     expect(rows.map((m) => m.id)).toEqual(['dca_1a2b3c4d', 'b', 'a'])
     expect(more).toBe(2)
     expect(mandateRows([mandate()]).more).toBe(0)
+    // Opened, every finished one is drawn and the fold count stays for "show fewer".
+    const all = mandateRows(listed, true)
+    expect(all.rows.map((m) => m.id)).toEqual(['dca_1a2b3c4d', 'b', 'a', 'c', 'd'])
+    expect(all.more).toBe(2)
   })
 
   it('clears a limit on update with a 0, as the engine reads it', () => {
@@ -419,7 +423,35 @@ describe('mandates among the missions', () => {
     expect(screen.getAllByTestId('mandate-row').map((r) => r.getAttribute('data-mandate'))).toEqual(
       ['dca_1a2b3c4d', 'b', 'a'],
     )
+    const toggle = screen.getByTestId('mandate-more')
+    expect(toggle.tagName).toBe('BUTTON')
+    expect(toggle).toHaveTextContent('+1 more')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    // The hidden one opens, and folds back.
+    fireEvent.click(toggle)
+    expect(screen.getAllByTestId('mandate-row').map((r) => r.getAttribute('data-mandate'))).toEqual(
+      ['dca_1a2b3c4d', 'b', 'a', 'c'],
+    )
+    expect(screen.getByTestId('mandate-more')).toHaveTextContent('show fewer')
+    expect(screen.getByTestId('mandate-more')).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(screen.getByTestId('mandate-more'))
+    expect(screen.getAllByTestId('mandate-row')).toHaveLength(3)
     expect(screen.getByTestId('mandate-more')).toHaveTextContent('+1 more')
+  })
+
+  it('counts the hidden finished mandates once: in the controls row, never in the strip', () => {
+    const listed = [
+      mandate(),
+      mandate({ id: 'b', status: 'stopped', updatedAt: '2026-09-28T05:45:00Z' }),
+      mandate({ id: 'a', status: 'completed', updatedAt: '2026-09-28T05:40:00Z' }),
+      mandate({ id: 'c', status: 'rejected', updatedAt: '2026-09-28T05:30:00Z' }),
+    ]
+    renderDesk(
+      <MissionStrip missions={[]} running={new Set()} pendingApprovals={0} mandates={listed} />,
+    )
+    expect(screen.getAllByTestId('mission-strip-mandate')).toHaveLength(3)
+    expect(screen.getByTestId('mission-strip')).not.toHaveTextContent('more')
+    expect(screen.queryByTestId('mission-strip-more')).toBeNull()
   })
 
   it('names mandates in the strip above the composer; the status strip sums them in one chip', () => {

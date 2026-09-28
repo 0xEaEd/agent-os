@@ -475,6 +475,63 @@ describe('desktop DCA card skin', () => {
     expect(rule('.msg-body .dca-card__action')).toMatch(/text-decoration: none;/)
   })
 
+  it('shows a stale card: controls off, the as-of amber, the refresh still live', () => {
+    const off = css.match(
+      /^\.dca-card\[data-dca-stale\] \.dca-actions \.dca-action,[^{]*\{[\s\S]*?^\}/m,
+    )?.[0]
+    expect(off).toBeTruthy()
+    expect(off).toMatch(/opacity: 0\.\d+;/)
+    expect(off).toMatch(/pointer-events: none;/)
+    // Only a failed re-read turns the as-of amber; the quiet mount-time
+    // "checking" pass must not flash the footer.
+    expect(selectors).toContain(".dca-card[data-dca-stale='failed'] .dca-card__ago")
+    expect(selectors).not.toContain('.dca-card[data-dca-stale] .dca-card__ago')
+    expect(css).toMatch(
+      /\.dca-card\[data-dca-stale='failed'\] \.dca-card__as-of,\s*\.dca-card\[data-dca-stale='failed'\] \.dca-card__ago \{\s*color: var\(--warn\);/,
+    )
+    expect(rule('.dca-card__stale')).toMatch(/display: flex;/)
+    // The footer's ↻ is how a stale card recovers: nothing may switch it off.
+    expect(
+      selectors.some((sel) => /data-dca-stale\][^,]*\.dca-card__(action|refresh)/.test(sel)),
+    ).toBe(false)
+  })
+
+  it('leads a list row with the mandate name in the text face, figures still mono', () => {
+    const name = rule('.dca-row__name')
+    expect(name).toMatch(/font-family: var\(--font-sans\);/)
+    expect(name).toMatch(/font-weight: 500;/)
+    expect(name).toMatch(/order: -1;/)
+    expect(name).toMatch(/text-overflow: ellipsis;/)
+    expect(name).not.toMatch(/text-transform/)
+    expect(css).toMatch(
+      /\.dca-row__spent,\s*\.dca-card__foot \{\s*font-family: var\(--font-mono\);/,
+    )
+  })
+
+  it("hangs quiet mono y-axis labels at the plot's left edge", () => {
+    const axis = rule('.dca-chart__y')
+    expect(axis).toMatch(/position: absolute;/)
+    expect(axis).toMatch(/pointer-events: none;/)
+    const label = rule('.dca-chart__ylabel')
+    expect(label).toMatch(/position: absolute;/)
+    expect(label).toMatch(/left: 0;/)
+    expect(label).toMatch(/font-family: var\(--font-mono\);/)
+    expect(label).toMatch(/color: var\(--dim\);/)
+    expect(Number(label?.match(/font-size: ([\d.]+)px;/)?.[1])).toBeLessThanOrEqual(10)
+  })
+
+  it('keeps the tooltip legible wherever the renderer places it', () => {
+    const tip = rule('.dca-chart__tooltip')
+    expect(tip).toMatch(/background: var\(--elevated\);/)
+    expect(tip).toMatch(/border: 1px solid var\(--border\);/)
+    expect(tip).toMatch(/backdrop-filter: blur\(\d+px\);/)
+    // Above the bars and every plot label (the y axis sits at 1).
+    const z = Number(tip?.match(/z-index: (\d+);/)?.[1])
+    expect(z).toBeGreaterThan(Number(rule('.dca-chart__y')?.match(/z-index: (\d+);/)?.[1] ?? 0))
+    // Placed under the columns inline: the skin's default `bottom` must yield.
+    expect(rule(".dca-chart__tooltip[data-dca-place='below']")).toMatch(/bottom: auto;/)
+  })
+
   it('never changes the case of a token symbol', () => {
     for (const r of ['.dca-card__pair,', '.dca-card__name', '.dca-stat__symbol']) {
       const block = css.match(new RegExp(`^\\${r}[^{]*\\{[\\s\\S]*?^\\}`, 'm'))?.[0]

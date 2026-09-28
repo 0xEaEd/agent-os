@@ -887,6 +887,7 @@ export const trading = {
   'trading.dca.next': 'next',
   'trading.dca.due': 'buy due',
   'trading.dca.more': '+{count} more',
+  'trading.dca.fewer': 'show fewer',
   'trading.dca.chip.awaiting': 'awaiting',
   'trading.dca.chip.active': 'active',
   'trading.dca.chip.paused': 'paused',

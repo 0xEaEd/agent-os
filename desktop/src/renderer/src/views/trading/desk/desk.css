@@ -658,12 +658,27 @@
 .trd-mctl__misses {
   color: var(--dim);
 }
-.trd-mctl__more,
-.trd-mstrip__more {
+/* "+N more" / "show fewer": a quiet text button that opens the finished
+   mandates folded out of the list. */
+.trd-mctl__more {
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
   font-family: var(--font-mono);
   font-size: 10.5px;
   white-space: nowrap;
   color: var(--dim);
+  cursor: pointer;
+}
+.trd-mctl__more:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.trd-mctl__more:focus-visible {
+  outline: 1px solid var(--ring);
+  outline-offset: 1px;
 }
 .trd-mctl__hint {
   padding-right: 8px;
@@ -1121,6 +1136,12 @@
 .trd-ledger__stamp[data-tone='ok'] {
   color: var(--ok);
   background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+/* A DCA row's mandate state once it is past deciding: paused, stopped,
+   rejected or expired read as a quiet word, not a warning. */
+.trd-ledger__stamp[data-tone='muted'] {
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
 }
 .trd-ledger__link,
 .trd-ledger__raw {

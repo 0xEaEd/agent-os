@@ -391,12 +391,27 @@ Root `article.dca-card[data-dca-kind=mandate][data-dca-status=…][data-dca-chai
 9. **Footer** `.dca-card__foot`: `dca_1a2b3c4d · Key main (0x89e0…da97) ·
    as of <relative time>` · ↻ refresh (when `request` present) · copy id.
 
+### Live state, never a stale button
+
+An artifact file is a snapshot from the moment the command ran; a mandate
+moves on. The mounter therefore (a) renders the snapshot with every action
+disabled (`data-dca-stale="checking"`) and at once re-reads the live state
+through `trading.dca.<request.kind>`; a failed read keeps the snapshot,
+sets `data-dca-stale="failed"` and shows a "state may be stale · ↻" line;
+(b) keeps a per-mounter cache of the latest payload per mandate id (fed by
+reads, action responses and `trading.dca.changed`) so a re-mounted card
+draws the newest known state immediately; (c) after an action is refused
+with `trading.dca.bad_state` / `not_found`, re-reads the card. The chart
+pads its price range by at least ±0.5 % of the average and labels the top
+and bottom of the range; same-day runs are labelled with times.
+
 ### `kind = "mandates"` — the list
 
 `article.dca-card[data-dca-kind=mandates]`: header `DCA · 3 mandates`,
 totals line (`$240 of $900 · $251 acquired`), then one row per mandate:
-status dot, `ETH ← USDC · every day · $10`, a mini progress bar, `next buy
-in …`, and the same action buttons in compact form. Empty → `No DCA
+status dot, the mandate **name** first, `ETH ← USDC · every day · $10`, a
+mini progress bar, `next buy in …`, and the same action buttons in compact
+form. Empty → `No DCA
 mandates yet.`
 
 ### Web vs desktop

@@ -139,7 +139,9 @@ export function MissionStrip({
   mandates?: Mandate[]
 }) {
   const now = useMandateClock(mandates)
-  const { rows, more } = mandateRows(mandates)
+  // The finished rows left out are counted (and opened) in the controls row
+  // below, once; the strip only names what it shows.
+  const { rows } = mandateRows(mandates)
   if (missions.length === 0 && mandates.length === 0) return null
   return (
     <div className="trd-mstrip" role="status" data-testid="mission-strip">
@@ -170,11 +172,6 @@ export function MissionStrip({
           <span className="trd-mstrip__word trd-mono">{mandateProgressText(m)}</span>
         </span>
       ))}
-      {more > 0 ? (
-        <span className="trd-mstrip__more" data-testid="mission-strip-more">
-          {t('trading.dca.more').replace('{count}', String(more))}
-        </span>
-      ) : null}
     </div>
   )
 }
@@ -224,7 +221,8 @@ export function MissionControls({
   onMandateStop?: (m: Mandate) => void
 }) {
   const now = useMandateClock(mandates)
-  const { rows, more } = mandateRows(mandates)
+  const [showAll, setShowAll] = useState(false)
+  const { rows, more } = mandateRows(mandates, showAll)
   return (
     <div className="trd-mctl" data-testid="mission-controls">
       {missions.map((job) => {
@@ -311,9 +309,7 @@ export function MissionControls({
         />
       ))}
       {more > 0 ? (
-        <span className="trd-mctl__more" data-testid="mandate-more">
-          {t('trading.dca.more').replace('{count}', String(more))}
-        </span>
+        <MoreToggle more={more} showAll={showAll} onToggle={() => setShowAll((v) => !v)} />
       ) : null}
       {showStart ? (
         <button
@@ -327,6 +323,32 @@ export function MissionControls({
         </button>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * "+N more" opens every finished mandate this desk still lists; "show fewer"
+ * folds them back to the newest two. Absent when nothing is folded away.
+ */
+function MoreToggle({
+  more,
+  showAll,
+  onToggle,
+}: {
+  more: number
+  showAll: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className="trd-mctl__more app-no-drag"
+      aria-expanded={showAll}
+      onClick={onToggle}
+      data-testid="mandate-more"
+    >
+      {showAll ? t('trading.dca.fewer') : t('trading.dca.more').replace('{count}', String(more))}
+    </button>
   )
 }
 

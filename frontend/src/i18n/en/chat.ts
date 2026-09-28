@@ -439,6 +439,9 @@ export const chat = defineNamespace('chat', {
   dcaRefresh: 'refresh',
   dcaRefreshTitle: 'Read this again from the engine',
   dcaRefreshFailed: 'refresh failed: {message}',
+  dcaStale: 'state may be stale',
+  dcaStaleTitle:
+    'This card could not be re-read from the engine; its controls stay off until a refresh succeeds',
   dcaCopyId: 'copy id',
   dcaCopyTitle: 'Copy {id}',
   dcaCopied: 'copied',

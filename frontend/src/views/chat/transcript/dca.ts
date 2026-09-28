@@ -67,6 +67,9 @@ export const DCA_WIDE_MIN_PX = 520
 /** At most this many attempts are drawn in the buys chart. */
 export const DCA_CHART_MAX = 50
 
+/** The chart's price axis reaches at least this far (a fraction of the average) past the data. */
+export const DCA_CHART_MIN_PAD = 0.005
+
 /** Rows in "Recent buys" / "Recent runs". */
 export const DCA_RECENT_RUNS = 5
 
@@ -869,11 +872,17 @@ export function buildDcaChartModel(mandate: DcaMandate): DcaChartModel | null {
   const prices = attempts.map((r) => r.priceUsd).filter((p): p is number => p !== null && p > 0)
   const fillPrices = fills.map((r) => r.priceUsd as number)
   const domain = [...prices, ...[avg, now].filter((p): p is number => p !== null && p > 0)]
+  if (domain.length === 0) return null
   const min = Math.min(...domain)
   const max = Math.max(...domain)
-  const span = max - min || max * 0.05 || 1
-  const lo = Math.max(0, min - span * 0.35)
-  const hi = max + span * 0.12
+  const span = max - min
+  // Pad by at least ±0.5 % of the average: near-identical prices (a 0.02 %
+  // spread) then draw as bars of nearly equal height, and the y labels show
+  // how narrow the band is, instead of one full bar next to an empty one.
+  const ref = avg !== null && avg > 0 ? avg : domain.reduce((a, b) => a + b, 0) / domain.length
+  const floor = ref * DCA_CHART_MIN_PAD
+  const lo = Math.max(0, min - Math.max(span * 0.35, floor))
+  const hi = max + Math.max(span * 0.12, floor)
   const yOf = (p: number | null): number | null =>
     p === null || !(p > 0) ? null : 100 - clamp01((p - lo) / (hi - lo)) * 100
   const slot = 100 / attempts.length
@@ -896,6 +905,37 @@ export function buildDcaChartModel(mandate: DcaMandate): DcaChartModel | null {
     now,
     nowY: yOf(now),
   }
+}
+
+/** A local "HH:MM"; '' when the stamp is unusable. */
+function formatClock(iso: string): string {
+  const at = Date.parse(iso)
+  if (!iso || Number.isNaN(at)) return ''
+  return new Date(at).toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+function localDay(iso: string): string {
+  const at = Date.parse(iso)
+  return Number.isNaN(at) ? '' : new Date(at).toDateString()
+}
+
+/**
+ * The x axis's two end labels (first, last; last '' when there is one
+ * column): dates, or local times when every plotted run fell on the same
+ * calendar day — the same date twice says nothing.
+ */
+export function dcaAxisLabels(model: DcaChartModel): [string, string] {
+  const first = model.columns[0]
+  const last = model.columns[model.columns.length - 1]
+  if (!first || !last) return ['', '']
+  const day = localDay(first.run.at)
+  const oneDay = day !== '' && model.columns.every((c) => localDay(c.run.at) === day)
+  const label = (iso: string): string => (oneDay ? formatClock(iso) : formatWhen(iso, false))
+  return [label(first.run.at), last === first ? '' : label(last.run.at)]
 }
 
 /** The chart's accessible summary. */
@@ -1119,25 +1159,32 @@ function statsSection(mandate: DcaMandate): HTMLElement {
   const { acquired, token } = mandate
   const stats = el('section', 'dca-card__stats')
 
-  const amount = el('span', 'dca-stat__value')
-  const human = acquired.amount.human
-  amount.append(
-    el('span', 'dca-stat__amount', human ? formatTokenAmount(human) : '0'),
-    el('span', 'dca-stat__symbol', ` ${token.symbol}`),
-  )
-  amount.title = `${human || '0'} ${token.symbol}`
-  stats.append(
-    stat(
-      'acquired',
-      t('chat.dcaStatAcquired'),
-      amount,
-      usdNode('dca-stat__sub', acquired.amount.usd, formatUsd),
-    ),
-  )
-
-  // Before the first filled buy there is no average and nothing to be up or
-  // down on: "—", as for an unknown price — never "$0.00 on $0 spent".
+  // Before the first filled buy nothing is acquired, there is no average and
+  // nothing to be up or down on: "—" in every cell, as for an unknown price —
+  // never "0 ETH / $0.00" or "$0.00 on $0 spent".
   const bought = mandate.runs.done > 0
+  if (bought) {
+    const amount = el('span', 'dca-stat__value')
+    const human = acquired.amount.human
+    amount.append(
+      el('span', 'dca-stat__amount', human ? formatTokenAmount(human) : '0'),
+      el('span', 'dca-stat__symbol', ` ${token.symbol}`),
+    )
+    amount.title = `${human || '0'} ${token.symbol}`
+    stats.append(
+      stat(
+        'acquired',
+        t('chat.dcaStatAcquired'),
+        amount,
+        usdNode('dca-stat__sub', acquired.amount.usd, formatUsd),
+      ),
+    )
+  } else {
+    stats.append(
+      stat('acquired', t('chat.dcaStatAcquired'), usdNode('dca-stat__value', null, formatUsd)),
+    )
+  }
+
   const avg = usdNode('dca-stat__value', bought ? acquired.avgPriceUsd : null, formatDcaPrice)
   let vs: HTMLElement | null = null
   if (bought && acquired.vsAvgPct !== null) {
@@ -1216,6 +1263,12 @@ function buildChart(mandate: DcaMandate, ctx: DcaRenderContext): HTMLElement {
   tooltip.id = tooltipId
   tooltip.setAttribute('role', 'tooltip')
   tooltip.hidden = true
+  // Under the columns, never over the stats row above the plot nor over the
+  // columns themselves (it would steal the pointer from them). Inline, like
+  // `left`, so every skin places it the same; `data-dca-place` is the hook.
+  tooltip.dataset.dcaPlace = 'below'
+  tooltip.style.top = 'calc(100% + 4px)'
+  tooltip.style.bottom = 'auto'
 
   const chart = svg('svg', {
     class: 'dca-chart__svg',
@@ -1434,7 +1487,11 @@ function buildChart(mandate: DcaMandate, ctx: DcaRenderContext): HTMLElement {
     label.style.top = plotTop(model.avgY)
     // Both labels hang above their lines; when the average sits just under the
     // current price, its label hangs below instead so the two stay apart.
-    if (model.nowY !== null && model.avgY >= model.nowY && model.avgY - model.nowY < 14) {
+    // Near the top it hangs below too, clear of the y axis's top label.
+    if (
+      model.avgY < 16 ||
+      (model.nowY !== null && model.avgY >= model.nowY && model.avgY - model.nowY < 14)
+    ) {
       label.dataset.dcaFlip = 'true'
     }
     plot.append(label)
@@ -1448,15 +1505,27 @@ function buildChart(mandate: DcaMandate, ctx: DcaRenderContext): HTMLElement {
     if (tone) label.dataset.dcaTone = tone
     plot.append(label)
   }
+  // The y axis: the top and bottom of the price range, at the left edge, so
+  // near-equal bars read as "within a hair of each other", not as a trend.
+  const yAxis = hidden(el('div', 'dca-chart__y'))
+  for (const [edge, price, y] of [
+    ['top', model.hi, 0],
+    ['bottom', model.lo, 100],
+  ] as const) {
+    const label = el('span', 'dca-chart__ylabel', formatDcaPrice(price))
+    label.dataset.edge = edge
+    label.style.top = plotTop(y)
+    yAxis.append(label)
+  }
+  plot.append(yAxis)
   plot.append(tooltip)
   figure.append(plot)
 
   const axis = hidden(el('div', 'dca-chart__axis'))
-  const first = model.columns[0]
-  const last = model.columns[model.columns.length - 1]
-  if (first) axis.append(el('span', 'dca-chart__date', formatWhen(first.run.at, false)))
-  if (last && last !== first) {
-    const end = el('span', 'dca-chart__date', formatWhen(last.run.at, false))
+  const [firstLabel, lastLabel] = dcaAxisLabels(model)
+  if (model.columns.length > 0) axis.append(el('span', 'dca-chart__date', firstLabel))
+  if (model.columns.length > 1) {
+    const end = el('span', 'dca-chart__date', lastLabel)
     end.dataset.align = 'end'
     axis.append(end)
   }
@@ -1596,6 +1665,30 @@ function refreshButton(): HTMLElement {
   return button
 }
 
+/**
+ * Why a card's controls are off: its live read is in flight (`checking`) or
+ * failed (`failed`). Stamped as `data-dca-stale` on the `.dca-card`.
+ */
+export type DcaStale = 'checking' | 'failed'
+
+/** "state may be stale · ↻" — shown while a card's live read has failed. */
+function staleHint(): HTMLElement {
+  const hint = el('p', 'dca-card__stale')
+  hint.setAttribute('role', 'status')
+  hint.title = t('chat.dcaStaleTitle')
+  const button = el('button', 'dca-card__stale-refresh', '↻') as HTMLButtonElement
+  button.type = 'button'
+  button.dataset.dcaFoot = 'refresh'
+  button.title = t('chat.dcaRefreshTitle')
+  button.setAttribute('aria-label', t('chat.dcaRefreshTitle'))
+  hint.append(
+    el('span', 'dca-card__stale-text', t('chat.dcaStale')),
+    hidden(el('span', 'dca-sep', ' · ')),
+    button,
+  )
+  return hint
+}
+
 function walletText(wallet: LpWallet | null): string {
   if (!wallet) return ''
   const short = shortAddress(wallet.address)
@@ -1717,7 +1810,11 @@ function mandateRow(mandate: DcaMandate, ctx: DcaRenderContext, nowMs: number): 
       `${formatDcaUsd(mandate.budget.spentUsd)} / ${formatDcaUsd(mandate.budget.capUsd)}`,
     ),
   )
-  main.append(top, progress, nextNode(mandate, 'dca-row__next', nowMs))
+  // The name leads: seven "USDC ← ETH · every 2 minutes · $0.04" rows are
+  // otherwise indistinguishable. Pair · plan · state is the second line.
+  const name = el('span', 'dca-row__name', mandate.name)
+  name.title = mandate.name
+  main.append(name, top, progress, nextNode(mandate, 'dca-row__next', nowMs))
   row.append(dot, main)
   if (ctx.canWrite) {
     const actions = actionsRow(mandate, true)
@@ -1910,6 +2007,20 @@ export function createDcaMounter(deps: DcaMounterDeps) {
   const errors = new Map<string, string>()
   /** Orders a "Buy now" placed, by order id → mandate id (refresh on settle). */
   const orders = new Map<string, string>()
+  /**
+   * Hosts whose card may not show the mandate as it is now: the artifact
+   * snapshot while its live read is in flight (`checking`), or after that
+   * read failed (`failed`). Their controls stay off (`data-dca-stale`).
+   */
+  const stale = new Map<HTMLElement, DcaStale>()
+  /**
+   * The newest live state of every mandate this mounter has seen (reads,
+   * control answers, `trading.dca.changed`), by id. A transcript re-render
+   * re-mounts a card from its artifact file — the snapshot taken when the
+   * mandate was created — so a re-mounted card draws this instead. It holds
+   * no DOM and outlives `destroyAll`.
+   */
+  const latestByMandateId = new Map<string, DcaMandatePayload>()
   const timers = new Set<ReturnType<typeof setTimeout>>()
   let clock: ReturnType<typeof setTimeout> | null = null
   const cards = new Map<HTMLElement, HTMLElement>()
@@ -1985,6 +2096,70 @@ export function createDcaMounter(deps: DcaMounterDeps) {
     return payload.kind === 'mandate' ? [payload.mandate] : payload.mandates
   }
 
+  /* ── the live-state cache ── */
+
+  function stampOf(mandate: DcaMandate): number {
+    const at = Date.parse(mandate.updatedAt)
+    return Number.isNaN(at) ? -Infinity : at
+  }
+
+  /** A mandate payload for a mandate that arrived without its envelope. */
+  function envelopeFor(mandate: DcaMandate, fetchedAt: string): DcaMandatePayload {
+    return {
+      version: 1,
+      fetchedAt,
+      warnings: [],
+      request: { kind: 'get', params: { mandateId: mandate.id } },
+      kind: 'mandate',
+      mandate,
+      run: null,
+    }
+  }
+
+  /** Keep `fresh` unless the cache already holds a strictly newer state. */
+  function rememberMandate(fresh: DcaMandatePayload): void {
+    const known = latestByMandateId.get(fresh.mandate.id)
+    if (known && stampOf(known.mandate) > stampOf(fresh.mandate)) return
+    latestByMandateId.set(fresh.mandate.id, { ...fresh, run: null })
+  }
+
+  /** Feed a live payload into the cache. */
+  function remember(payload: DcaPayload): void {
+    if (payload.kind === 'mandate') {
+      rememberMandate(payload)
+      return
+    }
+    const at = payload.fetchedAt || new Date(now()).toISOString()
+    payload.mandates.forEach((m) => rememberMandate(envelopeFor(m, at)))
+  }
+
+  /**
+   * A snapshot with every mandate the cache knows at least as fresh swapped
+   * in. `live` is true when nothing of the snapshot's own state is left (a
+   * mandate card with a cache hit, a list whose every row hit).
+   */
+  function withCache(snapshot: DcaPayload): { payload: DcaPayload; live: boolean } {
+    const hit = (m: DcaMandate): DcaMandatePayload | null => {
+      const known = latestByMandateId.get(m.id)
+      return known && stampOf(known.mandate) >= stampOf(m) ? known : null
+    }
+    if (snapshot.kind === 'mandate') {
+      const known = hit(snapshot.mandate)
+      if (!known) return { payload: snapshot, live: false }
+      return {
+        payload: { ...known, request: snapshot.request ?? known.request, run: null },
+        live: true,
+      }
+    }
+    let live = snapshot.mandates.length > 0
+    const mandates = snapshot.mandates.map((m) => {
+      const known = hit(m)
+      if (!known) live = false
+      return known ? known.mandate : m
+    })
+    return { payload: { ...snapshot, mandates }, live }
+  }
+
   /* ── the clock ── */
 
   function stopClock(): void {
@@ -2044,6 +2219,7 @@ export function createDcaMounter(deps: DcaMounterDeps) {
 
   function paintControls(host: HTMLElement): void {
     const card = host.querySelector<HTMLElement>('.dca-card')
+    const staleState = stale.get(host)
     let anyBusy = false
     host.querySelectorAll<HTMLElement>('.dca-actions').forEach((row) => {
       const id = row.dataset.dcaId ?? ''
@@ -2057,7 +2233,7 @@ export function createDcaMounter(deps: DcaMounterDeps) {
         row.removeAttribute('aria-busy')
       }
       row.querySelectorAll<HTMLButtonElement>('button[data-dca-action]').forEach((b) => {
-        b.disabled = Boolean(action)
+        b.disabled = Boolean(action) || staleState !== undefined
         if (action && b.dataset.dcaAction === action) b.dataset.dcaPending = 'true'
         else delete b.dataset.dcaPending
       })
@@ -2071,7 +2247,22 @@ export function createDcaMounter(deps: DcaMounterDeps) {
     if (card) {
       if (anyBusy && card.dataset.dcaKind === 'mandate') card.dataset.dcaBusy = 'true'
       else delete card.dataset.dcaBusy
+      paintStale(card, staleState)
     }
+  }
+
+  /** `data-dca-stale` on the card, and the "may be stale · ↻" hint once the live read failed. */
+  function paintStale(card: HTMLElement, state: DcaStale | undefined): void {
+    if (state) card.dataset.dcaStale = state
+    else delete card.dataset.dcaStale
+    const hint = card.querySelector<HTMLElement>(':scope > .dca-card__stale')
+    if (state !== 'failed') {
+      hint?.remove()
+      return
+    }
+    if (hint) return
+    const foot = card.querySelector<HTMLElement>(':scope > .dca-card__foot')
+    card.insertBefore(staleHint(), foot)
   }
 
   function paintAll(): void {
@@ -2093,11 +2284,14 @@ export function createDcaMounter(deps: DcaMounterDeps) {
    */
   function applyMandate(mandate: DcaMandate, fresh: DcaMandatePayload | null): void {
     const stamp = new Date(now()).toISOString()
+    remember(fresh ?? envelopeFor(mandate, stamp))
     rendered.forEach((host) => {
       const shown = payloads.get(host)
       if (!shown || !host.isConnected) return
       if (shown.kind === 'mandate') {
         if (shown.mandate.id !== mandate.id) return
+        // A live state: whatever snapshot the card held is gone.
+        stale.delete(host)
         const next: DcaMandatePayload = fresh
           ? {
               ...fresh,
@@ -2159,6 +2353,20 @@ export function createDcaMounter(deps: DcaMounterDeps) {
       errors.set(id, dcaErrorText(error))
       paintAll()
       diag('dca.action.error', { action, error: String(error) })
+      // "cannot approve …: it is completed": the card is out of date. Re-read
+      // every card that draws this mandate, controls off until it lands.
+      const { code } = rpcError(error)
+      if (code === 'trading.dca.bad_state' || code === 'trading.dca.not_found') {
+        rendered.forEach((host) => {
+          const payload = payloads.get(host)
+          if (!payload || !host.isConnected) return
+          if (!mandatesOf(payload).some((m) => m.id === id)) return
+          if (!readCall() || !requestFor(payload)) return
+          stale.set(host, 'checking')
+          paintControls(host)
+          void refreshHost(host)
+        })
+      }
     }
   }
 
@@ -2186,33 +2394,51 @@ export function createDcaMounter(deps: DcaMounterDeps) {
     return null
   }
 
-  async function refreshHost(host: HTMLElement): Promise<void> {
+  /**
+   * Re-run a card's read and redraw it. `quiet` (the read a mount fires on
+   * its own) neither dims the card nor flashes a failure under the footer: a
+   * stale card says so with its hint instead. `call` overrides the read call.
+   */
+  async function refreshHost(
+    host: HTMLElement,
+    opts: { quiet?: boolean; call?: DcaCall | null } = {},
+  ): Promise<void> {
     const current = payloads.get(host)
-    const call = readCall()
+    const call = opts.call ?? readCall()
     const request = current ? requestFor(current) : null
     if (!current || !request || !call || refreshing.has(host)) return
     refreshing.add(host)
     const card = host.querySelector<HTMLElement>('.dca-card')
-    card?.setAttribute('data-dca-refreshing', 'true')
-    card?.setAttribute('aria-busy', 'true')
-    const button = host.querySelector<HTMLButtonElement>('[data-dca-foot="refresh"]')
-    if (button) button.disabled = true
-    diag('dca.refresh.start', { kind: request.kind })
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('[data-dca-foot="refresh"]')]
+    if (!opts.quiet) {
+      card?.setAttribute('data-dca-refreshing', 'true')
+      card?.setAttribute('aria-busy', 'true')
+      buttons.forEach((b) => (b.disabled = true))
+    }
+    diag('dca.refresh.start', { kind: request.kind, quiet: Boolean(opts.quiet) })
     try {
       const raw = await call(dcaReadMethod(request), request.params)
       const next = normalizeDcaPayload(raw)
       if (!next) throw new Error(t('chat.dcaUnreadable'))
-      if (!host.isConnected || !rendered.has(host)) return
       if (!next.request) next.request = current.request
       if (!next.fetchedAt) next.fetchedAt = new Date(now()).toISOString()
+      remember(next)
+      if (!host.isConnected || !rendered.has(host)) return
+      stale.delete(host)
       show(host, next)
       scheduleClock()
       diag('dca.refresh.done', { kind: next.kind })
     } catch (error) {
-      card?.removeAttribute('data-dca-refreshing')
-      card?.removeAttribute('aria-busy')
-      if (button) button.disabled = false
-      flashFootError(host, t('chat.dcaRefreshFailed', { message: rpcError(error).message }))
+      if (!opts.quiet) {
+        card?.removeAttribute('data-dca-refreshing')
+        card?.removeAttribute('aria-busy')
+        buttons.forEach((b) => (b.disabled = false))
+        flashFootError(host, t('chat.dcaRefreshFailed', { message: rpcError(error).message }))
+      }
+      if (stale.has(host) && rendered.has(host)) {
+        stale.set(host, 'failed')
+        paintControls(host)
+      }
       diag('dca.refresh.error', { error: String(error) })
     } finally {
       refreshing.delete(host)
@@ -2272,6 +2498,7 @@ export function createDcaMounter(deps: DcaMounterDeps) {
         claimed.delete(host)
         rendered.delete(host)
         payloads.delete(host)
+        stale.delete(host)
         unwatch(host)
       }
     }
@@ -2303,12 +2530,22 @@ export function createDcaMounter(deps: DcaMounterDeps) {
         claimed.delete(host)
         return
       }
+      // The artifact is a snapshot from when it was published: draw the
+      // newest state this mounter knows instead, and re-read the live one.
+      // Until that read lands, a card still holding snapshot state keeps its
+      // controls off — an "Approve & start" on a completed mandate must not
+      // be clickable.
+      const { payload: shown, live } = withCache(payload)
+      const call = deps.call ?? null
+      const reread = call !== null && requestFor(shown) !== null
+      if (reread && !live) stale.set(host, 'checking')
       wire(host)
       rendered.add(host)
-      show(host, payload)
+      show(host, shown)
       setStatus(host, '')
       scheduleClock()
-      diag('dca.mount.done', { url, kind: payload.kind })
+      diag('dca.mount.done', { url, kind: payload.kind, cached: live })
+      if (reread) void refreshHost(host, { quiet: true, call })
     } catch (error) {
       setStatus(host, t('chat.dcaFailed'))
       diag('dca.mount.error', { url, error: String(error) })
@@ -2332,6 +2569,7 @@ export function createDcaMounter(deps: DcaMounterDeps) {
     rendered.clear()
     payloads.clear()
     refreshing.clear()
+    stale.clear()
     busy.clear()
     errors.clear()
     orders.clear()

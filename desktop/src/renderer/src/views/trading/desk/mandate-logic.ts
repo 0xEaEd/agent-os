@@ -233,13 +233,18 @@ export function deskMandates(all: readonly Mandate[], sessionKey: string, now: n
 /**
  * The rows a list draws: every live mandate, then at most FINISHED_ROWS
  * finished ones (newest first, as `deskMandates` sorts them); `more` counts
- * the finished ones left out.
+ * the finished ones beyond that. With `all`, every finished one is drawn and
+ * `more` still counts the ones a fold would hide (so the list can offer
+ * "show fewer").
  */
-export function mandateRows(mandates: readonly Mandate[]): { rows: Mandate[]; more: number } {
+export function mandateRows(
+  mandates: readonly Mandate[],
+  all = false,
+): { rows: Mandate[]; more: number } {
   const live = mandates.filter((m) => !TERMINAL.has(m.status))
   const finished = mandates.filter((m) => TERMINAL.has(m.status))
   return {
-    rows: [...live, ...finished.slice(0, FINISHED_ROWS)],
+    rows: [...live, ...(all ? finished : finished.slice(0, FINISHED_ROWS))],
     more: Math.max(0, finished.length - FINISHED_ROWS),
   }
 }

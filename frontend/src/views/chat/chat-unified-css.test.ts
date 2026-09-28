@@ -412,6 +412,30 @@ describe('DCA card CSS contract', () => {
     expect(block('.chat-surface .dca-chart__svg')).toMatch(/height: var\(--dca-plot-h\);/)
   })
 
+  it('opens the tooltip under the plot and pins the y labels to its edges', () => {
+    const tooltip = block('.chat-surface .dca-chart__tooltip')
+    expect(tooltip).toMatch(/top: calc\(100% \+ 0\.25rem\);/)
+    expect(tooltip).not.toMatch(/bottom:/)
+    const ylabel = block('.chat-surface .dca-chart__ylabel')
+    expect(ylabel).toMatch(/position: absolute;/)
+    expect(ylabel).toMatch(/left: 0;/)
+    expect(ylabel).toMatch(/pointer-events: none;/)
+    expect(block(".chat-surface .dca-chart__ylabel[data-edge='bottom']")).toMatch(
+      /transform: translateY\(/,
+    )
+  })
+
+  it('leads a list row with the mandate name and marks a stale card', () => {
+    const name = block('.chat-surface .dca-row__name')
+    expect(name).toMatch(/font-weight: 600;/)
+    expect(name).toMatch(/text-overflow: ellipsis;/)
+    expect(block('.chat-surface .dca-card[data-dca-stale] .dca-action:disabled')).toMatch(
+      /cursor: not-allowed;/,
+    )
+    expect(block('.chat-surface .dca-card__stale')).toMatch(/color: var\(--warn\);/)
+    expect(block('.chat-surface .dca-card__stale-refresh')).toMatch(/cursor: pointer;/)
+  })
+
   it('shows controls with an armed Stop and an inline error, and keeps links out of the link colour', () => {
     expect(block(".chat-surface .dca-action[data-dca-tone='primary']")).toMatch(
       /background: var\(--primary\);/,

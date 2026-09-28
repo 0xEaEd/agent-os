@@ -2535,22 +2535,51 @@ def _dca_buys(runs: dict[str, Any]) -> str:
     return f"{done} of {most} buys" if most else f"{done} buys"
 
 
-def _dca_run_line(run: dict[str, Any], symbol: str) -> str:
-    """``#12 · 2026-09-27 09:01 · filled · $10.00 → 0.0035 WETH @ $2,860.00``."""
-    at = _parse_iso(run.get("at"))
-    when = at.strftime("%Y-%m-%d %H:%M") if at else "—"
+def _signed_usd(value: Any) -> str:
+    """``$5.45`` / ``-$1.20``; a value that rounds to zero is ``$0.00``, never ``-$0.00``."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = round(float(value), 2)
+    except (TypeError, ValueError):
+        return str(value)
+    return money(number if number != 0 else 0.0)
+
+
+def _dca_when(at: datetime | None, now: datetime | None = None) -> str:
+    """Local ``HH:MM`` for a run today, ``Mon DD HH:MM`` otherwise, ``—`` when unknown."""
+    if at is None:
+        return "—"
+    local = at.astimezone()
+    today = (now or datetime.now(UTC)).astimezone().date()
+    return local.strftime("%H:%M" if local.date() == today else "%b %d %H:%M")
+
+
+def _dca_run_line(run: dict[str, Any], symbol: str, now: datetime | None = None) -> str:
+    """``#12 · 09:01 · $10.00 → 0.0035 WETH @ $2,860.00 · tx 0x1234…abcd``.
+
+    A skipped or failed run carries its reason; a pending or parked one says it is waiting.
+    """
     status = str(run.get("status") or "")
-    parts = [f"#{run.get('n')}", when, status + (" (buy now)" if run.get("manual") else "")]
+    parts = [f"#{run.get('n')}", _dca_when(_parse_iso(run.get("at")), now)]
+    if run.get("manual"):
+        parts.append("buy now")
     if status == "filled":
         parts.append(
             f"{money(run.get('usd'))} → {_dca_amount(run.get('amount'), symbol)} "
             f"@ {_usd(run.get('priceUsd'))}"
         )
+        if run.get("txHash"):
+            parts.append(f"tx {short_address(run.get('txHash'))}")
     elif status in ("parked", "pending"):
-        what = "awaiting approval" if status == "parked" else "placed"
-        parts.append(f"{money(run.get('usd'))} {what} · {run.get('orderId') or ''}".rstrip(" ·"))
-    elif run.get("reason"):
-        parts.append(str(run.get("reason")))
+        what = "awaiting approval" if status == "parked" else "pending, waiting to fill"
+        parts.append(f"{money(run.get('usd'))} {what}")
+        if run.get("orderId"):
+            parts.append(str(run.get("orderId")))
+    else:
+        parts.append(status or "unknown")
+        if run.get("reason"):
+            parts.append(str(run.get("reason")))
     return " · ".join(parts)
 
 
@@ -2582,7 +2611,11 @@ def _render_dca_mandate(result: dict[str, Any]) -> None:
     lines.append(
         f"acquired {_dca_amount(acquired.get('amount'), symbol)} · "
         f"avg {_usd(acquired.get('avgPriceUsd'))} vs now {_usd(acquired.get('currentPriceUsd'))} "
-        f"({percent(acquired.get('vsAvgPct'))}) · unrealised {money(acquired.get('unrealizedUsd'))}"
+        f"({percent(acquired.get('vsAvgPct'))})"
+    )
+    lines.append(
+        f"unrealised {_signed_usd(acquired.get('unrealizedUsd'))} · "
+        f"gas {_usd(acquired.get('gasUsd'))}"
     )
     guard_bits = []
     if guards.get("maxPriceUsd"):
@@ -2624,18 +2657,26 @@ def _render_dca_list(result: dict[str, Any]) -> None:
         title=f"DCA · {len(mandates)} mandate{'s' if len(mandates) != 1 else ''}",
         header_style=ACCENT_HEADER,
     )
-    for column in ("Mandate", "Name", "Pair", "Status", "Schedule", "Progress", "Buys", "Next"):
-        table.add_column(column, justify="right" if column == "Progress" else "left")
+    for column in ("Name", "Pair", "Cadence", "Status", "Progress", "Buys", "Next buy"):
+        # Fold, never ellipsize: a clipped id or cap is worse than a taller row.
+        table.add_column(
+            column,
+            justify="right" if column in ("Progress", "Buys") else "left",
+            overflow="fold",
+        )
     for mandate in mandates:
         budget, schedule = _dict(mandate.get("budget")), _dict(mandate.get("schedule"))
+        runs = _dict(mandate.get("runs"))
+        done, most = runs.get("done") or 0, runs.get("max")
+        # The id rides under the name: every other dca command needs it.
+        name = markup_escape(str(mandate.get("name") or "DCA"))
         table.add_row(
-            str(mandate.get("id") or ""),
-            markup_escape(str(mandate.get("name") or "")),
+            f"{name}\n[dim]{markup_escape(str(mandate.get('id') or ''))}[/]",
             markup_escape(_dca_pair(mandate)),
+            markup_escape(f"{money(budget.get('usdPerRun'))} {schedule.get('label') or ''}"),
             str(mandate.get("status") or ""),
-            f"{money(budget.get('usdPerRun'))} {schedule.get('label') or ''}",
             f"{money(budget.get('spentUsd'))} / {money(budget.get('capUsd'))}",
-            _dca_buys(_dict(mandate.get("runs"))),
+            f"{done}/{most}" if most else str(done),
             _dca_next(mandate),
         )
     console.print(table)

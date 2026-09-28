@@ -3,10 +3,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import { copyLpText } from '@/views/chat/transcript/lp'
 import type { StreamEventPayload } from '@/views/chat/types'
 import type { TranscriptEventSeams } from '@/views/chat/useTranscript'
-import { t } from '~/i18n'
+import { t, type MessageKey } from '~/i18n'
 import { TRADING_KEYS } from '~/stores/trading'
 import { providerMark } from '../ProviderMark'
-import { providerLabel, type TradingStatus } from '../types'
+import { providerLabel, type MandateListPayload, type TradingStatus } from '../types'
 import {
   commandFromToolInput,
   LEDGER_GROUP_MIN,
@@ -15,6 +15,7 @@ import {
   parseTradeCommand,
   parseTradeResult,
   txExplorerUrl,
+  withLiveMandate,
   type TradeCall,
   type TradeOutcome,
 } from './ledger'
@@ -114,6 +115,19 @@ function glyphFor(call: TradeCall, outcome: TradeOutcome | null): string {
       return isDcaKind(call.kind) ? '↻' : '›'
   }
 }
+
+/** A mandate's live status as the pill on its ledger row: the word key and its tone. */
+const MANDATE_STAMPS: Record<string, { key: MessageKey; tone: string }> = {
+  active: { key: 'trading.dca.state.active', tone: 'ok' },
+  paused: { key: 'trading.dca.state.paused', tone: 'muted' },
+  completed: { key: 'trading.dca.state.done', tone: 'ok' },
+  stopped: { key: 'trading.dca.state.stopped', tone: 'muted' },
+  rejected: { key: 'trading.dca.state.rejected', tone: 'muted' },
+  expired: { key: 'trading.dca.state.expired', tone: 'muted' },
+}
+
+/** A mandate's live status by id, or undefined when no loaded list names it. */
+export type MandateStatusOf = (mandateId: string) => string | undefined
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -228,6 +242,16 @@ function renderRow(
       e.stopPropagation()
       onFocusApproval(outcome.orderId)
     })
+    side.appendChild(stamp)
+  }
+  // A DCA row whose mandate the live list knows: its pill is the mandate's
+  // state now (awaiting approval is the stamp above), never the one recorded.
+  const mandateStamp =
+    !outcome?.awaiting && outcome?.mandateLive ? MANDATE_STAMPS[outcome.mandateLive] : undefined
+  if (mandateStamp) {
+    const stamp = el('span', 'trd-ledger__stamp', t(mandateStamp.key))
+    stamp.dataset.tone = mandateStamp.tone
+    stamp.dataset.mandate = outcome?.mandateLive ?? ''
     side.appendChild(stamp)
   }
   if (outcome?.confirmed) {
@@ -390,6 +414,19 @@ export function useTradeLedger(
         .getQueryData<TradingStatus>(TRADING_KEYS.status)
         ?.chains?.find((c) => c.chainId === chainId)?.explorer ?? null
   }, [queryClient])
+  // A DCA row's pill follows its mandate in the list the desk already holds
+  // (every mandate when loaded, else the live ones), read at draw time.
+  const mandateStatusOf = useRef<MandateStatusOf>(() => undefined)
+  useEffect(() => {
+    mandateStatusOf.current = (mandateId) => {
+      for (const all of [true, false]) {
+        const list = queryClient.getQueryData<MandateListPayload>(TRADING_KEYS.dca(all))
+        const found = list?.mandates?.find((m) => m.id === mandateId)
+        if (found) return found.status
+      }
+      return undefined
+    }
+  }, [queryClient])
   // Tool ids are per session; another session's rows are rebuilt from its
   // own blocks, and a map that only ever grew held every call ever seen.
   useEffect(() => {
@@ -416,6 +453,8 @@ export function useTradeLedger(
         const preview = details.querySelector('.chat-tool-result-preview')?.textContent ?? ''
         if (preview) outcome = parseTradeResult(call, preview)
       }
+      if (outcome?.mandateId)
+        outcome = withLiveMandate(outcome, mandateStatusOf.current(outcome.mandateId))
       let row = details.previousElementSibling as HTMLElement | null
       if (!row || !row.classList.contains(ROW_CLASS) || row.getAttribute(ROW_ATTR) !== id) {
         row = el('div', ROW_CLASS)
@@ -424,7 +463,7 @@ export function useTradeLedger(
         details.hidden = true
       }
       const measured = details.querySelector('.chat-tools-status')?.textContent?.trim() ?? ''
-      const signature = `${running}|${outcome?.detail ?? ''}|${outcome?.summary ?? ''}|${outcome?.status ?? ''}|${measured}`
+      const signature = `${running}|${outcome?.detail ?? ''}|${outcome?.summary ?? ''}|${outcome?.status ?? ''}|${outcome?.awaiting ?? ''}|${outcome?.mandateLive ?? ''}|${measured}`
       if (row.dataset.sig !== signature) {
         row.dataset.sig = signature
         renderRow(
@@ -466,6 +505,17 @@ export function useTradeLedger(
     observerRef.current = observer
     run()
   }, [])
+
+  // The mandate list moving (approved, paused, completed …) touches no DOM,
+  // so the observer never hears it: redraw the rows when a DCA list lands.
+  useEffect(() => {
+    return queryClient.getQueryCache().subscribe((event) => {
+      const key = event.query.queryKey
+      if (event.type !== 'updated' || key[0] !== 'trading' || key[1] !== 'dca') return
+      const root = rootRef.current
+      if (root) requestAnimationFrame(() => decorate.current(root))
+    })
+  }, [queryClient])
 
   const unbind = useCallback(() => {
     observerRef.current?.disconnect()
