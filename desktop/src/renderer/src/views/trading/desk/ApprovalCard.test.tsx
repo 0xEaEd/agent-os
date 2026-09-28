@@ -543,3 +543,99 @@ describe('approvals region CSS contract', () => {
     expect(rule('.trd-asks__stamp .trd-card__actions')).toMatch(/position: static;/)
   })
 })
+
+describe('ApprovalsRegion keeps the foot of the transcript in view', () => {
+  // The region is a flex sibling of `.chat-thread`: whatever it gains comes
+  // off the transcript's viewport at the bottom edge, so the transcript is
+  // scrolled by the same amount. jsdom has no layout, so the region's height
+  // and the ResizeObserver are driven by hand.
+  let height = 0
+  let observed: (() => void) | null = null
+  let disconnects = 0
+
+  beforeEach(() => {
+    height = 0
+    observed = null
+    disconnects = 0
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          observed = cb
+        }
+        observe() {}
+        disconnect() {
+          disconnects += 1
+        }
+      },
+    )
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const h = this.classList.contains('trd-asks') ? height : 0
+      return { height: h, width: 0, top: 0, left: 0, right: 0, bottom: h } as DOMRect
+    })
+    return () => {
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    }
+  })
+
+  const stage = (pending: ReturnType<typeof order>[]) => (
+    <div className="chat-stage">
+      <div className="chat-thread" data-testid="thread" />
+      <ApprovalsRegion
+        pending={pending}
+        settled={[]}
+        wallets={[WALLET]}
+        deciding={null}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOrderId={null}
+      />
+    </div>
+  )
+
+  it('scrolls the transcript by what the region takes, and does nothing while it is empty', () => {
+    const { rerender } = renderDesk(stage([]))
+    const thread = screen.getByTestId('thread')
+    let top = 500
+    Object.defineProperty(thread, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = v
+      },
+    })
+    // Empty: no region, no observer, no scroll.
+    expect(observed).toBeNull()
+    expect(top).toBe(500)
+
+    // A card docks: the transcript pays back its full height before paint.
+    height = 200
+    rerender(stage([order({ orderId: 'p1' })]))
+    expect(top).toBe(700)
+
+    // A second card stacks: only the growth is paid.
+    height = 320
+    act(() => observed?.())
+    expect(top).toBe(820)
+
+    // Shrinking gives the transcript room below; the reader is not moved.
+    height = 150
+    act(() => observed?.())
+    expect(top).toBe(820)
+    // Growing again counts from where it shrank to, not from its peak.
+    height = 180
+    act(() => observed?.())
+    expect(top).toBe(850)
+
+    // Emptied: the observer goes, and a later ask counts from zero again.
+    rerender(stage([]))
+    expect(disconnects).toBe(1)
+    expect(top).toBe(850)
+    height = 100
+    rerender(stage([order({ orderId: 'p2' })]))
+    expect(top).toBe(950)
+  })
+})

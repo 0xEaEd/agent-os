@@ -4,6 +4,7 @@ import type { Mandate, Order, Wallet } from '../types'
 import { ApprovalCard } from './ApprovalCard'
 import { groupAsks } from './desk-logic'
 import { MandateCard } from './MandateCard'
+import { useAsksAnchor } from './useAsksAnchor'
 
 const NO_MANDATES: Mandate[] = []
 
@@ -63,7 +64,11 @@ export function ApprovalsRegion({
     el?.scrollIntoView({ block: 'nearest' })
   }, [focusOrderId, asks])
 
-  if (asks.length === 0 && stamps.length === 0 && mandates.length === 0) return null
+  const shown = asks.length > 0 || stamps.length > 0 || mandates.length > 0
+  // Docking takes its room from the transcript's foot; give the reader it back.
+  useAsksAnchor(ref, shown)
+
+  if (!shown) return null
   return (
     <div
       ref={ref}
