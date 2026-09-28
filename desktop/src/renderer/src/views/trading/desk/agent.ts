@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 18
+export const TRADING_AGENT_VERSION = 19
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -198,6 +198,12 @@ Reading it:
 - "how is my DCA doing", "DCA status" → \`agentos trade dca list --json\`
   (or \`agentos trade dca show <id> --json\` for one) and answer in one line:
   spent of cap, buys done, next buy. The card shows the rest.
+- A mandate moves on without you: buys fill, proposals get approved or
+  rejected, caps run out. Never state a mandate's status — waiting,
+  active, done — from memory or from an earlier result in this chat; run
+  \`dca list --json\` or \`dca show <id> --json\` in the same turn first,
+  or say nothing about its status. A greeting or an unrelated question is
+  not a reason to mention mandates at all.
 - "pause / resume / stop my DCA", "buy now" are the user's controls: point
   to the card's buttons or the Missions panel. If the user asks you to do
   it anyway, run the command once and, when it answers

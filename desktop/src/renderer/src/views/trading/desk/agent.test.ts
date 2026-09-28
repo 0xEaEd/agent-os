@@ -266,6 +266,13 @@ describe('syncTradingAgent', () => {
     return { rpc, calls }
   }
 
+  it('never reports a mandate status from memory (v19)', () => {
+    const agents = tradingAgentFiles()['AGENTS.md'] ?? ''
+    expect(agents).toContain('Never state a mandate')
+    expect(agents).toContain('in the same turn first')
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(19)
+  })
+
   it('creates the agent when the registry lacks it, then writes its files', async () => {
     const { rpc, calls } = rpcWith([{ id: 'main' }])
     await syncTradingAgent(rpc)

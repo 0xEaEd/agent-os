@@ -554,18 +554,26 @@ export function scheduleLabel(schedule: DcaSchedule): string {
   return schedule.label || everyLabel(schedule.everySeconds)
 }
 
-/** "3 h 12 m", "12 m 5 s", "42 s", "1 d 4 h" for a positive span. */
-export function formatCountdown(ms: number): string {
+/**
+ * "3 h 12 m", "12 m 5 s", "42 s", "1 d 4 h" for a positive span. `trim` drops a
+ * zero second part for a whole span: "1 h", "2 m", "1 d" (not "1 h 0 m").
+ */
+export function formatCountdown(ms: number, trim = false): string {
   const total = Math.max(0, Math.floor(ms / 1000))
   const days = Math.floor(total / 86_400)
   const hours = Math.floor((total % 86_400) / 3600)
   const minutes = Math.floor((total % 3600) / 60)
   const seconds = total % 60
-  if (days > 0) return t('chat.dcaDurationDays', { days: String(days), hours: String(hours) })
+  if (days > 0) {
+    if (trim && hours === 0) return t('chat.dcaDurationDaysOnly', { days: String(days) })
+    return t('chat.dcaDurationDays', { days: String(days), hours: String(hours) })
+  }
   if (hours > 0) {
+    if (trim && minutes === 0) return t('chat.dcaDurationHoursOnly', { hours: String(hours) })
     return t('chat.dcaDurationHours', { hours: String(hours), minutes: String(minutes) })
   }
   if (minutes > 0) {
+    if (trim && seconds === 0) return t('chat.dcaDurationMinutesOnly', { minutes: String(minutes) })
     return t('chat.dcaDurationMinutes', { minutes: String(minutes), seconds: String(seconds) })
   }
   return t('chat.dcaDurationSeconds', { seconds: String(seconds) })
@@ -584,9 +592,12 @@ function msUntil(iso: string | null, nowMs: number): number | null {
 export function nextBuyText(mandate: DcaMandate, nowMs: number): string {
   switch (mandate.status) {
     case 'awaiting_approval': {
+      const every = mandate.schedule.everySeconds
       const first = mandate.schedule.startNow
         ? t('chat.dcaFirstOnApproval')
-        : t('chat.dcaFirstAfterApproval')
+        : every > 0
+          ? t('chat.dcaFirstAfter', { time: formatCountdown(every * 1000, true) })
+          : t('chat.dcaFirstAfterApproval')
       const left = msUntil(mandate.expiresAt, nowMs)
       if (left === null) return first
       if (left <= 0) return `${first} · ${t('chat.dcaProposalLapsing')}`
@@ -611,6 +622,17 @@ export function nextBuyText(mandate: DcaMandate, nowMs: number): string {
     default:
       return ''
   }
+}
+
+/**
+ * The engine's `statusReason` for the hero: "user" (the owner acted) reads
+ * "by you", "user: <note>" reads "by you: <note>"; anything else as given.
+ */
+export function statusReasonText(reason: string): string {
+  if (reason === 'user') return t('chat.dcaReasonByYou')
+  const note = /^user:\s*(.*)$/s.exec(reason)
+  if (note) return t('chat.dcaReasonByYouNote', { note: note[1]!.trim() })
+  return reason
 }
 
 /** Milliseconds the countdown line of `mandate` has left, or null when it does not tick. */
@@ -923,6 +945,40 @@ function localDay(iso: string): string {
   return Number.isNaN(at) ? '' : new Date(at).toDateString()
 }
 
+/** Decimals formatDcaPrice gives `price`: $2,860 → 0, $1.24 → 2, $0.00123 → 5. */
+function priceDecimals(price: number): number {
+  if (!(price > 0) || price >= 1000) return 0
+  if (price >= 1) return 2
+  return -Math.floor(Math.log10(price)) + 2
+}
+
+/**
+ * The y axis's two labels (top, bottom), both at one precision: the average
+ * label's, plus as many decimals (up to 6) as it takes for the two to differ
+ * visibly — distinct, and a last-digit step no wider than a fifth of the band,
+ * so rounding cannot misstate it: "$1.005" / "$0.995", never "$1.01" / "$1.00".
+ */
+export function dcaYAxisLabels(model: DcaChartModel): [string, string] {
+  const ref = model.avg !== null && model.avg > 0 ? model.avg : (model.hi + model.lo) / 2
+  if (ref < 1e-4) {
+    // Subscript-zero prices: widen by significant digits instead ($0.0₅921).
+    let sig = 3
+    while (sig < 6 && formatSmall(model.hi, sig) === formatSmall(model.lo, sig)) sig += 1
+    return [`$${formatSmall(model.hi, sig)}`, `$${formatSmall(model.lo, sig)}`]
+  }
+  const base = priceDecimals(ref)
+  const fmt = (value: number, digits: number) => `$${grouped(value, digits, digits)}`
+  let digits = base
+  const span = model.hi - model.lo
+  while (
+    digits < 6 &&
+    (fmt(model.hi, digits) === fmt(model.lo, digits) || 10 ** -digits > span / 5)
+  ) {
+    digits += 1
+  }
+  return [fmt(model.hi, digits), fmt(model.lo, digits)]
+}
+
 /**
  * The x axis's two end labels (first, last; last '' when there is one
  * column): dates, or local times when every plotted run fell on the same
@@ -1214,15 +1270,13 @@ function statsSection(mandate: DcaMandate): HTMLElement {
         )
   stats.append(stat('unrealized', t('chat.dcaStatUnrealized'), unrealized, unrealizedSub))
 
-  const gas = usdNode('dca-stat__value', acquired.gasUsd, formatUsd)
+  // No buy yet and no gas spent: "—" like the other cells, not "$0.00".
+  const gasUsd = !bought && acquired.gasUsd === 0 ? null : acquired.gasUsd
+  const gas = usdNode('dca-stat__value', gasUsd, formatUsd)
   const buys = mandate.runs.done
   const gasSub =
-    acquired.gasUsd !== null && buys > 0
-      ? el(
-          'span',
-          'dca-stat__sub',
-          t('chat.dcaGasPerBuy', { usd: formatUsd(acquired.gasUsd / buys) }),
-        )
+    gasUsd !== null && buys > 0
+      ? el('span', 'dca-stat__sub', t('chat.dcaGasPerBuy', { usd: formatUsd(gasUsd / buys) }))
       : null
   stats.append(stat('gas', t('chat.dcaStatGas'), gas, gasSub))
   return stats
@@ -1508,11 +1562,12 @@ function buildChart(mandate: DcaMandate, ctx: DcaRenderContext): HTMLElement {
   // The y axis: the top and bottom of the price range, at the left edge, so
   // near-equal bars read as "within a hair of each other", not as a trend.
   const yAxis = hidden(el('div', 'dca-chart__y'))
+  const [yTop, yBottom] = dcaYAxisLabels(model)
   for (const [edge, price, y] of [
-    ['top', model.hi, 0],
-    ['bottom', model.lo, 100],
+    ['top', yTop, 0],
+    ['bottom', yBottom, 100],
   ] as const) {
-    const label = el('span', 'dca-chart__ylabel', formatDcaPrice(price))
+    const label = el('span', 'dca-chart__ylabel', price)
     label.dataset.edge = edge
     label.style.top = plotTop(y)
     yAxis.append(label)
@@ -1762,7 +1817,9 @@ function buildMandate(payload: DcaMandatePayload, ctx: DcaRenderContext): HTMLEl
     el('span', 'dca-card__every', ` ${scheduleLabel(mandate.schedule)}`),
   )
   hero.append(line, nextNode(mandate, 'dca-card__next', nowMs))
-  if (mandate.statusReason) hero.append(el('p', 'dca-card__reason', mandate.statusReason))
+  if (mandate.statusReason) {
+    hero.append(el('p', 'dca-card__reason', statusReasonText(mandate.statusReason)))
+  }
   card.append(hero)
 
   card.append(progressSection(mandate))

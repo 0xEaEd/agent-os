@@ -20,6 +20,7 @@ import {
   dcaProgress,
   dcaReadMethod,
   dcaTickDelay,
+  dcaYAxisLabels,
   everyLabel,
   formatCountdown,
   formatDcaPrice,
@@ -31,6 +32,8 @@ import {
   nextBuyText,
   normalizeDcaPayload,
   normalizeDcaRequest,
+  statusReasonText,
+  type DcaChartModel,
   type DcaMandate,
   type DcaMandatePayload,
   type DcaMandatesPayload,
@@ -345,6 +348,12 @@ describe('countdown', () => {
     expect(formatCountdown(12 * 60_000 + 5_000)).toBe('12 m 5 s')
     expect(formatCountdown(42_000)).toBe('42 s')
     expect(formatCountdown(28 * 3_600_000)).toBe('1 d 4 h')
+    // Trimmed: a whole span drops its zero second part.
+    expect(formatCountdown(3_600_000)).toBe('1 h 0 m')
+    expect(formatCountdown(3_600_000, true)).toBe('1 h')
+    expect(formatCountdown(120_000, true)).toBe('2 m')
+    expect(formatCountdown(86_400_000, true)).toBe('1 d')
+    expect(formatCountdown(90_000, true)).toBe('1 m 30 s')
   })
 
   it('says when the next buy is, or why there is none', () => {
@@ -357,7 +366,13 @@ describe('countdown', () => {
     )
     expect(
       nextBuyText({ ...awaiting, schedule: { ...awaiting.schedule, startNow: false } }, FETCHED_AT),
-    ).toMatch(/^first buy one interval after approval/)
+    ).toBe('first buy after 6 h · proposal expires in 23 h 43 m')
+    expect(
+      nextBuyText(
+        { ...awaiting, schedule: { ...awaiting.schedule, startNow: false, everySeconds: 120 } },
+        FETCHED_AT,
+      ),
+    ).toMatch(/^first buy after 2 m · /)
     const completed = payload<DcaMandatePayload>('mandate-completed').mandate
     expect(nextBuyText(completed, FETCHED_AT)).toBe('completed · no more buys')
     expect(nextBuyText({ ...active, status: 'paused' }, FETCHED_AT)).toBe(
@@ -556,6 +571,21 @@ describe('buildDcaCard — mandate', () => {
     expect(card.querySelector('.dca-progress__runs')).toHaveTextContent('0 buys')
   })
 
+  it('says "by you" for a reason the owner gave', () => {
+    expect(statusReasonText('user')).toBe('by you')
+    expect(statusReasonText('user: too volatile')).toBe('by you: too volatile')
+    expect(statusReasonText('cap reached')).toBe('cap reached')
+    expect(statusReasonText('username taken')).toBe('username taken')
+    for (const status of ['stopped', 'rejected', 'paused'] as const) {
+      const card = render(normalizeDcaPayload(mandatePayloadFor(status, { statusReason: 'user' }))!)
+      expect(card.querySelector('.dca-card__reason')).toHaveTextContent(/^by you$/)
+    }
+    const noted = render(
+      normalizeDcaPayload(mandatePayloadFor('stopped', { statusReason: 'user: enough ETH' }))!,
+    )
+    expect(noted.querySelector('.dca-card__reason')).toHaveTextContent(/^by you: enough ETH$/)
+  })
+
   it('draws a completed mandate with its reason and no controls', () => {
     const card = render(payload('mandate-completed'), ctx({ canWrite: true }))
     expect(card.dataset.dcaStatus).toBe('completed')
@@ -625,6 +655,7 @@ describe('buildDcaCard — mandate', () => {
         vsAvgPct: 0,
         unrealizedUsd: 0,
         amount: { raw: '0', human: '0', usd: 0 },
+        gasUsd: 0,
       })
       m.history = (m.history as Json[])
         .filter((r) => r.status === 'skipped')
@@ -642,6 +673,10 @@ describe('buildDcaCard — mandate', () => {
     expect(value('unrealized')).toHaveTextContent(/^—$/)
     expect(value('unrealized')).toHaveAttribute('data-dca-no-price', 'true')
     expect(value('unrealized').dataset.dcaTone).toBeUndefined()
+    // Not "$0.00" gas either.
+    expect(value('gas')).toHaveTextContent(/^—$/)
+    expect(value('gas')).toHaveAttribute('data-dca-no-price', 'true')
+    expect(card.querySelector('[data-dca-stat="gas"] .dca-stat__sub')).toBeNull()
     // No "vs now 0 %", no "on $0 spent".
     expect(card.querySelector('[data-dca-stat="avg"] .dca-stat__sub')).toBeNull()
     expect(card.querySelector('[data-dca-stat="unrealized"] .dca-stat__sub')).toBeNull()
@@ -893,12 +928,28 @@ describe('buys chart axes', () => {
     expect(y).toHaveAttribute('aria-hidden', 'true')
     const labels = [...y.querySelectorAll<HTMLElement>('.dca-chart__ylabel')]
     expect(labels.map((l) => l.dataset.edge)).toEqual(['top', 'bottom'])
-    expect(labels.map((l) => l.textContent)).toEqual([
-      formatDcaPrice(model.hi),
-      formatDcaPrice(model.lo),
-    ])
+    expect(labels.map((l) => l.textContent)).toEqual(dcaYAxisLabels(model))
     expect(labels.map((l) => l.textContent)).toEqual(['$2,513', '$2,487'])
     expect(labels[0]!.style.top).toContain('var(--dca-plot-pad)')
+  })
+
+  it('gives both y labels one precision, widened until they differ', () => {
+    const axis = (avg: number | null, hi: number, lo: number) =>
+      dcaYAxisLabels({ avg, hi, lo } as DcaChartModel)
+    // The average's precision already resolves the band: both at 2 decimals.
+    expect(axis(40, 40.62, 39.38)).toEqual(['$40.62', '$39.38'])
+    // A ±0.5 % band at 2 decimals reads "$1.01" / "$1.00": widen both to 3.
+    expect(axis(1, 1.0051, 0.9951)).toEqual(['$1.005', '$0.995'])
+    expect(axis(1, 1.004, 1.001)).toEqual(['$1.0040', '$1.0010'])
+    // Whole dollars above $1,000.
+    expect(axis(2500, 2513.2, 2487.4)).toEqual(['$2,513', '$2,487'])
+    expect(axis(2500, 2500.4, 2500.1)).toEqual(['$2,500.40', '$2,500.10'])
+    // Sub-dollar prices start at the average's significant digits.
+    expect(axis(0.0123, 0.01241, 0.01219)).toEqual(['$0.01241', '$0.01219'])
+    // Stops at 6 decimals even when they still match.
+    expect(axis(1, 1.0000001, 1.0000002)).toEqual(['$1.000000', '$1.000000'])
+    // Subscript-zero prices widen by significant digits.
+    expect(axis(1.2e-6, 1.2345e-6, 1.2341e-6)).toEqual(['$0.0₅12345', '$0.0₅12341'])
   })
 
   it('shows times, not the same date twice, when every run fell on one day', () => {
