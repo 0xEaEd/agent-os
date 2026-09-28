@@ -39,6 +39,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   things the chat does not show on its own.
 
 ### Fixed
+- `apply_patch` refused every patch a GPT model wrote. OpenAI models open
+  hunks on a bare `@@` (or `@@ <a line to search past>`) with no line numbers,
+  and the parser knew only the numbered `@@@ -a,b +c,d @@@` header, so each
+  call failed with "expected a '@@@ ' hunk header" and the retry with a bare
+  `@@@` failed the same way. Context-anchored hunks are now located by their
+  context and removed lines (after the anchor, from where the previous hunk
+  ended), along with a headerless first hunk, `*** End of File`, and a
+  unified-diff `@@ -a,b +c,d @@` header. The located lines must still match
+  the file exactly, and a miss in any file leaves every file untouched (#3490).
 - Security: secret redaction and the payload guard matched connection strings
   against a scheme list that carried `redis` and `amqp` but not their TLS
   spellings, so `rediss://user:password@host` (what `REDIS_TLS_URL` holds) and
