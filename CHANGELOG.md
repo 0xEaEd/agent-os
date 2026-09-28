@@ -37,6 +37,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   streaming reply is visible in the chat itself; the word only repeated it.
   AWAITING and RUNNING stay: a pending decision and a mission in flight are
   things the chat does not show on its own.
+- Desktop: the inline new-project row in the sidebar no longer draws a ring
+  of its own around the whole row, so the focused name field shows one
+  outline instead of two (#3484).
 
 ### Fixed
 - Chat (desktop and Web UI): a message queued while a turn was running no
