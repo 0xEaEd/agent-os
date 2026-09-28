@@ -13,6 +13,7 @@ import {
   sectionRows,
   type SectionLabels,
   type SessionView,
+  visibleSlots,
 } from './logic'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -208,5 +209,30 @@ describe('sectionRows', () => {
       ['One', ['a']],
       ['No project', ['b', 'd']],
     ])
+  })
+})
+
+describe('visibleSlots', () => {
+  const slots = (out: ReturnType<typeof visibleSlots>) =>
+    out.map((s) => `${s.nested ? 'folder' : 'list'}:${s.row.key}`)
+
+  it('runs top to bottom: open folders first, then each section in turn', () => {
+    const out = visibleSlots(
+      [[row('f1'), row('f2')], [row('g1')]],
+      [{ items: [row('a'), row('b')] }, { items: [row('c')] }],
+    )
+    expect(slots(out)).toEqual([
+      'folder:f1',
+      'folder:f2',
+      'folder:g1',
+      'list:a',
+      'list:b',
+      'list:c',
+    ])
+  })
+
+  it('lists both copies of a pinned filed chat, each where it is drawn', () => {
+    const out = visibleSlots([[row('p'), row('f')]], [{ items: [row('p'), row('a')] }])
+    expect(slots(out)).toEqual(['folder:p', 'folder:f', 'list:p', 'list:a'])
   })
 })

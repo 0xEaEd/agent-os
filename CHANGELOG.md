@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Desktop: select several sessions in the sidebar and act on them at once.
+  Cmd-click toggles a row, Shift-click selects the range from the last row
+  clicked (in the order shown, chats in open project folders included),
+  Cmd+A selects every row shown and Escape clears. Right-clicking inside the
+  selection opens one menu for all of it: Pin, Mark as unread, Archive and
+  **Delete N sessions…**, which asks once and sends a single
+  `sessions.delete` with `keys`. Rows the gateway could not delete stay
+  selected and a toast gives the count. A plain click still opens the chat
+  and clears the selection. Deleting one session also reads the gateway's
+  per-key `errors` now, instead of reporting a failed delete as done (#3485).
 - Trading: `agentos trade lp pool|ranges|position|positions` read Uniswap V4
   liquidity on Base and Robinhood Chain — a token's deepest pool (reserves,
   TVL, market cap, launcher, whether the LP is locked), its liquidity

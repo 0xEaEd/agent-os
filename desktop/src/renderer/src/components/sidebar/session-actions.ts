@@ -18,6 +18,45 @@ interface HistoryMessage {
 /** Enough of a transcript for an export; the chat view pages at 50. */
 const EXPORT_LIMIT = 500
 
+/** `sessions.delete` answers per key: the ones it removed, and `"<key>: <why>"` for the rest. */
+export interface DeleteReply {
+  deleted?: unknown
+  errors?: unknown
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : []
+}
+
+/**
+ * Which of `keys` a `sessions.delete` reply says are gone. A reply without a
+ * `deleted` list counts every key the errors do not name.
+ */
+export function deleteOutcome(
+  keys: readonly string[],
+  reply: DeleteReply | null | undefined,
+): { deleted: string[]; failed: string[]; reasons: string[] } {
+  const reasons = strings(reply?.errors)
+  const listed = Array.isArray(reply?.deleted) ? new Set(strings(reply.deleted)) : null
+  // Keys carry colons, so an error is matched on the whole "<key>: " prefix.
+  const gone = (k: string) =>
+    listed ? listed.has(k) : !reasons.some((r) => r.startsWith(`${k}: `))
+  return {
+    deleted: keys.filter(gone),
+    failed: keys.filter((k) => !gone(k)),
+    reasons: reasons.map((r) => {
+      const key = keys.find((k) => r.startsWith(`${k}: `))
+      return key ? r.slice(key.length + 2) : r
+    }),
+  }
+}
+
+/** The chat on screen is this session's. */
+function showing(pathname: string, key: string): boolean {
+  const path = decodeURIComponent(pathname)
+  return path === `/sessions/${key}` || path.startsWith(`/sessions/${key}/`)
+}
+
 /**
  * What the row's menu can do to a session on the gateway: rename, export,
  * delete, copy its id. The local marks (pin, archive, unread) are the
@@ -93,18 +132,31 @@ export function useSessionActions(row: SessionRow): {
   }, [rpc, key])
 
   const remove = useCallback(async () => {
+    let reply: DeleteReply | undefined
     try {
-      await rpc.call('sessions.delete', { key })
+      reply = await rpc.call<DeleteReply>('sessions.delete', { key })
     } catch (err) {
       toast.error(`${t('session.toast.deleteFailed')}: ${errorText(err)}`, {
         id: 'session-delete-err',
       })
       return false
     }
+    // The gateway reports a key it could not delete in `errors`, not as a throw.
+    const { failed, reasons } = deleteOutcome([key], reply)
+    if (failed.length > 0) {
+      const why = reasons[0]
+      toast.error(
+        why ? `${t('session.toast.deleteFailed')}: ${why}` : t('session.toast.deleteFailed'),
+        {
+          id: 'session-delete-err',
+        },
+      )
+      return false
+    }
     forget(key)
     toast.success(t('session.toast.deleted'), { id: 'session-delete' })
     // The chat on screen was this session: leave it before the list refetches.
-    if (decodeURIComponent(pathname).startsWith(`/sessions/${key}`)) {
+    if (showing(pathname, key)) {
       void navigate('/sessions', { replace: true })
     }
     await refresh()
@@ -112,6 +164,56 @@ export function useSessionActions(row: SessionRow): {
   }, [rpc, key, forget, pathname, navigate, refresh])
 
   return { rename, copyId, exportMarkdown, remove }
+}
+
+/**
+ * Delete several sessions in one `sessions.delete` call (the sidebar's
+ * multi-selection). Resolves with the keys that went and the ones that did
+ * not; a turn running in a deleted session is cancelled by the gateway.
+ */
+export function useRemoveSessions(): (
+  keys: readonly string[],
+) => Promise<{ deleted: string[]; failed: string[] }> {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const forget = useSessionMarks((s) => s.forget)
+
+  return useCallback(
+    async (keys) => {
+      if (keys.length === 0) return { deleted: [], failed: [] }
+      let reply: DeleteReply | undefined
+      try {
+        reply = await rpc.call<DeleteReply>('sessions.delete', { keys: [...keys] })
+      } catch (err) {
+        toast.error(`${t('session.bulk.toast.deleteFailed')}: ${errorText(err)}`, {
+          id: 'session-delete-err',
+        })
+        return { deleted: [], failed: [...keys] }
+      }
+      const { deleted, failed } = deleteOutcome(keys, reply)
+      for (const k of deleted) forget(k)
+      if (failed.length === 0) {
+        toast.success(t('session.bulk.toast.deleted').replace('{n}', String(deleted.length)), {
+          id: 'session-delete',
+        })
+      } else {
+        toast.error(
+          t('session.bulk.toast.partial')
+            .replace('{done}', String(deleted.length))
+            .replace('{total}', String(keys.length)),
+          { id: 'session-delete-err' },
+        )
+      }
+      if (deleted.some((k) => showing(pathname, k))) {
+        void navigate('/sessions', { replace: true })
+      }
+      await queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      return { deleted, failed }
+    },
+    [rpc, queryClient, navigate, pathname, forget],
+  )
 }
 
 function downloadText(text: string, filename: string): void {

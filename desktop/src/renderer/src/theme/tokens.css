@@ -530,6 +530,31 @@
   .mac-session[data-unread='true'] .mac-session-title {
     font-weight: 600;
   }
+  /* In a multi-row selection (Cmd-click, Shift-click): an accent tint, apart
+     from the open chat's grey, so the selection and the open chat both read. */
+  .mac-session[data-selected='true'],
+  .mac-session-item[data-menu='true'] .mac-session[data-selected='true'] {
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
+  }
+  .mac-session[data-selected='true'][aria-current='page'] {
+    background: color-mix(in srgb, var(--primary) 26%, transparent);
+  }
+  /* The batch delete alert: the first few titles, then what it will do. */
+  .mac-bulk-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .mac-bulk-titles {
+    min-width: 0;
+    color: var(--foreground);
+  }
+  .mac-bulk-titles li {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
   .mac-session-dot {
     width: 5px;
     height: 5px;
