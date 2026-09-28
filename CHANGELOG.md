@@ -25,6 +25,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   now create mandates instead of cron jobs; existing cron-based DCA
   missions keep running unchanged. Contract: `docs/dca.md`.
 
+### Fixed
+- Chat (web UI and desktop): the copy button on an assistant reply keeps the
+  reply's line breaks. It read the rendered bubble's `textContent`, which
+  drops every `<br>` and paragraph break, so a multi-line reply pasted as one
+  run-on line. The copied text now follows what is drawn: soft line breaks,
+  blank lines between paragraphs, list markers, tab-separated table cells and
+  verbatim code blocks, without the code block's language label or its own
+  Copy button.
+
 ## [2026.9.28] - 2026-09-28
 
 ### Added
