@@ -209,6 +209,149 @@ export interface Order {
   tokenId?: string | null
   received?: { base: LpPlanAmount; quote: LpPlanAmount } | null
   spent?: { base: LpPlanAmount; quote: LpPlanAmount } | null
+  /** A buy a DCA mandate fired carries the mandate's id (docs/dca.md); null otherwise. */
+  mandateId?: string | null
+}
+
+/* ── DCA mandates (docs/dca.md) ──────────────────────────────────────────── */
+
+export type MandateStatus =
+  'awaiting_approval' | 'active' | 'paused' | 'completed' | 'stopped' | 'rejected' | 'expired'
+
+/** `pending`: the order is placed and not settled yet; `parked`: it waits for the user. */
+export type MandateRunStatus =
+  'pending' | 'filled' | 'parked' | 'skipped' | 'failed' | 'expired' | 'rejected'
+
+/** The card payload's chain, as the LP cards carry it. */
+export interface CardChain {
+  id: number
+  key: string
+  name: string
+  explorer?: string
+}
+
+/** The card payload's token: priced when the engine knows it, null otherwise. */
+export interface CardToken {
+  address: string
+  symbol: string
+  decimals: number
+  priceUsd: number | null
+}
+
+export interface CardWallet {
+  address: string
+  label: string | null
+  inApp?: boolean
+}
+
+/** One attempt of a mandate: a buy, a skip, a failure, or a buy waiting on the user. */
+export interface MandateRun {
+  n: number
+  at: string
+  manual: boolean
+  status: MandateRunStatus
+  /** Human-readable: "ETH at $3,120 above $3,000". */
+  reason: string | null
+  /** Machine-readable: max_price | daily_cap | insufficient_balance | cap_reached | trading.<code>. */
+  reasonCode?: string | null
+  usd: number | null
+  amount: LpPlanAmount | null
+  priceUsd: number | null
+  orderId: string | null
+  txHash: string | null
+  explorerUrl: string | null
+  gasUsd: number | null
+}
+
+/**
+ * A recurring buy the engine owns and runs by itself. Every figure is the
+ * engine's: the desk never counts a budget, it reads `budget`.
+ */
+export interface Mandate {
+  id: string
+  name: string
+  status: MandateStatus
+  statusReason: string | null
+  chain: CardChain
+  wallet: CardWallet
+  /** What is bought. */
+  token: CardToken
+  /** What is spent. */
+  quote: CardToken
+  schedule: {
+    everySeconds: number
+    label: string
+    startNow: boolean
+    anchorAt: string | null
+    nextRunAt: string | null
+    lastRunAt: string | null
+  }
+  budget: {
+    usdPerRun: number
+    capUsd: number
+    spentUsd: number
+    reservedUsd: number
+    remainingUsd: number
+    /** spent / cap, 0–1. */
+    progress: number
+  }
+  runs: { done: number; max: number | null; skipped: number; failed: number; attempts: number }
+  guards: {
+    maxPriceUsd: number | null
+    approvalThresholdUsd: number
+    dailyCapUsd: number
+    slippagePct: number | null
+    buysNeedApproval: boolean
+  }
+  acquired: {
+    amount: LpPlanAmount
+    avgPriceUsd: number | null
+    currentPriceUsd: number | null
+    vsAvgPct: number | null
+    unrealizedUsd: number | null
+    gasUsd: number
+  }
+  /** Newest first, at most 50. */
+  history: MandateRun[]
+  initiator: 'agent' | 'manual'
+  sessionKey: string | null
+  createdAt: string
+  updatedAt: string
+  approvedAt: string | null
+  expiresAt: string | null
+}
+
+interface MandateEnvelope {
+  version: number
+  fetchedAt: string
+  warnings: string[]
+  request?: { kind: 'get' | 'list'; params: Record<string, unknown> }
+}
+
+/** What every `trading.dca.*` write and `trading.dca.get` answer. */
+export interface MandatePayload extends MandateEnvelope {
+  kind: 'mandate'
+  mandate: Mandate
+  /** Only in the answer of `trading.dca.run`. */
+  run?: MandateRun
+}
+
+/** What `trading.dca.list` answers: live first, then newest. */
+export interface MandateListPayload extends MandateEnvelope {
+  kind: 'mandates'
+  mandates: Mandate[]
+  totals: {
+    count: number
+    active: number
+    spentUsd: number
+    capUsd: number
+    acquiredUsd: number | null
+  }
+}
+
+/** Still the user's to act on: awaiting a decision, running, or paused. */
+export function isLiveMandate(status: MandateStatus): boolean {
+  return status === 'awaiting_approval' || status === 'active' || status === 'paused'
 }
 
 export function isLpKind(kind: OrderKind | undefined | null): boolean {

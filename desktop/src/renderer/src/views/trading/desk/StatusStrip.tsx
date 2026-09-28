@@ -1,9 +1,14 @@
 import { LayoutPanelLeft, MessageSquare } from 'lucide-react'
 import type { RawJob } from '@/views/cron/logic'
 import { t } from '~/i18n'
+import { useNow } from '~/lib/use-now'
 import { badgeText } from '../logic'
+import type { Mandate } from '../types'
 import { missionStatus, statusWord, type StatusWord } from './desk-logic'
-import { missionWord } from './MissionControls'
+import { mandateProgressText } from './mandate-logic'
+import { mandateWord, missionWord } from './MissionControls'
+
+const NO_MANDATES: Mandate[] = []
 import type { DeskMode } from './mode-logic'
 
 /**
@@ -21,6 +26,7 @@ export function StatusStrip({
   sessionSlot,
   missions = [],
   running = new Set(),
+  mandates = NO_MANDATES,
   sessionPending = 0,
   globalPending = null,
   deskMode = false,
@@ -33,6 +39,8 @@ export function StatusStrip({
   sessionSlot?: (el: HTMLDivElement | null) => void
   missions?: RawJob[]
   running?: ReadonlySet<string>
+  /** The desk's DCA mandates; they share the two mission slots, after the cron ones. */
+  mandates?: Mandate[]
   sessionPending?: number
   /** null while loading or errored. */
   globalPending?: number | null
@@ -46,6 +54,9 @@ export function StatusStrip({
     missionRunning: missions.some((m) => m.id && running.has(m.id)),
   })
   const shown = missions.slice(0, 2)
+  const shownMandates = mandates.slice(0, Math.max(0, 2 - shown.length))
+  const total = missions.length + mandates.length
+  const now = useNow(trading && shownMandates.length ? 30_000 : 0)
   return (
     <div className="trd-strip" data-mode={mode} data-testid="status-strip">
       <div className="trd-strip__left">
@@ -63,8 +74,24 @@ export function StatusStrip({
               )
             })
           : null}
-        {trading && missions.length > shown.length ? (
-          <span className="trd-strip__more">+{missions.length - shown.length}</span>
+        {trading
+          ? shownMandates.map((m) => (
+              <span
+                key={m.id}
+                className="trd-strip__mission"
+                data-kind="mandate"
+                data-state={m.status}
+                data-testid="strip-mandate"
+              >
+                <b>{m.name}</b>
+                <span>
+                  {mandateWord(m, now)} · <span className="trd-mono">{mandateProgressText(m)}</span>
+                </span>
+              </span>
+            ))
+          : null}
+        {trading && total > shown.length + shownMandates.length ? (
+          <span className="trd-strip__more">+{total - shown.length - shownMandates.length}</span>
         ) : null}
       </div>
       <div className="trd-strip__centre">

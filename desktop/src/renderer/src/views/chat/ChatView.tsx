@@ -233,7 +233,10 @@ function ConnectedChat({
   // At the desk an LP card's Collect/Remove calls the write RPC over this
   // (operator) connection; the order parks, and its approval card joins the
   // desk's own asks — it has no session, so the desk is told its id. A plain
-  // chat hands the transcript nothing, and the cards carry no buttons.
+  // chat hands the transcript nothing, and the cards carry no buttons. A DCA
+  // card (docs/dca.md) takes the same pair: its Approve & start, Pause, Buy
+  // now and Stop call `trading.dca.*` here, and a Buy now that parks an order
+  // lands on that order's card.
   const [ownOrderIds, setOwnOrderIds] = useState<ReadonlySet<string>>(() => new Set())
   const atDesk = desk !== null
   const lpActions = useMemo<LpActions | null>(
@@ -274,6 +277,7 @@ function ConnectedChat({
     onSessionKeyResolved: switchToSession,
     routePinned: route.isPinned,
     lpActions,
+    dcaActions: lpActions,
   })
   const attachments = useAttachments()
   useEffect(() => {

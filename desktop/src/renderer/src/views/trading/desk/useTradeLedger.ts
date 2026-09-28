@@ -10,7 +10,8 @@ import { providerLabel, type TradingStatus } from '../types'
 import {
   commandFromToolInput,
   LEDGER_GROUP_MIN,
-  lpCallFromResult,
+  cardCallFromResult,
+  isDcaKind,
   parseTradeCommand,
   parseTradeResult,
   txExplorerUrl,
@@ -110,7 +111,7 @@ function glyphFor(call: TradeCall, outcome: TradeOutcome | null): string {
     case 'lp_add':
       return '◇'
     default:
-      return '›'
+      return isDcaKind(call.kind) ? '↻' : '›'
   }
 }
 
@@ -406,7 +407,7 @@ export function useTradeLedger(
         const input = details.querySelector('.chat-tool-input')?.textContent ?? ''
         call =
           parseTradeCommand(commandFromToolInput(input)) ??
-          lpCallFromResult(details.querySelector('.chat-tool-result-preview')?.textContent ?? '')
+          cardCallFromResult(details.querySelector('.chat-tool-result-preview')?.textContent ?? '')
         if (!call) return
       }
       const running = details.classList.contains('chat-tools-collapse--running')
@@ -505,7 +506,7 @@ export function useTradeLedger(
         entry.call =
           entry.call ??
           parseTradeCommand(commandFromToolInput(toolInput(payload))) ??
-          lpCallFromResult(toolResultText(payload))
+          cardCallFromResult(toolResultText(payload))
         if (!entry.call) {
           live.current.delete(id)
           return

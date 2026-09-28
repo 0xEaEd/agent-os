@@ -5,10 +5,12 @@ import {
   useQueryClient,
   type QueryClient,
 } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import { useConnection } from '@/stores/connection'
-import { QUOTE_REFRESH_MS } from '~/views/trading/logic'
+import { t, type MessageKey } from '~/i18n'
+import { errorText, QUOTE_REFRESH_MS } from '~/views/trading/logic'
 import { CHAINS } from '~/views/trading/types'
 import type {
   AllowanceList,
@@ -19,6 +21,9 @@ import type {
   Decoded,
   Entry,
   Limits,
+  Mandate,
+  MandateListPayload,
+  MandatePayload,
   NetworkStatus,
   Order,
   OrderKind,
@@ -69,6 +74,8 @@ export const TRADING_KEYS = {
   allowances: (wallet?: string, chainId?: number) =>
     ['trading', 'allowances', wallet ?? 'primary', chainId ?? 'all'] as const,
   network: ['trading', 'network'] as const,
+  /** DCA mandates (docs/dca.md): the live ones, or every one ever made. */
+  dca: (all = false) => ['trading', 'dca', all ? 'all' : 'live'] as const,
 }
 
 /** Gateway events after which trading data is stale. */
@@ -76,6 +83,7 @@ export const TRADING_EVENTS = [
   'trading.changed',
   'trading.approval.requested',
   'trading.order.finished',
+  'trading.dca.changed',
   '_hello',
 ] as const
 
@@ -688,4 +696,154 @@ export function useTokenSearch(first: number, query: string) {
     [stamps, first],
   )
   return { isFetching, tokens, debounced }
+}
+
+/* ── DCA mandates (docs/dca.md) ──────────────────────────────────────────── */
+
+const NO_MANDATES: Mandate[] = []
+
+/**
+ * The engine's DCA mandates: live ones (awaiting approval, active, paused),
+ * or every one with `all`. The key starts with `trading`, so `trading.changed`
+ * — which the engine emits on every mandate change — refreshes it, and
+ * `trading.dca.changed` is in TRADING_EVENTS for the same reason.
+ */
+export function useMandates(all = false, enabled = true) {
+  const rpc = useRpc()
+  const connected = useConnected()
+  const query = useQuery<MandateListPayload>({
+    queryKey: TRADING_KEYS.dca(all),
+    enabled: connected && enabled,
+    queryFn: async () => {
+      await rpc.waitForConnection()
+      return rpc.call<MandateListPayload>('trading.dca.list', all ? { all: true } : {})
+    },
+    // A countdown lives on the row; the list itself only moves when the
+    // engine says so (events), with a slow backstop for a missed one.
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+    placeholderData: (prev) => prev,
+  })
+  const mandates = useMemo(
+    () => (Array.isArray(query.data?.mandates) ? query.data.mandates : NO_MANDATES),
+    [query.data],
+  )
+  return { ...query, mandates, totals: query.data?.totals ?? null }
+}
+
+export type MandateAction = 'approve' | 'reject' | 'pause' | 'resume' | 'stop' | 'run'
+
+/** Operator writes on one mandate. Every answer is the full, refreshed card payload. */
+export interface MandateActions {
+  /** Resolves null when the engine refused (already toasted). */
+  create: (params: Record<string, unknown>) => Promise<MandatePayload | null>
+  update: (mandate: Mandate, patch: Record<string, unknown>) => Promise<MandatePayload | null>
+  approve: (mandate: Mandate) => Promise<MandatePayload | null>
+  reject: (mandate: Mandate, reason?: string) => Promise<MandatePayload | null>
+  pause: (mandate: Mandate) => Promise<MandatePayload | null>
+  resume: (mandate: Mandate) => Promise<MandatePayload | null>
+  stop: (mandate: Mandate, reason?: string) => Promise<MandatePayload | null>
+  /** "Buy now": one run at once; the payload carries `run`. */
+  run: (mandate: Mandate) => Promise<MandatePayload | null>
+  /** The mandate with a write in flight, or null. */
+  pending: string | null
+  busy: boolean
+}
+
+const DONE_KEYS: Record<MandateAction, MessageKey> = {
+  approve: 'trading.dca.toast.approved',
+  reject: 'trading.dca.toast.rejected',
+  pause: 'trading.dca.toast.paused',
+  resume: 'trading.dca.toast.resumed',
+  stop: 'trading.dca.toast.stopped',
+  run: 'trading.dca.toast.ran',
+}
+
+/**
+ * The mandate controls the desk offers (the Missions rows, the approval
+ * card, the DCA contract). Each write toasts its own outcome, keyed by the
+ * mandate so a second click replaces the first toast instead of stacking.
+ */
+export function useMandateActions(): MandateActions {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: ({
+      method,
+      params,
+    }: {
+      method: string
+      params: Record<string, unknown>
+      id: string | null
+    }) => rpc.call<MandatePayload>(method, params),
+    onSettled: () => invalidateTrading(queryClient),
+  })
+  const { mutateAsync } = mutation
+  const write = useCallback(
+    async (
+      method: string,
+      params: Record<string, unknown>,
+      id: string | null,
+      done: (res: MandatePayload) => void,
+    ): Promise<MandatePayload | null> => {
+      try {
+        const res = await mutateAsync({ method, params, id })
+        done(res)
+        return res ?? null
+      } catch (err) {
+        toast.error(`${t('trading.dca.toast.failed')}: ${errorText(err)}`, {
+          id: `dca-${id ?? 'new'}`,
+        })
+        return null
+      }
+    },
+    [mutateAsync],
+  )
+  const act = useCallback(
+    (action: MandateAction, mandate: Mandate, extra: Record<string, unknown> = {}) =>
+      write(`trading.dca.${action}`, { mandateId: mandate.id, ...extra }, mandate.id, (res) => {
+        const name = res?.mandate?.name || mandate.name
+        if (action === 'run') {
+          const run = res?.run
+          const text =
+            run?.status === 'parked'
+              ? t('trading.dca.toast.parked')
+              : run?.status === 'skipped' || run?.status === 'failed'
+                ? `${t('trading.dca.toast.runSkipped')}${run.reason ? `: ${run.reason}` : ''}`
+                : t(DONE_KEYS.run)
+          toast.success(`${text} · ${name}`, { id: `dca-${mandate.id}` })
+          return
+        }
+        toast.success(`${t(DONE_KEYS[action])} · ${name}`, { id: `dca-${mandate.id}` })
+      }),
+    [write],
+  )
+  const pending = mutation.isPending ? (mutation.variables?.id ?? null) : null
+  return {
+    create: (params) =>
+      write('trading.dca.create', params, null, (res) =>
+        toast.success(
+          `${
+            res?.mandate?.status === 'awaiting_approval'
+              ? t('trading.dca.toast.proposed')
+              : t('trading.dca.toast.created')
+          } · ${res?.mandate?.name ?? String(params.name ?? '')}`,
+          { id: 'dca-new' },
+        ),
+      ),
+    update: (mandate, patch) =>
+      write('trading.dca.update', { mandateId: mandate.id, ...patch }, mandate.id, (res) =>
+        toast.success(`${t('trading.dca.toast.updated')} · ${res?.mandate?.name ?? mandate.name}`, {
+          id: `dca-${mandate.id}`,
+        }),
+      ),
+    approve: (mandate) => act('approve', mandate),
+    reject: (mandate, reason) => act('reject', mandate, reason ? { reason } : {}),
+    pause: (mandate) => act('pause', mandate),
+    resume: (mandate) => act('resume', mandate),
+    stop: (mandate, reason) => act('stop', mandate, reason ? { reason } : {}),
+    run: (mandate) => act('run', mandate),
+    pending,
+    busy: mutation.isPending,
+  }
 }
