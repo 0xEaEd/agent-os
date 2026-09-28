@@ -30,6 +30,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   operator-only); with `--json` a confirmed order is followed by the
   refreshed position card. The phase-1 read methods now echo `request` so a
   card can refresh itself. Contract: `docs/lp-write.md`.
+- Trading: **DCA mandates** — `agentos trade dca create ETH --usd 10 --every
+  1d --cap 300` sets up a recurring buy the engine runs by itself. The cap,
+  the schedule, the optional `--runs` and `--max-price` guards are ledger
+  rows (schema v7: `mandates`, `mandate_runs`, `orders.mandate_id`), not a
+  prompt; each buy is an ordinary swap order under the usual guardrails
+  (threshold, daily cap, vault signing) and no LLM turn is spent on it.
+  From an agent a mandate parks as `awaiting_approval`; the operator
+  approves it once (desktop card, Missions panel, or `agentos trade dca
+  approve`). `dca list|show|approve|reject|pause|resume|stop|run|update`
+  round it out. Each `--json` command publishes an
+  `application/vnd.agentos.dca+json` card that the chat renders with a
+  live countdown to the next buy, a spent-of-cap progress bar, average buy
+  price vs now, a buys chart and, on the desktop, the controls (Approve &
+  start, Pause, Buy now, Stop). Gateway methods `trading.dca.*` (create/
+  get/list agent-callable, the rest operator-only). The desk's DCA presets
+  now create mandates instead of cron jobs; existing cron-based DCA
+  missions keep running unchanged. Contract: `docs/dca.md`.
 
 ### Changed
 - Desktop: the mode pill reads Chat | Trade, and the strip no longer says

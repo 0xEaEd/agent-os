@@ -64,13 +64,20 @@ create ──(operator)──────────────► active ─�
   `amount_usd = min(usd_per_run, remaining)`. Before placing the order the
   engine advances `next_run_at` (compare-and-set on the previous value) and
   inserts the run row, so a crash mid-run cannot buy twice.
-- **Run outcomes** (`mandate_runs.status`): `filled` (order confirmed),
+- **Run outcomes** (`mandate_runs.status`): `pending` (order placed, not
+  yet settled — buys run with `wait=False`), `filled` (order confirmed),
   `parked` (awaiting approval; becomes `filled` / `expired` / `rejected`
-  when the order settles), `skipped` (with `reason`: `max_price`,
+  when the order settles), `skipped` (with `reasonCode`: `max_price`,
   `daily_cap`, `insufficient_balance`, `cap_reached`), `failed` (quote or
-  execution failed, `reason` = the error code), `expired`, `rejected`.
+  execution failed, `reasonCode` = the error code), `expired`, `rejected`.
   Only `filled` runs count toward `runs.done`; skipped and failed runs are
-  counted separately and do not shift the cap.
+  counted separately and do not shift the cap. A `pending` run whose order
+  never appeared is written off as `failed trading.interrupted` after 1 h;
+  each tick re-checks unsettled runs against their orders (restart safety).
+  The balance is checked before an order is placed, so an
+  `insufficient_balance` skip leaves no failed order in the Book. With a
+  max price set and **no price known**, the run is skipped as `max_price`
+  (never buy blind) and does not count toward auto-pause.
 - **Cap accounting.** `spentUsd` = Σ `value_usd` of **confirmed** orders
   with this `mandate_id`; `reservedUsd` = Σ of open ones (awaiting /
   approved / submitted). A run is sized from `capUsd − spent − reserved`.
@@ -89,8 +96,16 @@ create ──(operator)──────────────► active ─�
 - **Buy now** (`trading.dca.run`, operator-only) fires a run immediately on
   an `active` or `paused` mandate; it counts like any run and does **not**
   move the next scheduled buy.
+- **Stop** also rejects the mandate's buys still waiting for approval.
+  **Resume** resets the bad-run streak. A user pause sets `statusReason`
+  `"user"`; an expired proposal `"no decision within 24 h"`. A mandate is
+  never completed while one of its buys is still open; it completes when
+  that buy settles. The order note counts **buys**, not attempts
+  (`buy 3/30` even after skipped runs).
 - **Update** (operator-only): `usdPerRun`, `capUsd`, `runsMax`,
-  `everySeconds`, `maxPriceUsd`, `name`. Lowering the cap below what is
+  `everySeconds`, `maxPriceUsd`, `name` (`null` = not given; `runsMax: 0`
+  removes the run limit, `maxPriceUsd: 0` removes the price guard; a cap
+  below `usdPerRun` is allowed). Lowering the cap below what is
   already spent completes the mandate. Changing `everySeconds` re-anchors
   the schedule at now (next buy = now + every).
 - **Stop** is terminal; **pause/resume** flip `active`/`paused`. Resuming
@@ -182,12 +197,15 @@ Errors are `TradingError` codes: `trading.dca.not_found`,
 one), `trading.dca.invalid` (usd ≤ 0, cap < usd, every < 60 s, unknown
 quote on Robinhood Chain without `--quote`), `trading.operator_required`
 (from the RPC layer), plus the usual `trading.disabled`, `wallet.locked`,
-`trading.unsupported_chain`, `trading.token_not_found`.
+`trading.unsupported_chain`, `trading.token_not_found` (unknown symbol;
+an ambiguous one stays `trading.invalid`). At create, `slippagePct` may
+not exceed the agent slippage ceiling and the wallet may not be `all`.
 
 Events: every state change emits `trading.changed {reason: "dca",
 mandateId}` (so the desktop's `['trading']` query prefix refreshes) and
 `trading.dca.changed {mandate}` (full payload). Each run emits
-`trading.dca.run {mandateId, run}`; the order itself emits the normal
+`trading.dca.run {mandateId, run}` twice — when placed (`pending`) and
+when settled; the order itself emits the normal
 `trading.approval.requested` / `trading.order.finished`. When an order with
 `mandate_id` settles (confirmed / failed / expired / rejected) the engine
 updates the run row and the mandate cache in the same place it settles the
@@ -237,7 +255,8 @@ Mandate = {
 }
 
 Run = { "n": 12, "at": iso, "manual": false,
-        "status": "filled" | "parked" | "skipped" | "failed" | "expired" | "rejected",
+        "status": "pending" | "filled" | "parked" | "skipped" | "failed" | "expired" | "rejected",
+        "reasonCode": string | null,              // machine: max_price | daily_cap | insufficient_balance | cap_reached | trading.<code>
         "reason": string | null,                  // skipped/failed detail, human-readable ("ETH at $3,120 above $3,000")
         "usd": number | null,                     // spent (filled) or attempted
         "amount": Amount | null,                  // received (filled only)
@@ -286,7 +305,8 @@ agentos trade dca list   [--all] [--wallet …] [--json] [--no-card]
 agentos trade dca show   <id> [--json] [--no-card]
 agentos trade dca approve <id> [--json] [--no-card]
 agentos trade dca reject  <id> [--reason "…"] [--json] [--no-card]
-agentos trade dca pause | resume | stop <id> [--reason "…"] [--json] [--no-card]
+agentos trade dca pause | resume <id> [--json] [--no-card]
+agentos trade dca stop   <id> [--reason "…"] [--json] [--no-card]
 agentos trade dca run    <id> [--wait --wait-seconds N] [--json] [--no-card]
 agentos trade dca update <id> [--usd X] [--cap X] [--runs N] [--every 12h] [--max-price X] [--name …] [--json] [--no-card]
 ```
@@ -307,7 +327,9 @@ agentos trade dca update <id> [--usd X] [--cap X] [--runs N] [--every 12h] [--ma
   schedule, progress bar `spent / cap`, next buy, avg vs current price) and
   a table for `list`.
 - Exit codes as `trade lp`: 2 for input / `trading.dca.invalid` /
-  `trading.dca.bad_state` / `trading.dca.not_found`, 1 for gateway errors.
+  `trading.dca.bad_state` / `trading.dca.not_found` / `trading.invalid` /
+  `trading.token_not_found`, 1 for gateway errors (including
+  `trading.operator_required`).
   Errors are JSON on stderr under `--json`, never a card.
 - `run --wait` waits for the fired order like `swap --wait`.
 - From an agent shell, `create` always answers `status: "awaiting_approval"`;
