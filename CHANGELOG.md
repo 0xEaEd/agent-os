@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.28] - 2026-09-28
+
 ### Added
 - Desktop: select several sessions in the sidebar and act on them at once.
   Cmd-click toggles a row, Shift-click selects the range from the last row
