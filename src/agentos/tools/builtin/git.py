@@ -147,9 +147,9 @@ async def _diff_revision(cwd: str | None) -> str | None:
 
     ``git diff HEAD`` is the spelling that reports staged and unstaged work in
     one pass, but it exits 128 with ``ambiguous argument 'HEAD'`` before the
-    first commit lands. There the index is the entire change set, so the caller
-    drops the revision and lets ``--cached`` carry it rather than failing a
-    diff that plain ``git diff`` used to answer.
+    first commit lands. There the caller diffs against the empty tree instead
+    (see ``_empty_tree``); ``git_log`` relies on the ``None`` to report "no
+    commits yet" (#2737).
     """
     try:
         await _run_git("rev-parse", "--verify", "--quiet", "HEAD", cwd=cwd)
@@ -158,10 +158,34 @@ async def _diff_revision(cwd: str | None) -> str | None:
     return "HEAD"
 
 
+# The empty tree's id depends on the repository's object format, so a SHA-1 id
+# hard-coded into a SHA-256 repository is an ``ambiguous argument`` (#3072).
+_EMPTY_TREES = {
+    "sha1": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "sha256": "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+}
+
+
+async def _empty_tree(cwd: str | None) -> str | None:
+    """The empty tree's id for this repository's object format, else ``None``.
+
+    Diffing against it before the first commit reports staged and unstaged work
+    together, as ``git diff HEAD`` does once a commit exists. ``_run_git`` has
+    no stdin, so the id is picked by ``--show-object-format`` rather than asked
+    of ``git hash-object --stdin`` the way the bundled ``git-diff`` skill does.
+    ``None`` (an old git, an unknown format) keeps the ``--cached`` fallback.
+    """
+    try:
+        object_format = await _run_git("rev-parse", "--show-object-format", cwd=cwd)
+    except RuntimeError:
+        return None
+    return _EMPTY_TREES.get(object_format.strip())
+
+
 def _git_diff_argv(a: dict[str, Any]) -> tuple[str, ...]:
     # Mirrors the ``git_diff`` body (#614). ``HEAD`` is spelled unconditionally
     # here because the fingerprint is derived before the repository is
-    # inspected; the body drops it in a repository without a first commit,
+    # inspected; the body swaps it out in a repository without a first commit,
     # which is the one case this argv describes more precisely than it runs.
     argv = ["git", "diff"]
     if a.get("staged"):
@@ -205,6 +229,11 @@ async def git_diff(
     # ``HEAD`` is the revision that reports both halves, and is the spelling the
     # bundled ``git-diff`` skill already uses.
     revision = await _diff_revision(cwd)
+    if revision is None and not staged:
+        # Bare ``--cached`` would drop every edit made after staging (#3072);
+        # ``staged=True`` keeps it, since it already compares the index
+        # against the empty tree before the first commit.
+        revision = await _empty_tree(cwd)
     args = ["diff"]
     if staged or revision is None:
         args.append("--cached")
