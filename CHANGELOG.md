@@ -30,6 +30,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   operator-only); with `--json` a confirmed order is followed by the
   refreshed position card. The phase-1 read methods now echo `request` so a
   card can refresh itself. Contract: `docs/lp-write.md`.
+- Desktop: each project folder in the sidebar has a `+` just left of its chat
+  count that starts a new chat in that project with its agent, as the
+  folder's **New chat** menu item does. It shows on hover, on keyboard focus
+  and while the folder's menu is open, and the count does not move when it
+  appears (#3489).
 
 ### Changed
 - Desktop: the mode pill reads Chat | Trade, and the strip no longer says

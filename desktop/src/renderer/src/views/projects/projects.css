@@ -37,7 +37,7 @@
 .proj-folder__row {
   position: relative;
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   height: 28px;
   border-radius: var(--radius-control);
@@ -55,6 +55,8 @@
   box-shadow: inset 0 0 0 1.5px var(--primary);
 }
 .proj-folder__disclose {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -75,14 +77,21 @@
 }
 .proj-folder__link {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-columns: 14px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   height: 28px;
   min-width: 0;
-  padding: 0 8px 0 4px;
+  padding: 0 4px;
   font-size: 13px;
   color: var(--sidebar-foreground);
+}
+/* The whole row opens the page, count included; the two buttons sit above. */
+a.proj-folder__link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-control);
 }
 .proj-folder__link svg {
   color: var(--muted-foreground);
@@ -95,9 +104,12 @@
   color: var(--sidebar-primary);
 }
 .proj-folder__link:focus-visible {
+  outline: none;
+}
+/* The ring goes round the whole row, the link's click target. */
+a.proj-folder__link:focus-visible::after {
   outline: 2px solid var(--sidebar-ring);
   outline-offset: -2px;
-  border-radius: var(--radius-control);
 }
 .proj-folder__name {
   overflow: hidden;
@@ -108,6 +120,54 @@
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   color: var(--dim);
+}
+/* "+" then the count. The "+" always holds its place, so the count never
+   moves when it shows, and the name truncates before it. It shows on hover
+   and on keyboard focus: a clicked link keeps focus, and that should not
+   leave the "+" up once the pointer has gone. */
+.proj-folder__trail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+}
+.proj-folder__new {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--dim);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 80ms ease-out,
+    background-color 80ms ease-out,
+    color 80ms ease-out;
+}
+.proj-folder__row:hover .proj-folder__new,
+.proj-folder__row:has(:focus-visible) .proj-folder__new,
+.proj-folder__row[data-menu='true'] .proj-folder__new {
+  opacity: 1;
+  pointer-events: auto;
+}
+.proj-folder__new:hover:not(:disabled) {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.proj-folder__new:disabled {
+  cursor: default;
+}
+.proj-folder__new:focus-visible {
+  outline: 2px solid var(--sidebar-ring);
+  outline-offset: 1px;
+}
+/* A session dragged over the row: the "Move here" label owns that corner. */
+.proj-folder[data-drop='true'] .proj-folder__new {
+  visibility: hidden;
 }
 .proj-folder__drop {
   position: absolute;

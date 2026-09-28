@@ -93,6 +93,8 @@ function FolderRow({ project, rows }: { project: RawProject; rows: SessionRow[] 
   const [confirmDelete, setConfirmDelete] = useState(false)
   const linkRef = useRef<HTMLAnchorElement>(null)
   const { shown, hidden } = folderPreview(rows)
+  // A function, so a "$" in the project's name is not read as a pattern.
+  const newChatLabel = t('projects.folder.newChat').replace('{name}', () => name)
 
   // The menu hands focus back to the row as it closes: Escape leaves you on
   // the row, and the delete alert returns focus there when it goes. New chat
@@ -180,8 +182,28 @@ function FolderRow({ project, rows }: { project: RawProject; rows: SessionRow[] 
           <NavLink ref={linkRef} to={projectPath(id)} className="proj-folder__link" title={name}>
             <Folder className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
             <span className="proj-folder__name">{name}</span>
-            <span className="proj-folder__count">{rows.length || ''}</span>
           </NavLink>
+        )}
+        {/* Beside the link, not in it: a button inside an <a> would open the page too. */}
+        {renaming ? null : (
+          <div className="proj-folder__trail">
+            <button
+              type="button"
+              className="proj-folder__new app-no-drag"
+              aria-label={newChatLabel}
+              title={newChatLabel}
+              disabled={actions.starting}
+              onClick={(e) => {
+                // Left on the row, Return would press this again instead of sending.
+                e.currentTarget.blur()
+                linkRef.current?.blur()
+                actions.newChat()
+              }}
+            >
+              <Plus className="size-3.5" strokeWidth={2} aria-hidden />
+            </button>
+            <span className="proj-folder__count">{rows.length || ''}</span>
+          </div>
         )}
         {over ? <span className="proj-folder__drop">{t('projects.folder.drop')}</span> : null}
       </div>
