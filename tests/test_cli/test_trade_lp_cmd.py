@@ -66,7 +66,22 @@ def _last_line(output: str) -> str:
             "trading.lp.pool",
             {"target": "0xabc", "quote": "WETH"},
         ),
+        (
+            ["pool", "ETH", "--quote", "USDC", "--fee", "0.05", "--chain", "base"],
+            "trading.lp.pool",
+            {"target": "ETH", "quote": "USDC", "feePct": "0.05", "chainId": 8453},
+        ),
+        (
+            ["pool", "ETH/USDC", "--fee", "0.05%"],
+            "trading.lp.pool",
+            {"target": "ETH/USDC", "feePct": "0.05%"},
+        ),
         (["ranges", "PEPE"], "trading.lp.ranges", {"target": "PEPE"}),
+        (
+            ["ranges", "PEPE", "--quote", "WETH", "--fee", "1"],
+            "trading.lp.ranges",
+            {"target": "PEPE", "quote": "WETH", "feePct": "1"},
+        ),
         (
             ["position", "#48213", "--chain", "robinhood"],
             "trading.lp.position",

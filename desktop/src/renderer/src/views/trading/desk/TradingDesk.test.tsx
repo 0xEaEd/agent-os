@@ -186,6 +186,73 @@ describe('useDeskInstruments · reject', () => {
   })
 })
 
+describe('useDeskInstruments · reject with an empty note', () => {
+  it('sends no reason at all, and the agent still hears it was rejected', async () => {
+    rpcCall.mockImplementation(
+      answers({ 'trading.orders.reject': () => ({ order: order({ status: 'rejected' }) }) }),
+    )
+    renderDesk(<Harness active />)
+    await screen.findByTestId('approval-card')
+    fireEvent.click(screen.getByTestId('card-reject'))
+    fireEvent.keyDown(screen.getByTestId('reject-reason'), { key: 'Enter' })
+    const rejects = () => rpcCall.mock.calls.filter((c) => c[0] === 'trading.orders.reject')
+    await waitFor(() => expect(rejects()).toHaveLength(1))
+    // Not `reason: 'user'`: the engine prefixes "user: " and stored "user: user".
+    expect(rejects()[0]?.[1]).toEqual({ orderId: 'o1' })
+    await waitFor(() => expect(sendText).toHaveBeenCalledTimes(1))
+    expect(String(sendText.mock.calls[0]?.[0])).toBe(
+      'Rejected order o1. Do not retry it without asking first.',
+    )
+  })
+})
+
+describe('useDeskInstruments · orders placed without a session', () => {
+  const kinds = ['swap', 'send', 'lp_collect', 'lp_remove', 'lp_add'] as const
+  it.each(kinds)('shows the full card for a %s the operator placed from the CLI', async (kind) => {
+    rpcCall.mockImplementation(
+      answers({
+        'trading.orders.list': () => ({
+          orders: [
+            order({ orderId: 'cli', kind, sessionKey: null, initiator: 'manual' }),
+            // Another chat's ask stays that chat's.
+            order({ orderId: 'elsewhere', sessionKey: 'agent:trading:webchat:other' }),
+          ],
+          pendingApprovals: 2,
+        }),
+      }),
+    )
+    renderDesk(<Harness active />)
+    const cards = await screen.findAllByTestId('approval-card')
+    expect(cards).toHaveLength(1)
+    expect(document.querySelector('[data-order="cli"]')).not.toBeNull()
+    expect(document.querySelector('[data-order="elsewhere"]')).toBeNull()
+  })
+
+  it('tells no agent when an operator order is rejected: nobody asked', async () => {
+    rpcCall.mockImplementation(
+      answers({
+        'trading.orders.list': () => ({
+          orders: [order({ orderId: 'cli', kind: 'lp_remove', sessionKey: null })],
+          pendingApprovals: 1,
+        }),
+        'trading.orders.reject': () => ({ order: order({ orderId: 'cli', status: 'rejected' }) }),
+      }),
+    )
+    renderDesk(<Harness active />)
+    await screen.findByTestId('approval-card')
+    fireEvent.click(screen.getByTestId('card-reject'))
+    fireEvent.keyDown(screen.getByTestId('reject-reason'), { key: 'Enter' })
+    await waitFor(() =>
+      expect(rpcCall.mock.calls.filter((c) => c[0] === 'trading.orders.reject')).toHaveLength(1),
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(sendText).not.toHaveBeenCalled()
+    expect(queueText).not.toHaveBeenCalled()
+  })
+})
+
 describe('useDeskInstruments · reject while the turn streams', () => {
   it('queues the reason for the next turn instead of dropping it', async () => {
     rpcCall.mockImplementation(

@@ -163,6 +163,7 @@ _UNILP_DIR = (
 )
 _PACKAGE = "_agentos_unilp"
 _MODULES = (
+    "abi_codec",
     "abi_defs",
     "chains",
     "fmt",
@@ -171,6 +172,8 @@ _MODULES = (
     "poolcache",
     "prices",
     "rpc",
+    "simulate",
+    "v4_actions",
     "v4_math",
     "v4_pool",
 )
@@ -200,6 +203,7 @@ class Unilp:
     """The skill's ``unilp`` modules, loaded once under a private package name."""
 
     abi: ModuleType
+    abi_codec: ModuleType
     chains: ModuleType
     fmt: ModuleType
     hexutil: ModuleType
@@ -207,6 +211,8 @@ class Unilp:
     poolcache: ModuleType
     prices: ModuleType
     rpc: ModuleType
+    simulate: ModuleType
+    v4_actions: ModuleType
     v4_math: ModuleType
     v4_pool: ModuleType
 
@@ -1001,6 +1007,140 @@ def _is_pool_id(value: str) -> bool:
     return True
 
 
+#: The dynamic-fee flag a V4 PoolKey carries in ``fee`` (``--fee dynamic``).
+DYNAMIC_FEE = 0x800000
+#: The highest static LP fee V4 accepts: 100 %, in hundredths of a bip.
+MAX_LP_FEE = 1_000_000
+#: Tick spacings tried for a named fee tier, besides the fee/100 and fee/50
+#: that launchpads and the v3 convention derive from the fee itself.
+_FEE_SPACINGS = (1, 10, 60, 200)
+
+
+def _fee_spacings(fee: int) -> tuple[int, ...]:
+    derived = {fee // d for d in (100, 50) if fee % d == 0}
+    return tuple(sorted(s for s in {*_FEE_SPACINGS, *derived} if 1 <= s <= 32_767))
+
+
+def parse_fee(value: Any) -> int | None:
+    """A fee tier as a V4 PoolKey stores it (hundredths of a bip); ``None`` if not given.
+
+    Takes what a person or an agent writes: ``0.05``, ``0.05%``, ``0.3``, ``1``
+    (percent) or ``500``, ``3000`` (V4's own units -- any whole number of 100
+    or more), and ``dynamic``. Below 100 a bare number is a percent, so
+    ``1`` is the 1 % tier and ``100`` the 0.01 % one.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        raise TradingError("trading.invalid", "feePct must be a fee tier such as 0.05 or 0.3%")
+    text = str(value).strip().lower()
+    if text == "dynamic":
+        return DYNAMIC_FEE
+    pct = text.endswith("%")
+    try:
+        number = float(text.removesuffix("%").strip())
+    except ValueError:
+        number = math.nan
+    if not math.isfinite(number) or number < 0:
+        raise TradingError(
+            "trading.invalid",
+            f"not a fee tier: {value!r} (use a percent such as 0.05, 0.3%, 1 or V4 units "
+            "such as 500)",
+        )
+    if not pct and number >= 100 and number.is_integer():
+        pips = float(number)
+    else:
+        pips = number * 10_000
+    fee = round(pips)
+    if abs(pips - fee) > 1e-6 or fee > MAX_LP_FEE:
+        raise TradingError(
+            "trading.invalid",
+            f"not a fee tier: {value!r} (V4 fees are whole hundredths of a bip, at most 100%)",
+        )
+    return fee
+
+
+def fee_label(fee: int) -> str:
+    """``500`` -> ``0.05%``; the dynamic flag -> ``dynamic`` (as ``fee_pct`` prints it)."""
+    return fee_pct({"fee": fee})
+
+
+def split_pair(target: str, quote: str | None) -> tuple[str, str | None]:
+    """``TOKEN/QUOTE`` -> ``(TOKEN, QUOTE)``; anything else passes through with ``quote``."""
+    text = (target or "").strip()
+    if "/" not in text:
+        return text, quote
+    base, _, other = text.partition("/")
+    base, other = base.strip(), other.strip()
+    if not base or not other or "/" in other:
+        raise TradingError("trading.invalid", f"not a pair: {target!r} (write TOKEN/QUOTE)")
+    if quote and quote.strip().lower() != other.lower():
+        raise TradingError(
+            "trading.invalid", f"{target} names {other} as the quote, but --quote says {quote}"
+        )
+    return base, other
+
+
+def _fee_matches(state: dict[str, Any], fee: int) -> bool:
+    actual = int(state["poolKey"]["fee"])
+    if fee == DYNAMIC_FEE:
+        return bool(actual & DYNAMIC_FEE)
+    return actual == fee
+
+
+def select_fee(
+    env: ChainEnv,
+    live: list[dict[str, Any]],
+    fee: int | None,
+    *,
+    token: str,
+    quote: str | None,
+) -> list[dict[str, Any]]:
+    """The live pools on fee tier ``fee`` (all of them when ``fee`` is ``None``).
+
+    None on that tier is ``trading.lp.not_found`` naming the tiers that do
+    exist for the pair, so the caller can pick one instead of guessing again.
+    """
+    if fee is None:
+        return live
+    matching = [p for p in live if _fee_matches(p, fee)]
+    if matching:
+        return matching
+    tiers = sorted(
+        {int(p["poolKey"]["fee"]) for p in live},
+        key=lambda f: (bool(f & DYNAMIC_FEE), f),
+    )
+    labels = list(dict.fromkeys(fee_label(f) for f in tiers))
+    try:
+        names = token_metas(env, [token, *([quote] if quote else [])])
+        what = str(names[token.lower()]["symbol"] or token)
+        if quote:
+            what += f"/{names[quote.lower()]['symbol'] or quote}"
+    except Exception:  # noqa: BLE001 - the message only; the address will do
+        what = f"{token}/{quote}" if quote else token
+    exist = f"tiers that exist: {', '.join(labels)}" if labels else "no V4 pool at all"
+    raise TradingError(
+        "trading.lp.not_found",
+        f"no {fee_label(fee)} Uniswap V4 pool for {what} on {env.spec.name}; {exist}",
+        details={
+            "token": token,
+            "quote": quote,
+            "chainId": env.spec.chain_id,
+            "feePct": fee_label(fee),
+            "tiers": labels,
+        },
+    )
+
+
+def check_pool_fee(state: dict[str, Any], fee: int | None) -> None:
+    """A named poolId must be on the named tier, if one was named."""
+    if fee is not None and not _fee_matches(state, fee):
+        raise TradingError(
+            "trading.invalid",
+            f"pool {state['poolId']} is a {fee_pct(state['poolKey'])} pool, not {fee_label(fee)}",
+        )
+
+
 def pool_states(env: ChainEnv, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """slot0 + liquidity for every candidate in one multicall; uninitialised ones dropped."""
     if not candidates:
@@ -1113,7 +1253,7 @@ def initialized_pools(env: ChainEnv, token: str, quote: str | None = None) -> li
 
 
 def discover_pools(
-    env: ChainEnv, token: str, quote: str | None = None
+    env: ChainEnv, token: str, quote: str | None = None, fee: int | None = None
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Live V4 pools holding ``token``, from every route that is cheap on this chain.
 
@@ -1122,14 +1262,23 @@ def discover_pools(
     read confirmed for this token, and -- where a node serves it -- the
     PoolManager's ``Initialize`` log for any fee or hook. The union is
     confirmed with one slot0 multicall and remembered; ranking is the caller's.
+    A named static ``fee`` also derives the hook-less pools on that tier at the
+    usual tick spacings, so an unusual tier is found without Initialize logs.
     """
     lib = env.lib
     launched, launcher = _launcher_candidates(env, token, quote)
     quotes = [lib.hexutil.checksum_address(quote)] if quote else None
+    vanilla = lib.v4_pool.derive_vanilla_candidates(env.chain, token, quotes)
+    if fee is not None and not fee & DYNAMIC_FEE:
+        tiers = tuple((fee, spacing) for spacing in _fee_spacings(fee))
+        vanilla = [
+            *vanilla,
+            *lib.v4_pool.derive_vanilla_candidates(env.chain, token, quotes, tiers),
+        ]
     candidates: dict[str, dict[str, Any]] = {}
     for candidate in (
         *launched,
-        *lib.v4_pool.derive_vanilla_candidates(env.chain, token, quotes),
+        *vanilla,
         *cached_token_pools(env, token),
         *initialized_pools(env, token, quote),
     ):
@@ -1196,6 +1345,16 @@ def pool_key_for_id(env: ChainEnv, pool_id: str) -> dict[str, Any]:
                 key = dict(candidate["poolKey"])
                 lib.poolcache.remember(env.chain, [{"poolId": wanted, "poolKey": key}])
                 return key
+    # The chain's quote assets paired with each other (ETH/USDC, WETH/USDC):
+    # hashing the hook-less fee tiers costs no request at all.
+    known = list(env.chain.get("knownQuotes") or {})
+    for token in known:
+        others = [q for q in known if q.lower() != token.lower()]
+        for candidate in lib.v4_pool.derive_vanilla_candidates(env.chain, token, others):
+            if candidate["poolId"].lower() == wanted:
+                key = dict(candidate["poolKey"])
+                lib.poolcache.remember(env.chain, [{"poolId": wanted, "poolKey": key}])
+                return key
     logs = full_range_logs(
         env, env.chain["poolManager"], [lib.abi.TOPIC_INITIALIZE, wanted], recent_fallback=True
     )
@@ -1218,8 +1377,13 @@ def pool_key_for_id(env: ChainEnv, pool_id: str) -> dict[str, Any]:
     )
 
 
-def walk(env: ChainEnv, state: dict[str, Any]) -> dict[str, Any]:
-    """Liquidity segments from the tick bitmap (no logs), and the scan's coverage."""
+def scan_pool(env: ChainEnv, state: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Liquidity segments from the tick bitmap (no logs), the scan's coverage, and its warnings.
+
+    Touches nothing on ``env``: a read comparing several pools scans each one
+    on its own and adopts only the chosen pool's warnings (``adopt_scan``), so
+    a candidate that lost cannot mark the card it is not on partial or failed.
+    """
     lib = env.lib
     res: dict[str, Any] = lib.v4_pool.walk_tick_ranges(
         env.client, env.chain, state["poolId"], state, max_words=MAX_BITMAP_WORDS
@@ -1237,17 +1401,32 @@ def walk(env: ChainEnv, state: dict[str, Any]) -> dict[str, Any]:
         "fullWords": int(truncated["fullWords"]) if truncated else full,
         "truncated": bool(truncated),
     }
+    notes: list[str] = []
     if truncated:
-        env.partial = True
-        env.warn(
+        notes.append(
             f"partial scan: {truncated['scannedWords']} of {truncated['fullWords']} tick-bitmap "
             "words around the current price were read; liquidity further out is not included"
         )
     if res.get("check", {}).get("ok") is False:
-        env.warn(
+        notes.append(
             "self-check failed: the summed in-range liquidity does not match the pool's "
             "on-chain liquidity, so these numbers are not trustworthy"
         )
+    return res, notes
+
+
+def adopt_scan(env: ChainEnv, res: dict[str, Any], notes: Iterable[str]) -> None:
+    """Make one pool's scan the card's: its partial flag and its warnings."""
+    if res["scan"]["truncated"]:
+        env.partial = True
+    for note in notes:
+        env.warn(note)
+
+
+def walk(env: ChainEnv, state: dict[str, Any]) -> dict[str, Any]:
+    """``scan_pool`` for the one pool a card is about: its warnings are the card's."""
+    res, notes = scan_pool(env, state)
+    adopt_scan(env, res, notes)
     return res
 
 
@@ -1332,6 +1511,8 @@ class PoolRead:
     tvl: float | None
     launcher: dict[str, Any] | None
     depth: float | None = None
+    #: The scan's own warnings, adopted onto the card only if this pool is chosen.
+    notes: list[str] = field(default_factory=list)
 
 
 def _rank(env: ChainEnv, state: dict[str, Any], side: Side, value: float | None) -> tuple[Any, ...]:
@@ -1344,14 +1525,17 @@ def _rank(env: ChainEnv, state: dict[str, Any], side: Side, value: float | None)
     )
 
 
-def read_pool(env: ChainEnv, target: str, quote: str | None = None) -> PoolRead:
+def read_pool(
+    env: ChainEnv, target: str, quote: str | None = None, fee: int | None = None
+) -> PoolRead:
     """The pool a card is about: the deepest one holding a token, or a given poolId.
 
     "Deepest" is decided in two passes. Every live pool is pre-ranked from its
     slot0 and active liquidity alone (liquid before empty, the chain's quote
     assets before other pairs, then in-range depth in USD); only the best
     ``MAX_POOLS_COMPARED`` are tick-walked, and the winner is the one with the
-    highest TVL among those, in the same order of precedence.
+    highest TVL among those, in the same order of precedence. ``fee`` keeps
+    only the pools on that tier (``select_fee``) before any of it.
     """
     lib = env.lib
     if _is_pool_id(target):
@@ -1365,13 +1549,16 @@ def read_pool(env: ChainEnv, target: str, quote: str | None = None) -> PoolRead:
                 "trading.lp.not_found", f"pool {pool_id} is not initialised on {env.spec.name}"
             )
         state = states[0]
+        check_pool_fee(state, fee)
         side = with_implied_base_price(make_side(env, state["poolKey"]), state)
         launcher = lib.launchers.resolve_launcher(env.client, env.chain, side.base["address"])
         res = walk(env, state)
         return PoolRead(state, side, res, tvl(side, res), launcher)
 
     token = lib.hexutil.checksum_address(target)
-    live, launcher = discover_pools(env, token, quote)
+    live, launcher = discover_pools(env, token, quote, fee)
+    if live:
+        live = select_fee(env, live, fee, token=token, quote=quote)
     if not live:
         what = f"paired with {quote} " if quote else ""
         raise TradingError(
@@ -1392,17 +1579,23 @@ def read_pool(env: ChainEnv, target: str, quote: str | None = None) -> PoolRead:
     ranked.sort(key=lambda item: item[0])
     reads = []
     for _, state, side, depth in ranked[:MAX_POOLS_COMPARED]:
-        res = walk(env, state)
-        reads.append(PoolRead(state, side, res, tvl(side, res), launcher, depth))
+        # Each candidate scans into its own notes: only the winner's reach the card.
+        res, notes = scan_pool(env, state)
+        reads.append(PoolRead(state, side, res, tvl(side, res), launcher, depth, notes))
     reads.sort(key=lambda r: _rank(env, r.state, r.side, r.tvl if r.tvl is not None else r.depth))
-    symbol = reads[0].side.base["symbol"]
+    chosen = reads[0]
+    adopt_scan(env, chosen.res, chosen.notes)
+    symbol = chosen.side.base["symbol"]
     liquid = sum(1 for _, state, _, _ in ranked if is_liquid(state))
     if len(ranked) > 1:
         env.warn(
             f"{len(ranked)} V4 pools hold {symbol} ({liquid} with active liquidity); "
             "showing the deepest"
         )
-    return reads[0]
+    if any(r.res["scan"]["truncated"] for r in reads[1:]):
+        # Their TVL may be understated; the card itself is not partial for it.
+        env.warn("other pools were not fully scanned; their TVL may be understated")
+    return chosen
 
 
 # ── safety ──────────────────────────────────────────────────────────────────
@@ -1474,8 +1667,10 @@ def _owner_for(segment: dict[str, Any], locked: list[dict[str, Any]], locker: st
 # ── payload builders ────────────────────────────────────────────────────────
 
 
-def build_pool(env: ChainEnv, target: str, quote: str | None = None) -> dict[str, Any]:
-    read = read_pool(env, target, quote)
+def build_pool(
+    env: ChainEnv, target: str, quote: str | None = None, fee: int | None = None
+) -> dict[str, Any]:
+    read = read_pool(env, target, quote, fee)
     side, state, res = read.side, read.state, read.res
     base_raw, quote_raw = side.split(res["amount0"], res["amount1"])
     guard, locked = safety(env, read.launcher, state["poolId"], side.base["address"])
@@ -1508,8 +1703,10 @@ def build_pool(env: ChainEnv, target: str, quote: str | None = None) -> dict[str
     )
 
 
-def build_ranges(env: ChainEnv, target: str, quote: str | None = None) -> dict[str, Any]:
-    read = read_pool(env, target, quote)
+def build_ranges(
+    env: ChainEnv, target: str, quote: str | None = None, fee: int | None = None
+) -> dict[str, Any]:
+    read = read_pool(env, target, quote, fee)
     side, state, res = read.side, read.state, read.res
     total = sum(int(r["liquidity"]) for r in res["ranges"]) or 0
     segments = []
@@ -2644,13 +2841,15 @@ async def _resolve_address(service: TradingService, spec: ChainSpec, value: str)
 
 async def _read_pool_kind(
     service: TradingService,
-    builder: Callable[[ChainEnv, str, str | None], dict[str, Any]],
+    builder: Callable[[ChainEnv, str, str | None, int | None], dict[str, Any]],
     *,
     chain: ChainSpec | None,
     target: str,
     quote: str | None,
+    fee: int | None = None,
 ) -> dict[str, Any]:
     loop = asyncio.get_running_loop()
+    target, quote = split_pair(target, quote)
     specs = [chain] if chain is not None else list(DEFAULT_CHAINS)
     last: TradingError | None = None
     for spec in specs:
@@ -2660,7 +2859,7 @@ async def _read_pool_kind(
             env = _engine_env(service, spec, loop)
 
             def run(env: ChainEnv = env, a: str = address, q: str | None = quote_address) -> Any:
-                return builder(start(env), a, q)
+                return builder(start(env), a, q, fee)
 
             result: dict[str, Any] = await asyncio.to_thread(run)
             return result
@@ -2681,17 +2880,34 @@ async def _read_pool_kind(
 
 
 async def lp_pool(
-    service: TradingService, *, chain: ChainSpec | None, target: str, quote: str | None = None
+    service: TradingService,
+    *,
+    chain: ChainSpec | None,
+    target: str,
+    quote: str | None = None,
+    fee: int | None = None,
 ) -> dict[str, Any]:
-    """``kind: "pool"``: reserves, launcher/lock status and the biggest ranges."""
-    return await _read_pool_kind(service, build_pool, chain=chain, target=target, quote=quote)
+    """``kind: "pool"``: reserves, launcher/lock status and the biggest ranges.
+
+    ``target`` may be a ``TOKEN/QUOTE`` pair; ``fee`` (``parse_fee``) picks a tier.
+    """
+    return await _read_pool_kind(
+        service, build_pool, chain=chain, target=target, quote=quote, fee=fee
+    )
 
 
 async def lp_ranges(
-    service: TradingService, *, chain: ChainSpec | None, target: str, quote: str | None = None
+    service: TradingService,
+    *,
+    chain: ChainSpec | None,
+    target: str,
+    quote: str | None = None,
+    fee: int | None = None,
 ) -> dict[str, Any]:
     """``kind: "ranges"``: the pool's liquidity distribution, segment by segment."""
-    return await _read_pool_kind(service, build_ranges, chain=chain, target=target, quote=quote)
+    return await _read_pool_kind(
+        service, build_ranges, chain=chain, target=target, quote=quote, fee=fee
+    )
 
 
 async def lp_position(

@@ -801,6 +801,58 @@ def test_pool_at_an_unusual_fee_is_found_through_initialize_logs() -> None:
     assert any("2 V4 pools hold BONER (1 with active liquidity)" in w for w in card["warnings"])
 
 
+def _spoil_scan(monkeypatch: pytest.MonkeyPatch, pool_id: str, *, check_fails: bool) -> None:
+    """The bitmap walk of ``pool_id`` comes back truncated (and, if asked, failing its check)."""
+    orig = LIB.v4_pool.walk_tick_ranges
+
+    def walk(client: Any, chain: Any, pid: str, state: Any, **kwargs: Any) -> Any:
+        res = orig(client, chain, pid, state, **kwargs)
+        if str(pid).lower() == pool_id.lower():
+            res["truncated"] = {"scannedWords": 600, "fullWords": 6932}
+            if check_fails:
+                res["check"] = {"ok": False}
+        return res
+
+    monkeypatch.setattr(LIB.v4_pool, "walk_tick_ranges", walk)
+
+
+@pytest.mark.parametrize("build", [lp.build_pool, lp.build_ranges])
+def test_a_losing_pools_scan_does_not_mark_the_chosen_card(
+    monkeypatch: pytest.MonkeyPatch, build: Any
+) -> None:
+    """``lp pool ETH --chain base`` showed the deepest pool with a self-check failure
+    and two partial-scan warnings that belonged to the pools it had beaten."""
+    world = boner_world()
+    world.logs_refused = False
+    live = next(p for p in world.pools.values() if p.key["fee"] == 9000)
+    stale = next(p for p in world.pools.values() if p.key["fee"] == 3000)
+    _spoil_scan(monkeypatch, stale.pool_id, check_fails=True)
+    card = build(env_for(world, prices=world_prices(world, {USDG: 1.0})), BONER)
+    assert card["pool"]["poolId"] == live.pool_id
+    assert card["partialScan"] is False
+    assert not any("self-check" in w or "partial scan" in w for w in card["warnings"])
+    assert any("2 V4 pools hold BONER (1 with active liquidity)" in w for w in card["warnings"])
+    assert sum("other pools were not fully scanned" in w for w in card["warnings"]) == 1
+    if "scan" in card:
+        assert card["scan"]["truncated"] is False
+
+
+@pytest.mark.parametrize("build", [lp.build_pool, lp.build_ranges])
+def test_the_chosen_pools_own_truncation_still_flags(
+    monkeypatch: pytest.MonkeyPatch, build: Any
+) -> None:
+    world = boner_world()
+    world.logs_refused = False
+    live = next(p for p in world.pools.values() if p.key["fee"] == 9000)
+    _spoil_scan(monkeypatch, live.pool_id, check_fails=True)
+    card = build(env_for(world, prices=world_prices(world, {USDG: 1.0})), BONER)
+    assert card["pool"]["poolId"] == live.pool_id
+    assert card["partialScan"] is True
+    assert any("partial scan: 600 of 6932" in w for w in card["warnings"])
+    assert any("self-check failed" in w for w in card["warnings"])
+    assert not any("other pools were not fully scanned" in w for w in card["warnings"])
+
+
 def test_empty_pool_never_beats_a_live_one_even_when_nothing_is_priced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1560,3 +1612,134 @@ async def test_each_named_chain_is_read_once(monkeypatch: pytest.MonkeyPatch) ->
     )
     assert [c["key"] for c in card["chains"]] == ["base", "robinhood"]
     assert card["totals"]["count"] == 3
+
+
+# ── fee tiers and pairs (``--fee``, ``TOKEN/QUOTE``) ────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("value", "fee"),
+    [
+        ("0.05", 500),
+        ("0.05%", 500),
+        (" 0.05 % ", 500),
+        (0.05, 500),
+        ("500", 500),
+        (500, 500),
+        ("0.3", 3000),
+        ("0.3%", 3000),
+        ("3000", 3000),
+        ("1", 10_000),
+        (1, 10_000),
+        ("1%", 10_000),
+        ("10000", 10_000),
+        ("0.01", 100),
+        ("100", 100),  # 100 and up without a % sign are V4 units
+        ("0.9", 9000),
+        ("0", 0),
+        ("dynamic", lp.DYNAMIC_FEE),
+        ("DYNAMIC", lp.DYNAMIC_FEE),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_parse_fee(value: Any, fee: int | None) -> None:
+    assert lp.parse_fee(value) == fee
+
+
+@pytest.mark.parametrize(
+    "value", ["abc", "-1", "0.00001", "101%", "1000001", "1e400", "nan", True, [500]]
+)
+def test_parse_fee_refuses_what_is_not_a_tier(value: Any) -> None:
+    with pytest.raises(TradingError) as exc:
+        lp.parse_fee(value)
+    assert exc.value.code == "trading.invalid"
+
+
+def test_fee_label() -> None:
+    assert [lp.fee_label(f) for f in (100, 500, 3000, 10_000, 9000)] == [
+        "0.01%",
+        "0.05%",
+        "0.3%",
+        "1%",
+        "0.9%",
+    ]
+    assert lp.fee_label(lp.DYNAMIC_FEE) == "dynamic"
+
+
+def test_split_pair() -> None:
+    assert lp.split_pair("ETH/USDC", None) == ("ETH", "USDC")
+    assert lp.split_pair(" ETH / USDC ", "usdc") == ("ETH", "USDC")
+    assert lp.split_pair("ETH", "USDC") == ("ETH", "USDC")
+    assert lp.split_pair("0x" + "ab" * 32, None) == ("0x" + "ab" * 32, None)
+    for bad, quote in [("ETH/", None), ("/USDC", None), ("A/B/C", None), ("ETH/USDC", "WETH")]:
+        with pytest.raises(TradingError) as exc:
+            lp.split_pair(bad, quote)
+        assert exc.value.code == "trading.invalid", bad
+
+
+def test_fee_picks_the_tier_not_the_deepest_pool() -> None:
+    # BONER/USDG in a funded 1 % pool and an empty 0.3 % one, both conventional tiers.
+    world = boner_world(live_fee=(10_000, 200))
+    empty = next(p for p in world.pools.values() if p.key["fee"] == 3000)
+    live = next(p for p in world.pools.values() if p.key["fee"] == 10_000)
+    env = env_for(world, prices=world_prices(world, {USDG: 1.0}))
+    assert lp.build_pool(env, BONER)["pool"]["poolId"] == live.pool_id
+    card = lp.build_pool(env, BONER, None, lp.parse_fee("0.3"))
+    assert card["pool"]["poolId"] == empty.pool_id and card["pool"]["feePct"] == "0.3%"
+    ranges = lp.build_ranges(env, BONER, USDG, lp.parse_fee("1%"))
+    assert ranges["pool"]["poolId"] == live.pool_id
+    # A named poolId must be on the named tier.
+    assert lp.build_pool(env, live.pool_id, None, 10_000)["pool"]["poolId"] == live.pool_id
+    with pytest.raises(TradingError) as wrong:
+        lp.build_pool(env, live.pool_id, None, 500)
+    assert wrong.value.code == "trading.invalid" and "1% pool, not 0.05%" in str(wrong.value)
+
+
+def test_a_missing_tier_names_the_tiers_that_exist() -> None:
+    world = boner_world(live_fee=(10_000, 200))
+    env = env_for(world, prices=world_prices(world, {USDG: 1.0}))
+    with pytest.raises(TradingError) as exc:
+        lp.build_pool(env, BONER, USDG, lp.parse_fee("0.05"))
+    assert exc.value.code == "trading.lp.not_found"
+    message = str(exc.value)
+    assert "no 0.05% Uniswap V4 pool for BONER/USDG" in message
+    assert "tiers that exist: 0.3%, 1%" in message
+    assert exc.value.details["tiers"] == ["0.3%", "1%"]
+    assert exc.value.details["feePct"] == "0.05%"
+
+
+def test_a_named_unusual_tier_is_found_without_initialize_logs() -> None:
+    # The live BONER market is 0.9 % at tick spacing 90: no conventional tier and,
+    # with logs refused, invisible to a plain read -- but naming the fee derives it.
+    world = boner_world()
+    assert world.logs_refused
+    live = next(p for p in world.pools.values() if p.key["fee"] == 9000)
+    env = env_for(world, prices=world_prices(world, {USDG: 1.0}))
+    assert lp.build_pool(env, BONER)["pool"]["feePct"] == "0.3%"  # the stale one
+    card = lp.build_pool(env, BONER, None, lp.parse_fee("0.9"))
+    assert card["pool"]["poolId"] == live.pool_id and int(card["pool"]["liquidity"]) > 0
+
+
+async def test_reads_take_a_pair_and_a_fee(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str, str | None, int | None]] = []
+
+    def builder(env: Any, target: str, quote: str | None, fee: int | None) -> dict[str, Any]:
+        seen.append((target, quote, fee))
+        return {"kind": "pool"}
+
+    async def resolve(service: Any, spec: Any, value: str) -> str:
+        return {"ETH": lp.NATIVE_ADDRESS, "USDC": "0x" + "cc" * 20}[value]
+
+    monkeypatch.setattr(lp, "_resolve_address", resolve)
+    monkeypatch.setattr(lp, "_engine_env", lambda service, spec, loop: object())
+    monkeypatch.setattr(lp, "start", lambda env: env)
+    await lp._read_pool_kind(
+        object(),  # type: ignore[arg-type]
+        builder,
+        chain=BASE,
+        target="ETH/USDC",
+        quote=None,
+        fee=500,
+    )
+    assert seen == [(lp.NATIVE_ADDRESS, "0x" + "cc" * 20, 500)]

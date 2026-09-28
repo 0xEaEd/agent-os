@@ -1,5 +1,13 @@
 import { LoaderCircle, TriangleAlert, X } from 'lucide-react'
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import {
+  Component,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from 'react'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -303,6 +311,50 @@ export function Empty({
  * offers the one thing that helps. Every tab and sheet uses this rather than
  * its own empty state, so a dead gateway never reads as "nothing here".
  */
+/**
+ * A tab that throws while rendering is contained here: it says so, names the
+ * error and offers a retry, and the rest of the window stays up. Key it by
+ * the tab so moving to another tab starts clean.
+ */
+export class PanelBoundary extends Component<
+  { children: ReactNode; name?: string },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: unknown): { error: Error } {
+    return { error: error instanceof Error ? error : new Error(String(error)) }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error(`[trading] panel ${this.props.name ?? ''} failed to render`, error, info)
+  }
+
+  render(): ReactNode {
+    const { error } = this.state
+    if (!error) return this.props.children
+    return (
+      <div role="alert" data-testid="panel-error">
+        <Empty
+          tone="error"
+          icon={<TriangleAlert className="size-8" strokeWidth={1.25} aria-hidden />}
+          title={t('trading.panel.failed')}
+          body={error.message || String(error)}
+          action={
+            <Button
+              variant="primary"
+              onClick={() => this.setState({ error: null })}
+              data-testid="panel-error-retry"
+            >
+              {t('trading.error.retry')}
+            </Button>
+          }
+        />
+      </div>
+    )
+  }
+}
+
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   return (
     <Empty

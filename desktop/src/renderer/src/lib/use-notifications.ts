@@ -9,6 +9,7 @@ import type { NotifyTarget } from '@shared/notify'
 import { sessionPath } from '~/components/sidebar/SessionRow'
 import { t } from '~/i18n'
 import { desktopApi, isDesktop } from '~/lib/desktop-api'
+import { orderToastFinished } from '~/lib/order-toasts'
 import { useGateway } from '~/stores/gateway'
 import { useNotifyCenter, unseenCount } from '~/stores/notify-center'
 import { useSessionMarks } from '~/stores/session-marks'
@@ -204,6 +205,8 @@ function useTradingSignals(): void {
     const offFinished = rpc.on('trading.order.finished', (payload) => {
       const order = (payload as { order?: TradingOrderLike } | undefined)?.order
       if (!order) return
+      // The "Approved. Sending…" toast has said all it can; the banner below says how it ended.
+      orderToastFinished(order.orderId)
       const preview = useSettings.getState().settings.notifications.preview
       const ok = order.status === 'confirmed'
       const outcome =

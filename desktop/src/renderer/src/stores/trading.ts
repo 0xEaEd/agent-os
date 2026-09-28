@@ -558,11 +558,12 @@ export function useOrderDecision() {
   const rpc = useRpc()
   const queryClient = useQueryClient()
   return useMutation({
+    // A reject carries no reason here: the engine records the bare "user"
+    // itself, and a placeholder reason was stored as "user: user".
     mutationFn: ({ orderId, approve }: { orderId: string; approve: boolean }) =>
-      rpc.call<{ order: Order }>(
-        approve ? 'trading.orders.approve' : 'trading.orders.reject',
-        approve ? { orderId } : { orderId, reason: 'user' },
-      ),
+      rpc.call<{ order: Order }>(approve ? 'trading.orders.approve' : 'trading.orders.reject', {
+        orderId,
+      }),
     onSettled: () => invalidateTrading(queryClient),
   })
 }

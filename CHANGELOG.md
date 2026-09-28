@@ -16,6 +16,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `senior-unilp-manager` skill. Each command also writes an
   `application/vnd.agentos.lp+json` card for the chat unless `--no-card`
   (payload: `docs/lp-cards.md`).
+- Trading: `agentos trade lp collect|remove|add` change a vault wallet's
+  Uniswap V4 positions — collect fees, remove liquidity (`--pct 100` burns
+  the NFT), add liquidity (`--usd` or token amounts, `--range
+  mcap:LO-HI|pct:N|full|ticks:LO:HI`, `--to-position` to top up) — through
+  the order pipeline: every LP write is simulated, then **always** parks for
+  approval (agent or not; an agent's add counts toward the daily cap), is
+  re-checked against the approved bounds on approval (`trading.price_moved`),
+  approves exactly what it may pull through Permit2 (never unlimited), sends
+  `modifyLiquidities` and books `lp_collect` / `lp_remove` / `lp_add` ledger
+  entries, including a mint's new tokenId. New gateway methods
+  `trading.lp.collect|remove|add` (agent-callable; approval stays
+  operator-only); with `--json` a confirmed order is followed by the
+  refreshed position card. The phase-1 read methods now echo `request` so a
+  card can refresh itself. Contract: `docs/lp-write.md`.
 
 ### Changed
 - Desktop: the mode pill reads Chat | Trade, and the strip no longer says

@@ -17,11 +17,19 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+import structlog
 
 from agentos import __version__
 from agentos.trading.chains import redact_rpc_url
 
+log = structlog.get_logger(__name__)
+
 USER_AGENT = f"agentos-trading/{__version__}"
+
+#: How long ``sealed_receipt`` waits for the block after a receipt's own
+#: (Base and Robinhood Chain make one every 2 s; the cap covers a slow node).
+SEAL_TIMEOUT_S = 15.0
+SEAL_INTERVAL_S = 1.0
 
 # keccak256("Transfer(address,address,uint256)")
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -683,6 +691,76 @@ class EvmClient:
                 return None
             await asyncio.sleep(interval_s)
 
+    async def wait_for_sealed_receipt(
+        self,
+        tx_hash: str,
+        *,
+        timeout_s: float = 120.0,
+        interval_s: float = 1.5,
+    ) -> dict[str, Any] | None:
+        """``wait_for_receipt``, then ``sealed_receipt``: what settlement books from."""
+        first = await self.wait_for_receipt(tx_hash, timeout_s=timeout_s, interval_s=interval_s)
+        if first is None:
+            return None
+        return await sealed_receipt(self, tx_hash, first)
+
+
+def is_provisional_capable(receipt: dict[str, Any]) -> bool:
+    """Whether a receipt comes from an OP-stack chain (it carries ``l1Fee``).
+
+    Only there can the first receipt a node serves be a preconfirmation
+    whose fee fields change once the block is sealed.
+    """
+    return "l1Fee" in receipt
+
+
+async def sealed_receipt(
+    client: EvmClient,
+    tx_hash: str,
+    first: dict[str, Any],
+    *,
+    timeout_s: float | None = None,
+    interval_s: float | None = None,
+) -> dict[str, Any]:
+    """The receipt of ``tx_hash`` as the sealed block has it.
+
+    Base serves flashblock preconfirmations: the first receipt a node returns
+    for a transaction can carry a provisional ``l1Fee`` that differs, by a
+    factor of two either way, from the one charged once the block is sealed —
+    and every gas, ``spent`` and ``received`` figure booked from it is off by
+    the difference. So on an OP-stack chain wait until the head is past the
+    receipt's block and read the receipt again. A chain without ``l1Fee``
+    returns ``first`` untouched and costs nothing; when the head never moves
+    or the re-read fails, ``first`` is kept and ``trading.receipt_provisional``
+    logged — a slightly wrong fee beats a settlement that never happens.
+    """
+    if not is_provisional_capable(first):
+        return first
+    block = decode_uint(str(first.get("blockNumber") or "0x0"))
+    if not block:
+        return first
+    deadline = time.monotonic() + (SEAL_TIMEOUT_S if timeout_s is None else timeout_s)
+    interval = SEAL_INTERVAL_S if interval_s is None else interval_s
+    reason = "head did not advance"
+    while True:
+        try:
+            head = await client.block_number()
+        except (EvmRpcError, EvmTransportError) as exc:
+            head, reason = 0, f"eth_blockNumber failed: {exc}"
+        if head > block:
+            try:
+                again = await client.get_transaction_receipt(tx_hash)
+            except (EvmRpcError, EvmTransportError) as exc:
+                again, reason = None, f"receipt re-read failed: {exc}"
+            else:
+                reason = "receipt re-read came back empty"
+            if again is not None and again.get("blockNumber"):
+                return again
+        if time.monotonic() >= deadline:
+            log.warning("trading.receipt_provisional", tx=tx_hash, block=block, reason=reason)
+            return first
+        await asyncio.sleep(interval)
+
 
 def receipt_succeeded(receipt: dict[str, Any] | None) -> bool:
     if not receipt:
@@ -691,9 +769,17 @@ def receipt_succeeded(receipt: dict[str, Any] | None) -> bool:
 
 
 def receipt_gas_wei(receipt: dict[str, Any]) -> int:
+    """What the transaction cost the sender in wei.
+
+    On OP-stack chains (Base, Robinhood Chain) the receipt also carries
+    ``l1Fee``, the data-posting fee charged on top of ``gasUsed × price``;
+    it is often several times the L2 fee, and leaving it out books it as
+    "spent" against the order instead of as gas.
+    """
     gas_used = decode_uint(str(receipt.get("gasUsed") or "0x0"))
     price = decode_uint(str(receipt.get("effectiveGasPrice") or "0x0"))
-    return gas_used * price
+    l1_fee = decode_uint(str(receipt.get("l1Fee") or "0x0"))
+    return gas_used * price + l1_fee
 
 
 def receipt_transfers(receipt: dict[str, Any]) -> list[TransferLog]:

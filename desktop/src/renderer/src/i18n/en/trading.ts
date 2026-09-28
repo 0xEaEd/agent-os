@@ -123,6 +123,9 @@ export const trading = {
   'trading.history.kind.approval': 'Approval',
   'trading.history.kind.gas': 'Gas',
   'trading.history.kind.unwrap': 'Unwrap',
+  'trading.history.kind.lp_add': 'Add liquidity',
+  'trading.history.kind.lp_collect': 'Collect fees',
+  'trading.history.kind.lp_remove': 'Remove liquidity',
   'trading.unwrap.note': 'Received WETH instead of ETH.',
   'trading.unwrap.cta': 'Unwrap',
   'trading.unwrap.sent': 'Unwrap sent',
@@ -615,6 +618,8 @@ export const trading = {
   'trading.card.rejectSend': 'Reject with note',
   'trading.card.dismiss': 'Dismiss this receipt',
   'trading.card.reasonPlaceholder': 'Why? (the agent reads this)',
+  // An order no agent asked for (no session): nobody reads the reason but the ledger.
+  'trading.card.reasonPlaceholder.optional': 'Why? (optional)',
 
   'trading.ledger.running': 'Running…',
   'trading.ledger.awaiting': 'Awaiting approval',
@@ -622,6 +627,9 @@ export const trading = {
   'trading.ledger.raw': 'raw',
   'trading.ledger.calls': 'trade calls',
   'trading.ledger.market': 'market',
+  'trading.ledger.openTx': 'Open on the explorer',
+  'trading.ledger.copyTx': 'Copy the transaction hash',
+  'trading.ledger.copied': 'copied',
 
   'trading.mission.state.running': 'Running',
   'trading.mission.state.awaiting': 'Awaiting approval',
@@ -822,10 +830,47 @@ export const trading = {
   'trading.mission.pausedForFresh': 'Paused before starting fresh',
   // History: an approval set to zero is a revoke.
   'trading.history.kind.revoke': 'Revoke',
+  // A tab of the BOOK / desk that threw while rendering: the rest stays up.
+  'trading.panel.failed': 'This panel failed to render',
   // Confirm sheet: the quote is frozen while it is open.
   'trading.confirm.quoteAsOf': 'Quote as of',
   'trading.confirm.refreshQuote': 'Refresh quote',
   // Approval card: the free-text note, labelled so it never reads as a fact.
   'trading.card.note.agent': 'Agent’s note',
   'trading.card.note': 'Note',
+
+  // ── LP writes (docs/lp-write.md): collect, remove, add ───────────────────
+  'trading.card.title.lp_collect': 'Approval needed · Collect fees',
+  'trading.card.title.lp_remove': 'Approval needed · Remove liquidity',
+  'trading.card.title.lp_add': 'Approval needed · Add liquidity',
+  'trading.card.titleSettled.lp_collect': 'Collect fees',
+  'trading.card.titleSettled.lp_remove': 'Remove liquidity',
+  'trading.card.titleSettled.lp_add': 'Add liquidity',
+  'trading.card.kind.lp_collect': 'Collect fees',
+  'trading.card.kind.lp_remove': 'Remove liquidity',
+  'trading.card.kind.lp_add': 'Add liquidity',
+  'trading.orders.kind.lp_collect': 'Collect fees',
+  'trading.orders.kind.lp_remove': 'Remove liquidity',
+  'trading.orders.kind.lp_add': 'Add liquidity',
+  // An LP order row: what goes in (add) or comes back (collect, remove).
+  'trading.orders.lp.deposit': 'deposit',
+  'trading.orders.lp.receive': 'receive',
+  'trading.card.fact.lpReceive': 'You receive',
+  'trading.card.fact.lpFees': 'Fees included',
+  'trading.card.fact.lpDeposit': 'You deposit',
+  'trading.card.fact.lpMinimum': 'Minimum',
+  'trading.card.fact.lpMaximum': 'Maximum',
+  'trading.card.fact.lpApprovals': 'Approvals needed',
+  'trading.card.fact.lpSlippage': 'Slippage',
+  'trading.card.fact.none': 'none',
+  'trading.card.lp.newPosition': 'new position',
+  'trading.card.lp.inRange': 'in range',
+  'trading.card.lp.aboveRange': 'above range',
+  'trading.card.lp.belowRange': 'below range',
+  'trading.card.lp.burns': 'Burns the position NFT',
+  'trading.card.lp.oneSided': 'One-sided: all {token} until price enters the range',
+  'trading.card.lp.hook': 'Pool has a hook',
+  'trading.card.lp.noFees': 'no fees to collect — this only pays gas',
+  'trading.card.lp.mcap': 'mcap',
+  'trading.card.lp.per': 'per',
 } as const

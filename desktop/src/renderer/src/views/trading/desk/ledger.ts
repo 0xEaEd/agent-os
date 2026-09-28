@@ -29,6 +29,9 @@ export type TradeKind =
   | 'sync'
   | 'wallet'
   | 'lp'
+  | 'lp_collect'
+  | 'lp_remove'
+  | 'lp_add'
   | 'other'
 
 export interface TradeCall {
@@ -92,7 +95,33 @@ function chainWord(args: string): string {
 }
 
 /** `trade lp` flags that take no value; every other `--name` consumes the next word. */
-const LP_BOOLEAN_FLAGS = new Set(['--json', '--no-card', '--all', '--help'])
+const LP_BOOLEAN_FLAGS = new Set(['--json', '--no-card', '--all', '--help', '--wait'])
+
+/** The `trade lp` subcommands that write: each parks an order of its own kind. */
+const LP_WRITES: Record<string, TradeKind> = {
+  collect: 'lp_collect',
+  remove: 'lp_remove',
+  add: 'lp_add',
+}
+
+/** "#48213" for a token id, the word as given otherwise. */
+function tokenIdWord(word: string | undefined): string {
+  if (!word) return ''
+  return /^\d+$/.test(word) ? `#${word}` : word
+}
+
+/** The size of an `lp add`: "$50", "1,000 PEPE", "0.5 PEPE + 0.01 WETH"-ish from the flags. */
+function lpAddSize(args: string, subject: string): string {
+  const usd = flag(args, 'usd')
+  if (usd) return `$${usd.replace(/^\$/, '')}`
+  const base = flag(args, 'amount-base')
+  const quote = flag(args, 'amount-quote')
+  const parts = [
+    base ? `${base}${subject ? ` ${subject}` : ''}` : '',
+    quote ? `${quote} quote` : '',
+  ]
+  return parts.filter(Boolean).join(' + ')
+}
 
 /** The positional words of a `trade lp` command line, with every flag and flag value dropped. */
 function lpPositionals(args: string): string[] {
@@ -131,6 +160,9 @@ const TITLES: Record<TradeKind, string> = {
   sync: 'Sync',
   wallet: 'Wallet',
   lp: 'Liquidity read',
+  lp_collect: 'Collect fees',
+  lp_remove: 'Remove liquidity',
+  lp_add: 'Add liquidity',
   other: 'Trade call',
 }
 
@@ -169,7 +201,7 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
     ) {
       kind = sub as TradeKind
     } else if (sub === 'lp') {
-      kind = 'lp'
+      kind = LP_WRITES[(lpPositionals(args)[0] ?? '').toLowerCase()] ?? 'lp'
     }
   } else if (sub === 'balances') kind = 'balances'
   else kind = 'wallet'
@@ -234,6 +266,20 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
     detail = id ?? ''
   } else if (kind === 'wallet') {
     detail = sub
+  } else if (kind === 'lp_collect' || kind === 'lp_remove') {
+    // `lp remove 48213 --pct 50` → "#48213 · 50%"; a remove without --pct takes it all.
+    const id = tokenIdWord(lpPositionals(args)[1])
+    const pct = kind === 'lp_remove' ? `${(flag(args, 'pct') ?? '100').replace(/%$/, '')}%` : ''
+    detail = [id, pct, chainWord(args)].filter(Boolean).join(' · ')
+  } else if (kind === 'lp_add') {
+    // `lp add PEPE --usd 50 --range mcap:2M-10M` → "PEPE · $50 · Base"; the
+    // result names the pair once it is known.
+    const subject = lpPositionals(args)[1] ?? ''
+    const shown = /^0x[0-9a-fA-F]{40,64}$/.test(subject) ? shortAddr(subject) : subject
+    const to = flag(args, 'to-position')
+    detail = [shown, lpAddSize(args, shown), to ? `→ ${tokenIdWord(to)}` : '', chainWord(args)]
+      .filter(Boolean)
+      .join(' · ')
   } else if (kind === 'lp') {
     // `lp pool boar --chain base` → "pool boar · Base"; flags and their values
     // (`--budget-seconds 60`, `--wallet=0x…`) never reach the subject.
@@ -254,6 +300,8 @@ export interface TradeOutcome {
   orderId: string | null
   txHash: string | null
   explorerUrl: string | null
+  /** The chain the order ran on, so a hash without a link can still get one. */
+  chainId: number | null
   provider: ProviderId | null
   /** Earned, not decorative: the result names a pending approval. */
   awaiting: boolean
@@ -270,6 +318,7 @@ const EMPTY: TradeOutcome = {
   orderId: null,
   txHash: null,
   explorerUrl: null,
+  chainId: null,
   provider: null,
   awaiting: false,
   confirmed: false,
@@ -304,8 +353,66 @@ function parseJson(text: string): unknown {
   }
 }
 
+/** A plan or receipt amount pair as one line: "1,240,000 PEPE + 0.00184 WETH". */
+function lpAmountsLine(pair: unknown, base: string, quote: string): string {
+  if (!isDict(pair)) return ''
+  const side = (a: unknown, symbol: string): string | null => {
+    const human = isDict(a) ? str(a.human) : null
+    return human && Number(human) > 0 ? `${formatAmount(human)} ${symbol}` : null
+  }
+  const sides = [side(pair.base, base), side(pair.quote, quote)].filter(Boolean)
+  return sides.length ? sides.join(' + ') : `0 ${base} + 0 ${quote}`
+}
+
+/** "PEPE/WETH" from the plan, else from the order's two tokens. */
+function lpPair(o: Dict, plan: Dict | null): [string, string] {
+  const base = (plan && sym(plan.token)) || sym(o.tokenIn)
+  const quote = (plan && sym(plan.quote)) || sym(o.tokenOut)
+  return [base, quote]
+}
+
+/** An LP write's subject once the order is known: "#48213", "#48213 · 100%", "PEPE/WETH · $50.00". */
+function lpOrderDetail(o: Dict): string {
+  const kind = str(o.kind)
+  const plan = isDict(o.plan) ? o.plan : null
+  const id = str(o.tokenId) ?? (plan ? str(plan.tokenId) : null)
+  const chain = plan && isDict(plan.chain) ? (str(plan.chain.name) ?? '') : ''
+  if (kind === 'lp_add') {
+    const [base, quote] = lpPair(o, plan)
+    const usd = num(o.valueUsd) ?? (plan && isDict(plan.expected) ? num(plan.expected.usd) : null)
+    const increase = plan?.increase === true
+    return [
+      base && quote ? `${base}/${quote}` : base,
+      usd !== null ? formatUsd(usd) : '',
+      id ? (increase ? `→ #${id}` : `#${id}`) : '',
+      chain,
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  }
+  const pct = kind === 'lp_remove' && plan && num(plan.pct) !== null ? `${num(plan.pct)}%` : ''
+  return [id ? `#${id}` : '', pct, chain].filter(Boolean).join(' · ')
+}
+
+/** What an LP write moves: expected while it waits, what the receipt says once confirmed. */
+function lpOrderLegs(o: Dict): string {
+  const kind = str(o.kind)
+  const plan = isDict(o.plan) ? o.plan : null
+  const [base, quote] = lpPair(o, plan)
+  const confirmed = o.status === 'confirmed'
+  const moved = kind === 'lp_add' ? o.spent : o.received
+  const line = lpAmountsLine(
+    confirmed && isDict(moved) ? moved : plan ? plan.expected : null,
+    base,
+    quote,
+  )
+  if (!line) return ''
+  return kind === 'lp_add' ? `deposit ${line}` : `receive ${line}`
+}
+
 function orderLegs(o: Dict): string {
   const kind = str(o.kind) ?? 'swap'
+  if (kind === 'lp_collect' || kind === 'lp_remove' || kind === 'lp_add') return lpOrderLegs(o)
   const amount = `${formatAmount(str(o.amountIn))} ${sym(o.tokenIn)}`
   if (kind === 'send') return `${amount} → ${shortAddr(str(o.recipient) ?? '')}`.trim()
   if (kind === 'revoke') {
@@ -321,7 +428,11 @@ function fromOrder(o: Dict): TradeOutcome {
   const status = str(o.status) as OrderStatus | null
   const txHash = str(o.txHash)
   const legs = orderLegs(o)
-  const provider = (str(o.provider) as ProviderId | null) ?? null
+  const kind = str(o.kind)
+  const lpWrite = kind === 'lp_collect' || kind === 'lp_remove' || kind === 'lp_add'
+  // An LP write goes to the PositionManager, never through a swap route: the
+  // order's default provider field names nothing here.
+  const provider = lpWrite ? null : ((str(o.provider) as ProviderId | null) ?? null)
   const bits = [legs]
   if (status) bits.push(statusWordFor(status))
   if (str(o.reason) && (status === 'rejected' || status === 'failed' || status === 'expired'))
@@ -329,10 +440,12 @@ function fromOrder(o: Dict): TradeOutcome {
   return {
     ...EMPTY,
     summary: bits.filter(Boolean).join(' · '),
+    ...(lpWrite && lpOrderDetail(o) ? { detail: lpOrderDetail(o) } : {}),
     status,
     orderId: str(o.orderId),
     txHash,
     explorerUrl: str(o.explorerUrl),
+    chainId: num(o.chainId),
     provider,
     awaiting: status === 'awaiting_approval',
     confirmed: status === 'confirmed' && Boolean(txHash),
@@ -522,6 +635,112 @@ function parseLpResult(text: string, data: unknown, command: string): TradeOutco
   return { ...EMPTY, detail: `${subject}${where}`, summary: bits.join(' · ') }
 }
 
+/**
+ * The string value of the first `key` out of text too truncated to parse; null
+ * when that first one is null (a nested namesake further on is not it).
+ */
+function jsonString(text: string, key: string): string | null {
+  const m = new RegExp(`"${key}"\\s*:\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|null)`).exec(text)
+  return m?.[1] !== undefined ? m[1].replace(/\\(.)/g, '$1') : null
+}
+
+/** The `{base, quote}` Amount pair under `key` ("received", "spent"), as far as it survived. */
+function truncatedPair(text: string, key: string, stop: string | null): Dict | null {
+  const at = text.search(new RegExp(`"${key}"\\s*:\\s*\\{`))
+  if (at < 0) return null
+  let body = text.slice(at)
+  const end = stop ? body.search(new RegExp(`"${stop}"\\s*:`)) : -1
+  if (end > 0) body = body.slice(0, end)
+  const side = (which: string): Dict | null => {
+    const w = body.search(new RegExp(`"${which}"\\s*:\\s*\\{`))
+    if (w < 0) return null
+    const human = /^[^}]*?"human"\s*:\s*"([^"]*)"/.exec(body.slice(w))
+    return human ? { human: human[1]! } : null
+  }
+  const base = side('base')
+  const quote = side('quote')
+  return base || quote ? { base, quote } : null
+}
+
+/**
+ * An LP write whose order JSON did not survive: the stored tool result stops
+ * at ~2,000 characters and the order runs to 3–4 KB, so `JSON.parse` fails.
+ * The fields that make the row are read by hand — they come early in the
+ * order (`orderId`, `kind`, `status`, `reason`, `txHash`), the receipt
+ * amounts only when the cut fell after them — and the row says the same
+ * thing the parsed path would. Never the JSON itself: when nothing can be
+ * read the row says the result was truncated. Null when the text is no JSON
+ * at all (a plain error line keeps the ordinary first-line path).
+ */
+function lpWriteFromTruncated(call: TradeCall, text: string): TradeOutcome | null {
+  const body = text.replace(/^\s*exit_code=-?\d+\s*/, '')
+  const start = body.search(/\S/)
+  if (start < 0 || !/[{[]/.test(body[start]!)) return null
+  const error = jsonString(body, 'message')
+  if (/^\s*[{[]\s*"error"\s*:/.test(body) && error) return { ...EMPTY, summary: error, error }
+  const orderId = jsonString(body, 'orderId')
+  const status = jsonString(body, 'status') as OrderStatus | null
+  if (!orderId && !status) return { ...EMPTY, summary: 'result truncated' }
+  const kind = jsonString(body, 'kind') ?? call.kind
+  const reason = jsonString(body, 'reason')
+  const txHash = field(body, /"txHash"\s*:\s*"(0x[0-9a-fA-F]{64})"/)
+  const explorerUrl = jsonString(body, 'explorerUrl')
+  const chainId = Number(field(body, /"chainId"\s*:\s*(\d+)/)) || null
+  const symbolOf = (key: string): string =>
+    field(body, new RegExp(`"${key}"\\s*:\\s*\\{[^}]*?"symbol"\\s*:\\s*"([^"]+)"`)) ?? ''
+  const base = symbolOf('tokenIn')
+  const quote = symbolOf('tokenOut')
+  const moved =
+    status === 'confirmed'
+      ? kind === 'lp_add'
+        ? truncatedPair(body, 'spent', null)
+        : truncatedPair(body, 'received', 'spent')
+      : null
+  const line = moved ? lpAmountsLine(moved, base, quote) : ''
+  const legs = line ? (kind === 'lp_add' ? `deposit ${line}` : `receive ${line}`) : ''
+  const bits = [legs]
+  if (status) bits.push(statusWordFor(status))
+  // The parsed path names the amounts while an order waits; the truncated
+  // one lost them, so the order id is what the row can still point at.
+  if (status === 'awaiting_approval' && !legs && orderId) bits.push(`#${orderId}`)
+  if (reason && (status === 'rejected' || status === 'failed' || status === 'expired'))
+    bits.push(reason)
+  return {
+    ...EMPTY,
+    summary: bits.filter(Boolean).join(' · ') || 'result truncated',
+    status,
+    orderId,
+    txHash,
+    explorerUrl,
+    chainId,
+    awaiting: status === 'awaiting_approval',
+    confirmed: status === 'confirmed' && Boolean(txHash),
+    error: status === 'failed' ? (reason ?? 'failed') : null,
+  }
+}
+
+const HTTP_URL = /^https?:\/\//i
+const TX_HASH = /^0x[0-9a-fA-F]{64}$/
+
+/**
+ * Where a ledger row's tx hash links to: the order's own `explorerUrl`, else
+ * the chain's explorer (`explorerFor(chainId)`) + `/tx/<hash>`. Null when
+ * neither is known (a truncated result on an unknown chain) — or when either
+ * is not a web link, which the shell would refuse to open anyway.
+ */
+export function txExplorerUrl(
+  outcome: Pick<TradeOutcome, 'txHash' | 'explorerUrl' | 'chainId'>,
+  explorerFor: (chainId: number) => string | null | undefined,
+): string | null {
+  const hash = outcome.txHash
+  if (!hash) return null
+  if (outcome.explorerUrl && HTTP_URL.test(outcome.explorerUrl)) return outcome.explorerUrl
+  if (!outcome.chainId || !TX_HASH.test(hash)) return null
+  const base = explorerFor(outcome.chainId)
+  if (!base || !HTTP_URL.test(base)) return null
+  return `${base.replace(/\/+$/, '')}/tx/${hash}`
+}
+
 /** One line for a result. Unknown shapes fall back to the first line of text. */
 export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
   const data = parseJson(text)
@@ -537,6 +756,10 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
     const firstLine = lines.find((l) => l.trim()) ?? ''
     if (PROJECTION_MARKER.test(firstLine)) {
       return { ...EMPTY, summary: call.detail }
+    }
+    if (call.kind === 'lp_collect' || call.kind === 'lp_remove' || call.kind === 'lp_add') {
+      const lp = lpWriteFromTruncated(call, text)
+      if (lp) return lp
     }
     const first = (lines[0] ?? '').slice(0, 140)
     if (code !== null && code !== 0)
@@ -575,6 +798,16 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
       if (isDict(data.order)) return fromOrder(data.order)
       break
     }
+    case 'lp_collect':
+    case 'lp_remove':
+    case 'lp_add': {
+      // The order JSON, as `trade swap`/`trade send` print it: bare, under
+      // `order`, or as the one entry of `orders`.
+      const orders = Array.isArray(data.orders) ? data.orders.filter(isDict) : []
+      const o = isDict(data.order) ? data.order : orders.length ? orders[0]! : data
+      if (str(o.orderId) || str(o.status)) return fromOrder(o)
+      break
+    }
     case 'allowances': {
       const rows = Array.isArray(data.allowances) ? data.allowances.filter(isDict) : []
       const unlimited = num(data.unlimitedCount) ?? rows.filter((a) => a.unlimited).length
@@ -593,7 +826,13 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
       if (tx && str(tx.status)) bits.push(String(tx.status))
       const transfers = Array.isArray(data.transfers) ? data.transfers.length : 0
       if (transfers) bits.push(`${transfers} transfer${transfers === 1 ? '' : 's'}`)
-      return { ...EMPTY, summary: bits.join(' · '), txHash: tx ? str(tx.hash) : null }
+      return {
+        ...EMPTY,
+        summary: bits.join(' · '),
+        txHash: tx ? str(tx.hash) : null,
+        explorerUrl: str(data.explorerUrl),
+        chainId: num(data.chainId) ?? (tx ? num(tx.chainId) : null),
+      }
     }
     case 'network': {
       const rows = Array.isArray(data.chains) ? data.chains.filter(isDict) : []

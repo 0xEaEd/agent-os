@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useConnection } from '@/stores/connection'
-import { TRADING_KEYS, useOrders } from './trading'
+import { TRADING_KEYS, useOrderDecision, useOrders } from './trading'
 
 const rpcCall = vi.fn()
 vi.mock('@/app/providers', () => ({
@@ -53,5 +53,20 @@ describe('useOrders', () => {
       .map((c) => (c[1] as { limit: number }).limit)
       .sort((a, b) => a - b)
     expect(limits).toEqual([50, 100])
+  })
+})
+
+describe('useOrderDecision', () => {
+  it('rejects with no placeholder reason (the engine stored "user: user")', async () => {
+    rpcCall.mockResolvedValue({ order: {} })
+    const { result } = renderHook(() => useOrderDecision(), { wrapper })
+    await act(async () => {
+      await result.current.mutateAsync({ orderId: 'o1', approve: false })
+    })
+    expect(rpcCall).toHaveBeenCalledWith('trading.orders.reject', { orderId: 'o1' })
+    await act(async () => {
+      await result.current.mutateAsync({ orderId: 'o2', approve: true })
+    })
+    expect(rpcCall).toHaveBeenCalledWith('trading.orders.approve', { orderId: 'o2' })
   })
 })

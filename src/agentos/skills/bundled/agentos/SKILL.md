@@ -552,13 +552,15 @@ agentos trade probe --provider uniswap  # reachable? key valid? (exit 1 when not
 agentos trade tokens --chain robinhood AAPL --json     # verified Stock Tokens are flagged
 agentos trade quote --chain base --in ETH --out USDC --amount 0.01 --json
 agentos trade swap --chain base --in ETH --out USDC --amount 0.01 --wait --json
-agentos trade orders --status awaiting_approval [--kind swap|send|revoke] / approve <id> / reject <id>
+agentos trade orders --status awaiting_approval [--kind swap|send|revoke|lp_collect|lp_remove|lp_add] / approve <id> / reject <id>
 agentos trade send --chain base --token USDC --to <addr> --amount 25 --json   # several --to = one batch; agent sends always wait for approval
 agentos trade allowances --json / revoke --chain base --token <addr> --spender <addr>   # live ERC-20 allowances; approve(spender, 0)
 agentos trade decode --chain base <txhash> --json / network --json   # explain a tx; head block, gas, RPC health
-agentos trade lp pool <token|poolId> [--chain base|robinhood] --json   # Uniswap V4 (read-only): deepest pool, reserves, TVL, launcher, LP lock; with --json also writes a chat card
-agentos trade lp ranges <token|poolId> [--chain C] --json / position <tokenId> --chain C --json   # liquidity distribution; one position NFT
+agentos trade lp pool <token|TOKEN/QUOTE|poolId> [--chain base|robinhood] [--quote Q] [--fee 0.05] --json   # Uniswap V4 read: deepest pool (or the one on --fee: 0.05 / 0.05% / 500 / dynamic), reserves, TVL, launcher, LP lock; with --json also writes a chat card; no pool on the tier → trading.lp.not_found listing the tiers that exist
+agentos trade lp ranges <token|TOKEN/QUOTE|poolId> [--chain C] [--quote Q] [--fee F] --json / position <tokenId> --chain C --json   # liquidity distribution; one position NFT
 agentos trade lp positions [--wallet ADDR]… [--chain C]… [--all] [--budget-seconds N] --json   # every V4 position of the vault's wallets, out of range first (≤ 50 rows, totals over all); --chain repeatable (none = both); answers within 25 s (--budget-seconds 5-300), partialScan + a warning when cut short; --no-card skips the card; a token as --wallet → trading.lp.not_a_wallet
+agentos trade lp collect <tokenId> --chain C [--allow-empty] / remove <tokenId> --chain C [--pct 100] [--slippage 1] [--wait] --json   # LP writes on a vault position: one order each, ALWAYS awaiting_approval (whoever asks); remove 100 burns the NFT; collect with zero fees → trading.lp.nothing_to_collect unless --allow-empty
+agentos trade lp add <token|TOKEN/QUOTE|poolId> --chain C [--quote Q] [--fee F] (--usd X | --amount-base A [--amount-quote B]) [--range mcap:2M-10M|pct:20|above[:N]|below[:N]|full|ticks:LO:HI] [--to-position <tokenId>] [--wallet ADDR] [--slippage 1] [--wait] --json   # mint / top up; default range pct:20; above:N = one-sided all-token band from just above the price up N % (below:N = all-quote, down N %; N default 20); no auto-swap (short side → trading.insufficient_balance); an agent's add counts toward the daily cap; confirmed + --json → refreshed position card
 agentos trade portfolio / history / limits <addr>
 agentos config set trading.uniswap_api_key <key>       # or Settings › Trading in the app
 agentos cron list / add / run <id> / runs

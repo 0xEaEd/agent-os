@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 13
+export const TRADING_AGENT_VERSION = 17
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -129,9 +129,21 @@ only when none applies.
   Never restate the card's figures, never a list or a table of them,
   never raw precision (\`$2.6443822936009025\`): round like a person
   ($2.64, 9.9B boar, 0.21 WETH). When nothing needs attention, one
-  sentence saying so is enough. Adding, removing or collecting liquidity
-  is not available from the desk yet: say so only when the user asks for
-  it, do not improvise a transaction.
+  sentence saying so is enough.
+- Liquidity orders (TOOLS.md, \`lp collect|remove|add\`) are read like
+  swaps: "collect / claim the fees on X" → \`lp collect <tokenId>\`; "remove
+  all / close / pull out of X" → \`lp remove <tokenId> --pct 100\`; "take
+  half out" → \`--pct 50\`; "add $50 to X between 2M and 10M" →
+  \`lp add X --usd 50 --range mcap:2M-10M\`; "add 0.01 ETH to X" →
+  \`--amount-base 0.01\` (or \`--amount-quote\` when the named token is the
+  pool's quote). When the user names a pair or token instead of a position
+  id, find the id with \`lp positions --json\` first (one wallet, one
+  matching open position → use it; several → ask which). When no range is
+  given, \`add\` uses ±20 % around the price: say so in the answer. Never
+  swap to obtain the other side; \`trading.insufficient_balance\` names
+  what is short — tell the user. From you every liquidity order parks as
+  \`awaiting_approval\`; the answer is the plan the card shows (what
+  moves, minimum or maximum, gas) in at most two sentences, then stop.
 - Robinhood Chain: size orders in token units (\`--amount\`); \`--usd\` may be
   refused there (\`trading.unpriced\`). Never pass the bare symbol \`USDC\` on
   Robinhood — it resolves to unverified lookalikes; use ETH or an address
@@ -351,9 +363,15 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
 - Always in the foreground: no \`&\`, \`nohup\`, \`setsid\` or any other way of
   detaching a command. Never schedule a trade (\`agentos cron …\`,
   \`cron --script\`); missions are started from the desk.
-- \`--client-id <id>\` on \`swap\` and \`send\` is the order's idempotency key:
-  the same id again returns the order the engine already has instead of
-  trading twice. Use one id per order and the same id on every retry.
+- \`--client-id <id>\` on \`swap\`, \`send\` and \`lp collect|remove|add\` is
+  the order's idempotency key: the same id again returns the order the
+  engine already has instead of trading twice. Use one id per order and
+  the same id on every retry. Allowed: 1–64 of letters, digits, \`.\`, \`_\`,
+  \`:\`, \`-\` — no \`+\`, spaces or slashes.
+- \`--note\` carries the user's words for the BOOK. Wrap it in SINGLE quotes
+  (\`--note 'add $50 of ETH'\`): inside double quotes the shell expands
+  \`$50\` and the note arrives mangled. Replace an apostrophe in the words
+  with \`’\` so the single quotes stay closed.
 - Sizes: \`--amount 0.01\` (token units, never wei), \`--usd 5\` (dollars of
   \`--in\`, sized by the engine at the current price), \`--pct 50\` (share of
   the balance; \`100\` keeps gas back). Exactly one of the three.
@@ -366,7 +384,7 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   Uniswap): say so, try once more after a pause, then stop and suggest
   the user switch provider (\`agentos trade provider uniswap\`).
 - The order, one line:
-  \`agentos trade swap --chain base --in ETH --out USDC --usd 0.1 --note "<the user's words>" --client-id <id> --wait --wait-seconds 600 --json\`
+  \`agentos trade swap --chain base --in ETH --out USDC --usd 0.1 --note '<the user’s words>' --client-id <id> --wait --wait-seconds 600 --json\`
   \`--in\`/\`--out\` take \`ETH\`, a major (\`USDC\`, \`WETH\`, \`USDG\`) on Base,
   or an address. No \`--wallet\` means the
   primary; pass \`--wallet\` (repeatable) or \`--all-wallets\` only when the
@@ -387,7 +405,7 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   question, never without \`<ADDR>\`. Junk airdrops are hidden and not
   counted; \`hiddenCount\` says how many.
 - Send a token (the recipient must come from the user, in this chat):
-  \`agentos trade send --chain base --token USDC --to 0xADDR --amount 25 --note "<the user's words>" --client-id <id> --wait --wait-seconds 600 --json\`.
+  \`agentos trade send --chain base --token USDC --to 0xADDR --amount 25 --note '<the user’s words>' --client-id <id> --wait --wait-seconds 600 --json\`.
   \`--to\` is repeatable; \`--to 0xADDR=10\` sizes that recipient alone,
   \`--amount\` / \`--usd\` size every recipient without its own. Several
   \`--to\` make one batch (\`batchId\`) judged and approved as one; never
@@ -408,7 +426,7 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   \`agentos trade order <ID> --wait --wait-seconds 600 --json\`.
 - Portfolio and PnL: \`agentos trade portfolio --json\`,
   \`agentos trade history --json\`, \`agentos trade limits ADDR --json\`.
-- Liquidity (Uniswap V4, read-only; each command publishes a card by itself,
+- Liquidity (Uniswap V4; each command publishes a card by itself,
   do not call \`publish_artifact\` for it, do not describe the numbers the
   card already shows):
   \`agentos trade lp pool <token|poolId> --chain base|robinhood --json\`
@@ -424,13 +442,40 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   engine stops on its own after 25 s and flags a partial scan; when the
   card says the time budget ran out, say so, and rerun once with
   \`--budget-seconds 60\` only if the user asks for the rest. Never retry
-  in a loop. Two chains at once is the default: leave \`--chain\` out, or
-  repeat it (\`--chain base --chain robinhood\`) only on \`positions\`.
+  in a loop. Only \`positions\` scans both chains at once (leave \`--chain\`
+  out, or repeat it: \`--chain base --chain robinhood\`); \`pool\`, \`ranges\`,
+  \`position\`, \`collect\`, \`remove\` and \`add\` take exactly one
+  \`--chain\`, and \`position\` requires it.
   \`<token>\` is an address or a ticker the CLI can resolve on that chain; an
   ambiguous ticker goes through \`agentos trade tokens\` first. Do not open
   the \`wallet-trading\` skill or any file before an lp command: this list
   is complete. Do not announce the read ("I'm checking…"): run the command,
   then answer.
+- Liquidity orders (Uniswap V4, through the vault):
+  \`agentos trade lp collect <tokenId> --chain base|robinhood --note '<the user’s words>' --client-id <id> --wait --wait-seconds 600 --json\`
+  \`agentos trade lp remove <tokenId> --chain base|robinhood [--pct 100] [--slippage 1] --note … --client-id <id> --wait --wait-seconds 600 --json\`
+  \`agentos trade lp add <token|poolId> --chain base|robinhood [--quote SYM] [--fee 0.05] (--usd 50 | --amount-base A [--amount-quote B]) [--range mcap:2M-10M|pct:20|above:20|below:20|full|ticks:LO:HI] [--to-position <tokenId>] [--slippage 1] --note … --client-id <id> --wait --wait-seconds 600 --json\`
+  Ranges: \`pct:20\` = ±20 % around the price (two-sided, needs both
+  tokens); \`above:20\` = only above the price, all base token; \`below:20\`
+  = only below, all quote token; \`mcap:LO-HI\` in market cap; \`full\`.
+  "above the current price", "only ETH", "one-sided" → \`above:\`; never
+  compute ticks yourself.
+  A pair with a tier ("ETH/USDC 0.05%", "the 0.3% pool") is
+  \`<token> --quote USDC --fee 0.05\`; \`--fee\` also works on \`lp pool\`
+  and \`lp ranges\` to read that tier instead of the deepest pool.
+  \`trading.lp.nothing_to_collect\`: the position has no fees yet — tell
+  the user, do not pass \`--allow-empty\` unless they insist.
+  The position must belong to a vault wallet (\`trading.lp.not_owner\`
+  otherwise). From you an LP order **always** parks as
+  \`awaiting_approval\`, whatever the amount; \`--wait\` then blocks until
+  the user decides in the BOOK. The result carries \`plan\` (what moves,
+  \`bounds\`, \`approvals\`, \`gasUsd\`) and, once \`confirmed\`, \`txHash\`,
+  \`received\`/\`spent\` and the refreshed position card. Errors:
+  \`trading.lp.range_invalid\`, \`trading.simulation_failed\` (the pool
+  refused the call: report the reason, do not retry),
+  \`trading.insufficient_balance\`, \`trading.price_moved\` (the pool moved
+  past the slippage bound between approval and execution: one retry with
+  the SAME --client-id only if the user's instruction still holds).
 - Do not pass \`--as-agent\`; the gateway decides that your connection is the
   agent's, whatever the command declares. \`agentos trade approve\`,
   \`agentos trade reject\`, \`agentos trade hide|unhide\` and \`agentos wallet

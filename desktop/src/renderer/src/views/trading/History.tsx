@@ -3,17 +3,20 @@ import {
   ArrowDownLeft,
   ArrowLeftRight,
   ArrowUpRight,
+  Coins,
   ExternalLink,
   Flame,
   History as HistoryIcon,
+  Minus,
   PackageOpen,
+  Plus,
   ShieldCheck,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { useRpc } from '@/app/providers'
 import { Button } from '~/components/ui/button'
-import { t } from '~/i18n'
+import { t, type MessageKey } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import {
   errorText,
@@ -35,6 +38,20 @@ const GLYPH: Record<EntryKind, LucideIcon> = {
   approval: ShieldCheck,
   gas: Flame,
   unwrap: PackageOpen,
+  lp_add: Plus,
+  lp_collect: Coins,
+  lp_remove: Minus,
+}
+
+/** A kind this build does not know yet (a newer engine) still gets a row. */
+const DEFAULT_GLYPH: LucideIcon = HistoryIcon
+
+/** The same map, read with a kind off the wire that may not be in it. */
+const GLYPH_BY_WIRE: Partial<Record<string, LucideIcon>> = GLYPH
+
+/** The kind's label, or the raw kind when the catalogue has none for it. */
+export function kindLabel(kind: string): string {
+  return (t(`trading.history.kind.${kind}` as MessageKey) as string | undefined) ?? kind
 }
 
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
@@ -219,7 +236,7 @@ export function isRevokeEntry(entry: Pick<Entry, 'kind' | 'amountIn'>): boolean 
 }
 
 function EntryRow({ entry, showWallet }: { entry: Entry; showWallet: boolean }) {
-  const Glyph = GLYPH[entry.kind]
+  const Glyph = GLYPH_BY_WIRE[entry.kind] ?? DEFAULT_GLYPH
   const by = initiatorKey(entry.initiator)
   const revoke = isRevokeEntry(entry)
   // The chain leads the sub-line as a mark, so the rest stays plain text. A
@@ -242,7 +259,7 @@ function EntryRow({ entry, showWallet }: { entry: Entry; showWallet: boolean }) 
       </span>
       <span className="trd-entry__what">
         <span className="trd-entry__kind">
-          {revoke ? t('trading.history.kind.revoke') : t(`trading.history.kind.${entry.kind}`)}
+          {revoke ? t('trading.history.kind.revoke') : kindLabel(entry.kind)}
         </span>
         <span className="trd-entry__sub">
           <ChainBadge chainId={entry.chainId} />

@@ -32,6 +32,7 @@ addresses to the scan set, every number still comes from the RPC.
 
 from __future__ import annotations
 
+import json
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -316,6 +317,7 @@ class WalletSyncer:
         swaps = [o for o in orders if _order_kind(o) == "swap"]
         sends = [o for o in orders if _order_kind(o) == "send"]
         revokes = [o for o in orders if _order_kind(o) == "revoke"]
+        lp_writes = [o for o in orders if _order_kind(o).startswith("lp_")]
 
         # Every event in time order: scanned transactions and our own orders.
         events: list[tuple[float, int, str, Any]] = [(g.ts, g.block, "tx", g) for g in groups]
@@ -325,6 +327,8 @@ class WalletSyncer:
             events.append((float(o["updated_at"]), 0, "send", o))
         for o in revokes:
             events.append((float(o["updated_at"]), 0, "revoke", o))
+        for o in lp_writes:
+            events.append((float(o["updated_at"]), 0, "lp", o))
         events.sort(key=lambda e: (e[0], e[1]))
 
         # What the chain holds now, and how much of it the events explain.
@@ -335,6 +339,9 @@ class WalletSyncer:
                 token = str(o.get(key) or "").lower()
                 if token and token != NATIVE_ADDRESS:
                     tokens.add(token)
+        for o in lp_writes:
+            ins, outs, _gas = _lp_moves(o)
+            tokens.update(t for t, _a, _i in [*ins, *outs] if t != NATIVE_ADDRESS)
         if self._watch_tokens is not None:
             tokens.update(t.lower() for t in await self._watch_tokens(chain) if t)
         tokens.update(await self._discovered(chain, wallet))
@@ -357,6 +364,12 @@ class WalletSyncer:
         for o in sends:
             token, amount, _recipient, _gas = _send_leg(o)
             net[token] -= amount
+        for o in lp_writes:
+            ins, outs, _gas = _lp_moves(o)
+            for token, amount, _index in ins:
+                net[token] += amount
+            for token, amount, _index in outs:
+                net[token] -= amount
         openings: dict[str, int] = {}
         for token, balance in {**erc20_now, NATIVE_ADDRESS: native_now}.items():
             unexplained = int(balance) - net.get(token, 0)
@@ -391,6 +404,11 @@ class WalletSyncer:
             elif kind == "send":
                 token, _amount, _recipient, _gas = _send_leg(payload)
                 await prepare(token, _ts)
+                await prepare(NATIVE_ADDRESS, _ts)
+            elif kind == "lp":
+                ins, outs, _gas = _lp_moves(payload)
+                for token, _amount, _index in [*ins, *outs]:
+                    await prepare(token, _ts)
                 await prepare(NATIVE_ADDRESS, _ts)
             else:
                 await prepare(NATIVE_ADDRESS, _ts)
@@ -475,6 +493,24 @@ class WalletSyncer:
                         order_id=str(payload["order_id"]),
                         session_key=payload.get("session_key"),
                         gas_usd=gas_usd_at(int(payload.get("gas_wei") or 0), ts),
+                    )
+                elif kind == "lp":
+                    ins, outs, gas_wei = _lp_moves(payload)
+                    await self._book_lp(
+                        wallet,
+                        chain,
+                        kind=_order_kind(payload),
+                        ins=ins,
+                        outs=outs,
+                        ts=ts,
+                        tx_hash=str(payload["tx_hash"]).lower(),
+                        initiator=str(payload.get("initiator") or "agent"),
+                        gas_usd=gas_usd_at(gas_wei, ts),
+                        order_id=str(payload["order_id"]),
+                        session_key=payload.get("session_key"),
+                        note=payload.get("note") or _lp_note(payload),
+                        metas=metas,
+                        priced=priced,
                     )
                 else:
                     spender = str(payload.get("recipient") or "").lower()
@@ -753,6 +789,99 @@ class WalletSyncer:
             return False
         self._consume(chain, wallet.key, token, amount, value, ts, entry_id)
         return True
+
+    async def _book_lp(
+        self,
+        wallet: WalletRecord,
+        chain: ChainSpec,
+        *,
+        kind: str,
+        ins: list[tuple[str, int, int]],
+        outs: list[tuple[str, int, int]],
+        ts: float,
+        tx_hash: str | None,
+        initiator: str,
+        gas_usd: float | None = None,
+        order_id: str | None = None,
+        session_key: str | None = None,
+        note: str | None = None,
+        metas: dict[str, TokenMeta] | None = None,
+        priced: dict[tuple[str, int], Priced] | None = None,
+    ) -> bool:
+        """Book a Uniswap V4 LP write: one entry of ``kind`` per token that moved.
+
+        ``ins``/``outs`` are ``(token, amount_raw, log_index)``. The lots follow
+        the deposit/withdraw convention: a token that came out of the pool
+        (fees, principal) opens a lot at the price of the moment, a token put
+        into the pool is consumed FIFO like a withdrawal (realizing its PnL).
+        Gas rides on the first entry; a write that moved nothing (a collect
+        with no fees) still books one entry, for its gas.
+        """
+        booked = False
+        gas = gas_usd
+        moves = [(True, *m) for m in ins if m[1] > 0] + [(False, *m) for m in outs if m[1] > 0]
+        if not moves:
+            entry_id = self.ledger.insert_entry(
+                ts=ts,
+                chain_id=chain.chain_id,
+                wallet=wallet.key,
+                kind=kind,
+                tx_hash=tx_hash,
+                log_index=0,
+                gas_usd=gas,
+                initiator=initiator,
+                order_id=order_id,
+                session_key=session_key,
+                note=note,
+            )
+            return entry_id is not None
+        for inbound, token, amount, log_index in moves:
+            meta = _pick(metas, token) or await self._token_meta(chain, token)
+            pin = _pick(priced, (token, int(ts)))
+            price, source = pin if pin is not None else await self._price_for(chain, token, ts)
+            value = float(to_human(amount, meta.decimals)) * price if price is not None else None
+            side: dict[str, Any] = (
+                {"token_out": token, "amount_out_raw": amount, "price_out_usd": price}
+                if inbound
+                else {"token_in": token, "amount_in_raw": amount, "price_in_usd": price}
+            )
+            entry_id = self.ledger.insert_entry(
+                ts=ts,
+                chain_id=chain.chain_id,
+                wallet=wallet.key,
+                kind=kind,
+                tx_hash=tx_hash,
+                log_index=log_index,
+                value_usd=value,
+                gas_usd=gas,
+                cost_basis_source=source,
+                initiator=initiator,
+                order_id=order_id,
+                session_key=session_key,
+                note=note,
+                **side,
+            )
+            gas = None
+            if entry_id is None:
+                continue
+            booked = True
+            if inbound:
+                self.ledger.add_lot(
+                    chain.chain_id,
+                    wallet.key,
+                    token,
+                    amount_raw=amount,
+                    cost_usd_per_raw=(
+                        per_raw(price, meta.decimals)
+                        if value is not None and price is not None
+                        else 0.0
+                    ),
+                    acquired_at=ts,
+                    entry_id=entry_id,
+                )
+            else:
+                self._consume(chain, wallet.key, token, amount, value, ts, entry_id)
+        return booked
 
     async def _book_swap(
         self,
@@ -1082,6 +1211,58 @@ class WalletSyncer:
 
 def _order_kind(order: dict[str, Any]) -> str:
     return str(order.get("kind") or "swap")
+
+
+def _lp_settlement(order: dict[str, Any]) -> dict[str, Any]:
+    try:
+        plan = json.loads(str(order.get("quote_json") or "{}"))
+    except ValueError:
+        return {}
+    settled = plan.get("settlement") if isinstance(plan, dict) else None
+    return settled if isinstance(settled, dict) else {}
+
+
+def _lp_moves(
+    order: dict[str, Any],
+) -> tuple[list[tuple[str, int, int]], list[tuple[str, int, int]], int]:
+    """(ins, outs, gas_wei) of a confirmed LP write, as its settlement recorded them."""
+    settled = _lp_settlement(order)
+
+    def moves(key: str) -> list[tuple[str, int, int]]:
+        out = []
+        for item in settled.get(key) or []:
+            try:
+                token, amount, index = item
+                out.append((str(token).lower(), int(amount), int(index)))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    return moves("ins"), moves("outs"), int(order.get("gas_wei") or 0)
+
+
+def lp_note(kind: str, plan: dict[str, Any]) -> str:
+    """The ledger's default label for an LP write (``docs/lp-write.md``, desk ledger)."""
+    token_id = plan.get("tokenId")
+    if kind == "lp_collect":
+        return f"Collect fees · #{token_id}"
+    if kind == "lp_remove":
+        pct = plan.get("pct")
+        share = f" · {float(pct):g}%" if pct is not None else ""
+        return f"Remove liquidity · #{token_id}{share}"
+    pair = "/".join(str((plan.get(k) or {}).get("symbol") or "?") for k in ("token", "quote"))
+    usd = (plan.get("expected") or {}).get("usd")
+    worth = f" · ${float(usd):,.2f}" if isinstance(usd, int | float) else ""
+    where = f" · #{token_id}" if token_id else ""
+    return f"Add liquidity · {pair}{worth}{where}"
+
+
+def _lp_note(order: dict[str, Any]) -> str:
+    try:
+        plan = json.loads(str(order.get("quote_json") or "{}"))
+    except ValueError:
+        plan = {}
+    return lp_note(_order_kind(order), plan if isinstance(plan, dict) else {})
 
 
 def _send_leg(order: dict[str, Any]) -> tuple[str, int, str, int]:

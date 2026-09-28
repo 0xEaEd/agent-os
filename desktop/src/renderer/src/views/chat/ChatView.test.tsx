@@ -113,3 +113,21 @@ describe('ChatView header', () => {
     expect(word.parentElement).toHaveAttribute('data-tone', 'danger')
   })
 })
+
+describe('ChatView jump to latest', () => {
+  it('docks the pill at the foot of the thread, not inside the composer block', () => {
+    // Inside the composer block it floated 12px above the composer — over the
+    // desk's approvals region, which sits between the two, and its last card's note.
+    const { container } = mount(slot)
+    const stage = container.querySelector<HTMLElement>('.chat-stage')!
+    const dock = container.querySelector<HTMLElement>('.chat-jump-dock')!
+    expect(dock.parentElement).toBe(stage)
+    const children = [...stage.children]
+    const thread = stage.querySelector('.chat-thread')!
+    const composerBlock = children.find((c) => c.querySelector('.chat-jump-dock, textarea'))!
+    expect(children.indexOf(dock)).toBeGreaterThan(children.indexOf(thread))
+    expect(composerBlock).not.toBe(dock)
+    expect(children.indexOf(dock)).toBeLessThan(children.indexOf(composerBlock))
+    expect(composerBlock.querySelector('.chat-jump-dock')).toBeNull()
+  })
+})

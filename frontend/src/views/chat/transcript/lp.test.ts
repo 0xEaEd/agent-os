@@ -6,11 +6,13 @@ import {
   LP_CLOCK_MS,
   LP_COPIED_MS,
   LP_DENSE_MIN_PX,
+  LP_ERROR_MS,
   LP_NARROW_MAX_PX,
   RANGE_BAND,
   buildChartModel,
   buildLpCard,
   chooseAxis,
+  closedPositionPayload,
   createLpMounter,
   explorerUrl,
   fitLabel,
@@ -26,7 +28,10 @@ import {
   formatUsd,
   formatUsdCompact,
   isLpArtifact,
+  lpReadMethod,
+  lpWriteErrorText,
   normalizeLpPayload,
+  normalizeLpRequest,
   positionMarker,
   signedDistance,
   relativeTime,
@@ -1292,5 +1297,587 @@ describe('createLpMounter layout', () => {
 
     mounter.destroyAll()
     expect(disconnect).toHaveBeenCalled()
+  })
+})
+
+/* ── phase 2: ↻ refresh and the write buttons (docs/lp-write.md) ───────── */
+
+describe('request echo', () => {
+  it('reads the request every fixture carries and builds the read method from it', () => {
+    const p = payload<LpPositionPayload>('position')
+    expect(p.request).toEqual({ kind: 'position', params: { tokenId: '48213', chainId: 8453 } })
+    expect(lpReadMethod(p.request!)).toBe('trading.lp.position')
+    expect(payload<LpPoolPayload>('pool').request?.kind).toBe('pool')
+  })
+
+  it('refuses anything but the four reads, so no other method can be built', () => {
+    expect(normalizeLpRequest(null)).toBeNull()
+    expect(normalizeLpRequest({ kind: 'collect', params: {} })).toBeNull()
+    expect(normalizeLpRequest({ kind: 'orders.approve' })).toBeNull()
+    expect(normalizeLpRequest({ kind: 'positions' })).toEqual({ kind: 'positions', params: {} })
+    expect(payload<LpPayload>('positions-empty').request).toBeNull()
+  })
+})
+
+describe('closed position card', () => {
+  function closedFixture(): LpPositionPayload {
+    const raw = fixture('position') as { position: { status: string } }
+    raw.position.status = 'closed'
+    return normalizeLpPayload(raw) as LpPositionPayload
+  }
+
+  it('keeps who it was and says it is closed, without the figures of a gone position', () => {
+    const card = render(closedFixture(), ctx({ canWrite: true, canRefresh: true }))
+    expect(card.dataset.lpStatus).toBe('closed')
+    expect(card.querySelector('.lp-card__pair')).toHaveTextContent('PEPE / WETH')
+    expect(card.querySelector('.lp-pill')).toHaveTextContent('Closed')
+    expect(card.querySelector('[data-lp-closed-note]')).toHaveTextContent(
+      'Position closed — no liquidity left as of block 21,044,901',
+    )
+    expect(card.querySelector('[data-lp-hero]')).toBeNull()
+    expect(card.querySelector('.lp-range')).toBeNull()
+    expect(card.querySelector('.lp-card__amounts')).toBeNull()
+    expect(card.querySelector('[data-lp-writes]')).toBeNull()
+    expect(card.querySelector('.lp-card__foot-meta')).toHaveTextContent('#48213 · checked 2m ago')
+    expect(card.querySelector('[data-lp-action="refresh"]')).not.toBeNull()
+  })
+
+  it('closedPositionPayload: last seen at the block it was drawn from, checked now', () => {
+    const open = payload<LpPositionPayload>('position')
+    const closed = closedPositionPayload(open, '2026-09-27T09:32:00Z')
+    expect(closed.position.status).toBe('closed')
+    expect(closed.lastSeenBlock).toBe(21044901)
+    expect(closed.fetchedAt).toBe('2026-09-27T09:32:00Z')
+    expect(closed.warnings).toEqual([])
+    // The original is untouched.
+    expect(open.position.status).toBe('above-range')
+    const card = render(closed)
+    expect(card.querySelector('[data-lp-closed-note]')).toHaveTextContent(
+      'Position closed (burned) — last seen at block 21,044,901',
+    )
+    expect(card.querySelector('.lp-card__foot-meta')).toHaveTextContent('checked just now')
+    // A later close keeps the first "last seen".
+    expect(closedPositionPayload(closed, '2026-09-27T09:40:00Z').lastSeenBlock).toBe(21044901)
+  })
+})
+
+describe('refresh and write buttons in the built card', () => {
+  it('shows ↻ only when the mounter can call and the payload says how', () => {
+    expect(render(payload('position')).querySelector('[data-lp-action="refresh"]')).toBeNull()
+    const card = render(payload('position'), ctx({ canRefresh: true }))
+    expect(card.querySelector('.lp-card__foot [data-lp-action="refresh"]')).not.toBeNull()
+    const bare = render(payload('positions-empty'), ctx({ canRefresh: true }))
+    expect(bare.querySelector('[data-lp-action="refresh"]')).toBeNull()
+  })
+
+  it('offers Collect / Remove… on an in-app position only when writes are allowed', () => {
+    expect(render(payload('position')).querySelector('[data-lp-writes]')).toBeNull()
+    const card = render(payload('position'), ctx({ canWrite: true }))
+    const group = card.querySelector<HTMLElement>('[data-lp-writes]')!
+    expect(group.dataset.lpTokenId).toBe('48213')
+    expect(group.dataset.lpChainId).toBe('8453')
+    expect(group.querySelector('[data-lp-action="collect"]')).toHaveTextContent('Collect fees')
+    expect(group.querySelector('[data-lp-action="remove"]')).toHaveTextContent('Remove…')
+    const choice = group.querySelector<HTMLElement>('[data-lp-choice]')!
+    expect(choice.hidden).toBe(true)
+    expect(
+      [...choice.querySelectorAll<HTMLElement>('[data-lp-pct]')].map((b) => b.dataset.lpPct),
+    ).toEqual(['50', '100'])
+
+    const external = fixture('position') as { position: { owner: { inApp: boolean } } }
+    external.position.owner.inApp = false
+    const foreign = render(normalizeLpPayload(external)!, ctx({ canWrite: true }))
+    expect(foreign.querySelector('[data-lp-writes]')).toBeNull()
+
+    const closed = fixture('position') as { position: { status: string } }
+    closed.position.status = 'closed'
+    expect(
+      render(normalizeLpPayload(closed)!, ctx({ canWrite: true })).querySelector(
+        '[data-lp-writes]',
+      ),
+    ).toBeNull()
+  })
+
+  it('turns Collect fees off with "no fees yet" when both sides owe zero, not when unknown', () => {
+    const zero = fixture('position') as {
+      position: { fees: { base: { raw: string }; quote: { raw: string }; usd: number | null } }
+    }
+    zero.position.fees.base.raw = '0'
+    zero.position.fees.quote.raw = '0'
+    zero.position.fees.usd = 0
+    const card = render(normalizeLpPayload(zero)!, ctx({ canWrite: true }))
+    const collect = card.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!
+    expect(collect.disabled).toBe(true)
+    expect(collect.title).toBe('no fees yet')
+    // Remove is unaffected.
+    expect(card.querySelector<HTMLButtonElement>('[data-lp-action="remove"]')!.disabled).toBe(false)
+
+    // One side still owes something: collect stays.
+    const oneSide = fixture('position') as typeof zero
+    oneSide.position.fees.base.raw = '0'
+    const partial = render(normalizeLpPayload(oneSide)!, ctx({ canWrite: true }))
+    expect(partial.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!.disabled).toBe(
+      false,
+    )
+
+    // Unknown fees (no amounts at all) are not zero: collect stays.
+    const unknown = fixture('position') as { position: Record<string, unknown> }
+    unknown.position.fees = null
+    const blind = render(normalizeLpPayload(unknown)!, ctx({ canWrite: true }))
+    const open = blind.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!
+    expect(open.disabled).toBe(false)
+    expect(open.title).not.toBe('no fees yet')
+  })
+
+  it('puts the buttons on the positions rows the vault owns, not the others', () => {
+    const card = render(payload('positions'), ctx({ canWrite: true }))
+    const rows = [...card.querySelectorAll<HTMLElement>('.lp-row')]
+    const withWrites = rows
+      .filter((row) => row.querySelector('[data-lp-writes]'))
+      .map((row) => row.dataset.lpTokenId)
+    expect(withWrites).toEqual(['48213', '48990'])
+  })
+})
+
+function rpcError(code: string, message = code): Error & { code: string } {
+  return Object.assign(new Error(message), { code })
+}
+
+describe('createLpMounter · refresh', () => {
+  function fresher(): Record<string, unknown> {
+    const raw = fixture('position') as Record<string, unknown> & {
+      position: Record<string, unknown>
+    }
+    raw.asOfBlock = 21045000
+    raw.fetchedAt = '2026-09-27T09:40:00Z'
+    raw.position.valueUsd = 1400
+    return raw
+  }
+
+  it('re-runs the request through the read RPC and swaps the payload in place', async () => {
+    let now = Date.parse('2026-09-27T09:40:00Z')
+    let resolve: (value: unknown) => void = () => {}
+    const call = vi.fn(() => new Promise((r) => (resolve = r)))
+    const host = placeholder()
+    const mounter = createLpMounter({
+      fetchPayload: () => Promise.resolve(fixture('position')),
+      call,
+      now: () => now,
+    })
+    mounter.mountLp(document.body)
+    await flush()
+    // The web console has a call but no actions: ↻ yes, write buttons no.
+    expect(host.querySelector('[data-lp-writes]')).toBeNull()
+    const button = host.querySelector<HTMLButtonElement>('[data-lp-action="refresh"]')!
+    expect(host.querySelector('.lp-card__foot-meta')).toHaveTextContent('10m ago')
+    button.click()
+    expect(call).toHaveBeenCalledWith('trading.lp.position', { tokenId: '48213', chainId: 8453 })
+    const card = host.querySelector<HTMLElement>('.lp-card')!
+    expect(card.dataset.lpRefreshing).toBe('true')
+    expect(button.disabled).toBe(true)
+    // A second click while one is in flight is nothing.
+    button.click()
+    expect(call).toHaveBeenCalledTimes(1)
+
+    now += 1_000
+    resolve(fresher())
+    await flush()
+    const next = host.querySelector<HTMLElement>('.lp-card')!
+    expect(next).not.toBe(card)
+    expect(next.dataset.lpRefreshing).toBeUndefined()
+    expect(next.querySelector('[data-lp-hero="value"]')).toHaveTextContent('$1,400.00')
+    expect(next.querySelector('.lp-card__foot-meta')).toHaveTextContent(
+      'as of block 21,045,000 · just now',
+    )
+    // The request survives the swap, so ↻ keeps working.
+    next.querySelector<HTMLButtonElement>('[data-lp-action="refresh"]')!.click()
+    expect(call).toHaveBeenCalledTimes(2)
+    mounter.destroyAll()
+  })
+
+  it('keeps the card and says why when the refresh fails, for a few seconds', async () => {
+    vi.useFakeTimers()
+    const call = vi.fn(() => Promise.reject(new Error('RPC down')))
+    const host = placeholder()
+    const mounter = createLpMounter({ fetchPayload: () => Promise.resolve(fixture('pool')), call })
+    mounter.mountLp(document.body)
+    await flush()
+    const card = host.querySelector<HTMLElement>('.lp-card')!
+    host.querySelector<HTMLButtonElement>('[data-lp-action="refresh"]')!.click()
+    expect(call).toHaveBeenCalledWith('trading.lp.pool', {
+      token: '0x6982508145454ce325ddbe47a25d4ec3d2311933',
+      chainId: 8453,
+    })
+    await flush()
+    expect(host.querySelector('.lp-card')).toBe(card)
+    expect(card.dataset.lpRefreshing).toBeUndefined()
+    expect(host.querySelector('[data-lp-refresh-error]')).toHaveTextContent(
+      'refresh failed: RPC down',
+    )
+    expect(host.querySelector<HTMLButtonElement>('[data-lp-action="refresh"]')!.disabled).toBe(
+      false,
+    )
+    vi.advanceTimersByTime(LP_ERROR_MS)
+    expect(host.querySelector('[data-lp-refresh-error]')).toBeNull()
+    mounter.destroyAll()
+  })
+
+  it('has no ↻ without a call', async () => {
+    const host = placeholder()
+    createLpMounter({ fetchPayload: () => Promise.resolve(fixture('position')) }).mountLp(
+      document.body,
+    )
+    await flush()
+    expect(host.querySelector('.lp-card')).not.toBeNull()
+    expect(host.querySelector('[data-lp-action="refresh"]')).toBeNull()
+  })
+})
+
+describe('createLpMounter · write actions', () => {
+  const ORDER = { orderId: 'lpo_c41a9e', kind: 'lp_collect', status: 'awaiting_approval' }
+
+  async function mounted(
+    call: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+    extra: { onOrder?: (id: string) => void; name?: string } = {},
+  ) {
+    const host = placeholder()
+    const mounter = createLpMounter({
+      fetchPayload: () => Promise.resolve(fixture(extra.name ?? 'position')),
+      actions: { call, onOrder: extra.onOrder },
+    })
+    mounter.mountLp(document.body)
+    await flush()
+    return { host, mounter }
+  }
+
+  it('collect: pending, then "awaiting approval · #order" until the order finishes', async () => {
+    let resolve: (value: unknown) => void = () => {}
+    const call = vi.fn((method: string) =>
+      method === 'trading.lp.collect'
+        ? new Promise((r) => (resolve = r))
+        : Promise.resolve(fixture('position')),
+    )
+    const onOrder = vi.fn()
+    const { host, mounter } = await mounted(call, { onOrder })
+    const group = host.querySelector<HTMLElement>('[data-lp-writes]')!
+    const collect = group.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!
+    collect.click()
+    expect(call).toHaveBeenCalledWith('trading.lp.collect', { tokenId: '48213', chainId: 8453 })
+    expect(group.dataset.lpWrite).toBe('pending')
+    expect(collect.disabled).toBe(true)
+    expect(group.querySelector('[data-lp-state]')).toHaveTextContent('asking…')
+
+    resolve(ORDER)
+    await flush()
+    expect(group.dataset.lpWrite).toBe('awaiting')
+    const state = group.querySelector<HTMLElement>('[data-lp-state]')!
+    expect(state).toHaveTextContent('awaiting approval · #lpo_c41a9e')
+    expect(state.hidden).toBe(false)
+    expect(onOrder).toHaveBeenCalledWith('lpo_c41a9e')
+    expect(group.querySelector<HTMLButtonElement>('[data-lp-action="remove"]')!.disabled).toBe(true)
+
+    // Someone else's order settling changes nothing.
+    mounter.orderFinished('other')
+    expect(group.dataset.lpWrite).toBe('awaiting')
+
+    mounter.orderFinished('lpo_c41a9e')
+    // The buttons come back and the card reads itself again.
+    expect(call).toHaveBeenLastCalledWith('trading.lp.position', {
+      tokenId: '48213',
+      chainId: 8453,
+    })
+    await flush()
+    const fresh = host.querySelector<HTMLElement>('[data-lp-writes]')!
+    expect(fresh.dataset.lpWrite).toBeUndefined()
+    expect(fresh.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!.disabled).toBe(
+      false,
+    )
+    expect(fresh.querySelector<HTMLElement>('[data-lp-state]')!.hidden).toBe(true)
+    mounter.destroyAll()
+  })
+
+  it('keeps a no-fees Collect off after another write on the position finishes', async () => {
+    const zero = fixture('position') as {
+      position: { fees: { base: { raw: string }; quote: { raw: string } } }
+    }
+    zero.position.fees.base.raw = '0'
+    zero.position.fees.quote.raw = '0'
+    let resolve: (value: unknown) => void = () => {}
+    const call = vi.fn((method: string) =>
+      method === 'trading.lp.remove' ? new Promise((r) => (resolve = r)) : Promise.resolve(zero),
+    )
+    const host = placeholder()
+    const mounter = createLpMounter({
+      fetchPayload: () => Promise.resolve(zero),
+      actions: { call },
+    })
+    mounter.mountLp(document.body)
+    await flush()
+    const group = host.querySelector<HTMLElement>('[data-lp-writes]')!
+    const collect = group.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!
+    expect(collect.disabled).toBe(true)
+    group.querySelector<HTMLButtonElement>('[data-lp-action="remove"]')!.click()
+    group.querySelector<HTMLButtonElement>('[data-lp-pct="50"]')!.click()
+    resolve({ order: { ...ORDER, kind: 'lp_remove' } })
+    await flush()
+    mounter.orderFinished('lpo_c41a9e')
+    await flush()
+    const fresh = host.querySelector<HTMLElement>('[data-lp-writes]')!
+    expect(fresh.querySelector<HTMLButtonElement>('[data-lp-action="remove"]')!.disabled).toBe(
+      false,
+    )
+    expect(fresh.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!.disabled).toBe(
+      true,
+    )
+    mounter.destroyAll()
+  })
+
+  it('remove: a 50 % / 100 % choice, and the pct goes to the RPC', async () => {
+    const call = vi.fn(() => Promise.resolve({ order: { ...ORDER, kind: 'lp_remove' } }))
+    const { host, mounter } = await mounted(call)
+    const group = host.querySelector<HTMLElement>('[data-lp-writes]')!
+    const remove = group.querySelector<HTMLButtonElement>('[data-lp-action="remove"]')!
+    const choice = group.querySelector<HTMLElement>('[data-lp-choice]')!
+    remove.click()
+    expect(choice.hidden).toBe(false)
+    expect(remove.getAttribute('aria-expanded')).toBe('true')
+    expect(call).not.toHaveBeenCalled()
+    choice.querySelector<HTMLButtonElement>('[data-lp-pct="100"]')!.click()
+    expect(call).toHaveBeenCalledWith('trading.lp.remove', {
+      tokenId: '48213',
+      chainId: 8453,
+      pct: 100,
+    })
+    await flush()
+    expect(group.dataset.lpWrite).toBe('awaiting')
+    expect(choice.hidden).toBe(true)
+    mounter.destroyAll()
+  })
+
+  it('acts on the row that was clicked in a positions card', async () => {
+    const call = vi.fn(() => Promise.resolve(ORDER))
+    const { host, mounter } = await mounted(call, { name: 'positions' })
+    const row = host.querySelector<HTMLElement>('.lp-row[data-lp-token-id="48990"]')!
+    row.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!.click()
+    expect(call).toHaveBeenCalledWith('trading.lp.collect', { tokenId: '48990', chainId: 8453 })
+    await flush()
+    expect(row.querySelector<HTMLElement>('[data-lp-writes]')!.dataset.lpWrite).toBe('awaiting')
+    // The other position is untouched.
+    const other = host.querySelector<HTMLElement>(
+      '.lp-row[data-lp-token-id="48213"] [data-lp-writes]',
+    )!
+    expect(other.dataset.lpWrite).toBeUndefined()
+    mounter.destroyAll()
+  })
+
+  it('shows a refusal under the buttons for a few seconds and frees them', async () => {
+    vi.useFakeTimers()
+    const call = vi.fn(() => Promise.reject(rpcError('trading.lp.not_owner')))
+    const { host, mounter } = await mounted(call)
+    const group = host.querySelector<HTMLElement>('[data-lp-writes]')!
+    group.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!.click()
+    await flush()
+    const error = group.querySelector<HTMLElement>('[data-lp-error]')!
+    expect(error.hidden).toBe(false)
+    expect(error).toHaveTextContent('This position is not in your wallet vault.')
+    expect(group.dataset.lpWrite).toBeUndefined()
+    expect(group.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!.disabled).toBe(
+      false,
+    )
+    vi.advanceTimersByTime(LP_ERROR_MS)
+    expect(error.hidden).toBe(true)
+    mounter.destroyAll()
+  })
+
+  it('names the operator-only refusal, and says how an order that did not park ended', async () => {
+    expect(lpWriteErrorText(rpcError('trading.operator_required'))).toBe(
+      'Only the desktop app can do this.',
+    )
+    expect(lpWriteErrorText(new Error('boom'))).toBe('Could not create the order: boom')
+    const call = vi.fn(() =>
+      Promise.resolve({ ...ORDER, status: 'failed', reason: 'simulation reverted' }),
+    )
+    const { host, mounter } = await mounted(call)
+    const group = host.querySelector<HTMLElement>('[data-lp-writes]')!
+    group.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!.click()
+    await flush()
+    expect(group.dataset.lpWrite).toBeUndefined()
+    expect(group.querySelector('[data-lp-error]')).toHaveTextContent(
+      'Order lpo_c41a9e: simulation reverted',
+    )
+    mounter.destroyAll()
+  })
+
+  it('draws no buttons while the actions getter answers null (the web, a plain chat)', async () => {
+    let actions: { call: () => Promise<unknown> } | null = null
+    const host = placeholder()
+    const mounter = createLpMounter({
+      fetchPayload: () => Promise.resolve(fixture('position')),
+      actions: () => actions,
+    })
+    mounter.mountLp(document.body)
+    await flush()
+    expect(host.querySelector('[data-lp-writes]')).toBeNull()
+    // With actions but no separate call, ↻ runs over the actions' call.
+    actions = { call: vi.fn(() => Promise.resolve(fixture('position'))) }
+    const second = placeholder('/api/v1/artifacts/lp-2')
+    mounter.mountLp(document.body)
+    await flush()
+    expect(second.querySelector('[data-lp-writes]')).not.toBeNull()
+    expect(second.querySelector('[data-lp-action="refresh"]')).not.toBeNull()
+    mounter.destroyAll()
+  })
+})
+
+describe('createLpMounter · a position burned under its cards', () => {
+  const ORDER = { orderId: 'lpo_r7d02b', kind: 'lp_remove', status: 'awaiting_approval' }
+
+  /** A position card (lp-1) and a positions card (lp-2) that both show #48213. */
+  async function twoCards(call: (method: string, params: Record<string, unknown>) => unknown) {
+    const position = placeholder('/api/v1/artifacts/lp-1')
+    const positions = placeholder('/api/v1/artifacts/lp-2')
+    const mounter = createLpMounter({
+      fetchPayload: (url) =>
+        Promise.resolve(fixture(url.endsWith('lp-1') ? 'position' : 'positions')),
+      actions: { call: vi.fn(async (m: string, p: Record<string, unknown>) => call(m, p)) },
+    })
+    mounter.mountLp(document.body)
+    await flush()
+    const row = positions.querySelector<HTMLElement>('.lp-row[data-lp-token-id="48213"]')!
+    return { position, positions, row, mounter }
+  }
+
+  const buttonsOf = (root: ParentNode): HTMLButtonElement[] => [
+    ...root.querySelectorAll<HTMLButtonElement>('[data-lp-writes] button[data-lp-action]'),
+  ]
+
+  function expectClosed(group: HTMLElement, owner: HTMLElement): void {
+    expect(group.dataset.lpWrite).toBe('closed')
+    const buttons = buttonsOf(group.parentElement!)
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const b of buttons) {
+      expect(b.disabled).toBe(true)
+      expect(b.title).toBe('position closed')
+    }
+    expect(owner.dataset.lpStatus).toBe('closed')
+    expect(owner.querySelector('.lp-pill')!.getAttribute('data-lp-status')).toBe('closed')
+    expect(owner.querySelector('.lp-pill')).toHaveTextContent('Closed')
+  }
+
+  /** A position card redrawn closed: header + pill + one note, none of the old figures. */
+  function expectClosedCard(host: HTMLElement, note: string): void {
+    const card = host.querySelector<HTMLElement>('.lp-card')!
+    expect(card.dataset.lpStatus).toBe('closed')
+    expect(card.querySelector('.lp-card__pair')).toHaveTextContent('PEPE / WETH')
+    expect(card.querySelector('.lp-card__meta')).toHaveTextContent('Base · 1%')
+    expect(card.querySelector('.lp-pill')!.getAttribute('data-lp-status')).toBe('closed')
+    expect(card.querySelector('[data-lp-closed-note]')).toHaveTextContent(note)
+    for (const stale of [
+      '[data-lp-hero]',
+      '.lp-range',
+      '[data-lp-row="principal"]',
+      '[data-lp-row="fees"]',
+      '[data-lp-writes]',
+    ]) {
+      expect(card.querySelector(stale), stale).toBeNull()
+    }
+    const meta = card.querySelector('.lp-card__foot-meta')!
+    expect(meta).toHaveTextContent('#48213 · checked just now')
+    expect(meta).not.toHaveTextContent('as of block')
+  }
+
+  it('↻ that finds the position gone (not_found) disables every card of it', async () => {
+    const { position, row, mounter } = await twoCards((method) => {
+      if (method === 'trading.lp.position')
+        throw rpcError('trading.lp.not_found', 'position #48213 does not exist on Base')
+      return null
+    })
+    position.querySelector<HTMLButtonElement>('[data-lp-action="refresh"]')!.click()
+    await flush()
+    // The card itself turns into a closed card: no stale value, range or amounts.
+    expectClosedCard(position, 'Position closed (burned) — last seen at block 21,044,901')
+    // The note says it; no second "closed" line flashes under the footer.
+    expect(position.querySelector('[data-lp-refresh-error]')).toBeNull()
+    // ↻ stays: reading again is harmless and answers the same.
+    expect(position.querySelector('[data-lp-action="refresh"]')).not.toBeNull()
+    // The older positions card showing the same position follows.
+    expectClosed(row.querySelector<HTMLElement>('[data-lp-writes]')!, row)
+    // The other row is untouched.
+    const other = row.parentElement!.querySelector<HTMLElement>(
+      '.lp-row[data-lp-token-id="48990"] [data-lp-writes]',
+    )!
+    expect(other.dataset.lpWrite).toBeUndefined()
+    expect(buttonsOf(other.parentElement!).every((b) => !b.disabled)).toBe(true)
+    mounter.destroyAll()
+  })
+
+  it('treats a position_closed read the same', async () => {
+    const { position, row, mounter } = await twoCards((method) => {
+      if (method === 'trading.lp.position') throw rpcError('trading.lp.position_closed')
+      return null
+    })
+    position.querySelector<HTMLButtonElement>('[data-lp-action="refresh"]')!.click()
+    await flush()
+    expectClosed(row.querySelector<HTMLElement>('[data-lp-writes]')!, row)
+    mounter.destroyAll()
+  })
+
+  it('the refresh after a finished remove reads "closed": the card drops its buttons, older cards disable theirs', async () => {
+    const closedRead = fixture('position') as {
+      position: Record<string, unknown>
+      fetchedAt: string
+    }
+    closedRead.position.status = 'closed'
+    // No stamp from the engine: the mounter stamps the read with its own clock.
+    closedRead.fetchedAt = ''
+    const { position, row, mounter } = await twoCards((method) => {
+      if (method === 'trading.lp.remove') return { order: ORDER }
+      if (method === 'trading.lp.position') return closedRead
+      return null
+    })
+    const group = position.querySelector<HTMLElement>('[data-lp-writes]')!
+    group.querySelector<HTMLButtonElement>('[data-lp-action="remove"]')!.click()
+    group.querySelector<HTMLButtonElement>('[data-lp-pct="100"]')!.click()
+    await flush()
+    // While it waits, neither card can ask again — the pct choices included.
+    expect(group.dataset.lpWrite).toBe('awaiting')
+    expect(buttonsOf(position).every((b) => b.disabled)).toBe(true)
+    const rowGroup = row.querySelector<HTMLElement>('[data-lp-writes]')!
+    expect(rowGroup.dataset.lpWrite).toBe('awaiting')
+    expect(buttonsOf(row).every((b) => b.disabled)).toBe(true)
+
+    mounter.orderFinished('lpo_r7d02b')
+    await flush()
+    // The read found it at zero liquidity: closed as of that read's block.
+    expectClosedCard(position, 'Position closed — no liquidity left as of block 21,044,901')
+    expectClosed(row.querySelector<HTMLElement>('[data-lp-writes]')!, row)
+    mounter.destroyAll()
+  })
+
+  it('a positions re-scan that no longer lists a position closes it on the other cards', async () => {
+    const rescan = fixture('positions') as { positions: { tokenId: string }[] }
+    rescan.positions = rescan.positions.filter((p) => p.tokenId !== '48213')
+    const { position, positions, mounter } = await twoCards((method) =>
+      method === 'trading.lp.positions' ? rescan : null,
+    )
+    positions.querySelector<HTMLButtonElement>('[data-lp-action="refresh"]')!.click()
+    await flush()
+    expect(positions.querySelector('.lp-row[data-lp-token-id="48213"]')).toBeNull()
+    expectClosedCard(position, 'Position closed (burned) — last seen at block 21,044,901')
+    mounter.destroyAll()
+  })
+
+  it('a write refused as position_closed closes the position too', async () => {
+    const { position, row, mounter } = await twoCards((method) => {
+      if (method === 'trading.lp.collect') throw rpcError('trading.lp.position_closed')
+      return null
+    })
+    position.querySelector<HTMLButtonElement>('[data-lp-action="collect"]')!.click()
+    await flush()
+    expectClosedCard(position, 'Position closed (burned) — last seen at block 21,044,901')
+    const rowGroup = row.querySelector<HTMLElement>('[data-lp-writes]')!
+    expectClosed(rowGroup, row)
+    expect(rowGroup.querySelector('[data-lp-error]')).toHaveTextContent('This position is closed.')
+    mounter.destroyAll()
   })
 })

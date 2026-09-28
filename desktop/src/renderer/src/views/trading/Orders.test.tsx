@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Orders } from './Orders'
+import { formatAmount } from './logic'
 import { order, renderDesk, USDC } from './test-utils'
+import type { Order } from './types'
 
 const rpcCall = vi.fn()
 vi.mock('@/app/providers', () => ({
@@ -327,5 +330,61 @@ describe('Orders · approvals', () => {
       />,
     )
     expect(screen.getByText('Nothing waiting')).toBeInTheDocument()
+  })
+})
+
+describe('Orders · LP rows', () => {
+  const FIXTURES = 'src/renderer/src/views/trading/desk/__fixtures__/lp'
+  const lp = (kind: 'lp_add' | 'lp_remove', extra: Partial<Order> = {}): Order => ({
+    ...(JSON.parse(readFileSync(`${FIXTURES}/${kind}.json`, 'utf8')) as Order),
+    expiresAt: Date.now() + 600_000,
+    ...extra,
+  })
+
+  function row(o: Order): HTMLElement {
+    renderDesk(
+      <Orders
+        orders={[o]}
+        approvalsOnly={false}
+        deciding={null}
+        onDecide={vi.fn()}
+        showWallet={false}
+        highlight={null}
+      />,
+    )
+    return screen.getByTestId('order-row')
+  }
+
+  it('an add shows the deposit it plans, with its dollars — never amountIn (the liquidity)', () => {
+    const add = lp('lp_add')
+    const el = row(add)
+    expect(el).toHaveTextContent('Add liquidity')
+    const amounts = screen.getByTestId('order-lp-amounts')
+    expect(amounts).toHaveTextContent('deposit 0.020404 WETH · $50.00')
+    expect(amounts).toHaveAttribute('data-estimate', 'true')
+    // The raw liquidity the engine files under amountIn is nowhere on the row.
+    expect(el).not.toHaveTextContent(formatAmount(add.amountIn))
+    expect(el).not.toHaveTextContent('0.0000281172')
+    // The dollars are said once, beside the deposit, not again in the headline.
+    expect(el.querySelector('.trd-order__head')?.textContent?.match(/\$50\.00/g)).toHaveLength(1)
+  })
+
+  it('a confirmed add shows what the receipt took', () => {
+    const add = lp('lp_add', {
+      status: 'confirmed',
+      spent: {
+        base: { raw: '0', human: '0', usd: 0 },
+        quote: { raw: '20391000000000000', human: '0.020391', usd: 49.97 },
+      },
+    })
+    row(add)
+    const amounts = screen.getByTestId('order-lp-amounts')
+    expect(amounts).toHaveTextContent('deposit 0.020391 WETH')
+    expect(amounts).not.toHaveAttribute('data-estimate')
+  })
+
+  it('a remove shows what comes back', () => {
+    row(lp('lp_remove'))
+    expect(screen.getByTestId('order-lp-amounts')).toHaveTextContent(/^receive /)
   })
 })
