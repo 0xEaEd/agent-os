@@ -21,7 +21,7 @@ import os
 import re
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -2546,12 +2546,17 @@ def _signed_usd(value: Any) -> str:
     return money(number if number != 0 else 0.0)
 
 
+# The zone run times are shown in. ``None`` is the system's local zone; tests
+# pin it (``time.tzset`` does not exist on Windows, so TZ alone is not enough).
+_DCA_LOCAL_TZ: tzinfo | None = None
+
+
 def _dca_when(at: datetime | None, now: datetime | None = None) -> str:
     """Local ``HH:MM`` for a run today, ``Mon DD HH:MM`` otherwise, ``—`` when unknown."""
     if at is None:
         return "—"
-    local = at.astimezone()
-    today = (now or datetime.now(UTC)).astimezone().date()
+    local = at.astimezone(_DCA_LOCAL_TZ)
+    today = (now or datetime.now(UTC)).astimezone(_DCA_LOCAL_TZ).date()
     return local.strftime("%H:%M" if local.date() == today else "%b %d %H:%M")
 
 

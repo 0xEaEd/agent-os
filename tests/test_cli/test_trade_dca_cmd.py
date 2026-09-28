@@ -447,14 +447,11 @@ def test_run_human_output_shows_the_run(client: _Client) -> None:
 
 @pytest.fixture
 def utc_clock(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Pin the local zone to UTC so ``HH:MM`` in the run lines is deterministic."""
-    import time
+    """Pin the run lines' zone to UTC so ``HH:MM`` is deterministic on every OS."""
+    from datetime import UTC
 
-    monkeypatch.setenv("TZ", "UTC")
-    time.tzset()
+    monkeypatch.setattr(trade_cmd, "_DCA_LOCAL_TZ", UTC)
     yield
-    monkeypatch.undo()
-    time.tzset()
 
 
 @pytest.mark.parametrize(
