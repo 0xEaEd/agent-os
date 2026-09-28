@@ -43,28 +43,25 @@ def _update(body: str, path: str = "app.py") -> str:
 
 
 @pytest.mark.asyncio
-async def test_a_unified_diff_header_is_refused_and_the_file_is_untouched(
+async def test_a_line_outside_any_hunk_is_refused_and_the_file_is_untouched(
     tmp_path: Path,
 ) -> None:
+    # The report's own shape, a unified-diff "@@ -1,1 +1,1 @@" header, now
+    # applies (test_apply_patch_context_anchored_hunks.py); a line that opens
+    # no hunk at all is what must still be refused.
     target = tmp_path / "app.py"
     target.write_text("print('old')\n", encoding="utf-8")
     mtime_before = target.stat().st_mtime_ns
 
     with pytest.raises(ValueError) as excinfo:
-        await _apply(tmp_path, _update("@@ -1,1 +1,1 @@\n-print('old')\n+print('new')\n"))
+        await _apply(tmp_path, _update("# swap it\n-print('old')\n+print('new')\n"))
 
     message = str(excinfo.value)
     assert "Invalid line in '*** Update File: app.py' block" in message
-    assert "expected a '@@@ ' hunk header" in message
-    assert "'@@ -1,1 +1,1 @@'" in message
+    assert "expected an '@@' hunk header" in message
+    assert "'# swap it'" in message
     assert target.read_text(encoding="utf-8") == "print('old')\n"
     assert target.stat().st_mtime_ns == mtime_before
-
-
-def test_a_unified_diff_header_gets_the_hint_that_names_it() -> None:
-    """The two-@ header is the shape models write most; say what it is."""
-    with pytest.raises(ValueError, match=r"unified-diff header; hunks here open with '@@@'"):
-        _parse_patch(_update("@@ -1,1 +1,1 @@\n-a\n+b\n"))
 
 
 def test_a_note_outside_a_hunk_does_not_get_the_unified_diff_hint() -> None:

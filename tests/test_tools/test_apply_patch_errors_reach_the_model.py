@@ -110,17 +110,22 @@ async def _failure(workspace: Path, patch: str) -> dict[str, Any]:
             id="update-file-line",
         ),
         pytest.param(
-            _update("app.py", "@@ -1 +1 @@", "-print('old')", "+print('new')"),
+            _update("app.py", "# swap the print", "-print('old')", "+print('new')"),
             "Invalid line in '*** Update File: app.py' block "
-            "(expected a '@@@ ' hunk header): '@@ -1 +1 @@'"
-            " (that is a unified-diff header; hunks here open with '@@@')",
-            id="unified-diff-header",
+            "(expected an '@@' hunk header): '# swap the print'",
+            id="update-file-note-line",
         ),
         pytest.param(
             "*** Begin Patch\n*** Update File: app.py\n*** End Patch\n",
             "No hunks found in '*** Update File: app.py' block: expected at least one "
-            "'@@@ -old_start,count +new_start,count @@@' hunk header",
+            "hunk. Open each hunk with '@@'",
             id="update-file-no-hunks",
+        ),
+        pytest.param(
+            _update("app.py", "@@", "-print('WRONG')", "+print('new')"),
+            "Update File: app.py: Hunk context not found: no run of 1 line(s) "
+            "starting with \"print('WRONG')\" matches the file exactly",
+            id="anchored-context-not-found",
         ),
         pytest.param(
             _update("../../outside.py", "@@@ -1,1 +1,1 @@@", "-a", "+b"),

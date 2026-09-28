@@ -7,6 +7,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Trading: **DCA mandates** — `agentos trade dca create ETH --usd 10 --every
+  1d --cap 300` sets up a recurring buy the engine runs by itself. The cap,
+  the schedule, the optional `--runs` and `--max-price` guards are ledger
+  rows (schema v7: `mandates`, `mandate_runs`, `orders.mandate_id`), not a
+  prompt; each buy is an ordinary swap order under the usual guardrails
+  (threshold, daily cap, vault signing) and no LLM turn is spent on it.
+  From an agent a mandate parks as `awaiting_approval`; the operator
+  approves it once (desktop card, Missions panel, or `agentos trade dca
+  approve`). `dca list|show|approve|reject|pause|resume|stop|run|update`
+  round it out. Each `--json` command publishes an
+  `application/vnd.agentos.dca+json` card that the chat renders with a
+  live countdown to the next buy, a spent-of-cap progress bar, average buy
+  price vs now, a buys chart and, on the desktop, the controls (Approve &
+  start, Pause, Buy now, Stop). Gateway methods `trading.dca.*` (create/
+  get/list agent-callable, the rest operator-only). The desk's DCA presets
+  now create mandates instead of cron jobs; existing cron-based DCA
+  missions keep running unchanged. Contract: `docs/dca.md`.
+
+## [2026.9.28] - 2026-09-28
+
+### Added
+- Desktop: select several sessions in the sidebar and act on them at once.
+  Cmd-click toggles a row, Shift-click selects the range from the last row
+  clicked (in the order shown, chats in open project folders included),
+  Cmd+A selects every row shown and Escape clears. Right-clicking inside the
+  selection opens one menu for all of it: Pin, Mark as unread, Archive and
+  **Delete N sessions…**, which asks once and sends a single
+  `sessions.delete` with `keys`. Rows the gateway could not delete stay
+  selected and a toast gives the count. A plain click still opens the chat
+  and clears the selection. Deleting one session also reads the gateway's
+  per-key `errors` now, instead of reporting a failed delete as done (#3485).
 - Trading: `agentos trade lp pool|ranges|position|positions` read Uniswap V4
   liquidity on Base and Robinhood Chain — a token's deepest pool (reserves,
   TVL, market cap, launcher, whether the LP is locked), its liquidity
@@ -30,23 +61,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   operator-only); with `--json` a confirmed order is followed by the
   refreshed position card. The phase-1 read methods now echo `request` so a
   card can refresh itself. Contract: `docs/lp-write.md`.
-- Trading: **DCA mandates** — `agentos trade dca create ETH --usd 10 --every
-  1d --cap 300` sets up a recurring buy the engine runs by itself. The cap,
-  the schedule, the optional `--runs` and `--max-price` guards are ledger
-  rows (schema v7: `mandates`, `mandate_runs`, `orders.mandate_id`), not a
-  prompt; each buy is an ordinary swap order under the usual guardrails
-  (threshold, daily cap, vault signing) and no LLM turn is spent on it.
-  From an agent a mandate parks as `awaiting_approval`; the operator
-  approves it once (desktop card, Missions panel, or `agentos trade dca
-  approve`). `dca list|show|approve|reject|pause|resume|stop|run|update`
-  round it out. Each `--json` command publishes an
-  `application/vnd.agentos.dca+json` card that the chat renders with a
-  live countdown to the next buy, a spent-of-cap progress bar, average buy
-  price vs now, a buys chart and, on the desktop, the controls (Approve &
-  start, Pause, Buy now, Stop). Gateway methods `trading.dca.*` (create/
-  get/list agent-callable, the rest operator-only). The desk's DCA presets
-  now create mandates instead of cron jobs; existing cron-based DCA
-  missions keep running unchanged. Contract: `docs/dca.md`.
+- Desktop: each project folder in the sidebar has a `+` just left of its chat
+  count that starts a new chat in that project with its agent, as the
+  folder's **New chat** menu item does. It shows on hover, on keyboard focus
+  and while the folder's menu is open, and the count does not move when it
+  appears (#3489).
 
 ### Changed
 - Desktop: the mode pill reads Chat | Trade, and the strip no longer says
@@ -54,8 +73,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   streaming reply is visible in the chat itself; the word only repeated it.
   AWAITING and RUNNING stay: a pending decision and a mission in flight are
   things the chat does not show on its own.
+- Desktop: the inline new-project row in the sidebar no longer draws a ring
+  of its own around the whole row, so the focused name field shows one
+  outline instead of two (#3484).
 
 ### Fixed
+- Chat (desktop and Web UI): a message queued while a turn was running no
+  longer follows you into the next session and gets sent there. The pending
+  queue is now kept per session — switching sessions (or starting a new chat)
+  leaves it with its own session, which sends it once that turn ends (on
+  return, if the turn finished while you were elsewhere).
+- `apply_patch` refused every patch a GPT model wrote. OpenAI models open
+  hunks on a bare `@@` (or `@@ <a line to search past>`) with no line numbers,
+  and the parser knew only the numbered `@@@ -a,b +c,d @@@` header, so each
+  call failed with "expected a '@@@ ' hunk header" and the retry with a bare
+  `@@@` failed the same way. Context-anchored hunks are now located by their
+  context and removed lines (after the anchor, from where the previous hunk
+  ended), along with a headerless first hunk, `*** End of File`, and a
+  unified-diff `@@ -a,b +c,d @@` header. The located lines must still match
+  the file exactly, and a miss in any file leaves every file untouched (#3490).
 - Security: secret redaction and the payload guard matched connection strings
   against a scheme list that carried `redis` and `amqp` but not their TLS
   spellings, so `rediss://user:password@host` (what `REDIS_TLS_URL` holds) and

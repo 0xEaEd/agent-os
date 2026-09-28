@@ -1,15 +1,25 @@
-import { useMemo, useState, type DragEvent } from 'react'
+import { useEffect, useMemo, useState, type DragEvent } from 'react'
+import { projectId } from '@/views/projects/logic'
 import { filterSessions } from '@/views/sessions/logic'
 import { t } from '~/i18n'
 import { useLive } from '~/stores/live'
 import { useMoveSession, useProjects } from '~/stores/projects'
 import { useSessionMarks } from '~/stores/session-marks'
+import { useSessionSelection } from '~/stores/session-selection'
 import { useSessionView } from '~/stores/session-view'
 import { toSessionRow, useSessions } from '~/stores/sessions'
 import { useUi } from '~/stores/ui'
-import { fileSessions, SESSION_DRAG_TYPE } from '~/views/projects/logic'
-import { agentIds, filterRows, hasActiveFilter, orderRows, sectionRows } from './logic'
+import { fileSessions, folderPreview, SESSION_DRAG_TYPE } from '~/views/projects/logic'
+import {
+  agentIds,
+  filterRows,
+  hasActiveFilter,
+  orderRows,
+  sectionRows,
+  visibleSlots,
+} from './logic'
 import { ProjectFolders } from './ProjectFolders'
+import { SessionBulkDelete } from './SessionBulk'
 import { SessionRowLink } from './SessionRow'
 import { SessionViewMenu } from './SessionViewMenu'
 
@@ -34,6 +44,8 @@ export function SessionList() {
   const archived = useSessionMarks((s) => s.archived)
   const unread = useSessionMarks((s) => s.unread)
   const liveIds = useLive((s) => s.ids)
+  const openFolders = useUi((s) => s.openFolders)
+  const setVisible = useSessionSelection((s) => s.setVisible)
   const [over, setOver] = useState(false)
   const searching = Boolean(query.trim())
   const { projects } = projectsState
@@ -83,6 +95,19 @@ export function SessionList() {
       projects,
     )
   }, [showFolders, filed, matched, pinned, unread, view, projects])
+
+  // What a Shift-click range runs over, and all a selection may hold: a row
+  // hidden by a search, a filter or a closed folder drops out of it.
+  const visible = useMemo(() => {
+    const folders = showFolders
+      ? projects
+          .filter((p) => openFolders.has(projectId(p)))
+          .map((p) => folderPreview(filed.byProject.get(projectId(p)) ?? []).shown)
+      : []
+    return visibleSlots(folders, sections)
+  }, [showFolders, projects, openFolders, filed, sections])
+  useEffect(() => setVisible(visible), [visible, setVisible])
+  useEffect(() => () => setVisible([]), [setVisible])
 
   const agents = useMemo(() => agentIds(rows), [rows])
   const hidden = hasActiveFilter(view) ? rows.length - narrowed.length : 0
@@ -146,6 +171,7 @@ export function SessionList() {
           </button>
         </p>
       ) : null}
+      <SessionBulkDelete />
     </div>
   )
 }
