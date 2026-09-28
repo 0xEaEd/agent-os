@@ -41,6 +41,21 @@ export const sessions = {
   'session.toast.archived': 'Session archived',
   'session.toast.unarchived': 'Session restored',
 
+  // Several rows selected (Cmd-click, Shift-click): the menu acts on all of them
+  'session.bulk.menu.label': 'Selected sessions',
+  'session.bulk.menu.delete': 'Delete {n} sessions…',
+  'session.bulk.delete.title': 'Delete {n} sessions?',
+  'session.bulk.delete.body':
+    'Their transcripts are removed from the gateway. This cannot be undone.',
+  'session.bulk.delete.more': 'and {n} more',
+  'session.bulk.delete.runningOne': 'One of them is running; its turn will be stopped.',
+  'session.bulk.delete.runningMany': '{n} of them are running; their turns will be stopped.',
+  'session.bulk.toast.deleted': '{n} sessions deleted',
+  'session.bulk.toast.partial': 'Deleted {done} of {total} sessions',
+  'session.bulk.toast.deleteFailed': 'Could not delete the sessions',
+  'session.bulk.toast.archived': '{n} sessions archived',
+  'session.bulk.toast.unarchived': '{n} sessions restored',
+
   // View menu (the slider button beside "Sessions")
   'view.label': 'View',
   'view.grouping': 'Grouping',
