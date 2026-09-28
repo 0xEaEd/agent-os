@@ -133,6 +133,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   readability floor was applied without checking the shot boundary, so a shot
   shorter than 800 ms emitted a cue that overlapped the next one; such a shot
   now gets a cue spanning the whole shot (#2588).
+- `agentos migrate openclaw`: a multi-paragraph daily note stays whole under its
+  `## Imported daily memory:` header instead of losing the header and landing
+  under an unrelated heading when its first paragraph already existed in
+  `MEMORY.md`. Re-running the migration after adding your own notes or a
+  `memory add` entry still reports `skipped`, and a sibling workspace's
+  `MEMORY.md` paragraphs are still deduped one by one (#3092).
 - `apply_patch`: a hunk whose start line lies past the end of the file is
   rejected with `Hunk start line N exceeds file length (M lines)` and the file
   is left untouched. A hunk of only `+` lines never reached the bounds check,
