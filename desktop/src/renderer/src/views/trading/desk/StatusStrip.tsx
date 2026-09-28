@@ -1,15 +1,30 @@
 import { LayoutPanelLeft, MessageSquare } from 'lucide-react'
 import type { RawJob } from '@/views/cron/logic'
 import { t } from '~/i18n'
-import { useNow } from '~/lib/use-now'
 import { badgeText } from '../logic'
 import type { Mandate } from '../types'
 import { missionStatus, statusWord, type StatusWord } from './desk-logic'
-import { mandateProgressText } from './mandate-logic'
-import { mandateWord, missionWord } from './MissionControls'
+import { mandateChip, type MandateChip } from './mandate-logic'
+import { missionWord, useMandateClock } from './MissionControls'
+import type { DeskMode } from './mode-logic'
 
 const NO_MANDATES: Mandate[] = []
-import type { DeskMode } from './mode-logic'
+
+/** "DCA · next 59 m", "DCA ×2 · next 12 m", "DCA · awaiting": the mandates in one chip. */
+export function mandateChipText(chip: MandateChip): string {
+  const head = chip.count > 1 ? `${t('trading.dca.kind')} ×${chip.count}` : t('trading.dca.kind')
+  const word =
+    chip.word === 'next' && chip.next
+      ? `${t('trading.dca.next')} ${chip.next}`
+      : chip.word === 'due'
+        ? t('trading.dca.due')
+        : chip.word === 'awaiting'
+          ? t('trading.dca.chip.awaiting')
+          : chip.word === 'paused'
+            ? t('trading.dca.chip.paused')
+            : t('trading.dca.chip.active')
+  return `${head} · ${word}`
+}
 
 /**
  * The chat's top strip. In every mode the mode pill sits in the middle. In
@@ -39,7 +54,7 @@ export function StatusStrip({
   sessionSlot?: (el: HTMLDivElement | null) => void
   missions?: RawJob[]
   running?: ReadonlySet<string>
-  /** The desk's DCA mandates; they share the two mission slots, after the cron ones. */
+  /** The desk's DCA mandates: summarised in one chip that takes one of the two mission slots. */
   mandates?: Mandate[]
   sessionPending?: number
   /** null while loading or errored. */
@@ -53,10 +68,11 @@ export function StatusStrip({
     pendingApprovals: sessionPending,
     missionRunning: missions.some((m) => m.id && running.has(m.id)),
   })
-  const shown = missions.slice(0, 2)
-  const shownMandates = mandates.slice(0, Math.max(0, 2 - shown.length))
-  const total = missions.length + mandates.length
-  const now = useNow(trading && shownMandates.length ? 30_000 : 0)
+  const now = useMandateClock(trading ? mandates : NO_MANDATES)
+  // Every live mandate in ONE chip, never a name and a progress each: the
+  // strip is a single 42px row shared with the mode pill and the Desk toggle.
+  const chip = trading ? mandateChip(mandates, now) : null
+  const shown = missions.slice(0, chip ? 1 : 2)
   return (
     <div className="trd-strip" data-mode={mode} data-testid="status-strip">
       <div className="trd-strip__left">
@@ -74,24 +90,18 @@ export function StatusStrip({
               )
             })
           : null}
-        {trading
-          ? shownMandates.map((m) => (
-              <span
-                key={m.id}
-                className="trd-strip__mission"
-                data-kind="mandate"
-                data-state={m.status}
-                data-testid="strip-mandate"
-              >
-                <b>{m.name}</b>
-                <span>
-                  {mandateWord(m, now)} · <span className="trd-mono">{mandateProgressText(m)}</span>
-                </span>
-              </span>
-            ))
-          : null}
-        {trading && total > shown.length + shownMandates.length ? (
-          <span className="trd-strip__more">+{total - shown.length - shownMandates.length}</span>
+        {trading && missions.length > shown.length ? (
+          <span className="trd-strip__more">+{missions.length - shown.length}</span>
+        ) : null}
+        {chip ? (
+          <span
+            className="trd-strip__chip"
+            data-state={chip.word}
+            title={mandateChipText(chip)}
+            data-testid="strip-mandates"
+          >
+            {mandateChipText(chip)}
+          </span>
         ) : null}
       </div>
       <div className="trd-strip__centre">

@@ -760,6 +760,44 @@ const DONE_KEYS: Record<MandateAction, MessageKey> = {
 }
 
 /**
+ * The "Buy now" answer, said as what happened to the buy: bought, placed,
+ * waiting for approval, skipped (and why), failed (and why). A skip is not a
+ * success — it used to toast the same green check as a buy, and read as
+ * nothing having happened at all. An answer without `run` falls back to the
+ * newest manual run in the mandate's history, and says so when there is none.
+ */
+export function runToast(res: MandatePayload | null | undefined, mandate: Mandate): void {
+  const name = res?.mandate?.name || mandate.name
+  const id = `dca-${mandate.id}`
+  const newest = res?.mandate?.history?.[0]
+  const run = res?.run ?? (newest?.manual ? newest : undefined)
+  const why = (key: MessageKey) => `${t(key)}${run?.reason ? `: ${run.reason}` : ''} · ${name}`
+  switch (run?.status) {
+    case 'filled':
+      toast.success(`${t('trading.dca.toast.filled')} · ${name}`, { id })
+      return
+    case 'pending':
+      toast.success(`${t('trading.dca.toast.ran')} · ${name}`, { id })
+      return
+    case 'parked':
+      toast.info(`${t('trading.dca.toast.parked')} · ${name}`, { id })
+      return
+    case 'skipped':
+      toast.warning(why('trading.dca.toast.runSkipped'), { id })
+      return
+    case 'failed':
+      toast.error(why('trading.dca.toast.runFailed'), { id })
+      return
+    case 'expired':
+    case 'rejected':
+      toast.warning(why('trading.dca.toast.runVoid'), { id })
+      return
+    default:
+      toast.info(`${t('trading.dca.toast.noRun')} · ${name}`, { id })
+  }
+}
+
+/**
  * The mandate controls the desk offers (the Missions rows, the approval
  * card, the DCA contract). Each write toasts its own outcome, keyed by the
  * mandate so a second click replaces the first toast instead of stacking.
@@ -804,14 +842,7 @@ export function useMandateActions(): MandateActions {
       write(`trading.dca.${action}`, { mandateId: mandate.id, ...extra }, mandate.id, (res) => {
         const name = res?.mandate?.name || mandate.name
         if (action === 'run') {
-          const run = res?.run
-          const text =
-            run?.status === 'parked'
-              ? t('trading.dca.toast.parked')
-              : run?.status === 'skipped' || run?.status === 'failed'
-                ? `${t('trading.dca.toast.runSkipped')}${run.reason ? `: ${run.reason}` : ''}`
-                : t(DONE_KEYS.run)
-          toast.success(`${text} · ${name}`, { id: `dca-${mandate.id}` })
+          runToast(res, mandate)
           return
         }
         toast.success(`${t(DONE_KEYS[action])} · ${name}`, { id: `dca-${mandate.id}` })

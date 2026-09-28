@@ -603,6 +603,46 @@ describe('buildDcaCard — mandate', () => {
     expect(rows[1]!.querySelector('.dca-run__ago')).toHaveTextContent('1d ago')
   })
 
+  it('heads the list "Recent runs" when a listed run bought nothing, "Recent buys" otherwise', () => {
+    const card = render(payload('mandate-active'))
+    // #14 is parked and #13 skipped: not all of these are buys.
+    expect(card.querySelector('.dca-runs__title')).toHaveTextContent(/^Recent runs$/)
+    const raw = activeWith((m) => {
+      m.history = (m.history as Json[]).filter((r) => r.status === 'filled')
+    })
+    const filled = render(normalizeDcaPayload(raw)!)
+    expect(filled.querySelector('.dca-runs__title')).toHaveTextContent(/^Recent buys$/)
+  })
+
+  it('draws "—" for avg, vs now and unrealised before the first filled buy', () => {
+    const raw = activeWith((m) => {
+      ;(m.runs as Json).done = 0
+      ;(m.budget as Json).spentUsd = 0
+      Object.assign(m.acquired as Json, {
+        avgPriceUsd: 0,
+        vsAvgPct: 0,
+        unrealizedUsd: 0,
+        amount: { raw: '0', human: '0', usd: 0 },
+      })
+      m.history = (m.history as Json[])
+        .filter((r) => r.status === 'skipped')
+        .map((r) => ({ ...r, n: 1 }))
+    })
+    const card = render(normalizeDcaPayload(raw)!)
+    const value = (key: string) =>
+      card.querySelector<HTMLElement>(`[data-dca-stat="${key}"] .dca-stat__value`)!
+    expect(value('avg')).toHaveTextContent(/^—$/)
+    expect(value('avg')).toHaveAttribute('data-dca-no-price', 'true')
+    expect(value('unrealized')).toHaveTextContent(/^—$/)
+    expect(value('unrealized')).toHaveAttribute('data-dca-no-price', 'true')
+    expect(value('unrealized').dataset.dcaTone).toBeUndefined()
+    // No "vs now 0 %", no "on $0 spent".
+    expect(card.querySelector('[data-dca-stat="avg"] .dca-stat__sub')).toBeNull()
+    expect(card.querySelector('[data-dca-stat="unrealized"] .dca-stat__sub')).toBeNull()
+    expect(card.querySelector('.dca-card__stats')).not.toHaveTextContent('on $0 spent')
+    expect(card.querySelector('.dca-runs__title')).toHaveTextContent(/^Recent runs$/)
+  })
+
   it('names a skipped run by its reason', () => {
     const raw = activeWith((m) => {
       m.history = (m.history as Json[]).slice(5)

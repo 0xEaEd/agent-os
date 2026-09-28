@@ -39,7 +39,7 @@ import {
 } from './desk-logic'
 import { dcaCreateParams, isMandatePreset } from './mandate-logic'
 import { MissionContract } from './MissionContract'
-import { MissionControls, MissionStrip, mandateWord, missionWord } from './MissionControls'
+import { MissionControls, MissionStrip, missionWord } from './MissionControls'
 import { MissionPicker } from './MissionPicker'
 import type { MissionsApi } from './missions'
 import type { MissionPreset } from './presets'
@@ -358,7 +358,6 @@ export function useDeskInstruments(
   // would listen to `cron.run.finished` twice and update every job twice.
   const missionJobs = desk?.missions.missions ?? NO_JOBS
   const missionRuns = desk?.missions.running ?? NO_RUNS
-  const deskMandates = desk?.missions.mandates ?? NO_MANDATES
   const awaitingMandates = desk?.missions.awaitingMandates ?? NO_MANDATES
   // `pick` is the catalogue; `form` is one contract, with the preset it came
   // from (null for a blank contract, an edit, or the one-shot swap chip). A
@@ -381,18 +380,17 @@ export function useDeskInstruments(
   // Tools tab and the composer chip both open it through the store.
   const sheet = useTradingUi((s) => s.sheet)
   const openSheet = useTradingUi((s) => s.openSheet)
+  // A cron mission's state takes the composer's hint; a DCA mandate never
+  // does — it has its own row and chip, and the hint stays the hint.
   const missionLine = useMemo(() => {
     const first = missionJobs[0]
-    if (!first) {
-      const mandate = deskMandates[0]
-      return mandate ? `${mandate.name} · ${mandateWord(mandate, now)}` : null
-    }
+    if (!first) return null
     const s = missionStatus(first, {
       running: Boolean(first.id && missionRuns.has(first.id)),
       pendingApprovals: pendingOrders.length,
     })
     return `${first.name} · ${missionWord(s.state, s.until)}`
-  }, [missionJobs, missionRuns, pendingOrders.length, deskMandates, now])
+  }, [missionJobs, missionRuns, pendingOrders.length])
 
   // ── Placeholder rotation ────────────────────────────────────────────────
   const [focused, setFocused] = useState(false)

@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { order, renderDesk, WALLET } from '../test-utils'
+import type { MandatePayload } from '../types'
+import { PLACEHOLDERS } from './desk-logic'
 import { useDeskFrame } from './TradingDesk'
 import { useDeskInstruments } from './useDeskInstruments'
 import type { DeskMode } from './mode-logic'
@@ -60,6 +63,7 @@ function Harness({
       {frame.banner}
       {inst.region}
       {inst.dockAbove}
+      <span data-testid="composer-placeholder">{inst.placeholder}</span>
       <button type="button" onClick={frame.desk?.onStartFresh} data-testid="start-fresh">
         fresh
       </button>
@@ -358,5 +362,54 @@ describe('useDeskFrame · start fresh', () => {
     })
     expect(rpcCall.mock.calls.some((c) => c[0] === 'cron.update')).toBe(true)
     expect(startFresh).not.toHaveBeenCalled()
+  })
+})
+
+describe('useDeskInstruments · the composer hint', () => {
+  const PAYLOAD = JSON.parse(
+    readFileSync('src/renderer/src/views/trading/desk/__fixtures__/dca/mandate.json', 'utf8'),
+  ) as MandatePayload
+  const dcaList = {
+    version: 1,
+    kind: 'mandates',
+    fetchedAt: PAYLOAD.fetchedAt,
+    warnings: [],
+    mandates: [{ ...PAYLOAD.mandate, name: 'Test DCA C', sessionKey: SESSION }],
+    totals: { count: 1, active: 1, spentUsd: 120, capUsd: 300, acquiredUsd: null },
+  }
+
+  it('keeps the normal hint while a DCA mandate runs', async () => {
+    rpcCall.mockImplementation(answers({ 'trading.dca.list': dcaList }))
+    renderDesk(<Harness active />)
+    // The mandate is on the desk (the strip above the composer names it)…
+    await screen.findByTestId('mission-strip-mandate')
+    // …and the composer still says what it always says.
+    const hint = screen.getByTestId('composer-placeholder')
+    expect(hint).not.toHaveTextContent('Test DCA C')
+    expect(PLACEHOLDERS).toContain(hint.textContent)
+  })
+
+  it('still puts a cron mission’s state in the hint', async () => {
+    rpcCall.mockImplementation(
+      answers({
+        'trading.dca.list': dcaList,
+        'cron.list': {
+          jobs: [
+            {
+              id: 'j1',
+              name: 'Watch ETH',
+              enabled: true,
+              sessionKey: SESSION,
+              scheduleKind: 'every',
+              scheduleRaw: 3600,
+            },
+          ],
+        },
+      }),
+    )
+    renderDesk(<Harness active />)
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-placeholder')).toHaveTextContent(/^Watch ETH · /),
+    )
   })
 })

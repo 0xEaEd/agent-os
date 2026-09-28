@@ -1,12 +1,19 @@
 import { OctagonX, Pause, Pencil, Play, Trash2, Zap } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { RawJob } from '@/views/cron/logic'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
-import { useNow } from '~/lib/use-now'
 import type { Mandate } from '../types'
 import { missionStatus, type MissionState } from './desk-logic'
-import { mandateProgress, mandateProgressText, mandateState } from './mandate-logic'
+import {
+  mandateBuysText,
+  mandateMissesText,
+  mandateProgress,
+  mandateProgressText,
+  mandateReason,
+  mandateRows,
+  mandateState,
+} from './mandate-logic'
 
 const NO_MANDATES: Mandate[] = []
 /** A second click on Stop within this long stops the mandate; after it, the button disarms. */
@@ -47,18 +54,50 @@ export function mandateWord(m: Mandate, now: number): string {
   return t(s.key)
 }
 
-/** The tick a row needs: every second in the last hour before a buy, else every half minute. */
-function useMandateClock(mandates: readonly Mandate[]): number {
-  const [fast, setFast] = useState(false)
-  const now = useNow(mandates.length === 0 ? 0 : fast ? 1_000 : 30_000)
-  const soon = mandates.some((m) => {
-    if (m.status !== 'active' || !m.schedule.nextRunAt) return false
-    const at = Date.parse(m.schedule.nextRunAt)
-    return Number.isFinite(at) && at - now < 3_600_000
-  })
-  // Adjusted while rendering (React's "state from props" pattern), not in an effect.
-  if (soon !== fast) setFast(soon)
-  return now
+/*
+ * One second-tick shared by every DCA countdown on screen — the Missions
+ * rows, the strip above the composer, the status strip's chip — so two
+ * surfaces never read two clocks and disagree about the same buy (one said
+ * "next 59 m" while the other, on a staler clock, still said "next 1 h").
+ */
+const clockListeners = new Set<() => void>()
+let clockNow = 0
+let clockTimer: ReturnType<typeof setInterval> | null = null
+
+function subscribeClock(listener: () => void): () => void {
+  clockListeners.add(listener)
+  if (clockTimer === null) {
+    clockNow = Date.now()
+    clockTimer = setInterval(() => {
+      clockNow = Date.now()
+      for (const l of clockListeners) l()
+    }, 1_000)
+  }
+  return () => {
+    clockListeners.delete(listener)
+    if (clockListeners.size === 0 && clockTimer !== null) {
+      clearInterval(clockTimer)
+      clockTimer = null
+    }
+  }
+}
+
+// While nothing ticks, the second the render happens in: stable across the
+// reads of one render, never a stale tick from an earlier mount.
+const readClock = () => (clockTimer === null ? Math.floor(Date.now() / 1_000) * 1_000 : clockNow)
+const noClock = () => () => {}
+
+/** The shared clock, ticking while any listed mandate has a next buy to count down to. */
+export function useMandateClock(mandates: readonly Mandate[]): number {
+  const ticking = mandates.some((m) => m.status === 'active' && Boolean(m.schedule.nextRunAt))
+  return useSyncExternalStore(ticking ? subscribeClock : noClock, readClock)
+}
+
+/** "Paused by you" for the operator's own bare pause or stop; the engine's words otherwise. */
+function reasonTitle(m: Mandate): string | null {
+  const reason = mandateReason(m)
+  if (reason !== 'user') return reason
+  return m.status === 'paused' ? t('trading.dca.reason.pausedByYou') : t('trading.dca.reason.byYou')
 }
 
 /** "$120 / $300" over a hairline bar: the engine's spent against its cap. */
@@ -100,6 +139,7 @@ export function MissionStrip({
   mandates?: Mandate[]
 }) {
   const now = useMandateClock(mandates)
+  const { rows, more } = mandateRows(mandates)
   if (missions.length === 0 && mandates.length === 0) return null
   return (
     <div className="trd-mstrip" role="status" data-testid="mission-strip">
@@ -116,7 +156,7 @@ export function MissionStrip({
           </span>
         )
       })}
-      {mandates.map((m) => (
+      {rows.map((m) => (
         <span
           key={m.id}
           className="trd-mstrip__item"
@@ -130,6 +170,11 @@ export function MissionStrip({
           <span className="trd-mstrip__word trd-mono">{mandateProgressText(m)}</span>
         </span>
       ))}
+      {more > 0 ? (
+        <span className="trd-mstrip__more" data-testid="mission-strip-more">
+          {t('trading.dca.more').replace('{count}', String(more))}
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -179,6 +224,7 @@ export function MissionControls({
   onMandateStop?: (m: Mandate) => void
 }) {
   const now = useMandateClock(mandates)
+  const { rows, more } = mandateRows(mandates)
   return (
     <div className="trd-mctl" data-testid="mission-controls">
       {missions.map((job) => {
@@ -251,7 +297,7 @@ export function MissionControls({
           </div>
         )
       })}
-      {mandates.map((m) => (
+      {rows.map((m) => (
         <MandateRow
           key={m.id}
           mandate={m}
@@ -264,6 +310,11 @@ export function MissionControls({
           onStop={onMandateStop}
         />
       ))}
+      {more > 0 ? (
+        <span className="trd-mctl__more" data-testid="mandate-more">
+          {t('trading.dca.more').replace('{count}', String(more))}
+        </span>
+      ) : null}
       {showStart ? (
         <button
           type="button"
@@ -312,6 +363,9 @@ function MandateRow({
     return () => window.clearTimeout(id)
   }, [armed])
   const steerable = m.status === 'active' || m.status === 'paused'
+  // Why it stopped or paused ("cap reached", "paused after 3 runs: …"), on hover.
+  const reason = reasonTitle(m)
+  const misses = mandateMissesText(m)
   return (
     <div
       className="trd-mctl__row"
@@ -319,18 +373,20 @@ function MandateRow({
       data-state={m.status}
       data-testid="mandate-row"
       data-mandate={m.id}
+      title={reason ?? undefined}
     >
       <span className="trd-mctl__kind" aria-hidden>
         {t('trading.dca.kind')}
       </span>
-      <span
-        className="trd-mctl__name"
-        title={m.statusReason ? `${m.name} · ${m.statusReason}` : m.name}
-      >
+      <span className="trd-mctl__name" title={reason ? `${m.name} · ${reason}` : m.name}>
         {m.name}
       </span>
       <span className="trd-mctl__word" data-testid="mandate-word">
         {mandateWord(m, now)}
+      </span>
+      <span className="trd-mctl__runs trd-mono" data-testid="mandate-runs">
+        {mandateBuysText(m)}
+        {misses ? <span className="trd-mctl__misses"> {misses}</span> : null}
       </span>
       <MandateProgress mandate={m} />
       {m.status === 'awaiting_approval' ? (

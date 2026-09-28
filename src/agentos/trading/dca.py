@@ -52,7 +52,10 @@ BAD_SKIPS = frozenset({"daily_cap", "insufficient_balance"})
 
 MIN_EVERY_SECONDS = 60
 #: A remainder of the cap under this is not worth a buy: the mandate is done.
+#: Capped at half a buy by :func:`dust_for`, so a mandate of tiny buys still runs.
 DUST_USD = 0.5
+#: The smallest buy a mandate may be set to.
+MIN_USD_PER_RUN = 0.01
 #: Consecutive bad runs (failed, or skipped for balance / daily cap) that pause.
 BAD_STREAK_LIMIT = 3
 #: How long an agent's proposal waits for the user before it expires.
@@ -133,6 +136,17 @@ def run_size(usd_per_run: float, cap: float, spent: float, reserved: float) -> f
     return math.floor(size * 100 + 1e-6) / 100
 
 
+def dust_for(usd_per_run: float) -> float:
+    """The remainder of the cap under which a mandate is done: ``min($0.50, half a buy)``.
+
+    Rounded down to the cent (never under one cent) like :func:`run_size`, so
+    ``run_size(...) < dust_for(...)`` holds exactly when the remainder itself
+    is under it: a run skipped for the cap always finds the mandate complete.
+    """
+    dust = min(DUST_USD, float(usd_per_run) / 2)
+    return max(0.01, math.floor(dust * 100 + 1e-6) / 100)
+
+
 def run_note(name: str, buy: int, runs_max: int | None) -> str:
     """The order note: ``"DCA ETH · buy 3/30"`` (``∞`` without a run limit)."""
     return f"{name} · buy {buy}/{runs_max if runs_max else '∞'}"
@@ -186,6 +200,8 @@ def validate_terms(
     """The first thing wrong with a mandate's terms, or ``None``."""
     if not _finite(usd_per_run) or usd_per_run <= 0:
         return "usdPerRun must be greater than zero"
+    if usd_per_run < MIN_USD_PER_RUN - 1e-9:
+        return f"usdPerRun must be at least {usd_text(MIN_USD_PER_RUN)}"
     if not _finite(cap_usd) or cap_usd <= 0:
         return "capUsd must be greater than zero"
     if creating and cap_usd < usd_per_run:
@@ -201,6 +217,7 @@ def validate_terms(
 
 def completion_reason(
     *,
+    usd_per_run: float,
     cap_usd: float,
     spent_usd: float,
     reserved_usd: float,
@@ -217,7 +234,7 @@ def completion_reason(
         return None
     if runs_max is not None and runs_done >= int(runs_max):
         return "runs reached"
-    if float(cap_usd) - float(spent_usd) < DUST_USD:
+    if run_size(usd_per_run, cap_usd, spent_usd, 0.0) < dust_for(usd_per_run):
         return "cap reached"
     return None
 
@@ -445,7 +462,8 @@ def mandate_warnings(
     if quote_balance_usd is not None and usd_per_run > 0:
         spent, reserved, _, _ = spend
         left = max(0.0, float(row["cap_usd"]) - spent - reserved)
-        buys_left = math.ceil(left / usd_per_run - 1e-9) if left >= DUST_USD else 0
+        worth_a_buy = run_size(usd_per_run, left, 0.0, 0.0) >= dust_for(usd_per_run)
+        buys_left = math.ceil(left / usd_per_run - 1e-9) if worth_a_buy else 0
         runs_max = row.get("runs_max")
         if runs_max is not None:
             buys_left = min(buys_left, max(0, int(runs_max) - int(row.get("runs_done") or 0)))

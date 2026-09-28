@@ -171,6 +171,38 @@
 .trd-strip__right {
   justify-content: flex-end;
 }
+/* Whatever the left side says stays in its own column: it clips (the chip
+   ellipsises) instead of running under the mode pill. */
+.trd-strip[data-mode='trading'] .trd-strip__left {
+  overflow: hidden;
+}
+/* The pin and the Desk toggle are controls: they keep their full width at the
+   narrowest desk, and the left column gives way instead. */
+.trd-strip__pin,
+.trd-strip__toggle {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* Every live DCA mandate in one chip ("DCA ×2 · next 12 m"): the only item on
+   the left that shrinks, with an ellipsis, never pushing into the pill. */
+.trd-strip__chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ok);
+}
+.trd-strip__chip[data-state='awaiting'] {
+  color: var(--warn);
+}
+.trd-strip__chip[data-state='paused'] {
+  color: var(--muted-foreground);
+}
 /* Chat mode: the open chat's session actions, rendered in by ChatView. The
    padding keeps them off the pill however far they are squeezed. */
 .trd-strip__session {
@@ -568,10 +600,6 @@
 .trd-strip__mission[data-state='awaiting_approval'] span {
   color: var(--warn);
 }
-.trd-strip__mission[data-kind='mandate'] .trd-mono {
-  letter-spacing: 0;
-  text-transform: none;
-}
 .trd-mctl__row[data-kind='mandate'] {
   gap: 4px;
   padding-left: 4px;
@@ -612,6 +640,30 @@
 }
 .trd-mctl__row[data-state='completed'] .trd-mctl__word {
   color: var(--info);
+}
+.trd-mctl__row[data-state='stopped'] .trd-mctl__word,
+.trd-mctl__row[data-state='rejected'] .trd-mctl__word,
+.trd-mctl__row[data-state='expired'] .trd-mctl__word {
+  color: var(--dim);
+}
+/* "3/10 buys · 1 skipped": the filled buys, then — muted — the runs that
+   bought nothing, so a finished row with no buys never reads as a success. */
+.trd-mctl__runs {
+  margin-right: 4px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.trd-mctl__misses {
+  color: var(--dim);
+}
+.trd-mctl__more,
+.trd-mstrip__more {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+  color: var(--dim);
 }
 .trd-mctl__hint {
   padding-right: 8px;
@@ -720,6 +772,21 @@
 }
 .trd-mandate__legs {
   align-items: baseline;
+}
+/* A proposal is read before one click commits every buy, so its facts are
+   never cut short: a long value wraps under its label instead. */
+.trd-mandate .trd-card__fact {
+  align-items: baseline;
+}
+.trd-mandate .trd-card__fact dt {
+  flex-shrink: 0;
+}
+.trd-mandate .trd-card__fact dd {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 .trd-mandate__rate {
   margin-left: auto;
@@ -1545,6 +1612,19 @@ body[data-dragging] .trd-book__handle {
   align-self: end;
   padding-bottom: 6px;
 }
+/* Editing: the wallet and chain are fixed, so they are text, not controls. */
+.trd-dca__fixed {
+  margin: 0;
+}
+.trd-dca__fixed dt {
+  font-size: 12px;
+  font-weight: 500;
+}
+.trd-dca__fixed dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
 
 /* ── Mission catalogue ───────────────────────────────────────────────────── */
 
@@ -1899,6 +1979,7 @@ body[data-dragging] .trd-book__handle {
    the row arrives. */
 .mode-shell[data-enter='trading'] .trd-strip__mission,
 .mode-shell[data-enter='trading'] .trd-strip__more,
+.mode-shell[data-enter='trading'] .trd-strip__chip,
 .mode-shell[data-enter='trading'] .trd-strip__word,
 .mode-shell[data-enter='trading'] .trd-strip__pin,
 .mode-shell[data-enter='trading'] .trd-strip__toggle {

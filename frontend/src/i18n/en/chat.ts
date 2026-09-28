@@ -408,6 +408,7 @@ export const chat = defineNamespace('chat', {
   dcaExplorerTitle: 'Open the transaction on {explorer}',
   dcaManual: 'buy now',
   dcaRecent: 'Recent buys',
+  dcaRecentRuns: 'Recent runs',
   dcaRunFilled: 'filled',
   dcaRunPending: 'buying…',
   dcaRunParked: 'awaiting approval',

@@ -5309,6 +5309,9 @@ class TradingService:
         spent, reserved, _, _ = self.ledger.mandate_spend(mandate_id)
         in_flight = len(self.ledger.open_runs(mandate_id))
         runs_max = int(row["runs_max"]) if row.get("runs_max") is not None else None
+        usd_per_run = float(row["usd_per_run"])
+        size = dca.run_size(usd_per_run, float(row["cap_usd"]), spent, reserved)
+        # Every attempt carries its size, skips included, so the history shows what was tried.
         run_id = self.ledger.insert_run(
             {
                 "mandate_id": mandate_id,
@@ -5316,6 +5319,7 @@ class TradingService:
                 "at": now,
                 "status": "pending",
                 "manual": 1 if manual else 0,
+                "usd": size,
             }
         )
 
@@ -5325,12 +5329,13 @@ class TradingService:
 
         if runs_max is not None and int(row["runs_done"]) + in_flight >= runs_max:
             return await skip("cap_reached", f"all {runs_max} buys are placed")
-        size = dca.run_size(float(row["usd_per_run"]), float(row["cap_usd"]), spent, reserved)
-        if size < dca.DUST_USD:
+        # ``size < dust`` only when the remainder itself is under it (``dca.dust_for``), so
+        # with nothing in flight this skip always completes the mandate in the same pass.
+        if size < dca.dust_for(usd_per_run):
             left = max(0.0, float(row["cap_usd"]) - spent - reserved)
             return await skip("cap_reached", f"{dca.usd_text(left)} left of the cap")
         price = await self._dca_price(chain, str(row["token_out"]))
-        self.ledger.update_run(run_id, usd=size, price_usd=price)
+        self.ledger.update_run(run_id, price_usd=price)
         max_price = row.get("max_price_usd")
         if max_price is not None:
             if price is None:
@@ -5490,6 +5495,7 @@ class TradingService:
         mandate_id = str(row["mandate_id"])
         spent, reserved, _, _ = self.ledger.mandate_spend(mandate_id)
         why = dca.completion_reason(
+            usd_per_run=float(row["usd_per_run"]),
             cap_usd=float(row["cap_usd"]),
             spent_usd=spent,
             reserved_usd=reserved,

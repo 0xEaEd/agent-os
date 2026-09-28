@@ -26,6 +26,14 @@ function positive(text: string): number | null {
   return text.trim() && Number.isFinite(n) && n > 0 ? n : null
 }
 
+/** "Key main · 0x89e0…da97": the wallet an existing mandate buys from. */
+function fixedWallet(m: Mandate, wallets: readonly Wallet[]): string {
+  const known = wallets.find((w) => sameAddress(w.address, m.wallet.address))
+  const label = known ? walletLabel(known) : m.wallet.label
+  const short = shortAddress(m.wallet.address)
+  return label && label !== short ? `${label} · ${short}` : short
+}
+
 /**
  * The DCA contract. Unlike a cron mission, a DCA is a mandate the engine
  * runs itself (docs/dca.md): the cap, the cadence, the number of buys and
@@ -110,10 +118,12 @@ export function DcaContract({
             .replace('{every}', everyPhrase(every))
             .replace('{cap}', usdShort(cap)),
           positive(form.runs) !== null
-            ? t('trading.dca.contract.summaryRuns').replace(
-                '{runs}',
-                String(Math.floor(Number(form.runs))),
-              )
+            ? Math.floor(Number(form.runs)) === 1
+              ? t('trading.dca.contract.summaryRunsOne')
+              : t('trading.dca.contract.summaryRuns').replace(
+                  '{runs}',
+                  String(Math.floor(Number(form.runs))),
+                )
             : '',
           positive(form.maxPrice) !== null
             ? t('trading.dca.contract.summaryMax')
@@ -325,48 +335,63 @@ export function DcaContract({
           </p>
         ) : null}
 
-        <div className="trd-contract__grid">
-          <label className="trd-field">
-            <span>{t('trading.dca.contract.wallet')}</span>
-            <select
-              className="mac-input"
-              value={form.wallet}
-              disabled={editing}
-              onChange={(e) => patch({ wallet: e.target.value })}
-              data-testid="dca-wallet"
-            >
-              {form.wallet && !wallets.some((w) => sameAddress(w.address, form.wallet)) ? (
-                // A mandate's wallet the vault list does not carry (yet): shown, not swapped.
-                <option value={form.wallet}>
-                  {mandate?.wallet.label || shortAddress(form.wallet)}
-                </option>
-              ) : null}
-              {wallets.map((w) => (
-                <option key={w.address} value={w.address}>
-                  {walletLabel(w)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <fieldset className="trd-field">
-            <legend>{t('trading.dca.contract.chain')}</legend>
-            <div className="trd-dca__chips" role="group">
-              {CHAINS.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className="trd-dca__chip app-no-drag"
-                  aria-pressed={form.chainId === c.id}
-                  disabled={editing}
-                  onClick={() => patch({ chainId: c.id })}
-                  data-testid={`dca-chain-${c.key}`}
-                >
-                  {c.short}
-                </button>
-              ))}
+        {editing && mandate ? (
+          // Fixed once the mandate exists: said as text, not as a control
+          // that looks like it could be changed.
+          <dl className="trd-contract__grid trd-dca__fixed" data-testid="dca-fixed">
+            <div className="trd-field">
+              <dt>{t('trading.dca.contract.wallet')}</dt>
+              <dd className="trd-mono" data-testid="dca-wallet-fixed">
+                {fixedWallet(mandate, wallets)}
+              </dd>
             </div>
-          </fieldset>
-        </div>
+            <div className="trd-field">
+              <dt>{t('trading.dca.contract.chain')}</dt>
+              <dd data-testid="dca-chain-fixed">
+                {CHAINS.find((c) => c.id === form.chainId)?.short ?? mandate.chain.name}
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <div className="trd-contract__grid">
+            <label className="trd-field">
+              <span>{t('trading.dca.contract.wallet')}</span>
+              <select
+                className="mac-input"
+                value={form.wallet}
+                onChange={(e) => patch({ wallet: e.target.value })}
+                data-testid="dca-wallet"
+              >
+                {form.wallet && !wallets.some((w) => sameAddress(w.address, form.wallet)) ? (
+                  // A primary the vault list does not carry (yet): shown, not swapped.
+                  <option value={form.wallet}>{shortAddress(form.wallet)}</option>
+                ) : null}
+                {wallets.map((w) => (
+                  <option key={w.address} value={w.address}>
+                    {walletLabel(w)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <fieldset className="trd-field">
+              <legend>{t('trading.dca.contract.chain')}</legend>
+              <div className="trd-dca__chips" role="group">
+                {CHAINS.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className="trd-dca__chip app-no-drag"
+                    aria-pressed={form.chainId === c.id}
+                    onClick={() => patch({ chainId: c.id })}
+                    data-testid={`dca-chain-${c.key}`}
+                  >
+                    {c.short}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          </div>
+        )}
 
         <div className="trd-contract__grid">
           <label className="trd-field">

@@ -81,7 +81,8 @@ create ──(operator)──────────────► active ─�
 - **Cap accounting.** `spentUsd` = Σ `value_usd` of **confirmed** orders
   with this `mandate_id`; `reservedUsd` = Σ of open ones (awaiting /
   approved / submitted). A run is sized from `capUsd − spent − reserved`.
-  When that remainder is under **$0.50**, or `runs.done == runs.max`, the
+  When that remainder is under **min($0.50, half a buy)** (rounded down to
+  the cent, never under $0.01), or `runs.done == runs.max`, the
   mandate is `completed` (`statusReason` = `"cap reached"` /
   `"runs reached"`) and emits `trading.dca.changed`. `spent_usd` is also
   cached on the mandate row (updated at settle) so the list is one query.
@@ -194,7 +195,7 @@ async def dca_run_due(self) -> None                               # called from 
 
 Errors are `TradingError` codes: `trading.dca.not_found`,
 `trading.dca.bad_state` (e.g. approve on an active one, resume on a stopped
-one), `trading.dca.invalid` (usd ≤ 0, cap < usd, every < 60 s, unknown
+one), `trading.dca.invalid` (usd ≤ 0 or under $0.01, cap < usd, every < 60 s, unknown
 quote on Robinhood Chain without `--quote`), `trading.operator_required`
 (from the RPC layer), plus the usual `trading.disabled`, `wallet.locked`,
 `trading.unsupported_chain`, `trading.token_not_found` (unknown symbol;
@@ -413,14 +414,25 @@ not like the web card. `canWrite` is true only on the desktop desk
   mandate form (token, USD per buy, every, cap, buys, max price, wallet,
   chain, name, start now) and states the limits are **enforced by the
   engine** (drop the "goals, not limits" note there). Edit → `trading.dca.update`.
-- **Missions list / strip / status strip** show mandates next to cron
-  missions: name, state word (`Awaiting approval`, `Active · next 3 h 12 m`,
-  `Paused`, `Done`), a mini progress `$120 / $300`, and controls Pause /
-  Resume, Buy now, Edit, Stop. Query key `['trading', 'dca']`; the existing
-  `trading.changed` invalidation covers it.
-- **Approvals region** (Book) lists pending mandates above pending orders as
-  a compact `MandateCard` (what, how much, how often, cap, first-buy note,
-  warnings) with **Approve & start** / Reject.
+- **Missions list and strip** show mandates next to cron missions: name,
+  state word (`Awaiting approval`, `Active · next 3 h 12 m`, `Active · buy
+  due`, `Paused`, `Done`, `Ended · no buys` when it finished with zero
+  buys), `done/max buys` with a muted `· N skipped · N failed` suffix, a
+  mini progress `$120 / $300`, `statusReason` as the row tooltip, and
+  controls Pause / Resume, Buy now, Edit, Stop (two-click). Buy now toasts
+  the run's outcome (bought / placed / awaiting approval / skipped: reason /
+  failed: reason). Finished mandates (any terminal status) stay for 1 h
+  after `updatedAt`, at most 2 rows newest first, then `+N more`. One
+  formatter drives every countdown (`buy due`, `N m`, `H h M m`, `D d H h`,
+  rounding down) on a shared one-second clock. Mandates never replace the
+  composer placeholder (cron missions still do). The **header status
+  strip** summarises mandates as one chip — `DCA · next 59 m`, `DCA ×2 ·
+  next 12 m`, `DCA · awaiting` — with no names or progress. Query key
+  `['trading', 'dca']`; the existing `trading.changed` invalidation covers it.
+- **Approvals region** (the asks area above the composer, where order
+  approval cards live) lists pending mandates above pending orders as a
+  compact `MandateCard` (what, how much, how often, cap, first buy, expiry,
+  warnings; values wrap, never truncate) with **Approve & start** / Reject.
 - **Desk ledger** (`ledger.ts`) recognises `agentos trade dca <sub> …` and
   the `dca-cards/` marker, with titles `Start DCA · ETH · $10 / day`,
   `DCA status`, `Pause DCA`, `Buy now`, …

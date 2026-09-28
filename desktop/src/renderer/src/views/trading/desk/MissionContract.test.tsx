@@ -370,7 +370,15 @@ describe('MissionContract · a DCA is a mandate the engine runs', () => {
       />,
     )
     expect(screen.getByTestId('dca-token')).toBeDisabled()
-    expect(screen.getByTestId('dca-wallet')).toBeDisabled()
+    // Wallet and chain are fixed: said as text, not a control that looks editable.
+    expect(screen.queryByTestId('dca-wallet')).toBeNull()
+    expect(screen.queryByTestId('dca-chain-base')).toBeNull()
+    expect(screen.getByTestId('dca-wallet-fixed')).toHaveTextContent('Main · 0x1111…1111')
+    expect(screen.getByTestId('dca-chain-fixed')).toHaveTextContent('Base')
+    // The summary counts one buy as one buy.
+    fireEvent.change(screen.getByTestId('dca-runs'), { target: { value: '1' } })
+    expect(screen.getByTestId('dca-summary')).toHaveTextContent('At most 1 buy.')
+    fireEvent.change(screen.getByTestId('dca-runs'), { target: { value: '30' } })
     expect(screen.queryByTestId('dca-start-now')).toBeNull()
     // Nothing changed yet: nothing to save.
     expect(screen.getByTestId('dca-submit')).toBeDisabled()

@@ -67,7 +67,7 @@ export const DCA_WIDE_MIN_PX = 520
 /** At most this many attempts are drawn in the buys chart. */
 export const DCA_CHART_MAX = 50
 
-/** Rows in "Recent buys". */
+/** Rows in "Recent buys" / "Recent runs". */
 export const DCA_RECENT_RUNS = 5
 
 const HOUR_MS = 3_600_000
@@ -1135,25 +1135,30 @@ function statsSection(mandate: DcaMandate): HTMLElement {
     ),
   )
 
-  const avg = usdNode('dca-stat__value', acquired.avgPriceUsd, formatDcaPrice)
+  // Before the first filled buy there is no average and nothing to be up or
+  // down on: "—", as for an unknown price — never "$0.00 on $0 spent".
+  const bought = mandate.runs.done > 0
+  const avg = usdNode('dca-stat__value', bought ? acquired.avgPriceUsd : null, formatDcaPrice)
   let vs: HTMLElement | null = null
-  if (acquired.vsAvgPct !== null) {
+  if (bought && acquired.vsAvgPct !== null) {
     vs = toned(
       el('span', 'dca-stat__sub', t('chat.dcaVsNow', { pct: formatVsPct(acquired.vsAvgPct) })),
       acquired.vsAvgPct,
     )
     vs.title = t('chat.dcaVsNowTitle', { price: formatDcaPrice(acquired.currentPriceUsd) })
-  } else if (acquired.avgPriceUsd !== null) {
+  } else if (bought && acquired.avgPriceUsd !== null) {
     vs = el('span', 'dca-stat__sub', t('chat.dcaNoPrice'))
   }
   stats.append(stat('avg', t('chat.dcaStatAvg'), avg, vs))
 
+  const unrealizedUsd = bought ? acquired.unrealizedUsd : null
   const unrealized = toned(
-    usdNode('dca-stat__value', acquired.unrealizedUsd, formatSignedUsd),
-    acquired.unrealizedUsd,
+    usdNode('dca-stat__value', unrealizedUsd, formatSignedUsd),
+    unrealizedUsd,
   )
-  const unrealizedSub =
-    acquired.unrealizedUsd === null
+  const unrealizedSub = !bought
+    ? null
+    : unrealizedUsd === null
       ? el('span', 'dca-stat__sub', t('chat.dcaNoPrice'))
       : el(
           'span',
@@ -1530,11 +1535,15 @@ function explorerHost(url: string): string {
 function runsSection(mandate: DcaMandate, nowMs: number): HTMLElement | null {
   if (mandate.history.length === 0) return null
   const section = el('section', 'dca-runs')
-  section.append(el('h4', 'dca-runs__title', t('chat.dcaRecent')))
+  const recent = mandate.history.slice(0, DCA_RECENT_RUNS)
+  // "Recent buys" only while every row is one; a skip or a failure is a run
+  // that bought nothing, and listing it under "buys" misreads it.
+  const allFilled = recent.every((run) => run.status === 'filled')
+  section.append(
+    el('h4', 'dca-runs__title', allFilled ? t('chat.dcaRecent') : t('chat.dcaRecentRuns')),
+  )
   const listNode = el('ol', 'dca-runs__list')
-  mandate.history
-    .slice(0, DCA_RECENT_RUNS)
-    .forEach((run) => listNode.append(runRow(run, mandate, nowMs)))
+  recent.forEach((run) => listNode.append(runRow(run, mandate, nowMs)))
   section.append(listNode)
   return section
 }

@@ -115,15 +115,21 @@ export function mandateProgress(m: Mandate): number {
   return Math.min(1, Math.max(0, p))
 }
 
-/** "3 h 12 m", "12 m", "2 d 4 h", "under a minute". */
+/**
+ * The one countdown every DCA surface prints (the Missions row, the status
+ * strip chip): minutes under an hour, hours and minutes under a day, days and
+ * hours after that — always rounded down, so 59 m 40 s is "59 m" everywhere
+ * and never "1 h 0 m" somewhere else. An overdue buy is not a countdown at
+ * all: `mandateState` says "buy due" for it.
+ */
 export function countdown(ms: number): string {
-  if (ms < 60_000) return 'under a minute'
+  if (ms < 60_000) return '< 1 m'
   const minutes = Math.floor(ms / 60_000)
   if (minutes < 60) return `${minutes} m`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} m` : `${hours} h`
+  if (hours < 24) return `${hours} h ${minutes % 60} m`
   const days = Math.floor(hours / 24)
-  return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`
+  return `${days} d ${hours % 24} h`
 }
 
 export interface MandateState {
@@ -147,7 +153,11 @@ const STATE_KEYS: Record<Mandate['status'], MessageKey> = {
 
 /** What the mandate is doing, as the Missions rows say it. */
 export function mandateState(m: Mandate, now: number): MandateState {
-  const key = STATE_KEYS[m.status] ?? 'trading.dca.state.done'
+  // A DCA that ran out without one filled buy did not succeed: never "Done".
+  const key =
+    m.status === 'completed' && m.runs.done === 0
+      ? 'trading.dca.state.endedNoBuys'
+      : (STATE_KEYS[m.status] ?? 'trading.dca.state.done')
   if (m.status !== 'active') return { key, next: null, due: false }
   const at = m.schedule.nextRunAt ? Date.parse(m.schedule.nextRunAt) : Number.NaN
   if (!Number.isFinite(at)) return { key, next: null, due: false }
@@ -155,24 +165,128 @@ export function mandateState(m: Mandate, now: number): MandateState {
   return { key, next: countdown(at - now), due: false }
 }
 
-/** How long a finished mandate stays in the Missions list, so its "Done" is seen. */
-export const DONE_VISIBLE_MS = 24 * 3_600_000
+/** "3/10 buys", "1 buy", "4 buys": the filled buys, of the limit when there is one. */
+export function mandateBuysText(m: Mandate): string {
+  const done = m.runs.done
+  if (m.runs.max !== null) return `${done}/${m.runs.max} buys`
+  return `${done} ${done === 1 ? 'buy' : 'buys'}`
+}
+
+/** "· 2 skipped · 1 failed": the runs that bought nothing, or '' when there are none. */
+export function mandateMissesText(m: Mandate): string {
+  const parts: string[] = []
+  if (m.runs.skipped > 0) parts.push(`${m.runs.skipped} skipped`)
+  if (m.runs.failed > 0) parts.push(`${m.runs.failed} failed`)
+  return parts.map((p) => `· ${p}`).join(' ')
+}
+
+const TERMINAL: ReadonlySet<Mandate['status']> = new Set([
+  'completed',
+  'stopped',
+  'rejected',
+  'expired',
+])
+const LIVE: ReadonlySet<Mandate['status']> = new Set(['awaiting_approval', 'active', 'paused'])
+
+export function isTerminalMandate(m: Mandate): boolean {
+  return TERMINAL.has(m.status)
+}
+
+/**
+ * Why a finished or paused mandate is where it is, for the row's tooltip: the
+ * engine's `statusReason`, a "user: …" note reduced to the note. A bare
+ * "user" (the operator's own pause or stop, no note) stays "user" for the
+ * caller to say in words. Null for a live mandate or one without a reason.
+ */
+export function mandateReason(m: Mandate): string | null {
+  if (!m.statusReason || !(TERMINAL.has(m.status) || m.status === 'paused')) return null
+  const reason = m.statusReason.trim()
+  if (reason.startsWith('user:')) return reason.slice(5).trim() || 'user'
+  return reason || null
+}
+
+/** How long a finished mandate (any terminal status) stays in the Missions list. */
+export const FINISHED_VISIBLE_MS = 3_600_000
+/** At most this many finished rows are listed; the rest are counted as "+N more". */
+export const FINISHED_ROWS = 2
 
 /**
  * The mandates a desk lists beside its cron missions: the ones filed to this
  * session, plus the unfiled ones (created from the CLI, which belong to the
- * operator and so to every desk). Live ones always; a completed one for a day,
- * so its "Done" is read where it ran.
+ * operator and so to every desk). Live ones always, in the engine's order;
+ * then every finished one — completed, stopped, rejected or expired alike —
+ * for an hour after it ended, newest first.
  */
 export function deskMandates(all: readonly Mandate[], sessionKey: string, now: number): Mandate[] {
-  return all.filter((m) => {
-    if (m.sessionKey && m.sessionKey !== sessionKey) return false
-    if (m.status === 'awaiting_approval' || m.status === 'active' || m.status === 'paused')
-      return true
-    if (m.status !== 'completed') return false
-    const at = Date.parse(m.updatedAt)
-    return Number.isFinite(at) && now - at < DONE_VISIBLE_MS
-  })
+  const mine = all.filter((m) => !m.sessionKey || m.sessionKey === sessionKey)
+  const live = mine.filter((m) => LIVE.has(m.status))
+  const finished = mine
+    .filter((m) => {
+      if (!TERMINAL.has(m.status)) return false
+      const at = Date.parse(m.updatedAt)
+      return Number.isFinite(at) && now - at < FINISHED_VISIBLE_MS
+    })
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+  return [...live, ...finished]
+}
+
+/**
+ * The rows a list draws: every live mandate, then at most FINISHED_ROWS
+ * finished ones (newest first, as `deskMandates` sorts them); `more` counts
+ * the finished ones left out.
+ */
+export function mandateRows(mandates: readonly Mandate[]): { rows: Mandate[]; more: number } {
+  const live = mandates.filter((m) => !TERMINAL.has(m.status))
+  const finished = mandates.filter((m) => TERMINAL.has(m.status))
+  return {
+    rows: [...live, ...finished.slice(0, FINISHED_ROWS)],
+    more: Math.max(0, finished.length - FINISHED_ROWS),
+  }
+}
+
+export interface MandateChip {
+  /** Live mandates (awaiting, active, paused) the chip stands for. */
+  count: number
+  /**
+   * awaiting: one waits for approval; due: a buy is overdue; next: a
+   * countdown; active: running, no next buy known; paused: none runs.
+   */
+  word: 'awaiting' | 'due' | 'next' | 'active' | 'paused'
+  /** The soonest countdown, for `next`. */
+  next: string | null
+}
+
+/**
+ * The status strip's one DCA chip: how many live mandates, and the one thing
+ * worth knowing about them — one awaits approval, else the soonest next buy.
+ * Null when none is live (a finished DCA has nothing to say up there).
+ */
+export function mandateChip(mandates: readonly Mandate[], now: number): MandateChip | null {
+  const live = mandates.filter((m) => LIVE.has(m.status))
+  if (live.length === 0) return null
+  const count = live.length
+  if (live.some((m) => m.status === 'awaiting_approval'))
+    return { count, word: 'awaiting', next: null }
+  let soonest: number | null = null
+  for (const m of live) {
+    if (m.status !== 'active' || !m.schedule.nextRunAt) continue
+    const at = Date.parse(m.schedule.nextRunAt)
+    if (Number.isFinite(at) && (soonest === null || at < soonest)) soonest = at
+  }
+  if (soonest === null) {
+    return live.some((m) => m.status === 'active')
+      ? { count, word: 'active', next: null }
+      : { count, word: 'paused', next: null }
+  }
+  if (soonest <= now) return { count, word: 'due', next: null }
+  return { count, word: 'next', next: countdown(soonest - now) }
+}
+
+/** "after 1 h", "after 1 d": when a mandate that does not start at once buys first. */
+export function everyAfter(seconds: number): string {
+  const m = /^(\d+)([wdhm]?)$/.exec(everyWord(seconds))
+  if (!m) return `${seconds} s`
+  return m[2] ? `${m[1]} ${m[2] === 'm' ? 'min' : m[2]}` : `${seconds} s`
 }
 
 /* ── The DCA contract form ───────────────────────────────────────────────── */

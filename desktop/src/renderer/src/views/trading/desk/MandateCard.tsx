@@ -5,18 +5,23 @@ import { t } from '~/i18n'
 import { initiatorKey, sameAddress, shortAddress, walletLabel } from '../logic'
 import { Sym } from '../parts'
 import type { Mandate, Wallet } from '../types'
-import { everyPhrase, usdShort } from './mandate-logic'
+import { everyAfter, everyPhrase, usdShort } from './mandate-logic'
 
+/** "Sep 29 02:42": short enough to sit whole beside its label. */
 function expiry(iso: string | null): string {
   if (!iso) return ''
   const ts = Date.parse(iso)
   if (!Number.isFinite(ts)) return ''
-  return new Intl.DateTimeFormat(undefined, {
+  const parts = new Intl.DateTimeFormat(undefined, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(ts)
+    hourCycle: 'h23',
+  }).formatToParts(ts)
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? ''
+  return `${part('month')} ${part('day')} ${part('hour')}:${part('minute')}`
 }
 
 function walletText(m: Mandate, wallets: readonly Wallet[]): string {
@@ -90,7 +95,9 @@ export function MandateCard({
     {
       key: 'first',
       label: t('trading.dca.card.fact.first'),
-      value: m.schedule.startNow ? t('trading.dca.card.firstNow') : t('trading.dca.card.firstNext'),
+      value: m.schedule.startNow
+        ? t('trading.dca.card.firstNow')
+        : t('trading.dca.card.firstNext').replace('{every}', everyAfter(m.schedule.everySeconds)),
     },
   )
   // What the engine would warn about, read from the mandate itself: the list

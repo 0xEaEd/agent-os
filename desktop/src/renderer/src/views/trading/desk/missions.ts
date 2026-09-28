@@ -97,7 +97,7 @@ export interface MissionsApi {
    */
   pauseAll: () => Promise<boolean>
   busy: boolean
-  /** This desk's DCA mandates: filed to the session or unfiled; live, or done within a day. */
+  /** This desk's DCA mandates: filed to the session or unfiled; live, or finished within the hour. */
   mandates: Mandate[]
   /** Every mandate awaiting the operator's approval, whichever chat proposed it. */
   awaitingMandates: Mandate[]
@@ -128,8 +128,9 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
     [query.data, sessionKey],
   )
 
-  // Every mandate, so a DCA that just completed can still say "Done" for a
-  // while; the minute clock only ages that window, the rows tick on their own.
+  // Every mandate, so a DCA that just finished (completed, stopped, rejected
+  // or expired) still shows how it ended for an hour; the minute clock only
+  // ages that window, the rows tick on their own.
   const allMandates = useMandates(true, enabled)
   const mandateActions = useMandateActions()
   const minute = useNow(enabled ? 60_000 : 0)

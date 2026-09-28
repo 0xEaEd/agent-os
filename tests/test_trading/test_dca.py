@@ -193,6 +193,33 @@ def test_run_size_takes_the_remainder_rounded_down() -> None:
     assert dca.run_size(10, 25, 30, 0) == 0.0
 
 
+@pytest.mark.parametrize(
+    ("usd", "dust"),
+    [(10, 0.5), (1, 0.5), (0.9, 0.45), (0.3, 0.15), (0.05, 0.02), (0.04, 0.02), (0.01, 0.01)],
+)
+def test_dust_is_the_smaller_of_fifty_cents_and_half_a_buy(usd: float, dust: float) -> None:
+    assert dca.dust_for(usd) == pytest.approx(dust)
+
+
+def test_a_run_too_small_to_place_always_means_the_mandate_is_done() -> None:
+    """``run_size < dust_for`` (the runner's cap skip) iff ``completion_reason`` says done."""
+    cents = [0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.3, 0.49, 0.5, 0.55, 1.0, 10.0]
+    for usd in cents:
+        for cap in cents:
+            for spent in (0.0, 0.004, 0.01, 0.019, 0.02, 0.025, 0.04, 0.3, 0.51, 9.6):
+                skip = dca.run_size(usd, cap, spent, 0.0) < dca.dust_for(usd)
+                done = dca.completion_reason(
+                    usd_per_run=usd,
+                    cap_usd=cap,
+                    spent_usd=spent,
+                    reserved_usd=0.0,
+                    runs_done=0,
+                    runs_max=None,
+                    in_flight=0,
+                )
+                assert skip == (done == "cap reached"), (usd, cap, spent)
+
+
 def test_reasons_and_payload_pieces() -> None:
     assert dca.split_reason("max_price: WETH at $2,700 above $2,600") == (
         "max_price",
@@ -293,6 +320,7 @@ async def test_pending_mandate_expires_after_a_day(world: World) -> None:
 async def test_create_validation(world: World) -> None:
     cases: list[tuple[dict[str, Any], str]] = [
         ({"usd_per_run": 0}, "trading.dca.invalid"),
+        ({"usd_per_run": 0.005}, "trading.dca.invalid"),
         ({"usd_per_run": 10, "cap_usd": 5}, "trading.dca.invalid"),
         ({"every_seconds": 59}, "trading.dca.invalid"),
         ({"cap_usd": None, "runs_max": None}, "trading.dca.invalid"),
@@ -308,6 +336,8 @@ async def test_create_validation(world: World) -> None:
         with pytest.raises(TradingError) as err:
             await world.create(**overrides)
         assert err.value.code == code, (overrides, err.value)
+    with pytest.raises(TradingError, match=r"usdPerRun must be at least \$0\.01"):
+        await world.create(usd_per_run=0.009, cap_usd=1)
     # A run limit alone sets the cap to usdPerRun × runsMax.
     capped = (await world.create(cap_usd=None, runs_max=30))["mandate"]
     assert capped["budget"]["capUsd"] == 300 and capped["runs"]["max"] == 30
@@ -389,6 +419,71 @@ async def test_last_buy_is_sized_to_the_remainder_then_cap_reached(world: World)
     assert len(world.runs(mandate_id)) == 3
 
 
+async def test_buys_under_fifty_cents_run_and_complete(world: World) -> None:
+    world.set_price(2000.0, usd=0.04)
+    mandate_id = (
+        await world.create(usd_per_run=0.04, cap_usd=0.55, runs_max=2, every_seconds=HOUR)
+    )["mandate"]["id"]
+    for step in range(2):
+        world.at(T0 + step * HOUR)
+        await world.due()
+    runs = world.runs(mandate_id)
+    assert [r["status"] for r in runs] == ["filled", "filled"]
+    assert [r["usd"] for r in runs] == [pytest.approx(0.04), pytest.approx(0.04)]
+    row = world.row(mandate_id)
+    assert row["status"] == "completed" and row["status_reason"] == "runs reached"
+    # A cap under $0.50 buys once instead of completing with nothing bought.
+    world.set_price(2000.0, usd=0.3)
+    world.at(T0 + 3 * HOUR)
+    small_id = (await world.create(usd_per_run=0.3, cap_usd=0.3, every_seconds=HOUR))["mandate"][
+        "id"
+    ]
+    await world.due()
+    assert [r["status"] for r in world.runs(small_id)] == ["filled"]
+    small = world.row(small_id)
+    assert small["status"] == "completed" and small["status_reason"] == "cap reached"
+    assert small["spent_usd"] == pytest.approx(0.3)
+
+
+@pytest.mark.parametrize(
+    ("usd", "cap", "size"),
+    [(0.04, 0.01, 0.01), (0.05, 0.019, 0.01), (10, 0.49, 0.49), (10, 0.004, 0.0)],
+)
+async def test_a_cap_reached_skip_completes_in_the_same_run(
+    world: World, usd: float, cap: float, size: float
+) -> None:
+    mandate_id = (await world.create(usd_per_run=usd, cap_usd=max(usd, 1)))["mandate"]["id"]
+    # Shrink the cap behind the service's back: the next run finds too little left.
+    world.service.ledger.update_mandate(mandate_id, now=T0, cap_usd=cap)
+    run = await world.service._dca_fire(mandate_id, manual=False)
+    assert run is not None
+    assert run["status"] == "skipped" and run["reason"].startswith("cap_reached: ")
+    assert run["usd"] == pytest.approx(size)  # the attempt is sized even though it skipped
+    row = world.row(mandate_id)
+    assert row["status"] == "completed" and row["status_reason"] == "cap reached"
+    assert row["next_run_at"] is None
+
+
+async def test_raising_the_cap_keeps_a_small_mandate_active(world: World) -> None:
+    world.set_price(2000.0, usd=0.04)
+    mandate_id = (await world.create(usd_per_run=0.04, cap_usd=0.04, every_seconds=HOUR))[
+        "mandate"
+    ]["id"]
+    raised = (await world.service.dca_update(mandate_id, cap_usd=0.08))["mandate"]
+    assert raised["status"] == "active" and raised["budget"]["capUsd"] == pytest.approx(0.08)
+    assert raised["budget"]["spentUsd"] == 0
+    await world.due()
+    row = world.row(mandate_id)
+    assert row["status"] == "active" and row["spent_usd"] == pytest.approx(0.04)
+    # A cap under what is spent completes it.
+    lowered = (await world.service.dca_update(mandate_id, cap_usd=0.03))["mandate"]
+    assert lowered["status"] == "completed" and lowered["statusReason"] == "cap reached"
+    with pytest.raises(TradingError, match=r"at least \$0\.01"):
+        await world.service.dca_update(
+            (await world.create(usd_per_run=1, cap_usd=10))["mandate"]["id"], usd_per_run=0.001
+        )
+
+
 async def test_completion_at_runs_max(world: World) -> None:
     mandate_id = (await world.create(cap_usd=100, runs_max=2, every_seconds=HOUR))["mandate"]["id"]
     for step in range(2):
@@ -452,6 +547,7 @@ async def test_three_insufficient_balance_skips_pause_the_mandate(world: World) 
     assert row["bad_streak"] == 3 and row["runs_skipped"] == 3 and row["runs_done"] == 0
     runs = world.runs(mandate_id)
     assert all(r["reason"].startswith("insufficient_balance: Key main holds 5 USDC") for r in runs)
+    assert all(r["usd"] == pytest.approx(10) for r in runs)  # what each run tried to spend
     # Paused: the schedule does not fire.
     world.at(T0 + 3 * HOUR)
     await world.due()
