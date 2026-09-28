@@ -45,8 +45,10 @@ def test_every_shared_directory_is_blocked_by_the_sandbox(directory: str) -> Non
 
 @pytest.mark.parametrize("directory", redact.CREDENTIAL_HOME_DIRS)
 def test_every_shared_directory_gates_a_shell_read(directory: str) -> None:
-    assert redact.reads_credential_file(f"cat ~/{directory}/anything") is True
-    assert redact.reads_credential_file(f"cat {home(directory)}/anything") is True
+    # A shell needs ``AppData/Roaming/GitHub CLI`` quoted; the rest stay bare.
+    q = '"' if " " in directory else ""
+    assert redact.reads_credential_file(f"cat {q}~/{directory}/anything{q}") is True
+    assert redact.reads_credential_file(f"cat {q}{home(directory)}/anything{q}") is True
 
 
 def test_the_sandbox_prefix_list_is_derived_not_copied() -> None:
@@ -162,7 +164,7 @@ def test_a_near_miss_of_the_service_account_pattern_is_not_gated(name: str) -> N
 
 @pytest.mark.parametrize(
     "path",
-    ["~/.terraform.d/credentials.tfrc.json", "~/.cargo/credentials.toml"],
+    ["~/.terraform.d/credentials.tfrc.json", "~/.cargo/credentials.toml", "./hosts.yml"],
 )
 def test_the_files_that_also_need_new_value_shapes_are_at_least_gated(path: str) -> None:
     """Gating is necessary but not sufficient here: a bare ``token`` key is a
@@ -229,6 +231,7 @@ def test_a_credential_file_under_a_build_cache_is_still_masked() -> None:
         "~/.terraform.d/plugin-cache/x",
         "./service-account.json",
         "~/.my.cnf",
+        "./inventory/hosts.yml",
     ],
 )
 def test_a_redaction_only_path_is_not_hard_blocked(path: str) -> None:
@@ -248,9 +251,10 @@ def test_redaction_only_names_do_not_leak_into_the_sandbox_file_list() -> None:
 
 
 def test_a_multi_segment_entry_matches_only_as_a_contiguous_run() -> None:
-    assert redact.reads_credential_file("cat ~/.config/gh/hosts.yml") is True
-    assert redact.reads_credential_file("cat ~/.config/other/gh/hosts.yml") is False
-    assert redact.reads_credential_file("cat ./gh/hosts.yml") is False
+    # ``config.yml``, not ``hosts.yml``: the latter is gated by name anywhere.
+    assert redact.reads_credential_file("cat ~/.config/gh/config.yml") is True
+    assert redact.reads_credential_file("cat ~/.config/other/gh/config.yml") is False
+    assert redact.reads_credential_file("cat ./gh/config.yml") is False
 
 
 def test_a_single_segment_entry_matches_under_any_parent() -> None:
