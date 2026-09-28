@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "kind": "mandate",
+  "fetchedAt": "2026-09-28T05:48:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "get",
+    "params": {
+      "mandateId": "dca_5c6d7e8f"
+    }
+  },
+  "mandate": {
+    "id": "dca_5c6d7e8f",
+    "name": "DCA cbBTC",
+    "status": "completed",
+    "statusReason": "cap reached",
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0x89e0c3a5f1b2d4e6a7c8b9d0e1f2a3b4c5d6da97",
+      "label": "Key main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "symbol": "cbBTC",
+      "decimals": 8,
+      "priceUsd": 101240
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1
+    },
+    "schedule": {
+      "everySeconds": 86400,
+      "label": "every day",
+      "startNow": true,
+      "anchorAt": "2026-09-10T12:00:00Z",
+      "nextRunAt": null,
+      "lastRunAt": "2026-09-14T12:00:03Z"
+    },
+    "budget": {
+      "usdPerRun": 20,
+      "capUsd": 100,
+      "spentUsd": 100,
+      "reservedUsd": 0,
+      "remainingUsd": 0,
+      "progress": 1
+    },
+    "runs": {
+      "done": 5,
+      "max": null,
+      "skipped": 0,
+      "failed": 0,
+      "attempts": 5
+    },
+    "guards": {
+      "maxPriceUsd": null,
+      "approvalThresholdUsd": 100,
+      "dailyCapUsd": 1000,
+      "slippagePct": 1,
+      "buysNeedApproval": false
+    },
+    "acquired": {
+      "amount": {
+        "raw": "100947",
+        "human": "0.00100947",
+        "usd": 102.2
+      },
+      "avgPriceUsd": 99061.88,
+      "currentPriceUsd": 101240,
+      "vsAvgPct": 2.2,
+      "unrealizedUsd": 2.2,
+      "gasUsd": 0.0302
+    },
+    "history": [
+      {
+        "n": 5,
+        "at": "2026-09-14T12:00:03Z",
+        "manual": false,
+        "status": "filled",
+        "reason": null,
+        "reasonCode": null,
+        "usd": 20,
+        "amount": {
+          "raw": "20180",
+          "human": "0.0002018",
+          "usd": 20.43
+        },
+        "priceUsd": 99105.6,
+        "orderId": "ord_d59eced1de",
+        "txHash": "0x0b918943df0962bc7a1824c0555a389347b4febdc7cf9d1254406d80ce44e3f9",
+        "explorerUrl": "https://basescan.org/tx/0x0b918943df0962bc7a1824c0555a389347b4febdc7cf9d1254406d80ce44e3f9",
+        "gasUsd": 0.0059
+      },
+      {
+        "n": 4,
+        "at": "2026-09-13T12:00:03Z",
+        "manual": false,
+        "status": "filled",
+        "reason": null,
+        "reasonCode": null,
+        "usd": 20,
+        "amount": {
+          "raw": "19938",
+          "human": "0.00019938",
+          "usd": 20.19
+        },
+        "priceUsd": 100312.8,
+        "orderId": "ord_aea92132c4",
+        "txHash": "0x7a61b53701befdae0eeeffaecc73f14e20b537bb0f8b91ad7c2936dc63562b25",
+        "explorerUrl": "https://basescan.org/tx/0x7a61b53701befdae0eeeffaecc73f14e20b537bb0f8b91ad7c2936dc63562b25",
+        "gasUsd": 0.006
+      },
+      {
+        "n": 3,
+        "at": "2026-09-12T12:00:03Z",
+        "manual": false,
+        "status": "filled",
+        "reason": null,
+        "reasonCode": null,
+        "usd": 20,
+        "amount": {
+          "raw": "20483",
+          "human": "0.00020483",
+          "usd": 20.74
+        },
+        "priceUsd": 97640.1,
+        "orderId": "ord_76a50887d8",
+        "txHash": "0x9f14025af0065b30e47e23ebb3b491d39ae8ed17d33739e5ff3827ffb3634953",
+        "explorerUrl": "https://basescan.org/tx/0x9f14025af0065b30e47e23ebb3b491d39ae8ed17d33739e5ff3827ffb3634953",
+        "gasUsd": 0.0064
+      },
+      {
+        "n": 2,
+        "at": "2026-09-11T12:00:03Z",
+        "manual": false,
+        "status": "filled",
+        "reason": null,
+        "reasonCode": null,
+        "usd": 20,
+        "amount": {
+          "raw": "20025",
+          "human": "0.00020025",
+          "usd": 20.27
+        },
+        "priceUsd": 99875.2,
+        "orderId": "ord_86e5014965",
+        "txHash": "0xc6f3ac57944a531490cd39902d0f777715fd005efac9a30622d5f5205e7f6894",
+        "explorerUrl": "https://basescan.org/tx/0xc6f3ac57944a531490cd39902d0f777715fd005efac9a30622d5f5205e7f6894",
+        "gasUsd": 0.0058
+      },
+      {
+        "n": 1,
+        "at": "2026-09-10T12:00:03Z",
+        "manual": false,
+        "status": "filled",
+        "reason": null,
+        "reasonCode": null,
+        "usd": 20,
+        "amount": {
+          "raw": "20321",
+          "human": "0.00020321",
+          "usd": 20.57
+        },
+        "priceUsd": 98420.5,
+        "orderId": "ord_e29c9c180c",
+        "txHash": "0xeb1e33e8a81b697b75855af6bfcdbcbf7cbbde9f94962ceaec1ed8af21f5a50f",
+        "explorerUrl": "https://basescan.org/tx/0xeb1e33e8a81b697b75855af6bfcdbcbf7cbbde9f94962ceaec1ed8af21f5a50f",
+        "gasUsd": 0.0061
+      }
+    ],
+    "initiator": "manual",
+    "sessionKey": "agent:main:desk:main",
+    "createdAt": "2026-09-10T11:59:00Z",
+    "updatedAt": "2026-09-14T12:00:03Z",
+    "approvedAt": "2026-09-10T12:00:00Z",
+    "expiresAt": null
+  }
+}

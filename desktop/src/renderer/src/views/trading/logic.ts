@@ -351,6 +351,12 @@ export function sortHoldings(
 }
 
 export interface AllocationSegment {
+  /**
+   * Unique per holding (chain, token address, wallet): a symbol is not — ETH
+   * on Base in two wallets, or a junk token calling itself ETH, gave two
+   * slices the same React key.
+   */
+  key: string
   symbol: string
   pct: number
 }
@@ -362,8 +368,12 @@ export function allocationSegments(holdings: readonly Holding[], max = 6): Alloc
     .sort((a, b) => b.allocationPct - a.allocationPct)
   const head = sorted.slice(0, max)
   const rest = sorted.slice(max).reduce((sum, h) => sum + h.allocationPct, 0)
-  const out = head.map((h) => ({ symbol: h.token.symbol, pct: h.allocationPct }))
-  if (rest > 0) out.push({ symbol: 'other', pct: rest })
+  const out = head.map((h) => ({
+    key: `${h.chainId}:${h.token.address.toLowerCase()}:${h.wallet ?? ''}`,
+    symbol: h.token.symbol,
+    pct: h.allocationPct,
+  }))
+  if (rest > 0) out.push({ key: 'other', symbol: 'other', pct: rest })
   return out
 }
 

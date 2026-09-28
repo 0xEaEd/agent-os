@@ -1,8 +1,23 @@
-import { Pause, Pencil, Play, Trash2, Zap } from 'lucide-react'
+import { OctagonX, Pause, Pencil, Play, Trash2, Zap } from 'lucide-react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { RawJob } from '@/views/cron/logic'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import type { Mandate } from '../types'
 import { missionStatus, type MissionState } from './desk-logic'
+import {
+  mandateBuysText,
+  mandateMissesText,
+  mandateProgress,
+  mandateProgressText,
+  mandateReason,
+  mandateRows,
+  mandateState,
+} from './mandate-logic'
+
+const NO_MANDATES: Mandate[] = []
+/** A second click on Stop within this long stops the mandate; after it, the button disarms. */
+const STOP_ARM_MS = 4000
 
 function clock(ts: number | null): string {
   if (!ts) return ''
@@ -29,6 +44,84 @@ export function missionWord(state: MissionState, until: number | null): string {
 }
 
 /**
+ * A mandate's state word: "Awaiting approval", "Active · next 3 h 12 m",
+ * "Active · buy due", "Paused", "Done". The engine's figures, in words.
+ */
+export function mandateWord(m: Mandate, now: number): string {
+  const s = mandateState(m, now)
+  if (s.next) return `${t(s.key)} · ${t('trading.dca.next')} ${s.next}`
+  if (s.due) return `${t(s.key)} · ${t('trading.dca.due')}`
+  return t(s.key)
+}
+
+/*
+ * One second-tick shared by every DCA countdown on screen — the Missions
+ * rows, the strip above the composer, the status strip's chip — so two
+ * surfaces never read two clocks and disagree about the same buy (one said
+ * "next 59 m" while the other, on a staler clock, still said "next 1 h").
+ */
+const clockListeners = new Set<() => void>()
+let clockNow = 0
+let clockTimer: ReturnType<typeof setInterval> | null = null
+
+function subscribeClock(listener: () => void): () => void {
+  clockListeners.add(listener)
+  if (clockTimer === null) {
+    clockNow = Date.now()
+    clockTimer = setInterval(() => {
+      clockNow = Date.now()
+      for (const l of clockListeners) l()
+    }, 1_000)
+  }
+  return () => {
+    clockListeners.delete(listener)
+    if (clockListeners.size === 0 && clockTimer !== null) {
+      clearInterval(clockTimer)
+      clockTimer = null
+    }
+  }
+}
+
+// While nothing ticks, the second the render happens in: stable across the
+// reads of one render, never a stale tick from an earlier mount.
+const readClock = () => (clockTimer === null ? Math.floor(Date.now() / 1_000) * 1_000 : clockNow)
+const noClock = () => () => {}
+
+/** The shared clock, ticking while any listed mandate has a next buy to count down to. */
+export function useMandateClock(mandates: readonly Mandate[]): number {
+  const ticking = mandates.some((m) => m.status === 'active' && Boolean(m.schedule.nextRunAt))
+  return useSyncExternalStore(ticking ? subscribeClock : noClock, readClock)
+}
+
+/** "Paused by you" for the operator's own bare pause or stop; the engine's words otherwise. */
+function reasonTitle(m: Mandate): string | null {
+  const reason = mandateReason(m)
+  if (reason !== 'user') return reason
+  return m.status === 'paused' ? t('trading.dca.reason.pausedByYou') : t('trading.dca.reason.byYou')
+}
+
+/** "$120 / $300" over a hairline bar: the engine's spent against its cap. */
+function MandateProgress({ mandate }: { mandate: Mandate }) {
+  const pct = Math.round(mandateProgress(mandate) * 100)
+  return (
+    <span
+      className="trd-mprog"
+      role="meter"
+      aria-label={t('trading.dca.progress')}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={pct}
+      data-testid="mandate-progress"
+    >
+      <span className="trd-mprog__bar" aria-hidden>
+        <span className="trd-mprog__fill" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="trd-mprog__text trd-mono">{mandateProgressText(mandate)}</span>
+    </span>
+  )
+}
+
+/**
  * The one-line band above the composer that says what the missions are
  * doing. Renders nothing when there is nothing running: a band that says
  * IDLE over an idle composer is chrome, not information.
@@ -37,12 +130,19 @@ export function MissionStrip({
   missions,
   running,
   pendingApprovals,
+  mandates = NO_MANDATES,
 }: {
   missions: RawJob[]
   running: ReadonlySet<string>
   pendingApprovals: number
+  /** The desk's DCA mandates, listed after the cron missions. */
+  mandates?: Mandate[]
 }) {
-  if (missions.length === 0) return null
+  const now = useMandateClock(mandates)
+  // The finished rows left out are counted (and opened) in the controls row
+  // below, once; the strip only names what it shows.
+  const { rows } = mandateRows(mandates)
+  if (missions.length === 0 && mandates.length === 0) return null
   return (
     <div className="trd-mstrip" role="status" data-testid="mission-strip">
       {missions.map((job) => {
@@ -58,6 +158,20 @@ export function MissionStrip({
           </span>
         )
       })}
+      {rows.map((m) => (
+        <span
+          key={m.id}
+          className="trd-mstrip__item"
+          data-kind="mandate"
+          data-state={m.status}
+          data-testid="mission-strip-mandate"
+        >
+          <span className="trd-mstrip__dot" aria-hidden />
+          <b>{m.name}</b>
+          <span className="trd-mstrip__word">{mandateWord(m, now)}</span>
+          <span className="trd-mstrip__word trd-mono">{mandateProgressText(m)}</span>
+        </span>
+      ))}
     </div>
   )
 }
@@ -77,6 +191,13 @@ export function MissionControls({
   onSetEnabled,
   onRemove,
   showStart = true,
+  mandates = NO_MANDATES,
+  mandateBusy = null,
+  onMandatePause,
+  onMandateResume,
+  onMandateRun,
+  onMandateEdit,
+  onMandateStop,
 }: {
   missions: RawJob[]
   running: ReadonlySet<string>
@@ -89,7 +210,19 @@ export function MissionControls({
   onRemove: (job: RawJob) => void
   /** The seats row carries its own Start chip when the controls sit above it. */
   showStart?: boolean
+  /** DCA mandates, listed after the cron missions with their own controls. */
+  mandates?: Mandate[]
+  /** The mandate with a write in flight: its row is locked until it lands. */
+  mandateBusy?: string | null
+  onMandatePause?: (m: Mandate) => void
+  onMandateResume?: (m: Mandate) => void
+  onMandateRun?: (m: Mandate) => void
+  onMandateEdit?: (m: Mandate) => void
+  onMandateStop?: (m: Mandate) => void
 }) {
+  const now = useMandateClock(mandates)
+  const [showAll, setShowAll] = useState(false)
+  const { rows, more } = mandateRows(mandates, showAll)
   return (
     <div className="trd-mctl" data-testid="mission-controls">
       {missions.map((job) => {
@@ -162,6 +295,22 @@ export function MissionControls({
           </div>
         )
       })}
+      {rows.map((m) => (
+        <MandateRow
+          key={m.id}
+          mandate={m}
+          now={now}
+          busy={mandateBusy === m.id}
+          onPause={onMandatePause}
+          onResume={onMandateResume}
+          onRun={onMandateRun}
+          onEdit={onMandateEdit}
+          onStop={onMandateStop}
+        />
+      ))}
+      {more > 0 ? (
+        <MoreToggle more={more} showAll={showAll} onToggle={() => setShowAll((v) => !v)} />
+      ) : null}
       {showStart ? (
         <button
           type="button"
@@ -172,6 +321,176 @@ export function MissionControls({
           <Zap className="size-3" strokeWidth={2.25} aria-hidden />
           {t('trading.mission.start')}
         </button>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * "+N more" opens every finished mandate this desk still lists; "show fewer"
+ * folds them back to the newest two. Absent when nothing is folded away.
+ */
+function MoreToggle({
+  more,
+  showAll,
+  onToggle,
+}: {
+  more: number
+  showAll: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className="trd-mctl__more app-no-drag"
+      aria-expanded={showAll}
+      onClick={onToggle}
+      data-testid="mandate-more"
+    >
+      {showAll ? t('trading.dca.fewer') : t('trading.dca.more').replace('{count}', String(more))}
+    </button>
+  )
+}
+
+/**
+ * One DCA mandate among the missions: its name, what it is doing, spent of
+ * cap, and the controls its state allows. A pending one is decided on its
+ * card (the approvals region), so its row only points there; a finished one
+ * has nothing left to steer. Stop is final, so it asks for a second click —
+ * inline, never a dialog.
+ */
+function MandateRow({
+  mandate: m,
+  now,
+  busy,
+  onPause,
+  onResume,
+  onRun,
+  onEdit,
+  onStop,
+}: {
+  mandate: Mandate
+  now: number
+  busy: boolean
+  onPause?: (m: Mandate) => void
+  onResume?: (m: Mandate) => void
+  onRun?: (m: Mandate) => void
+  onEdit?: (m: Mandate) => void
+  onStop?: (m: Mandate) => void
+}) {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const id = window.setTimeout(() => setArmed(false), STOP_ARM_MS)
+    return () => window.clearTimeout(id)
+  }, [armed])
+  const steerable = m.status === 'active' || m.status === 'paused'
+  // Why it stopped or paused ("cap reached", "paused after 3 runs: …"), on hover.
+  const reason = reasonTitle(m)
+  const misses = mandateMissesText(m)
+  return (
+    <div
+      className="trd-mctl__row"
+      data-kind="mandate"
+      data-state={m.status}
+      data-testid="mandate-row"
+      data-mandate={m.id}
+      title={reason ?? undefined}
+    >
+      <span className="trd-mctl__kind" aria-hidden>
+        {t('trading.dca.kind')}
+      </span>
+      <span className="trd-mctl__name" title={reason ? `${m.name} · ${reason}` : m.name}>
+        {m.name}
+      </span>
+      <span className="trd-mctl__word" data-testid="mandate-word">
+        {mandateWord(m, now)}
+      </span>
+      <span className="trd-mctl__runs trd-mono" data-testid="mandate-runs">
+        {mandateBuysText(m)}
+        {misses ? <span className="trd-mctl__misses"> {misses}</span> : null}
+      </span>
+      <MandateProgress mandate={m} />
+      {m.status === 'awaiting_approval' ? (
+        <span className="trd-mctl__hint">{t('trading.dca.review')}</span>
+      ) : null}
+      {steerable ? (
+        <>
+          {m.status === 'active' ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              aria-label={t('trading.dca.pause')}
+              title={t('trading.dca.pause')}
+              onClick={() => onPause?.(m)}
+              data-testid="mandate-pause"
+            >
+              <Pause className="size-3.5" strokeWidth={1.75} aria-hidden />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              aria-label={t('trading.dca.resume')}
+              title={t('trading.dca.resume')}
+              onClick={() => onResume?.(m)}
+              data-testid="mandate-resume"
+            >
+              <Play className="size-3.5" strokeWidth={1.75} aria-hidden />
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            disabled={busy}
+            aria-label={t('trading.dca.runNow')}
+            title={t('trading.dca.runNow')}
+            onClick={() => onRun?.(m)}
+            data-testid="mandate-run"
+          >
+            <Zap className="size-3.5" strokeWidth={1.75} aria-hidden />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            disabled={busy}
+            aria-label={t('trading.dca.edit')}
+            title={t('trading.dca.edit')}
+            onClick={() => onEdit?.(m)}
+            data-testid="mandate-edit"
+          >
+            <Pencil className="size-3.5" strokeWidth={1.75} aria-hidden />
+          </Button>
+          {armed ? (
+            <button
+              type="button"
+              className="trd-mctl__confirm app-no-drag"
+              disabled={busy}
+              onClick={() => {
+                setArmed(false)
+                onStop?.(m)
+              }}
+              data-testid="mandate-stop"
+              data-armed
+            >
+              {t('trading.dca.stopAgain')}
+            </button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              aria-label={t('trading.dca.stop')}
+              title={t('trading.dca.stop')}
+              onClick={() => setArmed(true)}
+              data-testid="mandate-stop"
+            >
+              <OctagonX className="size-3.5" strokeWidth={1.75} aria-hidden />
+            </Button>
+          )}
+        </>
       ) : null}
     </div>
   )

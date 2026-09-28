@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { t } from '~/i18n'
-import type { Order, Wallet } from '../types'
+import type { Mandate, Order, Wallet } from '../types'
 import { ApprovalCard } from './ApprovalCard'
 import { groupAsks } from './desk-logic'
+import { MandateCard } from './MandateCard'
+import { useAsksAnchor } from './useAsksAnchor'
+
+const NO_MANDATES: Mandate[] = []
 
 /**
  * Where the agent's asks dock: between the transcript and the composer, at
  * the point of cause. Height-bounded so a queue of asks can never push the
  * composer off-screen; the region scrolls inside. A card that settles stays
  * for a while as a one-line stamp so the outcome is read where the ask was.
- * The legs of a multisend are one ask and one card.
+ * The legs of a multisend are one ask and one card. A DCA mandate waiting
+ * for approval comes first: one decision there starts every buy after it.
  */
 export function ApprovalsRegion({
   pending,
@@ -20,6 +25,10 @@ export function ApprovalsRegion({
   onReject,
   focusOrderId,
   onDismiss,
+  mandates = NO_MANDATES,
+  mandateDeciding = null,
+  onApproveMandate,
+  onRejectMandate,
 }: {
   pending: Order[]
   settled: Order[]
@@ -31,6 +40,12 @@ export function ApprovalsRegion({
   focusOrderId: string | null
   /** Close a settled stamp before its own clock runs out. */
   onDismiss?: (orderId: string) => void
+  /** DCA mandates awaiting the operator (docs/dca.md), shown above the orders. */
+  mandates?: Mandate[]
+  /** The mandate with a decision in flight. */
+  mandateDeciding?: string | null
+  onApproveMandate?: (m: Mandate) => void
+  onRejectMandate?: (m: Mandate) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const asks = useMemo(() => groupAsks(pending), [pending])
@@ -49,7 +64,11 @@ export function ApprovalsRegion({
     el?.scrollIntoView({ block: 'nearest' })
   }, [focusOrderId, asks])
 
-  if (asks.length === 0 && stamps.length === 0) return null
+  const shown = asks.length > 0 || stamps.length > 0 || mandates.length > 0
+  // Docking takes its room from the transcript's foot; give the reader it back.
+  useAsksAnchor(ref, shown)
+
+  if (!shown) return null
   return (
     <div
       ref={ref}
@@ -58,6 +77,18 @@ export function ApprovalsRegion({
       aria-label={t('trading.card.region')}
       data-testid="approvals-region"
     >
+      {mandates.map((m, i) => (
+        <MandateCard
+          key={m.id}
+          mandate={m}
+          wallets={wallets}
+          deciding={mandateDeciding === m.id}
+          onApprove={(x) => onApproveMandate?.(x)}
+          onReject={(x) => onRejectMandate?.(x)}
+          // The first ask on screen takes focus once, on its least destructive button.
+          focusOnMount={i === 0 && asks.length === 0}
+        />
+      ))}
       {asks.map((ask) => (
         <ApprovalCard
           key={ask.key}

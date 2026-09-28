@@ -178,7 +178,7 @@ export function Overview({
           <div className="trd-alloc__bar" aria-hidden>
             {segments.map((s, i) => (
               <span
-                key={s.symbol}
+                key={s.key}
                 style={{ ['--i' as string]: i, flexBasis: `${s.pct}%` }}
                 data-other={s.symbol === 'other' ? 'true' : undefined}
                 title={`${s.symbol} ${formatPct(s.pct)}`}
@@ -187,7 +187,7 @@ export function Overview({
           </div>
           <div className="trd-alloc__legend">
             {segments.map((s, i) => (
-              <span key={s.symbol} style={{ ['--i' as string]: i }}>
+              <span key={s.key} style={{ ['--i' as string]: i }}>
                 <i data-other={s.symbol === 'other' ? 'true' : undefined} aria-hidden />
                 {s.symbol === 'other' ? t('trading.overview.other') : s.symbol}
                 <b>{formatPct(s.pct)}</b>

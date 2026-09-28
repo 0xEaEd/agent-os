@@ -395,6 +395,16 @@ function OrderRow({
               {t('trading.orders.batch')} {order.batchId.slice(4, 10)}
             </span>
           ) : null}
+          {order.mandateId ? (
+            // A buy a DCA mandate fired: the chip names the mandate it belongs to.
+            <span
+              className="trd-order__dca trd-mono"
+              title={order.mandateId}
+              data-testid="order-dca"
+            >
+              {t('trading.orders.dca')}
+            </span>
+          ) : null}
         </span>
         {showWallet ? (
           <span className="trd-order__fact">

@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "kind": "mandate",
+  "fetchedAt": "2026-09-27T09:15:00Z",
+  "warnings": [
+    "each buy of $150 is above the $100 approval threshold and will wait for you",
+    "USDC balance covers 6 more buys"
+  ],
+  "request": {
+    "kind": "get",
+    "params": {
+      "mandateId": "dca_9c0d1e2f"
+    }
+  },
+  "mandate": {
+    "id": "dca_9c0d1e2f",
+    "name": "Weekly ETH",
+    "status": "awaiting_approval",
+    "statusReason": null,
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+      "label": "Key main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "priceUsd": 2350.0
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1.0
+    },
+    "schedule": {
+      "everySeconds": 604800,
+      "label": "every week",
+      "startNow": true,
+      "anchorAt": null,
+      "nextRunAt": null,
+      "lastRunAt": null
+    },
+    "budget": {
+      "usdPerRun": 150.0,
+      "capUsd": 1500.0,
+      "spentUsd": 0.0,
+      "reservedUsd": 0.0,
+      "remainingUsd": 1500.0,
+      "progress": 0.0
+    },
+    "runs": {
+      "done": 0,
+      "max": null,
+      "skipped": 0,
+      "failed": 0,
+      "attempts": 0
+    },
+    "guards": {
+      "maxPriceUsd": null,
+      "approvalThresholdUsd": 100.0,
+      "dailyCapUsd": 1000.0,
+      "slippagePct": null,
+      "buysNeedApproval": true
+    },
+    "acquired": {
+      "amount": {
+        "raw": "0",
+        "human": "0",
+        "usd": 0.0
+      },
+      "avgPriceUsd": null,
+      "currentPriceUsd": 2350.0,
+      "vsAvgPct": null,
+      "unrealizedUsd": 0.0,
+      "gasUsd": 0.0
+    },
+    "history": [],
+    "initiator": "agent",
+    "sessionKey": "agent:desk:main",
+    "createdAt": "2026-09-27T09:10:00Z",
+    "updatedAt": "2026-09-27T09:10:00Z",
+    "approvedAt": null,
+    "expiresAt": "2026-09-28T09:10:00Z"
+  }
+}

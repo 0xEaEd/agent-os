@@ -210,6 +210,48 @@ describe('tradingAgentFiles · reading an order', () => {
   it('bumped the version with the text, so every desk rewrites its files', () => {
     expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(9)
   })
+  it('creates a DCA as an engine mandate, never a cron job, and never approves it (v18)', () => {
+    // A DCA used to be a cron job whose prompt asked the agent to count its
+    // own budget. It is now a mandate the engine runs: one command, parked
+    // for the user's approval, read back in one line.
+    const agents = files['AGENTS.md']
+    const tools = files['TOOLS.md']
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(18)
+    expect(agents).toContain('## DCA')
+    // The hard rule keeps its words and names its one exception.
+    expect(agents).toMatch(/Never create a cron job or `cron --script` job that trades/)
+    expect(agents).toMatch(/The one exception is a DCA mandate the user asked for/)
+    expect(agents).toMatch(/A DCA is never a\s+cron job and never one swap per turn/)
+    expect(tools).toMatch(
+      /Never schedule a trade \(`agentos cron …`,\s+`cron --script`\); missions are started from the desk\. The one exception\s+is a DCA mandate \(`agentos trade dca create`\), which parks for the\s+user's approval/,
+    )
+    // The reading rules.
+    expect(agents).toMatch(/"DCA \$10 ETH every day, max \$300" → `--usd 10 --every 1d --cap 300`/)
+    expect(agents).toMatch(/"30 buys".*→ `--runs 30`/s)
+    expect(agents).toMatch(/"only under 3000".*→ `--max-price 3000`/s)
+    expect(agents).toMatch(/`agentos trade dca list --json`/)
+    expect(agents).toMatch(/\*\*Approve & start\*\*/)
+    expect(agents).toMatch(/Always report the mandate id/)
+    expect(agents).toMatch(/`agentos trade dca approve`/)
+    // Every command with the CLI's own flags.
+    for (const cmd of [
+      'agentos trade dca create <token> --usd 10 --every 1d (--cap 300 | --runs 30 | both) [--max-price 3000] [--quote USDC] [--chain base|robinhood] [--wallet ADDR|label] [--slippage 1] [--name "DCA ETH"] [--start now|next] --json',
+      'agentos trade dca list [--all] [--wallet …] --json',
+      'agentos trade dca show <id> --json',
+      'agentos trade dca pause|resume|stop <id> [--reason "…"] --json',
+      'agentos trade dca run <id> [--wait --wait-seconds N] --json',
+      'agentos trade dca update <id> [--usd X] [--cap X] [--runs N] [--every 12h] [--max-price X] [--name …] --json',
+      'agentos trade dca approve|reject|pause|resume|stop|run|update',
+      '`trading.dca.invalid`',
+      '`trading.dca.bad_state`',
+    ]) {
+      expect(tools).toContain(cmd)
+    }
+    // English only, whatever the user writes in.
+    for (const name of ['AGENTS.md', 'TOOLS.md']) {
+      expect(files[name]).not.toMatch(/[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i)
+    }
+  })
 })
 
 describe('syncTradingAgent', () => {
@@ -223,6 +265,13 @@ describe('syncTradingAgent', () => {
     const rpc: AgentRpc = { call: call as AgentRpc['call'] }
     return { rpc, calls }
   }
+
+  it('never reports a mandate status from memory (v19)', () => {
+    const agents = tradingAgentFiles()['AGENTS.md'] ?? ''
+    expect(agents).toContain('Never state a mandate')
+    expect(agents).toContain('in the same turn first')
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(19)
+  })
 
   it('creates the agent when the registry lacks it, then writes its files', async () => {
     const { rpc, calls } = rpcWith([{ id: 'main' }])

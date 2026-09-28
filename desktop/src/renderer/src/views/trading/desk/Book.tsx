@@ -384,7 +384,7 @@ export function Book({
                   <div className="trd-alloc__bar" aria-hidden>
                     {segments.map((s, i) => (
                       <span
-                        key={s.symbol}
+                        key={s.key}
                         style={{ ['--i' as string]: i, flexBasis: `${s.pct}%` }}
                         data-other={s.symbol === 'other' ? 'true' : undefined}
                         title={`${s.symbol} ${formatPct(s.pct)}`}

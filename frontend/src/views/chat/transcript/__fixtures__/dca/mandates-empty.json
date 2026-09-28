@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "kind": "mandates",
+  "fetchedAt": "2026-09-28T05:48:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "list",
+    "params": {}
+  },
+  "mandates": [],
+  "totals": {
+    "count": 0,
+    "active": 0,
+    "spentUsd": 0,
+    "capUsd": 0,
+    "acquiredUsd": null
+  }
+}

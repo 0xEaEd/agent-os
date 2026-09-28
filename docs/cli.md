@@ -32,7 +32,7 @@ available without `uv tool list` or `pip show`.
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
 | `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
-| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL. |
+| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL; Uniswap V4 liquidity; DCA mandates. |
 | `agentos skills` | List, search, view, install, update, publish, inspect, and tap skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
@@ -896,6 +896,13 @@ agentos trade lp positions [--wallet <addr|label>]… [--chain base|robinhood]�
 agentos trade lp collect <tokenId> --chain base|robinhood [--allow-empty] [--note <text>] [--client-id <id>] [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # collect a vault position's fees; always waits for approval
 agentos trade lp remove <tokenId> --chain base|robinhood [--pct 100] [--slippage 1] [--note …] [--client-id …] [--wait …] [--json] [--no-card]   # take liquidity (and every fee) out; --pct 100 burns the NFT
 agentos trade lp add <token|TOKEN/QUOTE|poolId> --chain base|robinhood [--quote <token>] [--fee <tier>] (--usd X | --amount-base A [--amount-quote B]) [--range mcap:2M-10M|pct:20|above[:20]|below[:20]|full|ticks:LO:HI] [--to-position <tokenId>] [--wallet <addr|label>] [--slippage 1] [--note …] [--client-id …] [--wait …] [--json] [--no-card]   # mint a position (or top one up); default range pct:20
+agentos trade dca create <token> --usd X --every 30m|2h|1d|1w|<seconds> (--cap X | --runs N | both) [--max-price X] [--quote <token>] [--chain base|robinhood] [--wallet <addr|label>] [--slippage 1] [--name <text>] [--start now|next] [--json] [--no-card]   # DCA mandate: the engine buys on schedule under a hard cap; from an agent it waits for approval
+agentos trade dca list [--all] [--wallet <addr|label>] [--json] [--no-card]   # live mandates (awaiting approval, active, paused); --all adds completed/stopped/rejected/expired
+agentos trade dca show <id> [--json] [--no-card]            # one mandate: schedule, progress, avg buy vs price now, recent runs
+agentos trade dca approve <id> / reject <id> [--reason <text>] [--json] [--no-card]   # operator-only
+agentos trade dca pause <id> / resume <id> / stop <id> [--reason <text>] [--json] [--no-card]   # operator-only; stop is final
+agentos trade dca run <id> [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # buy now (operator-only); the next scheduled buy does not move
+agentos trade dca update <id> [--usd X] [--cap X] [--runs N] [--every 12h] [--max-price X] [--name <text>] [--json] [--no-card]   # operator-only; --runs 0 / --max-price 0 remove the limit
 agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval|lp_collect|lp_remove|lp_add] [--limit N] [--hidden]
 agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
 agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
@@ -1132,6 +1139,39 @@ on stdout, unless `--no-card`. Input errors (`trading.invalid`,
 `trading.lp.not_found`) exit 2; everything
 else exits 1. The ledger books a confirmed write as `lp_collect`,
 `lp_remove` or `lp_add` entries, one per token moved.
+
+`trade dca` manages **DCA mandates**: a recurring buy the engine owns and
+runs itself — `create ETH --usd 10 --every 1d --cap 300` buys $10 of ETH
+with the chain's USDC every day until $300 is spent (gateway methods
+`trading.dca.create|get|list|approve|reject|pause|resume|stop|run|update`;
+the contract is [`dca.md`](dca.md)). The cap, the run count and the schedule
+are rows in the ledger, enforced by the engine; every buy is an ordinary swap
+order (guardrails, approval threshold, daily cap, ledger) with the mandate's
+id and a `DCA ETH · buy 3/30` note, and no agent turn is spent on it.
+`--every` takes `30m`, `2h`, `1d`, `1w` or a plain number of seconds
+(minimum 60); `create` needs `--cap`, `--runs` or both (the cap defaults to
+`--usd × --runs`); `--quote` defaults to the chain's USDC and is required
+on Robinhood Chain; `--max-price` skips a buy while the token's price is
+above it (no price known → skipped too); `--start next` puts the first buy
+one interval after activation instead of at once. A mandate created from an
+agent's shell always answers `status: "awaiting_approval"` and expires after
+24 h without a decision; yours starts `active`. `create`, `list` and `show`
+are allowed from an agent; `approve`, `reject`, `pause`, `resume`, `stop`,
+`run` and `update` are the user's and answer `trading.operator_required` to
+an agent. Three skipped (balance, daily cap) or failed buys in a row pause
+the mandate; `resume` does not make up missed buys. `update --every`
+re-anchors the schedule at now; lowering `--cap` below what is spent
+completes the mandate. `run --wait` waits for the order it placed (like
+`swap --wait`) and prints the mandate again once it settled. With `--json`
+the payload is the first line of stdout and, unless `--no-card`, it is
+written to `dca-cards/<mandate|mandates>-<id|live|all>-<utc stamp>.json`
+(the 20 newest kept) and announced by the last line,
+`publish_artifact path=<file> mime=application/vnd.agentos.dca+json`;
+without `--json` a mandate prints as a panel and `list` as a table. Input
+and state errors (`INVALID_ARGUMENT`, `trading.dca.invalid`,
+`trading.dca.bad_state`, `trading.dca.not_found`, `trading.invalid`,
+`trading.token_not_found`) exit 2; everything else exits 1; under `--json`
+every error is `{"error": …}` on stderr and writes no card.
 
 `[trading]` config keys (each also an environment variable with the
 `AGENTOS_TRADING_` prefix): `enabled`, `provider` (`aggregator` |

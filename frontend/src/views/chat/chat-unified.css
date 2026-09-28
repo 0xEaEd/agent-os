@@ -1462,6 +1462,1024 @@
   }
 }
 
+/* DCA mandate cards (dca.ts, docs/dca.md). One renderer, two layouts keyed by
+   `.dca-card[data-dca-kind]` (mandate | mandates). It should read like an
+   instrument, not a form: the plan as a large figure, a live countdown, a
+   budget bar and four tabular stats. Status colours come from the theme's
+   --ok/--warn/--info tokens, so light and dark follow the console theme; the
+   pill always carries the status word as well. `data-dca-layout` (wide |
+   narrow) is stamped by the mounter from the measured card width. */
+.chat-surface .msg-artifact-dca-group {
+  display: grid;
+  gap: 0.625rem;
+  max-width: min(40rem, 100%);
+}
+
+.chat-surface .msg-artifact-dca {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .msg-artifact-dca__body:empty {
+  display: none;
+}
+
+.chat-surface .msg-artifact-dca__status {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-surface);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .msg-artifact-dca__status[hidden] {
+  display: none;
+}
+
+.chat-surface .dca-card {
+  --dca-tone: var(--dim);
+  display: grid;
+  gap: 0.875rem;
+  min-width: 0;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-surface .dca-card[data-dca-status='awaiting_approval'],
+.chat-surface .dca-row[data-dca-status='awaiting_approval'],
+.chat-surface .dca-pill[data-status='awaiting_approval'] {
+  --dca-tone: var(--warn);
+}
+
+.chat-surface .dca-card[data-dca-status='active'],
+.chat-surface .dca-row[data-dca-status='active'],
+.chat-surface .dca-pill[data-status='active'] {
+  --dca-tone: var(--ok);
+}
+
+.chat-surface .dca-card[data-dca-status='completed'],
+.chat-surface .dca-row[data-dca-status='completed'],
+.chat-surface .dca-pill[data-status='completed'] {
+  --dca-tone: var(--info);
+}
+
+.chat-surface .dca-card[data-dca-status='paused'],
+.chat-surface .dca-row[data-dca-status='paused'],
+.chat-surface .dca-pill[data-status='paused'] {
+  --dca-tone: var(--dim);
+}
+
+.chat-surface
+  .dca-card:is(
+    [data-dca-status='stopped'],
+    [data-dca-status='rejected'],
+    [data-dca-status='expired']
+  ),
+.chat-surface
+  .dca-row:is(
+    [data-dca-status='stopped'],
+    [data-dca-status='rejected'],
+    [data-dca-status='expired']
+  ),
+.chat-surface
+  .dca-pill:is([data-status='stopped'], [data-status='rejected'], [data-status='expired']) {
+  --dca-tone: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
+}
+
+.chat-surface .dca-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  min-width: 0;
+}
+
+.chat-surface .dca-card__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .dca-card__pair,
+.chat-surface .dca-card__list-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.chat-surface .dca-pair__arrow,
+.chat-surface .dca-sep {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.chat-surface .dca-pair__quote {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.chat-surface .dca-chain {
+  padding: 0.0625rem 0.4375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-card__name,
+.chat-surface .dca-card__count {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-card__name {
+  overflow: hidden;
+  max-width: 50%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--dca-tone) 45%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--dca-tone) 12%, transparent);
+  color: var(--dca-tone);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-pill__dot {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* A pending proposal breathes, softly: it is waiting on the user. */
+.chat-surface .dca-pill[data-status='awaiting_approval'] .dca-pill__dot {
+  animation: dca-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes dca-pulse {
+  50% {
+    box-shadow: 0 0 0 0.25rem color-mix(in srgb, var(--warn) 22%, transparent);
+    opacity: 0.55;
+  }
+}
+
+/* Hero: the plan as the largest figure on the card, then the live line. */
+.chat-surface .dca-card__hero {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.chat-surface .dca-card__hero-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.375rem;
+  margin: 0;
+}
+
+.chat-surface .dca-card__usd {
+  font-size: 1.75rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.chat-surface .dca-card__every {
+  color: var(--muted-foreground);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.chat-surface .dca-card__next {
+  color: var(--dca-tone);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-card__next[data-dca-due] {
+  font-weight: 600;
+}
+
+.chat-surface .dca-card__reason {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-card[data-dca-status='paused'] .dca-card__reason {
+  color: var(--warn);
+}
+
+/* Budget: spent solid, the in-flight reservation hatched after it. */
+.chat-surface .dca-card__progress {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.chat-surface .dca-progress {
+  position: relative;
+  overflow: hidden;
+  height: 0.5rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+
+.chat-surface .dca-progress--mini {
+  height: 0.25rem;
+}
+
+.chat-surface .dca-progress__spent {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--dca-tone);
+}
+
+.chat-surface .dca-progress__reserved {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--dca-tone) 70%, transparent) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.chat-surface .dca-progress__labels {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.125rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-progress__runs,
+.chat-surface .dca-progress__extra,
+.chat-surface .dca-progress__reserved-note {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-progress__reserved-note {
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-card__guards {
+  margin: -0.375rem 0 0;
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+/* Stats: 2×2, 4 across once the card is wide. */
+.chat-surface .dca-card__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.chat-surface .dca-card[data-dca-layout='wide'] .dca-card__stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.chat-surface .dca-stat {
+  display: grid;
+  align-content: start;
+  gap: 0.125rem;
+  min-width: 0;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius-control);
+  background: var(--background);
+}
+
+.chat-surface .dca-stat__label {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-stat__value {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-stat__symbol {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.chat-surface .dca-stat__sub {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-card [data-dca-tone='up'] {
+  color: var(--ok);
+}
+
+.chat-surface .dca-card [data-dca-tone='down'] {
+  color: var(--danger);
+}
+
+.chat-surface .dca-card [data-dca-no-price] {
+  color: var(--muted-foreground);
+  cursor: help;
+}
+
+/* Buys chart: plain SVG stretched to the plot box; every label is HTML
+   positioned in % so text never scales with the viewBox. */
+.chat-surface .dca-chart {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.chat-surface .dca-chart--empty {
+  color: var(--dim);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-chart__plot {
+  --dca-plot-pad: 0.75rem;
+  --dca-plot-h: 7.5rem;
+  position: relative;
+  padding-top: var(--dca-plot-pad);
+}
+
+.chat-surface .dca-chart__svg {
+  display: block;
+  width: 100%;
+  height: var(--dca-plot-h);
+  overflow: visible;
+}
+
+.chat-surface .dca-chart__baseline {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.chat-surface .dca-chart__hit {
+  fill: transparent;
+}
+
+.chat-surface .dca-chart__bar {
+  fill: color-mix(in srgb, var(--foreground) 26%, transparent);
+  transition: fill 120ms ease;
+}
+
+.chat-surface .dca-chart__col[data-hover='true'] .dca-chart__bar {
+  fill: color-mix(in srgb, var(--foreground) 55%, transparent);
+}
+
+.chat-surface .dca-chart__parked {
+  fill: color-mix(in srgb, var(--warn) 10%, transparent);
+  stroke: var(--warn);
+  stroke-dasharray: 3 2;
+  stroke-width: 1;
+}
+
+.chat-surface .dca-chart__pending {
+  fill: none;
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 2 2;
+  stroke-width: 1;
+  animation: dca-pending 1.4s ease-in-out infinite;
+}
+
+.chat-surface .dca-chart__skip {
+  fill: none;
+  stroke: var(--warn);
+  stroke-width: 1.25;
+}
+
+.chat-surface .dca-chart__void {
+  stroke: var(--dim);
+  stroke-width: 1.5;
+}
+
+.chat-surface .dca-chart__col {
+  outline: none;
+  cursor: default;
+}
+
+.chat-surface .dca-chart__col:focus-visible .dca-chart__hit {
+  fill: color-mix(in srgb, var(--ring) 14%, transparent);
+}
+
+.chat-surface .dca-chart__avg-line {
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 6 4;
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.chat-surface .dca-chart__now-line {
+  stroke: var(--foreground);
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+.chat-surface .dca-chart__now-line[data-dca-tone='up'] {
+  stroke: var(--ok);
+}
+
+.chat-surface .dca-chart__now-line[data-dca-tone='down'] {
+  stroke: var(--danger);
+}
+
+.chat-surface .dca-chart__avg,
+.chat-surface .dca-chart__now,
+.chat-surface .dca-chart__fail {
+  position: absolute;
+  font-family: var(--font-mono);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.chat-surface .dca-chart__avg,
+.chat-surface .dca-chart__now {
+  padding: 0.0625rem 0.25rem;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  font-size: 0.625rem;
+  transform: translateY(calc(-100% - 2px));
+}
+
+.chat-surface .dca-chart__avg {
+  left: 0;
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-chart__avg[data-dca-flip] {
+  transform: translateY(2px);
+}
+
+.chat-surface .dca-chart__now {
+  right: 0;
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.chat-surface .dca-chart__fail {
+  bottom: 0.25rem;
+  color: var(--danger);
+  font-size: 0.875rem;
+  font-weight: 700;
+  transform: translateX(-50%);
+}
+
+/* The y axis: the top and bottom of the padded price range, at the left
+   edge. The top label hangs below the plot's top, the bottom one sits on the
+   baseline; dca.ts sets each `top` from the two plot lengths. */
+.chat-surface .dca-chart__ylabel {
+  position: absolute;
+  left: 0;
+  padding: 0 0.25rem;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.chat-surface .dca-chart__ylabel[data-edge='bottom'] {
+  transform: translateY(calc(-100% - 1px));
+}
+
+.chat-surface .dca-chart__axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+}
+
+.chat-surface .dca-chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.125rem 0.75rem;
+  color: var(--dim);
+  font-size: 0.625rem;
+}
+
+.chat-surface .dca-chart__key::before {
+  display: inline-block;
+  width: 0.75rem;
+  margin-right: 0.25rem;
+  content: '';
+  vertical-align: middle;
+}
+
+.chat-surface .dca-chart__key[data-key='bar']::before {
+  height: 0.5rem;
+  background: color-mix(in srgb, var(--foreground) 26%, transparent);
+}
+
+.chat-surface .dca-chart__key[data-key='avg']::before {
+  border-top: 1px dashed var(--muted-foreground);
+}
+
+.chat-surface .dca-chart__key[data-key='now']::before {
+  border-top: 2px dotted var(--foreground);
+}
+
+.chat-surface .dca-chart__key[data-key='parked']::before {
+  height: 0.5rem;
+  border: 1px dashed var(--warn);
+}
+
+.chat-surface .dca-chart__key[data-key='pending']::before {
+  height: 0.5rem;
+  border: 1px dashed var(--muted-foreground);
+}
+
+.chat-surface .dca-chart__key[data-key='skipped']::before {
+  height: 0.1875rem;
+  border: 1px solid var(--warn);
+}
+
+.chat-surface .dca-chart__key[data-key='failed']::before {
+  width: auto;
+  color: var(--danger);
+  content: '×';
+  font-weight: 700;
+}
+
+/* The tooltip sits inside the plot, anchored on the hovered column's mark;
+   dca.ts sets `top` / `bottom` / `left` inline so every skin agrees, and
+   clamps it to the plot's edges. The short hide delay in dca.ts lets the
+   pointer travel onto its tx link. The `top` here is only a pre-placement
+   default; the inline values always win. */
+.chat-surface .dca-chart__tooltip {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  z-index: 2;
+  display: grid;
+  gap: 0.125rem;
+  padding: 0.4375rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--popover);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.chat-surface .dca-chart__tooltip[data-align='start'] {
+  transform: none;
+}
+
+.chat-surface .dca-chart__tooltip[data-align='end'] {
+  transform: translateX(-100%);
+}
+
+.chat-surface .dca-chart__tooltip[hidden] {
+  display: none;
+}
+
+.chat-surface .dca-chart__tooltip-line[data-dca-line='when'] {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-chart__tooltip-line[data-dca-line='detail'] {
+  font-weight: 600;
+}
+
+.chat-surface .dca-chart__tooltip-line[data-dca-run-status='skipped'],
+.chat-surface .dca-chart__tooltip-line[data-dca-run-status='parked'] {
+  color: var(--warn);
+}
+
+.chat-surface .dca-chart__tooltip-line[data-dca-run-status='failed'] {
+  color: var(--danger);
+}
+
+/* Recent buys: one mono line each, newest first. */
+.chat-surface .dca-runs {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.chat-surface .dca-runs__title {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+
+.chat-surface .dca-runs__list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .dca-run {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  min-width: 0;
+  padding: 0.25rem 0;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-run__n {
+  min-width: 1.75rem;
+  color: var(--dim);
+}
+
+.chat-surface .dca-run__ago {
+  min-width: 3.5rem;
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-run__status {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-run[data-dca-run-status='filled'] .dca-run__status {
+  color: var(--ok);
+}
+
+.chat-surface
+  .dca-run:is([data-dca-run-status='skipped'], [data-dca-run-status='parked'])
+  .dca-run__status {
+  color: var(--warn);
+}
+
+.chat-surface .dca-run[data-dca-run-status='failed'] .dca-run__status {
+  color: var(--danger);
+}
+
+/* A buy in flight: muted and breathing until the order settles. */
+.chat-surface .dca-run[data-dca-run-status='pending'] .dca-run__status {
+  color: var(--muted-foreground);
+  animation: dca-pending 1.4s ease-in-out infinite;
+}
+
+@keyframes dca-pending {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.chat-surface .dca-run > :not(.dca-run__detail) {
+  flex-shrink: 0;
+}
+
+.chat-surface .dca-run__detail {
+  overflow: hidden;
+  flex: 1 1 0;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-run__manual {
+  padding: 0 0.3125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+}
+
+.chat-surface .msg-body .dca-card a:is(.dca-run__link, .dca-chart__tx) {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+
+.chat-surface .msg-body .dca-card a:is(.dca-run__link, .dca-chart__tx):hover,
+.chat-surface .msg-body .dca-card a:is(.dca-run__link, .dca-chart__tx):focus-visible {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+
+.chat-surface .dca-run__link {
+  margin-left: auto;
+}
+
+/* Controls (desktop desk only: the web never renders them). */
+.chat-surface .dca-actions {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.chat-surface .dca-actions__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.chat-surface .dca-action {
+  padding: 0.3125rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.chat-surface .dca-action:hover:not(:disabled),
+.chat-surface .dca-action:focus-visible {
+  border-color: color-mix(in srgb, var(--foreground) 40%, transparent);
+}
+
+.chat-surface .dca-action[data-dca-tone='primary'] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 600;
+}
+
+.chat-surface .dca-action[data-dca-tone='danger'] {
+  color: var(--danger);
+}
+
+.chat-surface .dca-action[data-dca-confirm] {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  font-weight: 600;
+}
+
+.chat-surface .dca-action[data-dca-compact] {
+  padding: 0.125rem 0.5rem;
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-action:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+.chat-surface .dca-action[data-dca-pending] {
+  opacity: 0.8;
+}
+
+.chat-surface .dca-actions__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-actions__error[hidden] {
+  display: none;
+}
+
+.chat-surface .dca-card__warnings {
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-card__actions {
+  display: inline-flex;
+  gap: 0.75rem;
+}
+
+.chat-surface .dca-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chat-surface .dca-card__action:hover,
+.chat-surface .dca-card__action:focus-visible {
+  color: var(--foreground);
+}
+
+.chat-surface .dca-card__copy[data-dca-copied='true'] {
+  color: var(--ok);
+}
+
+.chat-surface .dca-card__copy[data-dca-copied='failed'] {
+  color: var(--danger);
+}
+
+.chat-surface .dca-card__refresh:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.chat-surface .dca-card__refresh-error {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+
+/* A card still drawing its artifact snapshot (live read in flight, or
+   failed): controls off, not "busy" — nothing is running on them. */
+.chat-surface .dca-card[data-dca-stale] .dca-action:disabled {
+  cursor: not-allowed;
+}
+
+.chat-surface .dca-card__stale {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-card__stale-refresh {
+  padding: 0 0.25rem;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-surface .dca-card__stale-refresh:hover,
+.chat-surface .dca-card__stale-refresh:focus-visible {
+  color: var(--foreground);
+}
+
+.chat-surface .dca-card__stale-refresh:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+/* ↻ and a control in flight keep the old figures on screen, dimmed. */
+.chat-surface .dca-card[data-dca-refreshing] > :not(.dca-card__foot),
+.chat-surface .dca-card[data-dca-busy] > :not(.dca-actions, .dca-card__foot) {
+  opacity: 0.6;
+  transition: opacity 160ms ease-out;
+}
+
+/* The list: one row per mandate, status dot · pair · plan · state, a mini
+   budget bar and the countdown under it, compact controls on the right. */
+.chat-surface .dca-totals {
+  margin: -0.25rem 0 0;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .dca-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 0.25rem 0.625rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.chat-surface .dca-row__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--dca-tone);
+}
+
+.chat-surface .dca-row__main {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.chat-surface .dca-row__name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-row__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .dca-row__pair {
+  font-weight: 500;
+}
+
+.chat-surface .dca-row__plan {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-row__state {
+  color: var(--dca-tone);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-surface .dca-row__progress {
+  display: grid;
+  grid-template-columns: minmax(3rem, 10rem) max-content;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chat-surface .dca-row__spent,
+.chat-surface .dca-row__next {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-card[data-dca-layout='narrow'] .dca-row {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.chat-surface .dca-card[data-dca-layout='narrow'] .dca-row .dca-actions {
+  grid-column: 2;
+}
+
+.chat-surface .dca-card__empty {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-surface .dca-pill[data-status='awaiting_approval'] .dca-pill__dot,
+  .chat-surface .dca-chart__pending,
+  .chat-surface .dca-run[data-dca-run-status='pending'] .dca-run__status {
+    animation: none;
+  }
+}
+
 /* Crosshair readout. lightweight-charts has no tooltip, so this strip carries
    the hovered candle's OHLC and its move. It takes its own row above the
    canvas rather than floating over it, so it can neither be clipped by the

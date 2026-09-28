@@ -1,11 +1,15 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  cardCallFromResult,
+  dcaCallFromResult,
   commandFromToolInput,
   exitCodeOf,
   ledgerRuns,
   lpCallFromResult,
   parseTradeCommand,
   parseTradeResult,
+  withLiveMandate,
 } from './ledger'
 
 describe('commandFromToolInput', () => {
@@ -532,5 +536,228 @@ describe('liquidity reads (agentos trade lp)', () => {
     const call = parseTradeCommand('agentos trade lp positions --chain robinhood --json')!
     const cut = '{"version": 1, "kind": "positions", "chain": null, "asOfBlo'
     expect(parseTradeResult(call, cut).detail).toBe('positions (Robinhood Chain)')
+  })
+})
+
+describe('trade status from history', () => {
+  it('reads a status cut past valid JSON as the route, never the raw JSON', () => {
+    const call = parseTradeCommand('agentos trade status --json')!
+    const full = {
+      enabled: true,
+      version: '2026.9.27',
+      provider: 'aggregator',
+      providers: [{ id: 'aggregator', label: 'AgentOS Aggregator', active: true }],
+      apiKeyConfigured: true,
+      chains: Array.from({ length: 30 }, (_, i) => ({ chainId: i, name: `chain ${i}` })),
+      unlocked: true,
+    }
+    const whole = parseTradeResult(call, JSON.stringify(full, null, 2))
+    expect(whole.provider).toBe('aggregator')
+    expect(whole.summary).toBe('via AgentOS Aggregator · vault unlocked')
+    for (const cut of [
+      JSON.stringify(full).slice(0, 400),
+      `exit_code=0\n${JSON.stringify(full, null, 2).slice(0, 400)}`,
+    ]) {
+      const out = parseTradeResult(call, cut)
+      expect(out.provider).toBe('aggregator')
+      expect(out.summary).toBe('via AgentOS Aggregator')
+      expect(out.summary).not.toContain('{')
+      expect(out.error).toBeNull()
+    }
+    // A failed status still reads as its error line.
+    expect(parseTradeResult(call, 'exit_code=1\ngateway unreachable').error).toBe(
+      'gateway unreachable',
+    )
+  })
+})
+
+describe('DCA mandates (agentos trade dca)', () => {
+  const FIXTURE = readFileSync(
+    'src/renderer/src/views/trading/desk/__fixtures__/dca/mandate.json',
+    'utf8',
+  )
+  const MARKER =
+    'publish_artifact path=/tmp/dca-cards/mandate-dca-eth-20260928T060000Z.json mime=application/vnd.agentos.dca+json'
+
+  it('titles every subcommand and summarises its arguments', () => {
+    expect(
+      parseTradeCommand('agentos trade dca create ETH --usd 10 --every 1d --cap 300 --json'),
+    ).toMatchObject({ kind: 'dca_create', title: 'Start DCA', detail: 'ETH · $10 / day' })
+    expect(
+      parseTradeCommand(
+        'agentos trade dca create eth --usd 25 --every 6h --runs 12 --chain base --max-price 3000 --json',
+      ),
+    ).toMatchObject({ detail: 'ETH · $25 / 6 h · Base' })
+    expect(
+      parseTradeCommand('agentos trade dca create ETH --usd 5 --every 30m --json')?.detail,
+    ).toBe('ETH · $5 / 30 min')
+    const rows: [string, string, string, string][] = [
+      ['agentos trade dca show dca_1a2b3c4d --json', 'dca', 'DCA status', 'dca_1a2b3c4d'],
+      ['agentos trade dca list --json', 'dca_list', 'DCA list', ''],
+      ['agentos trade dca list --all --json', 'dca_list', 'DCA list', 'all'],
+      ['agentos trade dca pause dca_1a2b3c4d --json', 'dca_pause', 'Pause DCA', 'dca_1a2b3c4d'],
+      ['agentos trade dca resume dca_1a2b3c4d --json', 'dca_resume', 'Resume DCA', 'dca_1a2b3c4d'],
+      ['agentos trade dca run dca_1a2b3c4d --wait --json', 'dca_run', 'Buy now', 'dca_1a2b3c4d'],
+      [
+        'agentos trade dca stop dca_1a2b3c4d --reason "done" --json',
+        'dca_stop',
+        'Stop DCA',
+        'dca_1a2b3c4d',
+      ],
+      [
+        'agentos trade dca approve dca_1a2b3c4d --json',
+        'dca_approve',
+        'Approve DCA',
+        'dca_1a2b3c4d',
+      ],
+      [
+        'agentos trade dca update dca_1a2b3c4d --cap 500 --json',
+        'dca_update',
+        'Update DCA',
+        'dca_1a2b3c4d',
+      ],
+    ]
+    for (const [command, kind, title, detail] of rows) {
+      expect(parseTradeCommand(command), command).toMatchObject({ kind, title, detail })
+    }
+  })
+
+  it('reads a mandate card as pair, cadence, state and money — never its JSON', () => {
+    const call = parseTradeCommand('agentos trade dca show dca_1a2b3c4d --json')!
+    const out = parseTradeResult(call, `${FIXTURE}\n${MARKER}`)
+    expect(out.detail).toBe('ETH ← USDC · $10 / day')
+    expect(out.summary).toBe('active · $120 of $300 · 12/30 buys')
+    expect(out.error).toBeNull()
+    expect(out.summary).not.toContain('{')
+  })
+
+  it('names the fired buy of a Buy now and earns the awaiting stamp when it parks', () => {
+    const payload = JSON.parse(FIXTURE) as Record<string, unknown> & {
+      mandate: { history: Record<string, unknown>[] }
+    }
+    const parked = { ...payload, run: payload.mandate.history[0] }
+    const call = parseTradeCommand('agentos trade dca run dca_1a2b3c4d --json')!
+    const out = parseTradeResult(call, JSON.stringify(parked))
+    expect(out.summary.startsWith('buy #14 awaiting approval')).toBe(true)
+    expect(out.awaiting).toBe(true)
+    expect(out.orderId).toBe('ord_7c2e91')
+    const filled = { ...payload, run: payload.mandate.history[2] }
+    const done = parseTradeResult(call, JSON.stringify(filled))
+    expect(done.summary.startsWith('buy #12 filled')).toBe(true)
+    expect(done.confirmed).toBe(true)
+    expect(done.txHash).toMatch(/^0x0c/)
+  })
+
+  it('reads a list, and an agent proposal as awaiting approval', () => {
+    const payload = JSON.parse(FIXTURE) as { mandate: Record<string, unknown> }
+    const proposal = { ...payload.mandate, id: 'dca_99', status: 'awaiting_approval' }
+    const list = {
+      version: 1,
+      kind: 'mandates',
+      fetchedAt: '2026-09-28T06:00:00Z',
+      warnings: [],
+      mandates: [payload.mandate, proposal],
+      totals: { count: 2, active: 1, spentUsd: 120, capUsd: 600, acquiredUsd: 127.9 },
+    }
+    const call = parseTradeCommand('agentos trade dca list --json')!
+    const out = parseTradeResult(call, JSON.stringify(list))
+    expect(out.detail).toBe('2 mandates')
+    expect(out.summary).toBe('1 active · 1 awaiting approval · $120 of $600')
+    expect(out.awaiting).toBe(true)
+    const empty = { ...list, mandates: [], totals: { count: 0, active: 0, spentUsd: 0, capUsd: 0 } }
+    expect(parseTradeResult(call, JSON.stringify(empty)).summary).toBe('none yet')
+  })
+
+  it('reads a result cut past valid JSON from its first fields', () => {
+    const call = parseTradeCommand(
+      'agentos trade dca create ETH --usd 10 --every 1d --cap 300 --json',
+    )!
+    const cut = FIXTURE.replace('"active"', '"awaiting_approval"').slice(0, 900)
+    const out = parseTradeResult(call, cut)
+    expect(out.detail).toBe('DCA ETH')
+    expect(out.summary).toBe('awaiting approval · dca_1a2b3c4d')
+    expect(out.awaiting).toBe(true)
+  })
+
+  it('lets a Start DCA row follow its mandate in the live list, else stay as recorded', () => {
+    const call = parseTradeCommand(
+      'agentos trade dca create ETH --usd 10 --every 1d --cap 300 --json',
+    )!
+    const payload = JSON.parse(FIXTURE) as { mandate: Record<string, unknown> }
+    const proposed = { ...payload, mandate: { ...payload.mandate, status: 'awaiting_approval' } }
+    const out = parseTradeResult(call, JSON.stringify(proposed))
+    expect(out.mandateId).toBe('dca_1a2b3c4d')
+    expect(out.mandateStatus).toBe('awaiting_approval')
+    expect(out.awaiting).toBe(true)
+    // Not in any loaded list: exactly as recorded.
+    expect(withLiveMandate(out, undefined)).toBe(out)
+    // Completed since: the pill and the status word follow the mandate.
+    const done = withLiveMandate(out, 'completed')
+    expect(done.awaiting).toBe(false)
+    expect(done.mandateLive).toBe('completed')
+    expect(done.summary.startsWith('done · ')).toBe(true)
+    expect(withLiveMandate(out, 'active').summary.startsWith('active · ')).toBe(true)
+    const still = withLiveMandate(out, 'awaiting_approval')
+    expect(still.awaiting).toBe(true)
+    expect(still.summary).toBe(out.summary)
+    // A truncated result keeps the id too.
+    const cut = FIXTURE.replace('"active"', '"awaiting_approval"').slice(0, 900)
+    const truncated = withLiveMandate(parseTradeResult(call, cut), 'stopped')
+    expect(truncated.summary).toBe('stopped · dca_1a2b3c4d')
+    expect(truncated.awaiting).toBe(false)
+    // A projected result on a command that names the mandate: the id is the command's.
+    const pause = parseTradeCommand('agentos trade dca pause dca_1a2b3c4d --json')!
+    const projected = parseTradeResult(pause, '{"version": 1, "kind": "mandate", "mandate": {')
+    expect(projected.mandateId).toBe('dca_1a2b3c4d')
+    // A Buy now that parked an order keeps the order's pill.
+    const parked = parseTradeResult(
+      parseTradeCommand('agentos trade dca run dca_1a2b3c4d --json')!,
+      JSON.stringify({
+        ...payload,
+        run: (payload.mandate as { history: unknown[] }).history[0],
+      }),
+    )
+    expect(withLiveMandate(parked, 'active')).toBe(parked)
+  })
+
+  it('reports an operator-only refusal plainly', () => {
+    const call = parseTradeCommand('agentos trade dca approve dca_1a2b3c4d --json')!
+    const out = parseTradeResult(
+      call,
+      'exit_code=1\n{"error": {"code": "trading.operator_required", "message": "only the operator may approve"}}',
+    )
+    expect(out.error).toBe('only the operator may approve')
+  })
+
+  it('recognises a DCA call from its card line alone, in all three shapes', () => {
+    const body = '{"version": 1, "kind": "mandate"'
+    expect(dcaCallFromResult(`${body}\n${MARKER}`)).toMatchObject({
+      kind: 'dca',
+      title: 'DCA status',
+    })
+    const live =
+      '[inline artifact published and already rendered for the user: ' +
+      'dca-cards/mandates-all-20260928T060000Z.json. Do not call publish_artifact for it.]'
+    expect(dcaCallFromResult(`{"version": 1, "kind": "mandates"}\n${live}`)).toMatchObject({
+      kind: 'dca_list',
+      title: 'DCA list',
+    })
+    expect(
+      dcaCallFromResult(
+        '[generated artifact omitted: mandate-dca-eth-1.json (application/vnd.agentos.dca+json)]',
+      ),
+    ).not.toBeNull()
+    // Neither an LP card nor a stray image is a DCA.
+    expect(
+      dcaCallFromResult('publish_artifact path=a.json mime=application/vnd.agentos.lp+json'),
+    ).toBeNull()
+    expect(dcaCallFromResult('publish_artifact path=a.png mime=image/png')).toBeNull()
+    expect(cardCallFromResult(`${body}\n${MARKER}`)?.kind).toBe('dca')
+    expect(
+      cardCallFromResult('publish_artifact path=a.json mime=application/vnd.agentos.lp+json')?.kind,
+    ).toBe('lp')
+    // The live rewrite ends in "]" after the JSON; the row still reads the card.
+    const out = parseTradeResult(dcaCallFromResult(`${FIXTURE}\n${live}`)!, `${FIXTURE}\n${live}`)
+    expect(out.detail).toBe('ETH ← USDC · $10 / day')
   })
 })

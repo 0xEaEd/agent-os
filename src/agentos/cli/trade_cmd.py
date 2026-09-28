@@ -21,11 +21,13 @@ import os
 import re
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any
 
 import click
 import typer
+from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
@@ -1698,8 +1700,13 @@ def _write_lp_card(result: dict[str, Any]) -> None:
 
 def _prune_lp_cards(directory: Path, keep: int = LP_CARDS_KEPT) -> None:
     """Keep the ``keep`` newest card files in ``directory``; never touch anything else."""
+    _prune_cards(directory, _LP_CARD_FILE, keep)
+
+
+def _prune_cards(directory: Path, pattern: re.Pattern[str], keep: int) -> None:
+    """Keep the ``keep`` newest files matching ``pattern``; never touch anything else."""
     try:
-        cards = [p for p in directory.iterdir() if p.is_file() and _LP_CARD_FILE.match(p.name)]
+        cards = [p for p in directory.iterdir() if p.is_file() and pattern.match(p.name)]
         cards.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
         for old in cards[keep:]:
             old.unlink(missing_ok=True)
@@ -2309,3 +2316,633 @@ def lp_add(
         json_output=json_output,
         no_card=no_card,
     )
+
+
+# ── trade dca: DCA mandates (docs/dca.md) ──────────────────────────────────
+
+DCA_MIME = "application/vnd.agentos.dca+json"
+#: Where ``trade dca --json`` writes its card payloads, relative to the working
+#: directory (same reasoning and pruning as ``LP_CARD_DIR``).
+DCA_CARD_DIR = "dca-cards"
+DCA_CARDS_KEPT = 20
+DCA_MIN_EVERY_SECONDS = 60
+_DCA_CARD_FILE = re.compile(r"^(mandate|mandates)-[A-Za-z0-9._-]*\.json$")
+#: Gateway error codes that mean "change the input" (or the mandate's state):
+#: exit 2, not 1.
+_DCA_USAGE_CODES = frozenset(
+    {
+        "trading.dca.invalid",
+        "trading.dca.bad_state",
+        "trading.dca.not_found",
+        "trading.invalid",
+        "trading.token_not_found",
+    }
+)
+_DCA_EVERY = re.compile(r"^(\d+(?:\.\d+)?)\s*([smhdw]?)$")
+_DCA_EVERY_UNITS = {"": 1, "s": 1, "m": 60, "h": 3_600, "d": 86_400, "w": 604_800}
+#: Run statuses whose order may still move after ``trading.dca.run`` returns.
+_DCA_OPEN_RUNS = frozenset({"pending", "parked"})
+_DCA_BAR_WIDTH = 24
+
+
+class _DcaGroup(_LpGroup):
+    """``trade dca``: a usage error under ``--json`` is a JSON error on stderr, exit 2."""
+
+
+dca_app = typer.Typer(
+    cls=_DcaGroup,
+    help=(
+        "DCA mandates: recurring buys the trading engine runs itself under a hard cap. "
+        "From an agent, create only proposes; you approve, pause, resume, stop, buy now "
+        "and edit."
+    ),
+)
+app.add_typer(dca_app, name="dca")
+
+
+def parse_every(value: str) -> int:
+    """``30m``, ``2h``, ``1d``, ``1w`` or a plain number of seconds → seconds (≥ 60).
+
+    Raises ``ValueError`` with a message fit for the user.
+    """
+    text = str(value or "").strip().lower()
+    match = _DCA_EVERY.match(text)
+    if not match:
+        raise ValueError(
+            f"--every {value!r} is not an interval; use 30m, 2h, 1d, 1w or a number of seconds"
+        )
+    seconds = float(match.group(1)) * _DCA_EVERY_UNITS[match.group(2)]
+    if seconds != int(seconds):
+        raise ValueError(f"--every {value!r} is not a whole number of seconds")
+    if seconds < DCA_MIN_EVERY_SECONDS:
+        raise ValueError(
+            f"--every must be at least {DCA_MIN_EVERY_SECONDS} seconds (got {value!r})"
+        )
+    return int(seconds)
+
+
+def _dca_every(value: str, *, json_output: bool) -> int:
+    try:
+        return parse_every(value)
+    except ValueError as exc:
+        _bad_argument(str(exc), json_output=json_output)
+        raise  # unreachable: _bad_argument exits
+
+
+def _dca_id(value: str, *, json_output: bool) -> str:
+    text = value.strip()
+    if not text:
+        _bad_argument("a mandate id is required (dca_…)", json_output=json_output)
+    return text
+
+
+def _dca_positive(value: float | None, flag: str, *, json_output: bool, zero: bool = False) -> None:
+    """``flag`` must be above 0 (or at least 0 when ``zero`` means "remove the limit")."""
+    if value is None:
+        return
+    if value < 0 or (value == 0 and not zero) or value != value:
+        need = "0 or more" if zero else "above 0"
+        _bad_argument(f"{flag} must be {need}", json_output=json_output)
+
+
+def _dca_card_name(result: dict[str, Any]) -> str:
+    kind = str(result.get("kind") or "mandate")
+    if kind == "mandates":
+        params = _dict(_dict(result.get("request")).get("params"))
+        slug = "all" if params.get("all") else "live"
+    else:
+        slug = str(_dict(result.get("mandate")).get("id") or "")
+    slug = _LP_SLUG.sub("", slug).strip("-") or kind
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{DCA_CARD_DIR}/{kind}-{slug}-{stamp}.json"
+
+
+def _write_dca_card(result: dict[str, Any]) -> None:
+    """Write the card payload and announce it; the marker is the last line on stdout."""
+    name = _dca_card_name(result)
+    try:
+        path = Path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"[card not written: {exc}]", err=True)
+        return
+    _prune_cards(path.parent, _DCA_CARD_FILE, DCA_CARDS_KEPT)
+    print_text(f"publish_artifact path={name} mime={DCA_MIME}")
+
+
+def _dca_call(method: str, params: dict[str, Any], *, json_output: bool) -> Any:
+    """Call one ``trading.dca.*`` method; an input or state the engine refuses exits 2."""
+
+    async def _run(client):
+        return await _dca_rpc(client, method, params, json_output=json_output)
+
+    return run_gateway_sync(_run, json_output=json_output)
+
+
+async def _dca_rpc(client: Any, method: str, params: dict[str, Any], *, json_output: bool) -> Any:
+    from agentos.cli.gateway_client import GatewayRPCError
+
+    try:
+        return await client.call(method, params)
+    except GatewayRPCError as exc:
+        if exc.code not in _DCA_USAGE_CODES:
+            raise
+        emit_error(exc.message, json_output=json_output, code=exc.code, details=exc.data)
+        raise typer.Exit(2) from exc
+
+
+def _dca_emit(result: Any, *, json_output: bool, no_card: bool) -> None:
+    """``--json``: the payload, then the card and its marker. Otherwise a panel or a table."""
+    payload = _dict(result)
+    if json_output:
+        print_json(payload)
+        if not no_card and payload.get("kind") in ("mandate", "mandates"):
+            _write_dca_card(payload)
+        return
+    if payload.get("kind") == "mandates":
+        _render_dca_list(payload)
+    else:
+        _render_dca_mandate(payload)
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _span(seconds: float) -> str:
+    """``3 h 12 m``, ``45 m``, ``2 d 4 h``, ``30 s``."""
+    seconds = int(max(0, seconds))
+    days, rest = divmod(seconds, 86_400)
+    hours, rest = divmod(rest, 3_600)
+    minutes, secs = divmod(rest, 60)
+    if days:
+        return f"{days} d {hours} h" if hours else f"{days} d"
+    if hours:
+        return f"{hours} h {minutes} m" if minutes else f"{hours} h"
+    if minutes:
+        return f"{minutes} m"
+    return f"{secs} s"
+
+
+def _dca_next(mandate: dict[str, Any], now: datetime | None = None) -> str:
+    """The next-buy line: ``in 3 h 12 m``, ``due now``, ``on approval``, ``paused``, ``—``."""
+    status = str(mandate.get("status") or "")
+    if status == "awaiting_approval":
+        return "on approval" if _dict(mandate.get("schedule")).get("startNow") else "after approval"
+    if status == "paused":
+        return "paused"
+    if status != "active":
+        return "—"
+    at = _parse_iso(_dict(mandate.get("schedule")).get("nextRunAt"))
+    if at is None:
+        return "—"
+    delta = (at - (now or datetime.now(UTC))).total_seconds()
+    return "due now" if delta <= 0 else f"in {_span(delta)}"
+
+
+def _dca_bar(progress: Any, width: int = _DCA_BAR_WIDTH) -> str:
+    try:
+        share = min(1.0, max(0.0, float(progress)))
+    except (TypeError, ValueError):
+        share = 0.0
+    filled = round(share * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _dca_amount(amount: Any, symbol: str) -> str:
+    human = _dict(amount).get("human")
+    if human is None or human == "":
+        return "—"
+    try:
+        return f"{float(human):.6g} {symbol}"
+    except (TypeError, ValueError):
+        return f"{human} {symbol}"
+
+
+def _dca_pair(mandate: dict[str, Any]) -> str:
+    return f"{token_symbol(mandate.get('token'))} ← {token_symbol(mandate.get('quote'))}"
+
+
+def _dca_buys(runs: dict[str, Any]) -> str:
+    done, most = runs.get("done") or 0, runs.get("max")
+    return f"{done} of {most} buys" if most else f"{done} buys"
+
+
+def _signed_usd(value: Any) -> str:
+    """``$5.45`` / ``-$1.20``; a value that rounds to zero is ``$0.00``, never ``-$0.00``."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = round(float(value), 2)
+    except (TypeError, ValueError):
+        return str(value)
+    return money(number if number != 0 else 0.0)
+
+
+# The zone run times are shown in. ``None`` is the system's local zone; tests
+# pin it (``time.tzset`` does not exist on Windows, so TZ alone is not enough).
+_DCA_LOCAL_TZ: tzinfo | None = None
+
+
+def _dca_when(at: datetime | None, now: datetime | None = None) -> str:
+    """Local ``HH:MM`` for a run today, ``Mon DD HH:MM`` otherwise, ``—`` when unknown."""
+    if at is None:
+        return "—"
+    local = at.astimezone(_DCA_LOCAL_TZ)
+    today = (now or datetime.now(UTC)).astimezone(_DCA_LOCAL_TZ).date()
+    return local.strftime("%H:%M" if local.date() == today else "%b %d %H:%M")
+
+
+def _dca_run_line(run: dict[str, Any], symbol: str, now: datetime | None = None) -> str:
+    """``#12 · 09:01 · $10.00 → 0.0035 WETH @ $2,860.00 · tx 0x1234…abcd``.
+
+    A skipped or failed run carries its reason; a pending or parked one says it is waiting.
+    """
+    status = str(run.get("status") or "")
+    parts = [f"#{run.get('n')}", _dca_when(_parse_iso(run.get("at")), now)]
+    if run.get("manual"):
+        parts.append("buy now")
+    if status == "filled":
+        parts.append(
+            f"{money(run.get('usd'))} → {_dca_amount(run.get('amount'), symbol)} "
+            f"@ {_usd(run.get('priceUsd'))}"
+        )
+        if run.get("txHash"):
+            parts.append(f"tx {short_address(run.get('txHash'))}")
+    elif status in ("parked", "pending"):
+        what = "awaiting approval" if status == "parked" else "pending, waiting to fill"
+        parts.append(f"{money(run.get('usd'))} {what}")
+        if run.get("orderId"):
+            parts.append(str(run.get("orderId")))
+    else:
+        parts.append(status or "unknown")
+        if run.get("reason"):
+            parts.append(str(run.get("reason")))
+    return " · ".join(parts)
+
+
+def _render_dca_mandate(result: dict[str, Any]) -> None:
+    mandate = _dict(result.get("mandate"))
+    if not mandate:
+        console.print("No mandate in the response.")
+        return
+    schedule, budget = _dict(mandate.get("schedule")), _dict(mandate.get("budget"))
+    runs, acquired = _dict(mandate.get("runs")), _dict(mandate.get("acquired"))
+    guards, wallet = _dict(mandate.get("guards")), _dict(mandate.get("wallet"))
+    chain = _dict(mandate.get("chain"))
+    symbol = token_symbol(mandate.get("token"))
+    status = str(mandate.get("status") or "")
+    reason = mandate.get("statusReason")
+    where = (
+        f"{chain.get('name') or ''} · {wallet.get('label') or short_address(wallet.get('address'))}"
+    )
+    lines = [
+        f"[{ACCENT}]{markup_escape(_dca_pair(mandate))}[/] · {markup_escape(where)}",
+        f"[bold]{money(budget.get('usdPerRun'))} {markup_escape(str(schedule.get('label') or ''))}"
+        f"[/] · next buy {_dca_next(mandate)}",
+        f"{_dca_bar(budget.get('progress'))} {money(budget.get('spentUsd'))} of "
+        f"{money(budget.get('capUsd'))} · {float(budget.get('progress') or 0) * 100:.0f} % · "
+        f"{_dca_buys(runs)}",
+    ]
+    if budget.get("reservedUsd"):
+        lines.append(f"reserved {money(budget.get('reservedUsd'))} (open buys)")
+    lines.append(
+        f"acquired {_dca_amount(acquired.get('amount'), symbol)} · "
+        f"avg {_usd(acquired.get('avgPriceUsd'))} vs now {_usd(acquired.get('currentPriceUsd'))} "
+        f"({percent(acquired.get('vsAvgPct'))})"
+    )
+    lines.append(
+        f"unrealised {_signed_usd(acquired.get('unrealizedUsd'))} · "
+        f"gas {_usd(acquired.get('gasUsd'))}"
+    )
+    guard_bits = []
+    if guards.get("maxPriceUsd"):
+        guard_bits.append(f"only under {_usd(guards.get('maxPriceUsd'))}")
+    if guards.get("buysNeedApproval"):
+        guard_bits.append("each buy waits for your approval")
+    if runs.get("skipped") or runs.get("failed"):
+        guard_bits.append(f"{runs.get('skipped') or 0} skipped, {runs.get('failed') or 0} failed")
+    if guard_bits:
+        lines.append(" · ".join(guard_bits))
+    history = [r for r in mandate.get("history") or [] if isinstance(r, dict)]
+    if history:
+        lines.append("")
+        lines.append("[bold]recent runs[/]")
+        lines.extend(markup_escape(_dca_run_line(r, symbol)) for r in history[:5])
+    for warning in result.get("warnings") or []:
+        lines.append(f"[yellow]•[/] {markup_escape(str(warning))}")
+    title = f"{markup_escape(str(mandate.get('name') or 'DCA'))} · {status}"
+    if reason:
+        title += f" ({markup_escape(str(reason))})"
+    subtitle = f"{mandate.get('id')} · as of {result.get('fetchedAt')}"
+    console.print(Panel("\n".join(lines), title=title, subtitle=subtitle, expand=False))
+    run = _dict(result.get("run"))
+    if run:
+        console.print(f"Run: {markup_escape(_dca_run_line(run, symbol))}")
+    if status == "awaiting_approval":
+        console.print(
+            "Waiting for your approval in the app "
+            f"(or: agentos trade dca approve {mandate.get('id')})."
+        )
+
+
+def _render_dca_list(result: dict[str, Any]) -> None:
+    mandates = [m for m in result.get("mandates") or [] if isinstance(m, dict)]
+    if not mandates:
+        console.print("No DCA mandates yet.")
+        return
+    table = Table(
+        title=f"DCA · {len(mandates)} mandate{'s' if len(mandates) != 1 else ''}",
+        header_style=ACCENT_HEADER,
+    )
+    for column in ("Name", "Pair", "Cadence", "Status", "Progress", "Buys", "Next buy"):
+        # Fold, never ellipsize: a clipped id or cap is worse than a taller row.
+        table.add_column(
+            column,
+            justify="right" if column in ("Progress", "Buys") else "left",
+            overflow="fold",
+        )
+    for mandate in mandates:
+        budget, schedule = _dict(mandate.get("budget")), _dict(mandate.get("schedule"))
+        runs = _dict(mandate.get("runs"))
+        done, most = runs.get("done") or 0, runs.get("max")
+        # The id rides under the name: every other dca command needs it.
+        name = markup_escape(str(mandate.get("name") or "DCA"))
+        table.add_row(
+            f"{name}\n[dim]{markup_escape(str(mandate.get('id') or ''))}[/]",
+            markup_escape(_dca_pair(mandate)),
+            markup_escape(f"{money(budget.get('usdPerRun'))} {schedule.get('label') or ''}"),
+            str(mandate.get("status") or ""),
+            f"{money(budget.get('spentUsd'))} / {money(budget.get('capUsd'))}",
+            f"{done}/{most}" if most else str(done),
+            _dca_next(mandate),
+        )
+    console.print(table)
+    totals = _dict(result.get("totals"))
+    console.print(
+        f"{money(totals.get('spentUsd'))} of {money(totals.get('capUsd'))} · "
+        f"{money(totals.get('acquiredUsd'))} acquired · as of {result.get('fetchedAt')}"
+    )
+
+
+_JSON_HELP = "Emit machine-readable JSON (and write the card)"
+_NO_CARD_HELP = "With --json: do not write the card file"
+
+
+@dca_app.command("create")
+def dca_create(
+    token: str = typer.Argument(..., help="Token to buy: a ticker (ETH, WETH) or an address"),
+    usd: float = typer.Option(..., "--usd", help="US dollars spent per buy"),
+    every: str = typer.Option(
+        ..., "--every", help="Interval: 30m, 2h, 1d, 1w or seconds (minimum 60)"
+    ),
+    cap: float | None = typer.Option(
+        None, "--cap", help="Stop after spending this many US dollars in total"
+    ),
+    runs: int | None = typer.Option(None, "--runs", help="Stop after this many buys"),
+    max_price: float | None = typer.Option(
+        None, "--max-price", help="Skip a buy while the token's price is above this (USD)"
+    ),
+    quote: str | None = typer.Option(
+        None, "--quote", help="Token spent (default the chain's USDC; required on robinhood)"
+    ),
+    chain: str = typer.Option("base", "--chain", help="base or robinhood"),
+    wallet: str | None = typer.Option(
+        None, "--wallet", help="Vault wallet address or label (default primary)"
+    ),
+    slippage: float | None = typer.Option(None, "--slippage", help="Slippage % per buy"),
+    name: str | None = typer.Option(None, "--name", help='Mandate name (default "DCA <token>")'),
+    start: str = typer.Option(
+        "now", "--start", help="now: first buy at activation; next: one interval later"
+    ),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Create a DCA mandate. From an agent it waits for your approval; yours starts at once."""
+
+    every_seconds = _dca_every(every, json_output=json_output)
+    if cap is None and runs is None:
+        _bad_argument("Pass --cap, --runs or both: a DCA needs a limit", json_output=json_output)
+    _dca_positive(usd, "--usd", json_output=json_output)
+    _dca_positive(cap, "--cap", json_output=json_output)
+    _dca_positive(max_price, "--max-price", json_output=json_output)
+    _dca_positive(slippage, "--slippage", json_output=json_output)
+    if runs is not None and runs < 1:
+        _bad_argument("--runs must be at least 1", json_output=json_output)
+    start_key = start.strip().lower()
+    if start_key not in ("now", "next"):
+        _bad_argument(f"--start must be now or next (got {start!r})", json_output=json_output)
+    params: dict[str, Any] = {
+        "chainId": chain_id_from_arg(chain),
+        "token": token,
+        "usdPerRun": usd,
+        "everySeconds": every_seconds,
+        "startNow": start_key == "now",
+        "initiator": initiator_for(False),
+    }
+    for key, value in (
+        ("capUsd", cap),
+        ("runsMax", runs),
+        ("maxPriceUsd", max_price),
+        ("quote", quote),
+        ("wallet", wallet),
+        ("slippagePct", slippage),
+        ("name", name),
+    ):
+        if value is not None:
+            params[key] = value
+    session_key = os.environ.get("AGENTOS_SESSION_KEY", "").strip()
+    if session_key:
+        params["sessionKey"] = session_key
+    result = _dca_call("trading.dca.create", params, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("list")
+def dca_list(
+    all_: bool = typer.Option(False, "--all", help="Include completed, stopped and rejected"),
+    wallet: str | None = typer.Option(None, "--wallet", help="Only this wallet's mandates"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Live DCA mandates (awaiting approval, active, paused), or every one with --all."""
+
+    params: dict[str, Any] = {}
+    if all_:
+        params["all"] = True
+    if wallet:
+        params["wallet"] = wallet
+    result = _dca_call("trading.dca.list", params, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)
+
+
+def _dca_simple(
+    method: str,
+    mandate_id: str,
+    *,
+    json_output: bool,
+    no_card: bool,
+    reason: str | None = None,
+) -> None:
+    params: dict[str, Any] = {"mandateId": _dca_id(mandate_id, json_output=json_output)}
+    if reason:
+        params["reason"] = reason
+    result = _dca_call(method, params, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)
+
+
+_ID_HELP = "Mandate id (dca_…)"
+
+
+@dca_app.command("show")
+def dca_show(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """One mandate: schedule, progress, average buy price and recent runs."""
+    _dca_simple("trading.dca.get", mandate_id, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("approve")
+def dca_approve(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Approve a proposed mandate and start it (yours only; an agent cannot)."""
+    _dca_simple("trading.dca.approve", mandate_id, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("reject")
+def dca_reject(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    reason: str | None = typer.Option(None, "--reason", help="Why (kept on the mandate)"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Reject a proposed mandate."""
+    _dca_simple(
+        "trading.dca.reject", mandate_id, json_output=json_output, no_card=no_card, reason=reason
+    )
+
+
+@dca_app.command("pause")
+def dca_pause(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Pause an active mandate; no buy fires until you resume it."""
+    _dca_simple("trading.dca.pause", mandate_id, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("resume")
+def dca_resume(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Resume a paused mandate; missed buys are not made up, the next one fires when due."""
+    _dca_simple("trading.dca.resume", mandate_id, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("stop")
+def dca_stop(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    reason: str | None = typer.Option(None, "--reason", help="Why (kept on the mandate)"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Stop a mandate for good; its buys still waiting for approval are rejected."""
+    _dca_simple(
+        "trading.dca.stop", mandate_id, json_output=json_output, no_card=no_card, reason=reason
+    )
+
+
+@dca_app.command("run")
+def dca_run(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    wait: bool = typer.Option(False, "--wait", help="Block until the buy is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Buy now: one buy on an active or paused mandate. The next scheduled buy does not move."""
+
+    params = {"mandateId": _dca_id(mandate_id, json_output=json_output)}
+
+    async def _run(client):
+        result = _dict(await _dca_rpc(client, "trading.dca.run", params, json_output=json_output))
+        run = _dict(result.get("run"))
+        order_id = run.get("orderId")
+        if not (wait and order_id and run.get("status") in _DCA_OPEN_RUNS):
+            return result
+        await client.call(
+            "trading.orders.wait", {"orderId": order_id, "timeoutSeconds": wait_seconds}
+        )
+        fresh = _dict(await _dca_rpc(client, "trading.dca.get", params, json_output=json_output))
+        if not fresh:
+            return result
+        history = _dict(fresh.get("mandate")).get("history") or []
+        settled = next(
+            (r for r in history if isinstance(r, dict) and r.get("n") == run.get("n")), run
+        )
+        return {**fresh, "run": settled}
+
+    result = run_gateway_sync(_run, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("update")
+def dca_update(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    usd: float | None = typer.Option(None, "--usd", help="US dollars per buy"),
+    cap: float | None = typer.Option(None, "--cap", help="Total US dollars to spend"),
+    runs: int | None = typer.Option(None, "--runs", help="Number of buys (0 removes the limit)"),
+    every: str | None = typer.Option(
+        None, "--every", help="Interval: 30m, 2h, 1d, 1w or seconds; re-anchors the schedule"
+    ),
+    max_price: float | None = typer.Option(
+        None, "--max-price", help="Skip buys above this price (USD); 0 removes the guard"
+    ),
+    name: str | None = typer.Option(None, "--name", help="New name"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Change a mandate's terms (yours only). Lowering the cap below what is spent completes it."""
+
+    params: dict[str, Any] = {"mandateId": _dca_id(mandate_id, json_output=json_output)}
+    _dca_positive(usd, "--usd", json_output=json_output)
+    _dca_positive(cap, "--cap", json_output=json_output)
+    _dca_positive(max_price, "--max-price", json_output=json_output, zero=True)
+    if runs is not None and runs < 0:
+        _bad_argument("--runs must be 0 or more", json_output=json_output)
+    if name is not None and not name.strip():
+        _bad_argument("--name must not be empty", json_output=json_output)
+    for key, value in (
+        ("usdPerRun", usd),
+        ("capUsd", cap),
+        ("runsMax", runs),
+        ("everySeconds", _dca_every(every, json_output=json_output) if every else None),
+        ("maxPriceUsd", max_price),
+        ("name", name),
+    ):
+        if value is not None:
+            params[key] = value
+    if len(params) == 1:
+        _bad_argument(
+            "Nothing to update: pass --usd, --cap, --runs, --every, --max-price or --name",
+            json_output=json_output,
+        )
+    result = _dca_call("trading.dca.update", params, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)

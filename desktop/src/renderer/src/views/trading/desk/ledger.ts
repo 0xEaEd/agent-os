@@ -32,6 +32,16 @@ export type TradeKind =
   | 'lp_collect'
   | 'lp_remove'
   | 'lp_add'
+  | 'dca'
+  | 'dca_list'
+  | 'dca_create'
+  | 'dca_approve'
+  | 'dca_reject'
+  | 'dca_pause'
+  | 'dca_resume'
+  | 'dca_run'
+  | 'dca_stop'
+  | 'dca_update'
   | 'other'
 
 export interface TradeCall {
@@ -94,8 +104,45 @@ function chainWord(args: string): string {
   return ''
 }
 
-/** `trade lp` flags that take no value; every other `--name` consumes the next word. */
+/** `trade lp` / `trade dca` flags that take no value; every other `--name` consumes the next word. */
 const LP_BOOLEAN_FLAGS = new Set(['--json', '--no-card', '--all', '--help', '--wait'])
+
+/** `trade dca <sub>`: each subcommand is its own row kind (docs/dca.md). */
+const DCA_SUBS: Record<string, TradeKind> = {
+  create: 'dca_create',
+  list: 'dca_list',
+  show: 'dca',
+  approve: 'dca_approve',
+  reject: 'dca_reject',
+  pause: 'dca_pause',
+  resume: 'dca_resume',
+  run: 'dca_run',
+  stop: 'dca_stop',
+  update: 'dca_update',
+}
+
+/** Every DCA row kind. */
+export function isDcaKind(kind: TradeKind): boolean {
+  return kind === 'dca' || kind.startsWith('dca_')
+}
+
+/** `--every` as the row says it after the slash: "1d" → "day", "6h" → "6 h", "30m" → "30 min". */
+function dcaEvery(word: string | null): string {
+  if (!word) return ''
+  const m = /^(\d+(?:\.\d+)?)([smhdw]?)$/i.exec(word.trim())
+  if (!m) return word
+  const n = Number(m[1])
+  const unit = (m[2] || 's').toLowerCase()
+  const seconds = n * ({ s: 1, m: 60, h: 3_600, d: 86_400, w: 604_800 } as const)[unit as 's']
+  if (seconds === 86_400) return 'day'
+  if (seconds === 604_800) return 'week'
+  if (seconds === 3_600) return 'hour'
+  if (seconds % 604_800 === 0) return `${seconds / 604_800} w`
+  if (seconds % 86_400 === 0) return `${seconds / 86_400} d`
+  if (seconds % 3_600 === 0) return `${seconds / 3_600} h`
+  if (seconds % 60 === 0) return `${seconds / 60} min`
+  return `${seconds} s`
+}
 
 /** The `trade lp` subcommands that write: each parks an order of its own kind. */
 const LP_WRITES: Record<string, TradeKind> = {
@@ -163,6 +210,16 @@ const TITLES: Record<TradeKind, string> = {
   lp_collect: 'Collect fees',
   lp_remove: 'Remove liquidity',
   lp_add: 'Add liquidity',
+  dca: 'DCA status',
+  dca_list: 'DCA list',
+  dca_create: 'Start DCA',
+  dca_approve: 'Approve DCA',
+  dca_reject: 'Reject DCA',
+  dca_pause: 'Pause DCA',
+  dca_resume: 'Resume DCA',
+  dca_run: 'Buy now',
+  dca_stop: 'Stop DCA',
+  dca_update: 'Update DCA',
   other: 'Trade call',
 }
 
@@ -202,6 +259,8 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
       kind = sub as TradeKind
     } else if (sub === 'lp') {
       kind = LP_WRITES[(lpPositionals(args)[0] ?? '').toLowerCase()] ?? 'lp'
+    } else if (sub === 'dca') {
+      kind = DCA_SUBS[(lpPositionals(args)[0] ?? '').toLowerCase()] ?? 'dca'
     }
   } else if (sub === 'balances') kind = 'balances'
   else kind = 'wallet'
@@ -280,6 +339,19 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
     detail = [shown, lpAddSize(args, shown), to ? `→ ${tokenIdWord(to)}` : '', chainWord(args)]
       .filter(Boolean)
       .join(' · ')
+  } else if (kind === 'dca_create') {
+    // `dca create ETH --usd 10 --every 1d --cap 300` → "ETH · $10 / day".
+    const token = lpPositionals(args)[1] ?? ''
+    const shown = /^0x[0-9a-fA-F]{40}$/.test(token) ? shortAddr(token) : token.toUpperCase()
+    const usd = flag(args, 'usd')
+    const every = dcaEvery(flag(args, 'every'))
+    const size = usd ? `$${usd.replace(/^\$/, '')}${every ? ` / ${every}` : ''}` : ''
+    detail = [shown, size, chainWord(args)].filter(Boolean).join(' · ')
+  } else if (kind === 'dca_list') {
+    detail = /(?:^|\s)--all(?:\s|$)/.test(args) ? 'all' : ''
+  } else if (isDcaKind(kind)) {
+    // Every other DCA subcommand names one mandate: its id is the detail.
+    detail = lpPositionals(args)[1] ?? ''
   } else if (kind === 'lp') {
     // `lp pool boar --chain base` → "pool boar · Base"; flags and their values
     // (`--budget-seconds 60`, `--wallet=0x…`) never reach the subject.
@@ -310,6 +382,14 @@ export interface TradeOutcome {
   error: string | null
   /** When the market figures in the result were read, if the result says. */
   marketAt: number | null
+  /** A DCA row: the mandate it names, and the status its result recorded (docs/dca.md). */
+  mandateId?: string | null
+  mandateStatus?: string | null
+  /**
+   * The mandate's status as the live list has it now, set only by
+   * `withLiveMandate`: the row's pill follows it instead of the recorded one.
+   */
+  mandateLive?: string | null
 }
 
 const EMPTY: TradeOutcome = {
@@ -337,6 +417,23 @@ const sym = (v: unknown): string =>
 export function exitCodeOf(text: string): number | null {
   const m = /^\s*exit_code=(-?\d+)/.exec(text)
   return m ? Number(m[1]) : null
+}
+
+/**
+ * `trade status --json` cut past valid JSON (a stored result keeps ~2,000
+ * characters; the chain and provider rows run past that). `provider` is the
+ * third key, so it survives; `unlocked` comes after the chains and usually
+ * does not. Null when the text is not a status document at all.
+ */
+function statusFromTruncated(text: string): TradeOutcome | null {
+  if (!/^\s*(?:exit_code=\d+\s*)?\{\s*"enabled"\s*:/.test(text)) return null
+  const provider = jsonString(text, 'provider')
+  const unlocked = /"unlocked"\s*:\s*(true|false)/.exec(text)?.[1]
+  const bits: string[] = []
+  if (provider) bits.push(`via ${providerLabel(provider)}`)
+  if (unlocked === 'true') bits.push('vault unlocked')
+  if (unlocked === 'false') bits.push('vault locked')
+  return { ...EMPTY, summary: bits.join(' · '), provider: provider as ProviderId | null }
 }
 
 /** The JSON document inside a tool result, ignoring the exit-code line and stray output. */
@@ -493,6 +590,214 @@ const LP_CARD_MARKER = new RegExp(
 export function lpCallFromResult(text: string): TradeCall | null {
   if (!LP_CARD_MARKER.test(text)) return null
   return { kind: 'lp', title: TITLES.lp, detail: '', command: '' }
+}
+
+/**
+ * The DCA card announcement `agentos trade dca … --json` prints last, in the
+ * same three shapes as the LP one: raw, rewritten by publish_inline_artifacts
+ * (only the `dca-cards/` directory survives), or dropped by a projection.
+ */
+const DCA_CARD_MARKER = new RegExp(
+  [
+    /publish_artifact\s+path=\S+\s+mime=application\/vnd\.agentos\.dca\+json/.source,
+    /\[inline artifact published and already rendered for the user:\s*(?:\S*\/)?dca-cards\/[^\s\]]+/
+      .source,
+    /\[generated artifact omitted:[^\]\n]*application\/vnd\.agentos\.dca\+json/.source,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * A DCA call recognised by its result alone (the command was wrapped past
+ * recognition): the result announces a DCA card. `mandates` reads as the list.
+ */
+export function dcaCallFromResult(text: string): TradeCall | null {
+  if (!DCA_CARD_MARKER.test(text)) return null
+  const list = /"kind"\s*:\s*"mandates"/.test(text) || /dca-cards\/mandates-/.test(text)
+  const kind: TradeKind = list ? 'dca_list' : 'dca'
+  return { kind, title: TITLES[kind], detail: '', command: '' }
+}
+
+/** Any card-announcing trade call recognised from its result: an LP read or a DCA. */
+export function cardCallFromResult(text: string): TradeCall | null {
+  return lpCallFromResult(text) ?? dcaCallFromResult(text)
+}
+
+const DCA_STATUS_WORDS: Record<string, string> = {
+  awaiting_approval: 'awaiting approval',
+  active: 'active',
+  paused: 'paused',
+  completed: 'done',
+  stopped: 'stopped',
+  rejected: 'rejected',
+  expired: 'expired',
+}
+
+/** "$120" for whole dollars, "$120.40" otherwise. */
+function dcaUsd(value: number | null): string {
+  if (value === null) return ''
+  return Math.abs(value - Math.round(value)) < 0.005
+    ? `$${Math.round(value).toLocaleString('en-US')}`
+    : formatUsd(value)
+}
+
+/** One mandate as a row: "ETH ← USDC · $10 / day" as the subject, state and money as the summary. */
+function dcaMandateLine(m: Dict): { detail: string; bits: string[] } {
+  const token = sym(m.token)
+  const quote = sym(m.quote)
+  const schedule = isDict(m.schedule) ? m.schedule : null
+  const budget = isDict(m.budget) ? m.budget : null
+  const every = schedule ? num(schedule.everySeconds) : null
+  const perRun = budget ? num(budget.usdPerRun) : null
+  const pair = token && quote ? `${token} ← ${quote}` : token
+  const size =
+    perRun !== null ? `${dcaUsd(perRun)}${every !== null ? ` / ${dcaEvery(`${every}`)}` : ''}` : ''
+  const bits: string[] = []
+  const status = str(m.status)
+  if (status) bits.push(DCA_STATUS_WORDS[status] ?? status)
+  if (budget && num(budget.spentUsd) !== null && num(budget.capUsd) !== null)
+    bits.push(`${dcaUsd(num(budget.spentUsd))} of ${dcaUsd(num(budget.capUsd))}`)
+  const runs = isDict(m.runs) ? m.runs : null
+  if (runs && num(runs.done) !== null) {
+    const max = num(runs.max)
+    bits.push(max !== null ? `${num(runs.done)}/${max} buys` : `${num(runs.done)} buys`)
+  }
+  return { detail: [pair, size].filter(Boolean).join(' · '), bits }
+}
+
+/**
+ * A DCA read-out or write in one line, never its JSON. The mandate payload
+ * runs to several KB (up to 50 runs of history), past the ~2,000 characters a
+ * stored tool result keeps, so a result that no longer parses is read by hand
+ * from the fields that come first (`kind`, `id`, `name`, `status`).
+ */
+function parseDcaResult(call: TradeCall, text: string, data: unknown): TradeOutcome {
+  if (isDict(data) && isDict(data.error)) {
+    const message = str(data.error.message) ?? 'error'
+    return { ...EMPTY, summary: message, error: message }
+  }
+  const d = isDict(data) ? data : null
+  const kind = (d && str(d.kind)) ?? field(text, /"kind"\s*:\s*"(mandates?)"/)
+  if (!kind) {
+    const code = exitCodeOf(text)
+    const first =
+      text
+        .split('\n')
+        .find((l) => l.trim() && !/^\s*exit_code=/.test(l))
+        ?.slice(0, 140) ?? ''
+    if (/^\s*[{[]/.test(first)) {
+      const message = jsonString(text, 'message')
+      if (message) return { ...EMPTY, summary: message, error: message }
+    }
+    if (code !== null && code !== 0) {
+      const line = first || `exit ${code}`
+      return { ...EMPTY, summary: line, error: line }
+    }
+    return { ...EMPTY, summary: PROJECTION_MARKER.test(first) ? call.detail : '' }
+  }
+  if (kind === 'mandates') {
+    const rows = d && Array.isArray(d.mandates) ? d.mandates.filter(isDict) : null
+    const totals = d && isDict(d.totals) ? d.totals : null
+    const count = totals ? num(totals.count) : rows ? rows.length : null
+    const active = totals
+      ? num(totals.active)
+      : rows
+        ? rows.filter((m) => m.status === 'active').length
+        : null
+    const pending = rows ? rows.filter((m) => m.status === 'awaiting_approval').length : 0
+    const bits: string[] = []
+    if (count !== null) bits.push(count === 0 ? 'none yet' : `${active ?? 0} active`)
+    if (pending) bits.push(`${pending} awaiting approval`)
+    if (totals && num(totals.spentUsd) !== null && num(totals.capUsd) !== null && count)
+      bits.push(`${dcaUsd(num(totals.spentUsd))} of ${dcaUsd(num(totals.capUsd))}`)
+    return {
+      ...EMPTY,
+      detail: count !== null ? `${count} mandate${count === 1 ? '' : 's'}` : '',
+      summary: bits.join(' · '),
+      awaiting: pending > 0,
+    }
+  }
+  const m = d && isDict(d.mandate) ? d.mandate : null
+  if (!m) {
+    // Truncated: the mandate's first fields survive, the rest is gone.
+    const id = field(text, /"id"\s*:\s*"(dca_[0-9a-zA-Z]+)"/)
+    const name = field(text, /"mandate"\s*:\s*\{[^{}]*?"name"\s*:\s*"([^"]+)"/)
+    const status = field(text, /"mandate"\s*:\s*\{[^{}]*?"status"\s*:\s*"([a-z_]+)"/)
+    const bits = [status ? (DCA_STATUS_WORDS[status] ?? status) : '', id ?? '']
+    return {
+      ...EMPTY,
+      ...(name ? { detail: name } : {}),
+      summary: bits.filter(Boolean).join(' · ') || 'result truncated',
+      awaiting: status === 'awaiting_approval',
+      mandateId: id ?? namedMandate(call),
+      mandateStatus: status,
+    }
+  }
+  const line = dcaMandateLine(m)
+  const run = d && isDict(d.run) ? d.run : null
+  const bits = [...line.bits]
+  let orderId: string | null = null
+  let txHash: string | null = null
+  let explorerUrl: string | null = null
+  let awaiting = m.status === 'awaiting_approval'
+  if (run) {
+    const status = str(run.status)
+    const n = num(run.n)
+    const word = status === 'parked' ? 'awaiting approval' : (status ?? '')
+    bits.unshift(
+      [n !== null ? `buy #${n}` : 'buy', word, str(run.reason) ?? ''].filter(Boolean).join(' '),
+    )
+    orderId = str(run.orderId)
+    txHash = str(run.txHash)
+    explorerUrl = str(run.explorerUrl)
+    if (status === 'parked') awaiting = true
+  }
+  const chain = isDict(m.chain) ? num(m.chain.id) : null
+  return {
+    ...EMPTY,
+    detail: line.detail || str(m.name) || '',
+    summary: bits.filter(Boolean).join(' · '),
+    orderId,
+    txHash,
+    explorerUrl,
+    chainId: chain,
+    awaiting,
+    confirmed: Boolean(run && run.status === 'filled' && txHash),
+    error: run && run.status === 'failed' ? (str(run.reason) ?? 'failed') : null,
+    mandateId: str(m.id) ?? namedMandate(call),
+    mandateStatus: str(m.status),
+  }
+}
+
+/** The mandate id a `trade dca <sub> <id>` command names, when it names one. */
+function namedMandate(call: TradeCall): string | null {
+  return /^dca_[0-9a-zA-Z]+$/.test(call.detail) ? call.detail : null
+}
+
+/**
+ * A DCA row read against the live mandate list. The result recorded the
+ * mandate as it was when the command ran ("awaiting approval" on a Start
+ * DCA row); once the list knows it, the row's pill and status word follow
+ * the mandate instead. A row that fronts one buy's order (a parked or filled
+ * run) keeps the order's pill, and an unknown mandate stays as recorded.
+ */
+export function withLiveMandate(
+  outcome: TradeOutcome,
+  live: string | null | undefined,
+): TradeOutcome {
+  if (!live || !outcome.mandateId || outcome.orderId || outcome.error) return outcome
+  const recorded = outcome.mandateStatus ? DCA_STATUS_WORDS[outcome.mandateStatus] : null
+  const now = DCA_STATUS_WORDS[live] ?? live
+  let summary = outcome.summary
+  if (recorded && recorded !== now) {
+    const bits = summary.split(' · ')
+    const at = bits.indexOf(recorded)
+    if (at >= 0) {
+      bits[at] = now
+      summary = bits.join(' · ')
+    }
+  }
+  return { ...outcome, summary, awaiting: live === 'awaiting_approval', mandateLive: live }
 }
 
 const LP_STATUS_WORDS: Record<string, string> = {
@@ -745,6 +1050,19 @@ export function txExplorerUrl(
 export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
   const data = parseJson(text)
   if (call.kind === 'lp') return parseLpResult(text, data, call.command)
+  if (isDcaKind(call.kind)) {
+    // The card line after the JSON can end in "]" (the live rewrite), which
+    // the plain parse swallows into the document; drop it and try again.
+    const bare = isDict(data)
+      ? data
+      : parseJson(
+          text
+            .split('\n')
+            .filter((l) => !DCA_CARD_MARKER.test(l))
+            .join('\n'),
+        )
+    return parseDcaResult(call, text, bare)
+  }
   if (!isDict(data)) {
     const code = exitCodeOf(text)
     const lines = text
@@ -760,6 +1078,10 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
     if (call.kind === 'lp_collect' || call.kind === 'lp_remove' || call.kind === 'lp_add') {
       const lp = lpWriteFromTruncated(call, text)
       if (lp) return lp
+    }
+    if (call.kind === 'status' && (code === null || code === 0)) {
+      const status = statusFromTruncated(text)
+      if (status) return status
     }
     const first = (lines[0] ?? '').slice(0, 140)
     if (code !== null && code !== 0)

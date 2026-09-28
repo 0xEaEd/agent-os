@@ -336,3 +336,207 @@ describe('desktop LP card skin', () => {
     expect(css).toMatch(/\.lp-range__upper \{\s*transform: translateX\(-100%\);/)
   })
 })
+
+// DCA cards (frontend dca.ts, docs/dca.md "Rendering") are the console's
+// markup too; the desktop draws them as desk instruments through the
+// `data-dca-*` hooks. These pin the hooks the skin reads and what makes it
+// the desk's: a rail that follows the mandate's state (breathing while it
+// waits for approval), figures in tabular mono, and actions that only exist
+// at the desk and cannot be repainted by `.msg-body a`.
+describe('desktop DCA card skin', () => {
+  const rule = (selector: string): string | undefined =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+    )?.[0]
+
+  it('joins the artifact grid next to the LP group', () => {
+    expect(css).toMatch(/\.msg-artifact-lp-group,\s*\.msg-artifact-dca-group \{\s*display: grid;/)
+    expect(css).toMatch(/^\.msg-artifact-dca-group \{\s*max-width: min\(38rem, 100%\);/m)
+  })
+
+  it('draws a hairline plate with a status rail, not a border, and mono numerals', () => {
+    const card = rule('.dca-card')
+    expect(card).toBeTruthy()
+    expect(card).toMatch(/--dca-rail: var\(--dim\);/)
+    expect(card).toMatch(/box-shadow: inset 0 0 0 1px var\(--hairline\);/)
+    expect(card).not.toMatch(/\bborder:/)
+    expect(card).toMatch(/font-variant-numeric: tabular-nums;/)
+    expect(rule('.dca-card::before')).toMatch(/background: var\(--dca-rail\);/)
+    expect(css).toMatch(/\.dca-card__usd \{[^}]*font-family: var\(--font-mono\);/)
+    expect(css).toMatch(
+      /\.dca-stat__value,[\s\S]*?\.dca-run,[\s\S]*?font-family: var\(--font-mono\);/,
+    )
+  })
+
+  it('tones the rail and the pill from every renderer-stamped status', () => {
+    const tones: Record<string, string> = {
+      awaiting_approval: 'warn',
+      active: 'ok',
+      completed: 'info',
+    }
+    for (const [status, tone] of Object.entries(tones)) {
+      expect(css, status).toMatch(
+        new RegExp(
+          `\\.dca-card\\[data-dca-status='${status}'\\] \\{\\s*--dca-rail: var\\(--${tone}\\);`,
+        ),
+      )
+      expect(css, status).toMatch(
+        new RegExp(
+          `\\.dca-pill\\[data-status='${status}'\\] \\{\\s*--dca-tone: var\\(--${tone}\\);`,
+        ),
+      )
+    }
+    for (const status of ['paused', 'stopped', 'rejected', 'expired']) {
+      expect(selectors, status).toContain(`.dca-card[data-dca-status='${status}']`)
+    }
+  })
+
+  it('breathes the rail while a mandate waits for approval, and holds still on reduced motion', () => {
+    expect(rule(".dca-card[data-dca-status='awaiting_approval']::before")).toMatch(
+      /animation: dca-rail-breathe/,
+    )
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.dca-card\[data-dca-status='awaiting_approval'\]::before,[\s\S]*?animation: none;/,
+    )
+  })
+
+  it('keys layout, busy and due states on the card hooks, never on the host', () => {
+    expect(selectors).toContain(".dca-card[data-dca-layout='wide'] .dca-card__stats")
+    expect(selectors).toContain(".dca-card[data-dca-layout='narrow'] .dca-card__stats")
+    expect(selectors).toContain(
+      '.dca-card[data-dca-busy] > :not(.dca-actions):not(.dca-card__foot)',
+    )
+    expect(selectors).toContain('.dca-card__next[data-dca-next-at]')
+    expect(selectors.some((s) => s.includes('.msg-artifact-dca[data-dca-kind'))).toBe(false)
+    expect(selectors).toContain(".dca-card[data-dca-kind='mandates']")
+  })
+
+  it('styles every documented part of the card', () => {
+    for (const part of [
+      '.dca-card__head',
+      '.dca-card__hero',
+      '.dca-card__next',
+      '.dca-card__progress',
+      '.dca-card__stats',
+      '.dca-chart',
+      '.dca-runs',
+      '.dca-actions',
+      '.dca-actions__error',
+      '.dca-card__warnings',
+      '.dca-card__foot',
+      '.dca-pill',
+    ]) {
+      expect(selectors, part).toContain(part)
+    }
+    // The reserved buy is hatched on the gauge, not a second solid colour.
+    expect(rule('.dca-progress__reserved')).toMatch(/repeating-linear-gradient\(/)
+  })
+
+  it('sets the two plot lengths the renderer positions the chart labels from', () => {
+    // dca.ts places the avg / now labels at calc(var(--dca-plot-pad) +
+    // var(--dca-plot-h) * y): the skin must define both and build the plot
+    // from them, or the labels float off their lines.
+    const plot = rule('.dca-chart__plot')
+    expect(plot).toMatch(/--dca-plot-pad: [\d.]+(px|rem);/)
+    expect(plot).toMatch(/--dca-plot-h: [\d.]+(px|rem);/)
+    expect(plot).toMatch(/padding-top: var\(--dca-plot-pad\);/)
+    expect(plot).toMatch(/position: relative;/)
+    expect(rule('.dca-chart__svg')).toMatch(/height: var\(--dca-plot-h\);/)
+    expect(css).toMatch(
+      /\.dca-chart__avg,\s*\.dca-chart__now,\s*\.dca-chart__fail \{\s*position: absolute;/,
+    )
+    expect(rule('.dca-chart__tooltip')).toMatch(/position: absolute;/)
+    for (const kind of [
+      'bar',
+      'parked',
+      'pending',
+      'skip',
+      'void',
+      'fail',
+      'avg-line',
+      'now-line',
+    ]) {
+      expect(selectors, kind).toContain(`.dca-chart__${kind}`)
+    }
+  })
+
+  it('spells out an armed Stop and marks the call in flight', () => {
+    expect(rule('.msg-body .dca-action[data-dca-confirm]')).toMatch(/color: var\(--danger\);/)
+    expect(selectors).toContain('.msg-body .dca-action[data-dca-pending]')
+    expect(selectors).toContain('.dca-actions[data-dca-busy] .dca-action')
+  })
+
+  it('outranks the transcript link rule for the actions and makes Approve the one filled control', () => {
+    expect(rule('.msg-body .dca-action')).toMatch(/cursor: default;/)
+    expect(rule(".msg-body .dca-action[data-dca-tone='primary']")).toMatch(
+      /background: var\(--primary\);/,
+    )
+    expect(rule(".msg-body .dca-action[data-dca-tone='danger']")).toMatch(/color: var\(--danger\);/)
+    expect(rule('.msg-body .dca-card__action')).toMatch(/text-decoration: none;/)
+  })
+
+  it('shows a stale card: controls off, the as-of amber, the refresh still live', () => {
+    const off = css.match(
+      /^\.dca-card\[data-dca-stale\] \.dca-actions \.dca-action,[^{]*\{[\s\S]*?^\}/m,
+    )?.[0]
+    expect(off).toBeTruthy()
+    expect(off).toMatch(/opacity: 0\.\d+;/)
+    expect(off).toMatch(/pointer-events: none;/)
+    // Only a failed re-read turns the as-of amber; the quiet mount-time
+    // "checking" pass must not flash the footer.
+    expect(selectors).toContain(".dca-card[data-dca-stale='failed'] .dca-card__ago")
+    expect(selectors).not.toContain('.dca-card[data-dca-stale] .dca-card__ago')
+    expect(css).toMatch(
+      /\.dca-card\[data-dca-stale='failed'\] \.dca-card__as-of,\s*\.dca-card\[data-dca-stale='failed'\] \.dca-card__ago \{\s*color: var\(--warn\);/,
+    )
+    expect(rule('.dca-card__stale')).toMatch(/display: flex;/)
+    // The footer's ↻ is how a stale card recovers: nothing may switch it off.
+    expect(
+      selectors.some((sel) => /data-dca-stale\][^,]*\.dca-card__(action|refresh)/.test(sel)),
+    ).toBe(false)
+  })
+
+  it('leads a list row with the mandate name in the text face, figures still mono', () => {
+    const name = rule('.dca-row__name')
+    expect(name).toMatch(/font-family: var\(--font-sans\);/)
+    expect(name).toMatch(/font-weight: 500;/)
+    expect(name).toMatch(/order: -1;/)
+    expect(name).toMatch(/text-overflow: ellipsis;/)
+    expect(name).not.toMatch(/text-transform/)
+    expect(css).toMatch(
+      /\.dca-row__spent,\s*\.dca-card__foot \{\s*font-family: var\(--font-mono\);/,
+    )
+  })
+
+  it("hangs quiet mono y-axis labels at the plot's left edge", () => {
+    const axis = rule('.dca-chart__y')
+    expect(axis).toMatch(/position: absolute;/)
+    expect(axis).toMatch(/pointer-events: none;/)
+    const label = rule('.dca-chart__ylabel')
+    expect(label).toMatch(/position: absolute;/)
+    expect(label).toMatch(/left: 0;/)
+    expect(label).toMatch(/font-family: var\(--font-mono\);/)
+    expect(label).toMatch(/color: var\(--dim\);/)
+    expect(Number(label?.match(/font-size: ([\d.]+)px;/)?.[1])).toBeLessThanOrEqual(10)
+  })
+
+  it('keeps the tooltip legible wherever the renderer places it', () => {
+    const tip = rule('.dca-chart__tooltip')
+    expect(tip).toMatch(/background: var\(--elevated\);/)
+    expect(tip).toMatch(/border: 1px solid var\(--border\);/)
+    expect(tip).toMatch(/backdrop-filter: blur\(\d+px\);/)
+    // Above the bars and every plot label (the y axis sits at 1).
+    const z = Number(tip?.match(/z-index: (\d+);/)?.[1])
+    expect(z).toBeGreaterThan(Number(rule('.dca-chart__y')?.match(/z-index: (\d+);/)?.[1] ?? 0))
+    // Placed under the columns inline: the skin's default `bottom` must yield.
+    expect(rule(".dca-chart__tooltip[data-dca-place='below']")).toMatch(/bottom: auto;/)
+  })
+
+  it('never changes the case of a token symbol', () => {
+    for (const r of ['.dca-card__pair,', '.dca-card__name', '.dca-stat__symbol']) {
+      const block = css.match(new RegExp(`^\\${r}[^{]*\\{[\\s\\S]*?^\\}`, 'm'))?.[0]
+      expect(block, r).toBeTruthy()
+      expect(block, r).not.toMatch(/text-transform/)
+    }
+  })
+})

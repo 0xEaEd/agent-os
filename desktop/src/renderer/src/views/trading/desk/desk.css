@@ -171,6 +171,38 @@
 .trd-strip__right {
   justify-content: flex-end;
 }
+/* Whatever the left side says stays in its own column: it clips (the chip
+   ellipsises) instead of running under the mode pill. */
+.trd-strip[data-mode='trading'] .trd-strip__left {
+  overflow: hidden;
+}
+/* The pin and the Desk toggle are controls: they keep their full width at the
+   narrowest desk, and the left column gives way instead. */
+.trd-strip__pin,
+.trd-strip__toggle {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* Every live DCA mandate in one chip ("DCA ×2 · next 12 m"): the only item on
+   the left that shrinks, with an ellipsis, never pushing into the pill. */
+.trd-strip__chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ok);
+}
+.trd-strip__chip[data-state='awaiting'] {
+  color: var(--warn);
+}
+.trd-strip__chip[data-state='paused'] {
+  color: var(--muted-foreground);
+}
 /* Chat mode: the open chat's session actions, rendered in by ChatView. The
    padding keeps them off the pill however far they are squeezed. */
 .trd-strip__session {
@@ -548,6 +580,159 @@
   background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
+/* DCA mandates beside the missions (docs/dca.md). The engine runs them, so a
+   row reads its figures, not a schedule: a "DCA" micro-tag in info blue, the
+   state word, and spent of cap over a hairline gauge — all mono. The strip
+   and status strip share the state tones: amber while it waits for you,
+   green while it runs. */
+.trd-mstrip__item[data-state='active'] .trd-mstrip__dot {
+  background: var(--ok);
+}
+.trd-mstrip__item[data-state='awaiting_approval'] .trd-mstrip__dot {
+  background: var(--warn);
+}
+.trd-mstrip__item[data-state='awaiting_approval'] .trd-mstrip__word {
+  color: var(--warn);
+}
+.trd-mstrip__item[data-state='completed'] .trd-mstrip__dot {
+  background: var(--info);
+}
+.trd-strip__mission[data-state='awaiting_approval'] span {
+  color: var(--warn);
+}
+.trd-mctl__row[data-kind='mandate'] {
+  gap: 4px;
+  padding-left: 4px;
+}
+.trd-mctl__row[data-kind='mandate'][data-state='awaiting_approval'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.trd-mctl__kind {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 14%, transparent);
+}
+.trd-mctl__row[data-kind='mandate'] .trd-mctl__name {
+  margin-right: 0;
+}
+.trd-mctl__word {
+  margin-right: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-mctl__row[data-state='active'] .trd-mctl__word {
+  color: var(--ok);
+}
+.trd-mctl__row[data-state='awaiting_approval'] .trd-mctl__word {
+  color: var(--warn);
+}
+.trd-mctl__row[data-state='completed'] .trd-mctl__word {
+  color: var(--info);
+}
+.trd-mctl__row[data-state='stopped'] .trd-mctl__word,
+.trd-mctl__row[data-state='rejected'] .trd-mctl__word,
+.trd-mctl__row[data-state='expired'] .trd-mctl__word {
+  color: var(--dim);
+}
+/* "3/10 buys · 1 skipped": the filled buys, then — muted — the runs that
+   bought nothing, so a finished row with no buys never reads as a success. */
+.trd-mctl__runs {
+  margin-right: 4px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.trd-mctl__misses {
+  color: var(--dim);
+}
+/* "+N more" / "show fewer": a quiet text button that opens the finished
+   mandates folded out of the list. */
+.trd-mctl__more {
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+  color: var(--dim);
+  cursor: pointer;
+}
+.trd-mctl__more:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.trd-mctl__more:focus-visible {
+  outline: 1px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-mctl__hint {
+  padding-right: 8px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.trd-mprog {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+}
+.trd-mprog__bar {
+  width: 44px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--hairline);
+}
+.trd-mprog__fill {
+  display: block;
+  height: 100%;
+  background: var(--muted-foreground);
+  transition: width 320ms var(--desk-ease-out);
+}
+.trd-mctl__row[data-state='active'] .trd-mprog__fill {
+  background: var(--ok);
+}
+.trd-mctl__row[data-state='completed'] .trd-mprog__fill {
+  background: var(--info);
+}
+.trd-mprog__text {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+/* Stop is final: the second click is a word, in red, where the icon was. */
+.trd-mctl__row .trd-mctl__confirm {
+  width: auto;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.trd-mctl__row .trd-mctl__confirm:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
 /* ── Approvals region + card ─────────────────────────────────────────────── */
 
 /* The region's cap is a share of the window, not a fixed line: an LP add
@@ -585,6 +770,61 @@
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, var(--border)),
     inset 3px 0 0 var(--danger);
+}
+/* A DCA proposal among the asks: the same card family as an order, with an
+   info-blue rail — one decision here starts every buy after it, so it reads
+   as a standing instruction rather than a single trade. */
+.trd-card.trd-mandate {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--info) 45%, var(--border)),
+    inset 3px 0 0 var(--info);
+}
+.trd-mandate .trd-card__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--info);
+}
+.trd-mandate__legs {
+  align-items: baseline;
+}
+/* A proposal is read before one click commits every buy, so its facts are
+   never cut short: a long value wraps under its label instead. */
+.trd-mandate .trd-card__fact {
+  align-items: baseline;
+}
+.trd-mandate .trd-card__fact dt {
+  flex-shrink: 0;
+}
+.trd-mandate .trd-card__fact dd {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.trd-mandate__rate {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-mandate__warnings {
+  margin: 8px 0 0;
+  padding-left: 14px;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+.trd-mandate__enforced {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-mandate__enforced::before {
+  content: '● ';
+  color: var(--ok);
 }
 .trd-asks__stamp .trd-card {
   padding: 8px 14px;
@@ -896,6 +1136,12 @@
 .trd-ledger__stamp[data-tone='ok'] {
   color: var(--ok);
   background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+/* A DCA row's mandate state once it is past deciding: paused, stopped,
+   rejected or expired read as a quiet word, not a warning. */
+.trd-ledger__stamp[data-tone='muted'] {
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
 }
 .trd-ledger__link,
 .trd-ledger__raw {
@@ -1316,6 +1562,91 @@ body[data-dragging] .trd-book__handle {
   background: color-mix(in srgb, var(--warning, var(--foreground)) 8%, transparent);
 }
 
+/* The DCA contract: numbers the engine enforces, so it leads with the plan in
+   one sentence under an info rail, and says in green that the engine stops it. */
+.trd-dca fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.trd-dca__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.trd-dca__chip {
+  height: 26px;
+  min-width: 38px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+.trd-dca__chip:hover:not(:disabled) {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-dca__chip[aria-pressed='true'] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.trd-dca__chip:disabled {
+  opacity: 0.5;
+}
+.trd-dca__chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-dca__custom {
+  width: 120px;
+  height: 26px;
+}
+.trd-dca__opt {
+  font-size: 10.5px;
+  font-style: normal;
+  color: var(--dim);
+}
+.trd-dca__summary {
+  padding: 8px 10px 8px 12px;
+  border-radius: var(--radius);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--info) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--info);
+}
+.trd-dca__enforced::before {
+  content: '● ';
+  color: var(--ok);
+}
+.trd-dca__start {
+  align-self: end;
+  padding-bottom: 6px;
+}
+/* Editing: the wallet and chain are fixed, so they are text, not controls. */
+.trd-dca__fixed {
+  margin: 0;
+}
+.trd-dca__fixed dt {
+  font-size: 12px;
+  font-weight: 500;
+}
+.trd-dca__fixed dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+
 /* ── Mission catalogue ───────────────────────────────────────────────────── */
 
 .trd-picker {
@@ -1669,6 +2000,7 @@ body[data-dragging] .trd-book__handle {
    the row arrives. */
 .mode-shell[data-enter='trading'] .trd-strip__mission,
 .mode-shell[data-enter='trading'] .trd-strip__more,
+.mode-shell[data-enter='trading'] .trd-strip__chip,
 .mode-shell[data-enter='trading'] .trd-strip__word,
 .mode-shell[data-enter='trading'] .trd-strip__pin,
 .mode-shell[data-enter='trading'] .trd-strip__toggle {
