@@ -1290,8 +1290,39 @@ class UsageTracker:
         finally:
             conn.close()
 
+    @staticmethod
+    def _date_bounds_ms(start_date: str | None, end_date: str | None) -> tuple[int, int]:
+        """The [start, end] millisecond window the date filters describe.
+
+        Same reading as the SQL path: a start date begins at its midnight UTC and an end
+        date runs to the last millisecond of that day. An unparsable date is ignored
+        there, so it is ignored here too.
+        """
+        low, high = 0, 2**63 - 1
+        if start_date:
+            try:
+                dt = datetime.strptime(start_date, "%Y-%m-%d")
+                low = int(dt.replace(tzinfo=UTC).timestamp() * 1000)
+            except ValueError:
+                pass
+        if end_date:
+            try:
+                dt = datetime.strptime(end_date, "%Y-%m-%d")
+                high = int((dt.replace(tzinfo=UTC).timestamp() + 86400) * 1000) - 1
+            except ValueError:
+                pass
+        return low, high
+
     def _query_in_memory(self, **kwargs) -> list[dict[str, Any]]:
-        rows = []
+        rows: list[dict[str, Any]] = []
+        # In-memory rows are per-model turn totals; none of them is attributed to a tool,
+        # so a tool_name filter selects nothing rather than everything (#3034).
+        if kwargs.get("tool_name"):
+            return rows
+        low_ms, high_ms = self._date_bounds_ms(kwargs.get("start_date"), kwargs.get("end_date"))
+        created_at = int(time.time() * 1000)
+        if not (low_ms <= created_at <= high_ms):
+            return rows
         for session_key, usage in self._sessions.items():
             agent_id, channel = self.get_session_scope(session_key)
             if kwargs.get("agent_id") and kwargs["agent_id"] != agent_id:
@@ -1321,7 +1352,7 @@ class UsageTracker:
                         "cacheWriteTokens": mu.cache_write_tokens,
                         "costUsd": mu.cost,
                         "billedCostUsd": mu.billed_cost,
-                        "createdAt": int(time.time() * 1000),
+                        "createdAt": created_at,
                     }
                 )
         return rows
