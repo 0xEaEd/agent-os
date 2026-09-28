@@ -39,6 +39,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   things the chat does not show on its own.
 
 ### Fixed
+- Chat (desktop and Web UI): a message queued while a turn was running no
+  longer follows you into the next session and gets sent there. The pending
+  queue is now kept per session — switching sessions (or starting a new chat)
+  leaves it with its own session, which sends it once that turn ends (on
+  return, if the turn finished while you were elsewhere).
 - `apply_patch` refused every patch a GPT model wrote. OpenAI models open
   hunks on a bare `@@` (or `@@ <a line to search past>`) with no line numbers,
   and the parser knew only the numbered `@@@ -a,b +c,d @@@` header, so each

@@ -343,7 +343,7 @@ function ConnectedChat({
     isStreaming: () => busy,
     isCompactInFlight: () => isCompactInFlightForCurrentSession(),
   }
-  const pending = usePendingQueue(bridge)
+  const pending = usePendingQueue(bridge, sessionKey)
 
   useApprovalPending(sessionKey, setStreamIdlePausedForApproval)
 
@@ -371,11 +371,12 @@ function ConnectedChat({
     [abort, pending],
   )
 
+  // The outgoing session keeps its pending queue (usePendingQueue is keyed
+  // per session), so a new chat starts with an empty one without clearing it.
   const startNewChat = useCallback(() => {
-    pending.clearAll()
     pendingIntentRef.current = 'new_chat'
     void navigate('/sessions')
-  }, [navigate, pending])
+  }, [navigate])
 
   const onSessionAction = useCallback(
     (action: string) => {

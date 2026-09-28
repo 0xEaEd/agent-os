@@ -137,4 +137,72 @@ describe('usePendingQueue', () => {
     expect(result.current.length).toBe(0)
     expect(state.sent).toHaveLength(0)
   })
+
+  describe('per-session queues', () => {
+    // The chat route element stays mounted across a session switch; the queue
+    // must not follow the user into the next session.
+    const render = (bridge: PendingComposerBridge) =>
+      renderHook(({ sessionKey }) => usePendingQueue(bridge, sessionKey), {
+        initialProps: { sessionKey: 'agent:main:a' },
+      })
+
+    it("does not drain one session's queue into another after a switch", () => {
+      const { bridge, state } = makeBridge()
+      const { result, rerender } = render(bridge)
+      act(() => void result.current.enqueue(item('for A')))
+      rerender({ sessionKey: 'agent:main:b' })
+      expect(result.current.length).toBe(0)
+      expect(result.current.queue).toEqual([])
+      // B's subscribe replays its last `.done` → the transcript schedules a drain.
+      act(() => {
+        result.current.scheduleDrainAfterTerminal()
+        vi.advanceTimersByTime(50)
+      })
+      expect(state.sent).toHaveLength(0)
+    })
+
+    it('does not fire a drain armed in the outgoing session', () => {
+      const { bridge, state } = makeBridge()
+      const { result, rerender } = render(bridge)
+      act(() => void result.current.enqueue(item('for A')))
+      act(() => result.current.scheduleDrainAfterTerminal())
+      rerender({ sessionKey: 'agent:main:b' })
+      act(() => void vi.advanceTimersByTime(50))
+      expect(state.sent).toHaveLength(0)
+    })
+
+    it('keeps a queue for its session and drains it there on return', () => {
+      const { bridge, state } = makeBridge()
+      const { result, rerender } = render(bridge)
+      act(() => void result.current.enqueue(item('for A')))
+      rerender({ sessionKey: 'agent:main:b' })
+      act(() => void result.current.enqueue(item('for B')))
+      rerender({ sessionKey: 'agent:main:a' })
+      expect(result.current.queue.map((q) => q.text)).toEqual(['for A'])
+      act(() => {
+        result.current.scheduleDrainAfterTerminal()
+        vi.advanceTimersByTime(50)
+      })
+      expect(state.sent.map((s) => s.text)).toEqual(['for A'])
+      rerender({ sessionKey: 'agent:main:b' })
+      expect(result.current.queue.map((q) => q.text)).toEqual(['for B'])
+    })
+
+    it('scopes clear, pop and remove to the shown session', () => {
+      const { bridge, state } = makeBridge()
+      const { result, rerender } = render(bridge)
+      act(() => void result.current.enqueue(item('a1')))
+      act(() => void result.current.enqueue(item('a2')))
+      rerender({ sessionKey: 'agent:main:b' })
+      act(() => void result.current.enqueue(item('b1')))
+      act(() => void result.current.enqueue(item('b2')))
+      act(() => result.current.remove(0))
+      expect(result.current.queue.map((q) => q.text)).toEqual(['b2'])
+      act(() => void result.current.popAllIntoComposer())
+      expect(state.text).toBe('b2')
+      act(() => result.current.clearAll())
+      rerender({ sessionKey: 'agent:main:a' })
+      expect(result.current.queue.map((q) => q.text)).toEqual(['a1', 'a2'])
+    })
+  })
 })
