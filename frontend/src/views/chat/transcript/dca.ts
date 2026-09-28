@@ -1295,6 +1295,26 @@ function plotTop(y: number): string {
   return `calc(var(--dca-plot-pad) + var(--dca-plot-h) * ${(y / 100).toFixed(4)})`
 }
 
+/** The top of a column's mark, 0–100 of the SVG height: where its tooltip anchors. */
+function columnMarkTop(col: DcaChartColumn): number {
+  switch (col.kind) {
+    case 'filled':
+      return col.y ?? 100
+    case 'parked':
+    case 'pending':
+      return col.y ?? 60
+    case 'skipped':
+      return Math.max(0, (col.y ?? 94) - 1.5)
+    case 'failed':
+      return 86 // the HTML × sits on the baseline
+    default:
+      return 97
+  }
+}
+
+/** Gap between a column's mark and its tooltip, in px. */
+const TIP_GAP = 4
+
 function columnLabel(col: DcaChartColumn, token: LpToken): string {
   const detail = runDetail(col.run, token)
   return [`#${col.run.n}`, formatWhen(col.run.at, true), runStatusLabel(col.run.status), detail]
@@ -1317,12 +1337,9 @@ function buildChart(mandate: DcaMandate, ctx: DcaRenderContext): HTMLElement {
   tooltip.id = tooltipId
   tooltip.setAttribute('role', 'tooltip')
   tooltip.hidden = true
-  // Under the columns, never over the stats row above the plot nor over the
-  // columns themselves (it would steal the pointer from them). Inline, like
-  // `left`, so every skin places it the same; `data-dca-place` is the hook.
-  tooltip.dataset.dcaPlace = 'below'
-  tooltip.style.top = 'calc(100% + 4px)'
-  tooltip.style.bottom = 'auto'
+  // Placed inside the plot on every show (see `place`), so it never covers the
+  // stats above the chart nor the legend and runs list below it.
+  tooltip.dataset.dcaPlace = 'above'
 
   const chart = svg('svg', {
     class: 'dca-chart__svg',
@@ -1395,12 +1412,48 @@ function buildChart(mandate: DcaMandate, ctx: DcaRenderContext): HTMLElement {
       lines.push(link)
     }
     tooltip.replaceChildren(...lines)
-    const center = col.x + col.width / 2
-    tooltip.style.left = `${center}%`
-    tooltip.dataset.align = center < 22 ? 'start' : center > 78 ? 'end' : 'center'
     tooltip.hidden = false
+    place(col)
     groups.forEach((g) => g.removeAttribute('data-hover'))
     group.setAttribute('data-hover', 'true')
+  }
+  /**
+   * Anchor the tooltip on the column's mark, inside the plot: a few px above
+   * the mark's top, or just below it when there is no room above; centred on
+   * the column, flipped to `start` / `end` near the side edges, and clamped
+   * to the plot's top and bottom. `top`, `bottom` and `left` are inline, so
+   * every skin places it the same; `data-dca-place` / `data-align` are the
+   * hooks. Without a layout (detached, or a test DOM) it falls back to the
+   * same anchor in CSS lengths.
+   */
+  const place = (col: DcaChartColumn): void => {
+    const center = col.x + col.width / 2
+    const y = columnMarkTop(col)
+    const box = plot.getBoundingClientRect()
+    const area = chart.getBoundingClientRect()
+    const tipW = tooltip.offsetWidth
+    const tipH = tooltip.offsetHeight
+    let align: 'start' | 'center' | 'end' = center < 22 ? 'start' : center > 78 ? 'end' : 'center'
+    tooltip.style.left = `${center}%`
+    if (box.width > 0 && box.height > 0 && area.height > 0 && tipH > 0) {
+      const cx = (box.width * center) / 100
+      align = cx - tipW / 2 < 0 ? 'start' : cx + tipW / 2 > box.width ? 'end' : 'center'
+      const mark = area.top - box.top + (area.height * y) / 100
+      const above = mark - TIP_GAP - tipH >= 0
+      const top = above ? mark - TIP_GAP - tipH : mark + TIP_GAP
+      tooltip.dataset.dcaPlace = above ? 'above' : 'below'
+      tooltip.style.top = `${Math.round(Math.max(0, Math.min(top, box.height - tipH)))}px`
+      tooltip.style.bottom = 'auto'
+    } else if (y >= 50) {
+      tooltip.dataset.dcaPlace = 'above'
+      tooltip.style.top = 'auto'
+      tooltip.style.bottom = `calc(var(--dca-plot-h) * ${(1 - y / 100).toFixed(4)} + ${TIP_GAP}px)`
+    } else {
+      tooltip.dataset.dcaPlace = 'below'
+      tooltip.style.top = `calc(${plotTop(y)} + ${TIP_GAP}px)`
+      tooltip.style.bottom = 'auto'
+    }
+    tooltip.dataset.align = align
   }
   tooltip.addEventListener('mouseenter', () => generation++)
   tooltip.addEventListener('mouseleave', hideSoon)

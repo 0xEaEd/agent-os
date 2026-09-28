@@ -968,16 +968,71 @@ describe('buys chart axes', () => {
     expect(days[1]).toMatch(/^Sep \d+$/)
   })
 
-  it('opens the tooltip under the columns, never over the stats above', () => {
+  /** Give the plot, its SVG and the tooltip a layout jsdom does not compute. */
+  function layout(card: HTMLElement, tip = { w: 160, h: 60 }): HTMLElement {
+    const rect = (top: number, width: number, height: number) => () =>
+      ({ top, left: 0, width, height, right: width, bottom: top + height, x: 0, y: top }) as DOMRect
+    const plot = card.querySelector<HTMLElement>('.dca-chart__plot')!
+    plot.getBoundingClientRect = rect(100, 600, 132)
+    card.querySelector<SVGElement>('.dca-chart__svg')!.getBoundingClientRect = rect(112, 600, 120)
+    const tooltip = card.querySelector<HTMLElement>('.dca-chart__tooltip')!
+    Object.defineProperty(tooltip, 'offsetWidth', { configurable: true, value: tip.w })
+    Object.defineProperty(tooltip, 'offsetHeight', { configurable: true, value: tip.h })
+    return tooltip
+  }
+
+  it('opens the tooltip inside the plot, on the hovered column, clamped to its edges', () => {
+    const p = payload<DcaMandatePayload>('mandate-active')
+    const model = buildDcaChartModel(p.mandate)!
+    const card = render(p)
+    const tooltip = layout(card)
+    const cols = [...card.querySelectorAll<SVGGElement>('.dca-chart__col')]
+    const hover = (i: number): void => {
+      cols[i]!.dispatchEvent(new MouseEvent('mouseenter'))
+    }
+    const markTop = (i: number): number => 12 + (120 * model.columns[i]!.y!) / 100
+
+    // A bar whose top leaves room: a few px above it, bottom edge 4px clear.
+    const low = model.columns.findIndex((c, i) => c.kind === 'filled' && markTop(i) >= 70)
+    expect(low).toBeGreaterThanOrEqual(0)
+    hover(low)
+    expect(tooltip.dataset.dcaPlace).toBe('above')
+    expect(tooltip.style.top).toBe(`${Math.round(markTop(low) - 4 - 60)}px`)
+    expect(tooltip.style.bottom).toBe('auto')
+    const c = model.columns[low]!
+    expect(tooltip.style.left).toBe(`${c.x + c.width / 2}%`)
+
+    // A bar near the plot's top: just below its top instead, never past the plot.
+    const high = model.columns.findIndex((c, i) => c.kind === 'filled' && markTop(i) < 64)
+    expect(high).toBeGreaterThanOrEqual(0)
+    hover(high)
+    expect(tooltip.dataset.dcaPlace).toBe('below')
+    expect(tooltip.style.top).toBe(`${Math.round(Math.min(markTop(high) + 4, 132 - 60))}px`)
+
+    // Too tall to fit above the low bar: below it, pulled up off the plot's bottom.
+    layout(card, { w: 160, h: 120 })
+    hover(low)
+    expect(tooltip.dataset.dcaPlace).toBe('below')
+    expect(tooltip.style.top).toBe('12px')
+
+    // Clamped at the side edges.
+    layout(card)
+    hover(0)
+    expect(tooltip.dataset.align).toBe('start')
+    hover(cols.length - 1)
+    expect(tooltip.dataset.align).toBe('end')
+    hover(Math.floor(cols.length / 2))
+    expect(tooltip.dataset.align).toBe('center')
+  })
+
+  it('never leaves the old under-the-plot offset behind', () => {
     const card = render(payload('mandate-active'))
     const tooltip = card.querySelector<HTMLElement>('.dca-chart__tooltip')!
-    expect(tooltip.dataset.dcaPlace).toBe('below')
-    expect(tooltip.style.top).toBe('calc(100% + 4px)')
-    expect(tooltip.style.bottom).toBe('auto')
-    // Still clamped at the edges.
-    card
-      .querySelectorAll<SVGGElement>('.dca-chart__col')[0]!
-      .dispatchEvent(new MouseEvent('mouseenter'))
+    card.querySelectorAll<SVGGElement>('.dca-chart__col')[0]!.dispatchEvent(new FocusEvent('focus'))
+    // No layout in jsdom: the same anchor in the plot's CSS lengths.
+    expect(tooltip.style.top).not.toContain('100%')
+    expect(`${tooltip.style.top} ${tooltip.style.bottom}`).toContain('--dca-plot-')
+    expect(['above', 'below']).toContain(tooltip.dataset.dcaPlace)
     expect(tooltip.dataset.align).toBe('start')
   })
 })

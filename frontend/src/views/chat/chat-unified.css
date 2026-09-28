@@ -2043,10 +2043,11 @@
   font-weight: 700;
 }
 
-/* The tooltip opens under the columns (dca.ts also sets this inline, so every
-   skin agrees): never over the stats row above the plot, nor over the columns
-   it explains, where it would steal the pointer from them. The short hide
-   delay in dca.ts lets the pointer travel down to its tx link. */
+/* The tooltip sits inside the plot, anchored on the hovered column's mark;
+   dca.ts sets `top` / `bottom` / `left` inline so every skin agrees, and
+   clamps it to the plot's edges. The short hide delay in dca.ts lets the
+   pointer travel onto its tx link. The `top` here is only a pre-placement
+   default; the inline values always win. */
 .chat-surface .dca-chart__tooltip {
   position: absolute;
   top: calc(100% + 0.25rem);
