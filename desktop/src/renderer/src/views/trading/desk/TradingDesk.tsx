@@ -172,7 +172,8 @@ export function useDeskFrame(input: {
 
   // "Start fresh" mints a new session key, and missions are filed by key: a
   // mission left enabled on the old key would keep trading, unseen. Every
-  // active mission is paused first; if one refuses, the desk stays here.
+  // active mission — and every active DCA mandate filed to this chat — is
+  // paused first; if one refuses, the desk stays here.
   const { startFresh: mintFresh } = session
   const { pauseAll } = missions
   const startFresh = useCallback(() => {
@@ -292,6 +293,7 @@ export function useDeskFrame(input: {
         onSwitchMode={onSwitchMode}
         missions={missions.missions}
         running={missions.running}
+        mandates={missions.mandates}
         sessionPending={sessionPending}
         globalPending={globalPending > 0 ? globalPending : null}
         deskMode={fullDesk}

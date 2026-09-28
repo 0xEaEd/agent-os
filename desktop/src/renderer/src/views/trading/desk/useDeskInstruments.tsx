@@ -22,7 +22,7 @@ import { Notice } from '~/views/settings/parts'
 import { errorText, isAwaitingApproval, sameAddress } from '../logic'
 import { useSwitchProvider } from '../useSwitchProvider'
 import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
-import type { Limits, Order, ProviderId, Wallet } from '../types'
+import type { Limits, Mandate, Order, ProviderId, Wallet } from '../types'
 import { ApprovalsRegion } from './ApprovalsRegion'
 import { ComposerSeats } from './ComposerSeats'
 import {
@@ -37,8 +37,9 @@ import {
   type MissionForm,
   type MissionKind,
 } from './desk-logic'
+import { dcaCreateParams, isMandatePreset } from './mandate-logic'
 import { MissionContract } from './MissionContract'
-import { MissionControls, MissionStrip, missionWord } from './MissionControls'
+import { MissionControls, MissionStrip, mandateWord, missionWord } from './MissionControls'
 import { MissionPicker } from './MissionPicker'
 import type { MissionsApi } from './missions'
 import type { MissionPreset } from './presets'
@@ -52,6 +53,7 @@ const ROTATE_MS = 6000
 const NO_JOBS: RawJob[] = []
 const NO_RUNS: ReadonlySet<string> = new Set()
 const NO_ORDERS: ReadonlySet<string> = new Set()
+const NO_MANDATES: Mandate[] = []
 /** A settled ask stays in the region this long as a stamp. */
 const STAMP_TTL_MS = 10 * 60_000
 
@@ -356,11 +358,20 @@ export function useDeskInstruments(
   // would listen to `cron.run.finished` twice and update every job twice.
   const missionJobs = desk?.missions.missions ?? NO_JOBS
   const missionRuns = desk?.missions.running ?? NO_RUNS
+  const deskMandates = desk?.missions.mandates ?? NO_MANDATES
+  const awaitingMandates = desk?.missions.awaitingMandates ?? NO_MANDATES
   // `pick` is the catalogue; `form` is one contract, with the preset it came
-  // from (null for a blank contract, an edit, or the one-shot swap chip).
+  // from (null for a blank contract, an edit, or the one-shot swap chip). A
+  // DCA mandate being edited rides along as `mandate`.
   const [contract, setContract] = useState<
     | { mode: 'pick' }
-    | { mode: 'form'; kind: MissionKind; preset: MissionPreset | null; job?: RawJob | null }
+    | {
+        mode: 'form'
+        kind: MissionKind
+        preset: MissionPreset | null
+        job?: RawJob | null
+        mandate?: Mandate | null
+      }
     | null
   >(null)
   // The composer's wallet chip is the one wallet affordance that is always on
@@ -372,13 +383,16 @@ export function useDeskInstruments(
   const openSheet = useTradingUi((s) => s.openSheet)
   const missionLine = useMemo(() => {
     const first = missionJobs[0]
-    if (!first) return null
+    if (!first) {
+      const mandate = deskMandates[0]
+      return mandate ? `${mandate.name} · ${mandateWord(mandate, now)}` : null
+    }
     const s = missionStatus(first, {
       running: Boolean(first.id && missionRuns.has(first.id)),
       pendingApprovals: pendingOrders.length,
     })
     return `${first.name} · ${missionWord(s.state, s.until)}`
-  }, [missionJobs, missionRuns, pendingOrders.length])
+  }, [missionJobs, missionRuns, pendingOrders.length, deskMandates, now])
 
   // ── Placeholder rotation ────────────────────────────────────────────────
   const [focused, setFocused] = useState(false)
@@ -417,7 +431,7 @@ export function useDeskInstruments(
   })
 
   return {
-    still: pendingOrders.length > 0,
+    still: pendingOrders.length > 0 || awaitingMandates.length > 0,
     placeholder,
     onFocusChange: setFocused,
     region: (
@@ -430,6 +444,10 @@ export function useDeskInstruments(
         onReject={onReject}
         focusOrderId={focusOrderId}
         onDismiss={onDismissStamp}
+        mandates={awaitingMandates}
+        mandateDeciding={missions.mandate.pending}
+        onApproveMandate={(m) => void missions.mandate.approve(m)}
+        onRejectMandate={(m) => void missions.mandate.reject(m)}
       />
     ),
     dockAbove: (
@@ -451,12 +469,13 @@ export function useDeskInstruments(
           missions={missions.missions}
           running={missions.running}
           pendingApprovals={pendingOrders.length}
+          mandates={missions.mandates}
         />
       </div>
     ),
     seats: (
       <div className="trd-seatstack">
-        {missions.missions.length ? (
+        {missions.missions.length || missions.mandates.length ? (
           <MissionControls
             missions={missions.missions}
             running={missions.running}
@@ -468,6 +487,21 @@ export function useDeskInstruments(
             onSetEnabled={missions.setEnabled}
             onRemove={missions.remove}
             showStart={false}
+            mandates={missions.mandates}
+            mandateBusy={missions.mandate.pending}
+            onMandatePause={(m) => void missions.mandate.pause(m)}
+            onMandateResume={(m) => void missions.mandate.resume(m)}
+            onMandateRun={(m) =>
+              void missions.mandate.run(m).then((res) => {
+                // A buy that parks lands on its approval card here.
+                const orderId = res?.run?.status === 'parked' ? res.run.orderId : null
+                if (orderId) setFocusOrderId(orderId)
+              })
+            }
+            onMandateEdit={(m) =>
+              setContract({ mode: 'form', kind: 'dca', preset: null, mandate: m })
+            }
+            onMandateStop={(m) => void missions.mandate.stop(m)}
           />
         ) : null}
         <ComposerSeats
@@ -528,7 +562,9 @@ export function useDeskInstruments(
       />
     ) : contract?.mode === 'pick' ? (
       <MissionPicker
-        onPick={(preset) => setContract({ mode: 'form', kind: 'custom', preset })}
+        onPick={(preset) =>
+          setContract({ mode: 'form', kind: isMandatePreset(preset) ? 'dca' : 'custom', preset })
+        }
         onCustom={() => setContract({ mode: 'form', kind: 'custom', preset: null })}
         onClose={() => setContract(null)}
       />
@@ -537,10 +573,13 @@ export function useDeskInstruments(
         kind={contract.kind}
         preset={contract.preset}
         job={contract.job ?? null}
+        mandate={contract.mandate ?? null}
         // Only what the catalogue opened can go back to it: an edit and the
         // one-shot swap chip never passed through it.
         onBack={
-          contract.job || contract.kind === 'swap' ? undefined : () => setContract({ mode: 'pick' })
+          contract.job || contract.mandate || contract.kind === 'swap'
+            ? undefined
+            : () => setContract({ mode: 'pick' })
         }
         wallets={desk.wallets}
         primary={desk.primary}
@@ -548,6 +587,12 @@ export function useDeskInstruments(
         onClose={() => setContract(null)}
         onSend={(prompt) => submitText(prompt)}
         onCreate={(form: MissionForm, prompt) => missions.create(form, prompt)}
+        // The desk's connection is the operator's: the mandate starts at once,
+        // filed to this session so its buys and asks land in this chat.
+        onCreateMandate={(form) =>
+          missions.mandate.create(dcaCreateParams(form, { sessionKey, wallets: desk.wallets }))
+        }
+        onUpdateMandate={(m, patch) => missions.mandate.update(m, patch)}
         onUpdate={(id, form, prompt) =>
           missions.update(id, {
             name: form.name.trim(),

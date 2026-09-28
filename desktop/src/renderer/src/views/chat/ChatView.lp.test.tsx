@@ -21,14 +21,19 @@ const rpc = {
 vi.mock('@/app/providers', () => ({ useRpc: () => rpc }))
 vi.mock('@/views/chat/RoutePicker', () => ({ RoutePicker: () => null }))
 
-const seen: { lpActions: LpActions | null | undefined; own: ReadonlySet<string>; focus: unknown } =
-  { lpActions: undefined, own: new Set(), focus: null }
+const seen: {
+  lpActions: LpActions | null | undefined
+  dcaActions: LpActions | null | undefined
+  own: ReadonlySet<string>
+  focus: unknown
+} = { lpActions: undefined, dcaActions: undefined, own: new Set(), focus: null }
 // What the desk instruments render into the chat's slots (null = nothing).
 const slots: { region: ReactNode; seats: ReactNode } = { region: null, seats: null }
 
 vi.mock('@/views/chat/useTranscript', () => ({
-  useTranscript: (opts: { lpActions?: LpActions | null }) => {
+  useTranscript: (opts: { lpActions?: LpActions | null; dcaActions?: LpActions | null }) => {
     seen.lpActions = opts.lpActions
+    seen.dcaActions = opts.dcaActions
     return {
       containerRef: createRef(),
       routerFxDockRef: createRef(),
@@ -85,6 +90,7 @@ beforeEach(() => {
   slots.region = null
   slots.seats = null
   seen.lpActions = undefined
+  seen.dcaActions = undefined
   seen.own = new Set()
   seen.focus = null
   rpc.call.mockClear()
@@ -108,6 +114,27 @@ describe('ChatView · LP write actions', () => {
     act(() => actions!.onOrder?.('lpo_c41a9e'))
     expect([...seen.own]).toEqual(['lpo_c41a9e'])
     expect(seen.focus).toBe('lpo_c41a9e')
+  })
+})
+
+describe('ChatView · DCA card actions', () => {
+  // The DCA card's buttons (Approve & start, Pause, Buy now, Stop) exist only
+  // where the chat hands the renderer `dcaActions`: the desk, never a plain chat.
+  it('hands the transcript no DCA actions in a plain chat', () => {
+    mount(null)
+    expect(seen.dcaActions).toBeNull()
+  })
+
+  it('at the desk: calls trading.dca.* over the operator connection and adopts a parked buy', async () => {
+    const desk = { entering: false, onFirstSend: vi.fn() } as unknown as DeskProps
+    mount(desk)
+    const actions = seen.dcaActions
+    expect(actions).toBeTruthy()
+    await actions!.call('trading.dca.approve', { mandateId: 'dca_1a2b3c4d' })
+    expect(rpc.call).toHaveBeenCalledWith('trading.dca.approve', { mandateId: 'dca_1a2b3c4d' })
+    act(() => actions!.onOrder?.('ord_7c2e91'))
+    expect([...seen.own]).toEqual(['ord_7c2e91'])
+    expect(seen.focus).toBe('ord_7c2e91')
   })
 })
 
