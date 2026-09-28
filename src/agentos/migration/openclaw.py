@@ -58,11 +58,12 @@ MAX_SKILL_FILE_BYTES = 256_000
 MAX_MEMORY_CHARS = 80_000
 MEMORY_OVERFLOW_DIR = "memory-overflow"
 # Marks the start of one imported daily-memory note inside the merged
-# MEMORY.md. Everything up to the next such header belongs to that note.
+# MEMORY.md; the note's body is the whole note file.
 _DAILY_MEMORY_HEADER_RE = re.compile(r"^## Imported daily memory: ")
 # A paragraph boundary in MEMORY.md: blank lines, or the curated store's
 # ``\n§\n`` entry delimiter that ``memory add`` joins entries with.
-_MEMORY_PARAGRAPH_BREAK_RE = re.compile(r"\r?\n(?:[ \t]*§?[ \t]*\r?\n)+")
+# ``§`` sits in its own group so a long whitespace run has one way to match.
+_MEMORY_PARAGRAPH_BREAK_RE = re.compile(r"\r?\n(?:[ \t]*(?:§[ \t]*)?\r?\n)+")
 
 USER_DATA_OPTIONS = {
     "soul",
@@ -478,6 +479,28 @@ def _rebrand_text(text: str) -> tuple[str, bool]:
     for key, value in protected.items():
         migrated = migrated.replace(key, value)
     return migrated, migrated != text
+
+
+def _memory_merge_blocks(parts: list[str], end: int | None) -> list[str]:
+    """Merge units of ``"\\n\\n".join(parts)[:end]``, one list entry per unit.
+
+    A daily-memory note part is one unit, even when ``end`` cuts it short;
+    any other part is split into its paragraphs.
+    """
+    blocks: list[str] = []
+    start = 0
+    for part in parts:
+        if end is not None and start >= end:
+            break
+        kept = (part if end is None else part[: end - start]).strip()
+        start += len(part) + 2
+        if not kept:
+            continue
+        if _DAILY_MEMORY_HEADER_RE.match(kept):
+            blocks.append(kept)
+        else:
+            blocks.extend(b for b in re.split(r"\n{2,}", kept) if b.strip())
+    return blocks
 
 
 class OpenClawMigrator:
@@ -984,7 +1007,7 @@ class OpenClawMigrator:
             converted, changed = _rebrand_text(part)
             rebranded_parts.append(converted)
             rebranded = rebranded or changed
-        text, details = self._prepare_memory_text(rebranded_parts)
+        text, blocks, details = self._prepare_memory_text(rebranded_parts)
         details["read_sources"] = [str(path) for path in read_sources]
         if rebranded:
             details["semantic_conversions"] = ["openclaw-branding"]
@@ -1008,7 +1031,9 @@ class OpenClawMigrator:
             and not _dest_is_pristine_bootstrap_template(destination, "MEMORY.md")
         ):
             existing = destination.read_text(encoding="utf-8-sig")
-            merged, deduped, appended_count = self._merge_blocks_preserving_existing(existing, text)
+            merged, deduped, appended_count = self._merge_blocks_preserving_existing(
+                existing, blocks
+            )
             if appended_count == 0:
                 record_details["deduplicated_against_existing"] = True
                 self._record(
@@ -1041,7 +1066,14 @@ class OpenClawMigrator:
         if isinstance(overflow, str):
             self._write_memory_overflow(overflow)
 
-    def _prepare_memory_text(self, parts: list[str]) -> tuple[str, dict[str, Any]]:
+    def _prepare_memory_text(self, parts: list[str]) -> tuple[str, list[str], dict[str, Any]]:
+        # Also returns the text's merge units for
+        # ``_merge_blocks_preserving_existing``. They follow the parts: a
+        # daily-memory note is one block however many paragraphs it has, and
+        # every other part (a ``MEMORY.md`` body, the overflow marker) is split
+        # into paragraphs. A note must end where its part does, not at the next
+        # note header, or it swallows a sibling ``MEMORY.md`` placed after it
+        # and those paragraphs stop being deduped one by one (#3092).
         seen: set[str] = set()
         unique: list[str] = []
         duplicates = 0
@@ -1058,7 +1090,7 @@ class OpenClawMigrator:
             "deduplicated_blocks": duplicates,
         }
         if len(text) <= MAX_MEMORY_CHARS:
-            return text, details
+            return text, _memory_merge_blocks(unique, len(text)), details
         cutoff = text.rfind("\n\n", 0, MAX_MEMORY_CHARS)
         if cutoff < MAX_MEMORY_CHARS // 2:
             cutoff = MAX_MEMORY_CHARS
@@ -1070,7 +1102,8 @@ class OpenClawMigrator:
         )
         details["overflow"] = overflow
         details["overflow_chars"] = len(overflow)
-        return trimmed + marker, details
+        blocks = _memory_merge_blocks(unique, len(trimmed)) + _memory_merge_blocks([marker], None)
+        return trimmed + marker, blocks, details
 
     def _memory_dedupe_key(self, text: str) -> str:
         stripped = text.strip()
@@ -1079,20 +1112,17 @@ class OpenClawMigrator:
             stripped = match.group(1).strip()
         return re.sub(r"\s+", " ", stripped)
 
-    def _merge_blocks_preserving_existing(self, existing: str, new: str) -> tuple[str, int, int]:
-        # Append blocks from ``new`` that are not already present in
-        # ``existing``. A "block" is a paragraph, but daily-memory entries
-        # of the form ``## Imported daily memory: <name>\n\n<body>`` are
-        # kept glued together — otherwise the header and body, separated
-        # by ``\n\n``, would be deduped independently and produce wrong
-        # results when only the body happens to appear elsewhere.
-        #
-        # A note's ``<body>`` is the whole note file, often more than one
-        # paragraph, so the header claims every paragraph up to the next
-        # daily-memory header — the same unit ``_memory_dedupe_key`` uses.
-        # Gluing only the first paragraph let a note whose opening paragraph
-        # matched the destination (a bare ``## Preferences`` is enough) lose
-        # its header and land its remaining paragraphs loose (#3092).
+    def _merge_blocks_preserving_existing(
+        self, existing: str, new_blocks: list[str]
+    ) -> tuple[str, int, int]:
+        # Append the blocks of ``new_blocks`` (from ``_prepare_memory_text``)
+        # that are not already present in ``existing``. A "block" is a
+        # paragraph, but a daily-memory entry of the form
+        # ``## Imported daily memory: <name>\n\n<body>`` is one block with its
+        # whole body — otherwise the header and body, separated by ``\n\n``,
+        # would be deduped independently, and a note whose opening paragraph
+        # matched the destination (a bare ``## Preferences`` is enough) lost
+        # its header and landed its remaining paragraphs loose (#3092).
         #
         # Returns ``(merged_text, n_deduplicated, n_appended)``. When all
         # logical blocks already exist the existing text is returned.
@@ -1139,6 +1169,9 @@ class OpenClawMigrator:
             ]
 
         existing_paragraphs = _paragraphs(existing)
+        paragraph_positions: dict[str, list[int]] = {}
+        for position, paragraph in enumerate(existing_paragraphs):
+            paragraph_positions.setdefault(paragraph, []).append(position)
 
         def _note_in_existing(block: str) -> bool:
             if not _DAILY_MEMORY_HEADER_RE.match(block):
@@ -1146,15 +1179,19 @@ class OpenClawMigrator:
             wanted = _paragraphs(block)
             return any(
                 existing_paragraphs[i : i + len(wanted)] == wanted
-                for i, paragraph in enumerate(existing_paragraphs)
-                if paragraph == wanted[0]
+                for i in paragraph_positions.get(wanted[0], ())
             )
 
+        # Every existing paragraph on its own as well: the last note's extent
+        # there runs on over whatever follows it (a sibling ``MEMORY.md``
+        # appended by the previous run), and those paragraphs must still
+        # dedupe one by one.
         existing_norms = {_norm(block) for block in _logical_blocks(existing)}
+        existing_norms.update(existing_paragraphs)
         appended: list[str] = []
         deduped = 0
         seen_in_new: set[str] = set()
-        for block in _logical_blocks(new):
+        for block in new_blocks:
             normalised = _norm(block)
             if (
                 normalised in existing_norms

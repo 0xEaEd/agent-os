@@ -23,6 +23,7 @@ the call behind ``agentos migrate openclaw``, not the merge helper.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -218,3 +219,100 @@ def test_a_note_that_only_prefixes_an_existing_paragraph_is_still_appended(
     assert text.rstrip().endswith(
         "## Imported daily memory: day-two.md\n\nDeploy window is Tuesday."
     )
+
+
+# ---------------------------------------------------------------------------
+# A note ends where its own file does, not at the next note header
+# ---------------------------------------------------------------------------
+
+
+def _sibling_memory(source: Path, body: str) -> None:
+    sibling = source / "workspace-w1"
+    sibling.mkdir()
+    (sibling / "MEMORY.md").write_text(body, encoding="utf-8")
+
+
+def test_a_sibling_memory_paragraph_already_in_the_destination_is_not_appended_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The last primary note must not run on into the sibling ``MEMORY.md``
+    joined after it; each sibling paragraph is still deduped on its own."""
+    source = _openclaw_source(tmp_path, {"day-one.md": "Primary note.\n"})
+    _sibling_memory(source, "## Preferences\n\nUser likes concise answers.\n")
+    destination = _destination(
+        tmp_path, monkeypatch, "## Preferences\n\nUser likes concise answers.\n"
+    )
+
+    item = _migrate(tmp_path, source)
+    text = destination.read_text(encoding="utf-8")
+
+    assert item["status"] == "migrated"
+    assert "## Imported daily memory: day-one.md\n\nPrimary note." in text
+    assert text.count("## Preferences") == 1
+    assert text.count("User likes concise answers.") == 1
+
+
+def test_a_re_run_after_a_new_primary_note_does_not_duplicate_sibling_paragraphs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After the first run the sibling's paragraphs sit below the last note in
+    the destination; they must still count as present on the next run."""
+    source = _openclaw_source(tmp_path, {"day-one.md": "Primary note.\n"})
+    _sibling_memory(source, "## Team\n\nShip on Fridays.\n")
+    destination = _destination(tmp_path, monkeypatch, "User likes concise answers.\n")
+    assert _migrate(tmp_path, source)["status"] == "migrated"
+
+    (source / "workspace" / "memory" / "day-two.md").write_text("Second note.\n", encoding="utf-8")
+    item = _migrate(tmp_path, source)
+    text = destination.read_text(encoding="utf-8")
+
+    assert item["status"] == "migrated"
+    assert item["details"]["new_blocks_appended"] == 1
+    assert text.count("## Imported daily memory: day-one.md") == 1
+    assert text.count("## Imported daily memory: day-two.md") == 1
+    assert text.count("## Team") == 1
+    assert text.count("Ship on Fridays.") == 1
+
+
+def test_a_re_run_past_the_size_cap_adds_no_second_overflow_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The overflow marker is its own paragraphs, not part of the note the
+    cutoff leaves last. A note sorted first moves the cutoff, so a different
+    note ends up last on the re-run; the marker must still dedupe."""
+    notes = {
+        f"day-{index:03d}.md": f"Note {index}.\n\n" + f"fact {index} " * 300 + "\n"
+        for index in range(60)
+    }
+    source = _openclaw_source(tmp_path, notes)
+    destination = _destination(tmp_path, monkeypatch, "User likes concise answers.\n")
+    assert _migrate(tmp_path, source)["status"] == "migrated"
+    assert destination.read_text(encoding="utf-8").count("## Migration overflow") == 1
+
+    # Longer than one note, so the cutoff moves past a whole note.
+    (source / "workspace" / "memory" / "aaa-new.md").write_text(
+        "A note sorted before the others.\n\n" + "new fact " * 400 + "\n", encoding="utf-8"
+    )
+    item = _migrate(tmp_path, source)
+    text = destination.read_text(encoding="utf-8")
+
+    assert item["status"] == "migrated"
+    assert item["details"]["new_blocks_appended"] == 1
+    assert text.count("## Imported daily memory: aaa-new.md") == 1
+    assert text.count("## Migration overflow") == 1
+
+
+def test_a_long_whitespace_run_in_the_destination_does_not_stall_the_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The paragraph-break pattern backtracked quadratically on a whitespace
+    run (7.7 s for 40k spaces). The ceiling is loose on purpose: it fails on a
+    regression of that shape, not on a slow runner."""
+    source = _openclaw_source(tmp_path, {"day-one.md": "Primary note.\n"})
+    _destination(tmp_path, monkeypatch, "Existing.\n" + " " * 40_000 + "tail\n")
+
+    start = time.perf_counter()
+    item = _migrate(tmp_path, source)
+
+    assert item["status"] == "migrated"
+    assert time.perf_counter() - start < 2.0
