@@ -1,6 +1,7 @@
 import { t } from '@/i18n'
 import '@/i18n/en/chat'
 
+import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
@@ -22,7 +23,8 @@ import { resetSession } from './resetSession'
  * `_selectSlashCmd`'s action switch (chat.js:2691-2839) dispatches on the
  * serialized `execution.action` / `rpc_method`. The RPC-backed branches (reset /
  * usage / model / router.hold.set / router.hold.clear) are ported faithfully as
- * `rpc.call(...) + toast`. The two branches that cross into session/stream
+ * `rpc.call(...) + toast`, and `plan.mode.set` (newer than that switch) takes
+ * the same shape. The two branches that cross into session/stream
  * ownership delegate through `onSessionAction`: `new_chat` (chat.js:2692-2715)
  * switches/persists/re-subscribes, while `compact_context` (chat.js:2738-2763)
  * uses the composed compaction controller for in-flight UI around the RPC.
@@ -54,6 +56,8 @@ export function useSlashCommands(opts?: {
   addSystemMessage?: (text: string) => void
 }): UseSlashCommands {
   const rpc = useRpc()
+  // `/plan` refreshes the Toolbar's plan pill, which reads this query cache.
+  const queryClient = useQueryClient()
   const sessionKey = opts?.sessionKey ?? ''
   const [commands, setCommands] = useState<SlashCommand[]>([])
   // chat.js:2628 `_slashCatalogLoaded` — set once the catalog resolves (success
@@ -226,6 +230,29 @@ export function useSlashCommands(opts?: {
             )
           return
         }
+        // `/plan [off]` — plan mode on, or off with `off` (also `exit` / `stop`,
+        // as the gateway's own parser reads it for text surfaces). The flag
+        // lives in gateway memory; the Toolbar pill reads it back through
+        // `plan.mode.get`, so that query is refreshed either way.
+        case 'plan.mode.set':
+        case '/plan': {
+          const off = ['off', 'exit', 'stop'].includes(args.trim().toLowerCase())
+          rpc
+            .call('plan.mode.set', { key, mode: off ? 'off' : 'on' })
+            .then((res: unknown) => {
+              const on = (res as { planMode?: boolean } | null)?.planMode ?? !off
+              toast.info(on ? t('chat.slashPlanOn') : t('chat.slashPlanOff'))
+            })
+            .catch((err: unknown) =>
+              toast.error(
+                t('chat.slashPlanFailed', {
+                  message: err instanceof Error ? err.message : String(err),
+                }),
+              ),
+            )
+            .finally(() => void queryClient.invalidateQueries({ queryKey: ['plan.mode.get', key] }))
+          return
+        }
         // chat.js:2790-2818 — model list (optionally filtered), into a system row.
         case 'models.list':
         case '/model': {
@@ -337,7 +364,7 @@ export function useSlashCommands(opts?: {
           return
       }
     },
-    [rpc],
+    [rpc, queryClient],
   )
 
   // chat.js:2842-2853 `_executeSlashCommand`: lazy-load the catalog if it
