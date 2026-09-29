@@ -1683,6 +1683,7 @@ export function createStreamController(
     // separator/in-flight surface the history renderer + send flow drive.
     showCompactionToast: compactionRenderer.showCompactionToast,
     syncCompactionSeparator: compactionRenderer.syncCompactionSeparator,
+    hideCompactionSeparator: compactionRenderer.hideCompactionSeparator,
     renderCompactionSummarySeparators: compactionRenderer.renderCompactionSummarySeparators,
     clearCompactionSummarySeparators: compactionRenderer.clearCompactionSummarySeparators,
     setCompactInFlight: compactionRenderer.setCompactInFlight,

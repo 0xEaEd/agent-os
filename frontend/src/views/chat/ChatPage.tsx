@@ -251,6 +251,7 @@ export function ChatPage() {
     pinnedToTail,
     scrollToTail,
     isCompactInFlightForCurrentSession,
+    compactContext,
     setStreamIdlePausedForApproval,
     setPendingDelegates,
   } = useTranscript({
@@ -468,10 +469,11 @@ export function ChatPage() {
         switchToSession(key)
         toast.info('New chat session in the current agent: ' + key)
       }
-      // `compact_context` stays delegated to the compaction controller (Task 7)
-      // via the hook's own RPC fallback — not a session-swap concern.
+      // chat.js:2738-2763 — `/compact` runs through the compaction controller,
+      // which owns the in-flight state and the separator around the RPC.
+      if (action === 'compact_context') compactContext()
     },
-    [sessionKey, switchToSession],
+    [sessionKey, switchToSession, compactContext],
   )
 
   const startNewChat = useCallback(() => {

@@ -290,6 +290,13 @@ export function useTranscript(opts: {
    */
   isCompactInFlightForCurrentSession: () => boolean
   /**
+   * chat.js:2738-2763 — `/compact` for the CURRENT session: mark the
+   * compaction in flight and show its separator before the RPC goes out (a
+   * message sent meanwhile queues behind it), then settle both from the
+   * result through the same path the `session.event.compaction` frames take.
+   */
+  compactContext: () => void
+  /**
    * chat.js:6216 `_setStreamIdlePausedForApproval` — pause the idle timer + flip
    * run-status to `approval_pending` (or resume). Wired to `useApprovalPending`.
    */
@@ -1265,6 +1272,11 @@ export function useTranscript(opts: {
     headerStateRef.current.day = ''
     headerStateRef.current.role = ''
     controller.clearRouterFxVisuals('session_switch')
+    // chat.js:1819-1820 — a compaction marked in flight belongs to the session
+    // it ran in. Its frames stop arriving once that session is unsubscribed, so
+    // the flag would otherwise outlive it and queue every send on the way back.
+    controller.setCompactInFlight(false)
+    controller.hideCompactionSeparator()
     controller.syncLastStreamSeqFromSession(opts.sessionKey)
     // eslint-disable-next-line react-hooks/set-state-in-effect -- a session-key transition must synchronously reset the externally-driven status mirror
     applySessionRunState({ run_status: 'idle' })
@@ -2193,6 +2205,44 @@ export function useTranscript(opts: {
     [controller],
   )
 
+  // chat.js:2738-2763 — the slash command's manual compaction. The gateway
+  // also broadcasts the lifecycle as `session.event.compaction`, and those
+  // frames go out before the RPC returns: when they have already settled the
+  // compaction, the result has nothing left to add (legacy fed it through
+  // anyway, which doubled the failure toast). A result that lands after a
+  // session switch belongs to the old session.
+  const compactContext = useCallback(() => {
+    const key = sessionKeyRef.current
+    if (!key) return
+    controller.setCompactInFlight(true, key)
+    controller.syncCompactionSeparator(
+      { key, source: 'manual', status: 'started', phase: 'manual' },
+      'started',
+      'manual',
+    )
+    rpc
+      .call('sessions.contextCompact', { key })
+      .then((result: unknown) => {
+        if (key !== sessionKeyRef.current) return
+        if (!controller.isCompactInFlightForCurrentSession()) return
+        controller.showCompactionToast({
+          ...((result ?? {}) as Record<string, unknown>),
+          key,
+          source: 'manual',
+        })
+      })
+      .catch((err: unknown) => {
+        if (key !== sessionKeyRef.current) return
+        if (!controller.isCompactInFlightForCurrentSession()) return
+        controller.showCompactionToast({
+          key,
+          source: 'manual',
+          status: 'failed',
+          message: (err instanceof Error && err.message) || 'unknown error',
+        })
+      })
+  }, [controller, rpc])
+
   return {
     containerRef,
     routerFxDockRef,
@@ -2207,6 +2257,7 @@ export function useTranscript(opts: {
     pinnedToTail,
     scrollToTail,
     isCompactInFlightForCurrentSession,
+    compactContext,
     setStreamIdlePausedForApproval,
     setPendingDelegates,
   }
