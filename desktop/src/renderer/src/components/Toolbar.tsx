@@ -7,15 +7,16 @@ import { useUi } from '~/stores/ui'
 import { ThemeToggle } from '~/theme/ThemeToggle'
 
 /**
- * Content-column toolbar. Left side stays empty on purpose (the wordmark, or
- * in a chat the sidebar, carries identity); right side holds window-level
- * controls, the way Mail and Notes do.
+ * Content-column toolbar. Left side holds the one sidebar toggle, next to the
+ * sidebar it controls (and past the traffic lights once it is hidden); right
+ * side holds window-level controls, the way Mail and Notes do.
  */
 export function Toolbar() {
   const toggleSidebar = useUi((s) => s.toggleSidebar)
   const sidebarOpen = useUi((s) => s.sidebarOpen)
   const settingsOpen = useUi((s) => s.settingsOpen)
   const openSettings = useUi((s) => s.openSettings)
+  const sidebarLabel = t(sidebarOpen ? 'sidebar.collapse' : 'sidebar.expand')
 
   return (
     <header
@@ -27,27 +28,11 @@ export function Toolbar() {
       }}
     >
       <div className="app-no-drag">
-        {!sidebarOpen ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t('sidebar.collapse')}
-            onClick={toggleSidebar}
-          >
-            <LayoutPanelLeft
-              className="size-4 text-muted-foreground"
-              strokeWidth={1.75}
-              aria-hidden
-            />
-          </Button>
-        ) : null}
-      </div>
-      <div className="app-no-drag flex items-center gap-0.5">
         <Button
           variant="ghost"
           size="icon"
-          aria-label={t('sidebar.collapse')}
-          title={t('sidebar.collapse')}
+          aria-label={sidebarLabel}
+          title={`${sidebarLabel} (⌘⇧S)`}
           onClick={toggleSidebar}
         >
           <LayoutPanelLeft
@@ -56,6 +41,8 @@ export function Toolbar() {
             aria-hidden
           />
         </Button>
+      </div>
+      <div className="app-no-drag flex items-center gap-0.5">
         <UpdatePill />
         <NotificationBell />
         <ThemeToggle />

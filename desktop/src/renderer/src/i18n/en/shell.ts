@@ -13,6 +13,7 @@ export const shell = {
   'sidebar.filter': 'Filter sessions',
   'sidebar.home': 'Home',
   'sidebar.collapse': 'Hide sidebar',
+  'sidebar.expand': 'Show sidebar',
   'sidebar.resize': 'Resize sidebar',
 
   'group.today': 'Today',
