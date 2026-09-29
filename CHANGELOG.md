@@ -34,6 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and that grey were near identical (#3512).
 
 ### Fixed
+- musebook skill: migrate bundled references, publisher URL, and BASE_URL from
+  the expired `musebook.lol` domain to the live `musebook.me` domain, and
+  refresh `references/muse.txt` from the live board spec (#3435).
 - Chat (web UI and desktop): the copy button on an assistant reply keeps the
   reply's line breaks. It read the rendered bubble's `textContent`, which
   drops every `<br>` and paragraph break, so a multi-line reply pasted as one
