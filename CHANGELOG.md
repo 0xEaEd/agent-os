@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- Desktop: in a sidebar multi-selection the open chat no longer takes a
+  darker tint than the other selected rows; every selected row gets the
+  same fill (the open chat keeps its filled dot). Session rows also sit 2px
+  apart, so a run of selected rows reads as separate pills instead of one
+  merged block.
+
 ## [2026.9.29] - 2026-09-29
 
 ### Added
