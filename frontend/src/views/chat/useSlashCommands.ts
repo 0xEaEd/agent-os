@@ -47,6 +47,10 @@ export interface UseSlashCommands {
   execute: (text: string) => Promise<boolean>
 }
 
+/** `/model` without a transcript: how many rows its toast lists, and for how long. */
+const TOAST_MODEL_LINES = 12
+const TOAST_MODEL_MS = 10_000
+
 export function useSlashCommands(opts?: {
   sessionKey: string
   /** Delegate the session/stream-mutating actions (new_chat / compact) to the
@@ -54,6 +58,9 @@ export function useSlashCommands(opts?: {
   onSessionAction?: (action: string, cmd: SlashCommand, args: string) => void
   /** Append a system message row (chat.js:2814 `/model` result). */
   addSystemMessage?: (text: string) => void
+  /** A slash command changed the route hold (`/c0`–`/c3`, `/use`, `/auto`):
+   * the composer's route chip re-reads it, since it only reads on its own. */
+  onRouteHoldChange?: () => void
 }): UseSlashCommands {
   const rpc = useRpc()
   // `/plan` refreshes the Toolbar's plan pill, which reads this query cache.
@@ -75,11 +82,13 @@ export function useSlashCommands(opts?: {
   const sessionKeyRef = useRef(sessionKey)
   const onSessionActionRef = useRef(opts?.onSessionAction)
   const addSystemMessageRef = useRef(opts?.addSystemMessage)
+  const onRouteHoldChangeRef = useRef(opts?.onRouteHoldChange)
   useEffect(() => {
     sessionKeyRef.current = sessionKey
     onSessionActionRef.current = opts?.onSessionAction
     addSystemMessageRef.current = opts?.addSystemMessage
-  }, [sessionKey, opts?.onSessionAction, opts?.addSystemMessage])
+    onRouteHoldChangeRef.current = opts?.onRouteHoldChange
+  }, [sessionKey, opts?.onSessionAction, opts?.addSystemMessage, opts?.onRouteHoldChange])
 
   // ── Catalog load (chat.js:2615-2635 `_loadSlashCommands`) ─────────────────
   // Extracted so both the mount effect below AND `execute` (chat.js:2843
@@ -286,9 +295,21 @@ export function useSlashCommands(opts?: {
               const title = filter
                 ? `Models matching "${filter}" (${matches.length}/${list.length}):`
                 : `Available models (${list.length}):`
-              const body = [title, ...lines].join('\n')
-              if (addSystemMessageRef.current) addSystemMessageRef.current(body)
-              else toast.info(title)
+              if (addSystemMessageRef.current) {
+                addSystemMessageRef.current([title, ...lines].join('\n'))
+                return
+              }
+              // Without a transcript to write into, the list rides on the toast:
+              // capped (a whole catalog can run to hundreds of rows), one model
+              // per line, and up long enough to read.
+              const shown = lines.slice(0, TOAST_MODEL_LINES)
+              const more = lines.length - shown.length
+              if (more > 0) shown.push(t('chat.slashModelsMore', { count: more }))
+              toast.info(title, {
+                description: shown.join('\n'),
+                duration: TOAST_MODEL_MS,
+                style: { whiteSpace: 'pre-line' },
+              })
             })
             .catch((err: unknown) =>
               toast.error(
@@ -311,7 +332,10 @@ export function useSlashCommands(opts?: {
             }
             rpc
               .call('router.hold.set', { key, model })
-              .then(() => toast.info(t('chat.routePinned', { target: model })))
+              .then(() => {
+                onRouteHoldChangeRef.current?.()
+                toast.info(t('chat.routePinned', { target: model }))
+              })
               .catch((err: unknown) =>
                 toast.error(
                   t('chat.slashRouterPinFailed', {
@@ -325,6 +349,7 @@ export function useSlashCommands(opts?: {
           rpc
             .call('router.hold.set', { key, tier })
             .then((res: unknown) => {
+              onRouteHoldChangeRef.current?.()
               const model = (res as { model?: string })?.model
               toast.info(
                 t('chat.slashRouterPinned', { target: tier + (model ? ' → ' + model : '') }),
@@ -343,13 +368,14 @@ export function useSlashCommands(opts?: {
         case 'router.hold.clear': {
           rpc
             .call('router.hold.clear', { key })
-            .then((res: unknown) =>
+            .then((res: unknown) => {
+              onRouteHoldChangeRef.current?.()
               toast.info(
                 (res as { cleared?: boolean })?.cleared
                   ? t('chat.slashRoutingRestored')
                   : t('chat.slashRoutingAlready'),
-              ),
-            )
+              )
+            })
             .catch((err: unknown) =>
               toast.error(
                 t('chat.slashRouterUnpinFailed', {

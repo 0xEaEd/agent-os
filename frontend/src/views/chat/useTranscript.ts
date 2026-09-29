@@ -274,6 +274,13 @@ export function useTranscript(opts: {
   setRouterFxEnabled: (enabled: boolean) => void
   /** The user's sent-message history, oldest→newest (legacy `_messages`, chat.js:8712). */
   history: string[]
+  /**
+   * chat.js `_addMessage('system', …)` — append a local system row (the
+   * `/model` list). It is not part of the session's history, so the next
+   * history rebuild drops it, as legacy's did: after a turn, or on the config
+   * re-read when the window regains focus.
+   */
+  addSystemMessage: (text: string) => void
   /** Current session run state rendered by the header chip. */
   runState: RunStatusResult
   /**
@@ -2199,6 +2206,10 @@ export function useTranscript(opts: {
     [controller],
   )
 
+  const addSystemMessage = useCallback((text: string) => {
+    messageRendererRef.current?.addMessage('system', text, Date.now())
+  }, [])
+
   // chat.js:8660 — the enqueue-while-busy branch (chat.js:6091) queries this.
   const isCompactInFlightForCurrentSession = useCallback(
     () => controller.isCompactInFlightForCurrentSession(),
@@ -2253,6 +2264,7 @@ export function useTranscript(opts: {
     routerFxEnabled,
     setRouterFxEnabled,
     history,
+    addSystemMessage,
     runState,
     pinnedToTail,
     scrollToTail,

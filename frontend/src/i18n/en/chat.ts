@@ -168,6 +168,7 @@ export const chat = defineNamespace('chat', {
   slashNoModelsMatch: 'No models match "{filter}"',
   slashNoModels: 'No models available',
   slashModelListFailed: 'Model list failed: {message}',
+  slashModelsMore: '…and {count} more (narrow with /model <filter>)',
   slashRouterPinned: 'Router pinned to {target}',
   slashRouterPinFailed: 'Router pin failed: {message}',
   slashRoutingRestored: 'Automatic routing restored',

@@ -262,6 +262,7 @@ function ConnectedChat({
     routerFxEnabled,
     setRouterFxEnabled,
     history,
+    addSystemMessage,
     runState,
     pinnedToTail,
     scrollToTail,
@@ -404,7 +405,15 @@ function ConnectedChat({
     void requestSessionReset(rpc, sessionKey)
   }, [rpc, sessionKey])
 
-  const { commands, execute: executeSlash } = useSlashCommands({ sessionKey, onSessionAction })
+  // `/model` writes its list into the transcript, which the keyless home keeps
+  // hidden until the first send; there the list rides on a toast instead. A
+  // route hold set by a command has the composer's route chip re-read it.
+  const { commands, execute: executeSlash } = useSlashCommands({
+    sessionKey,
+    onSessionAction,
+    addSystemMessage: docked ? addSystemMessage : undefined,
+    onRouteHoldChange: route.reload,
+  })
 
   const onComposerSend = useCallback(
     async (rawText: string) => {
