@@ -7,6 +7,7 @@ import { PLACEHOLDERS } from './desk-logic'
 import { useDeskFrame } from './TradingDesk'
 import { useDeskInstruments } from './useDeskInstruments'
 import { useTradingUi } from '~/stores/trading-ui'
+import { useUi } from '~/stores/ui'
 import type { DeskMode } from './mode-logic'
 
 const rpcCall = vi.fn()
@@ -328,6 +329,7 @@ describe('useDeskInstruments · a multisend card is the whole batch', () => {
 describe('useDeskFrame · start fresh', () => {
   const job = { id: 'j1', name: 'DCA ETH', enabled: true, targetSessionKey: SESSION }
   it('pauses the running missions of the old session before minting a new one', async () => {
+    const focusBefore = useUi.getState().composerFocusRequest
     rpcCall.mockImplementation(
       answers({
         'cron.list': () => ({ jobs: [job, { ...job, id: 'j2', name: 'Off', enabled: false }] }),
@@ -343,9 +345,13 @@ describe('useDeskFrame · start fresh', () => {
     await waitFor(() => expect(startFresh).toHaveBeenCalledTimes(1))
     const updates = rpcCall.mock.calls.filter((c) => c[0] === 'cron.update').map((c) => c[1])
     expect(updates).toEqual([{ id: 'j1', enabled: false }])
+    // Issue #3524: the chat stays mounted across the new key, so the fresh
+    // session asks it for the composer.
+    expect(useUi.getState().composerFocusRequest).toBe(focusBefore + 1)
   })
 
   it('stays put when a mission cannot be paused', async () => {
+    const focusBefore = useUi.getState().composerFocusRequest
     rpcCall.mockImplementation(
       answers({
         'cron.list': () => ({ jobs: [job] }),
@@ -363,6 +369,7 @@ describe('useDeskFrame · start fresh', () => {
     })
     expect(rpcCall.mock.calls.some((c) => c[0] === 'cron.update')).toBe(true)
     expect(startFresh).not.toHaveBeenCalled()
+    expect(useUi.getState().composerFocusRequest).toBe(focusBefore)
   })
 })
 

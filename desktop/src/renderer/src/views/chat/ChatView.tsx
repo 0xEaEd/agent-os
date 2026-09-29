@@ -197,6 +197,21 @@ function ConnectedChat({
     regenerateMessageRef.current(text)
   }, [])
 
+  // A new session keeps this view, and so the composer, mounted: its
+  // focus-on-mount does not run again, and focus stays wherever it was (the
+  // transcript, the sidebar) or falls to <body>. Take it back on every fresh
+  // session (#3524):
+  // - landing on the keyless home, which mints a new `freshKey`. On purpose
+  //   that is any way there, also closing or deleting the open chat: the home
+  //   is a blank chat, and a freshly mounted one focuses itself too;
+  // - a new-session action that asked for it: ⌘N, ⌘⇧O, `/new` and the
+  //   sidebar's New session on the home itself, where nothing changes, and
+  //   the desk's "Start fresh" once it has minted its new key.
+  const composerFocusRequest = useUi((s) => s.composerFocusRequest)
+  useEffect(() => {
+    composerHandleRef.current?.focus()
+  }, [freshKey, composerFocusRequest])
+
   // Skills → "Use in chat" leaves text in the UI store. Drop it into the
   // composer of whichever chat is showing, once, and forget it. Nothing is
   // sent: the user still presses Return. Two paths in: a prompt written while
@@ -389,6 +404,7 @@ function ConnectedChat({
     }
     pendingIntentRef.current = 'new_chat'
     void navigate('/sessions')
+    useUi.getState().requestComposerFocus()
   }, [desk, navigate])
 
   const onSessionAction = useCallback(

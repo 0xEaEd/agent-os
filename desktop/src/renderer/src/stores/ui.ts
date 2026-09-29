@@ -64,6 +64,13 @@ interface UiStore {
    * nothing is sent, the user still presses Return.
    */
   pendingPrompt: string | null
+  /**
+   * Bumped by a new-session action (⌘N, the chat's new-chat paths, the
+   * sidebar's New session, the desk's "Start fresh"). The chat view focuses
+   * its composer on every bump: it usually stays mounted across a new
+   * session, so the composer's own focus-on-mount never runs again.
+   */
+  composerFocusRequest: number
   /** Project folders currently disclosed in the sidebar. */
   openFolders: ReadonlySet<string>
   /** The inline "new project" row is showing in the sidebar. */
@@ -83,6 +90,7 @@ interface UiStore {
   toggleSettings(): void
   setSettingsSection(section: SettingsSection): void
   setPendingPrompt(text: string | null): void
+  requestComposerFocus(): void
   toggleFolder(id: string): void
   setFolderOpen(id: string, open: boolean): void
   startCreatingProject(): void
@@ -99,6 +107,7 @@ export const useUi = create<UiStore>((set) => ({
   settingsOpen: false,
   settingsSection: DEFAULT_SECTION,
   pendingPrompt: null,
+  composerFocusRequest: 0,
   openFolders: loadOpenFolders(),
   creatingProject: false,
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
@@ -132,6 +141,7 @@ export const useUi = create<UiStore>((set) => ({
     set((s) => ({ settingsOpen: !s.settingsOpen, jobsOpen: false, skillsOpen: false })),
   setSettingsSection: (settingsSection) => set({ settingsSection }),
   setPendingPrompt: (pendingPrompt) => set({ pendingPrompt }),
+  requestComposerFocus: () => set((s) => ({ composerFocusRequest: s.composerFocusRequest + 1 })),
   toggleFolder: (id) =>
     set((s) => {
       const next = new Set(s.openFolders)
