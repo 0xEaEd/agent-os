@@ -65,6 +65,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the Toolbar's plan toggle showing it on until the next reload or session
   switch. The toggle now re-reads the flag once the approval settles
   (#3520)
+- Desktop: with the sidebar collapsed the toolbar showed two sidebar
+  toggles, one by the traffic lights and one in the right-hand cluster
+  before the notification bell, and with it open the only toggle sat on the
+  right, away from the sidebar. There is now one toggle, always on the
+  left; it reads "Hide sidebar" or "Show sidebar" to match what it will do,
+  and its tooltip shows ⌘⇧S (#3522)
 
 ## [2026.9.28] - 2026-09-28
 
