@@ -379,6 +379,8 @@ export const settings = {
   'settings.about.appCard.blurb':
     'AgentOS for Mac itself. Checks on its own; downloads and restarts only when you say so.',
   'settings.about.app.status': 'Status',
+  'settings.about.app.latest': 'Latest',
+  'settings.about.app.unknown': 'Not checked yet',
   'settings.about.app.unsupported': 'Updates are only available in a packaged, signed build.',
   'settings.about.app.available': 'is available.',
   'settings.about.app.download': 'Download',
