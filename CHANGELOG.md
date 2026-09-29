@@ -25,6 +25,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   now create mandates instead of cron jobs; existing cron-based DCA
   missions keep running unchanged. Contract: `docs/dca.md`.
 
+### Changed
+- Desktop: sessions multi-selected in the sidebar show an accent tint only,
+  without the 1px accent outline on each row, which stacked into a column of
+  boxed pills over a run of adjacent selected rows. The tint goes from 16% to
+  22% (32% on the selected open chat) so it still reads apart from the open
+  chat's grey without the outline; in the default light palette the old tint
+  and that grey were near identical (#3512).
+
 ### Fixed
 - Chat (web UI and desktop): the copy button on an assistant reply keeps the
   reply's line breaks. It read the rendered bubble's `textContent`, which
