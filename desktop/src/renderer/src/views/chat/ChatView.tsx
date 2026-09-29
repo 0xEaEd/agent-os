@@ -377,10 +377,17 @@ function ConnectedChat({
 
   // The outgoing session keeps its pending queue (usePendingQueue is keyed
   // per session), so a new chat starts with an empty one without clearing it.
+  // At the desk a new chat is a fresh desk session: the desk mints its key and
+  // stays put. The keyless home is Chat mode, so going there would leave the
+  // desk. `/new`, the shortcut and the header button all land here.
   const startNewChat = useCallback(() => {
+    if (desk) {
+      desk.onStartFresh()
+      return
+    }
     pendingIntentRef.current = 'new_chat'
     void navigate('/sessions')
-  }, [navigate])
+  }, [desk, navigate])
 
   const onSessionAction = useCallback(
     (action: string) => {
@@ -667,10 +674,8 @@ function ConnectedChat({
         variant="ghost"
         size="icon"
         aria-label={desk ? t('trading.chat.fresh') : t('chat.newChat')}
-        title={
-          desk ? t('trading.chat.fresh') : `${t('chat.newChat')} (${formatCombo(NEW_CHAT_COMBO)})`
-        }
-        onClick={desk ? desk.onStartFresh : startNewChat}
+        title={`${desk ? t('trading.chat.fresh') : t('chat.newChat')} (${formatCombo(NEW_CHAT_COMBO)})`}
+        onClick={startNewChat}
         data-testid={desk ? 'chat-fresh' : undefined}
       >
         <SquarePen className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
