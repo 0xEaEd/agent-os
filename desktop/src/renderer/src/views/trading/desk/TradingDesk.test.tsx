@@ -6,6 +6,7 @@ import type { MandatePayload } from '../types'
 import { PLACEHOLDERS } from './desk-logic'
 import { useDeskFrame } from './TradingDesk'
 import { useDeskInstruments } from './useDeskInstruments'
+import { useTradingUi } from '~/stores/trading-ui'
 import type { DeskMode } from './mode-logic'
 
 const rpcCall = vi.fn()
@@ -362,6 +363,36 @@ describe('useDeskFrame · start fresh', () => {
     })
     expect(rpcCall.mock.calls.some((c) => c[0] === 'cron.update')).toBe(true)
     expect(startFresh).not.toHaveBeenCalled()
+  })
+})
+
+// Issue #3519: the shell's ⌘N reaches the desk's "Start fresh" through the
+// trading UI store, so it takes the same mission pause as the pen button.
+describe('useDeskFrame · start fresh from the shell', () => {
+  const job = { id: 'j1', name: 'DCA ETH', enabled: true, targetSessionKey: SESSION }
+  it('publishes start fresh while the desk is up, and pauses missions first', async () => {
+    rpcCall.mockImplementation(answers({ 'cron.list': () => ({ jobs: [job] }) }))
+    const view = renderDesk(<Harness active />)
+    await screen.findByTestId('approval-card')
+    await waitFor(() => expect(rpcCall.mock.calls.some((c) => c[0] === 'cron.list')).toBe(true))
+    const fromShell = useTradingUi.getState().startFreshDesk
+    expect(fromShell).toBeTypeOf('function')
+
+    await act(async () => {
+      fromShell!()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(startFresh).toHaveBeenCalledTimes(1))
+    const updates = rpcCall.mock.calls.filter((c) => c[0] === 'cron.update').map((c) => c[1])
+    expect(updates).toEqual([{ id: 'j1', enabled: false }])
+
+    view.unmount()
+    expect(useTradingUi.getState().startFreshDesk).toBeNull()
+  })
+
+  it('publishes nothing in an ordinary chat', () => {
+    renderDesk(<Harness active={false} mode="chat" />)
+    expect(useTradingUi.getState().startFreshDesk).toBeNull()
   })
 })
 
