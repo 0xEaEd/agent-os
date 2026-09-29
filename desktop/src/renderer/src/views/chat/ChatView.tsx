@@ -266,6 +266,7 @@ function ConnectedChat({
     pinnedToTail,
     scrollToTail,
     isCompactInFlightForCurrentSession,
+    compactContext,
     setStreamIdlePausedForApproval,
     setPendingDelegates,
   } = useTranscript({
@@ -385,8 +386,11 @@ function ConnectedChat({
   const onSessionAction = useCallback(
     (action: string) => {
       if (action === 'new_chat') startNewChat()
+      // chat.js:2738-2763 — `/compact` runs through the compaction controller,
+      // which owns the in-flight state and the separator around the RPC.
+      if (action === 'compact_context') compactContext()
     },
-    [startNewChat],
+    [startNewChat, compactContext],
   )
 
   const resetSession = useCallback(() => {
