@@ -34,6 +34,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and that grey were near identical (#3512).
 
 ### Fixed
+- CLI: `agentos replay`, chat's `/new`, `/save`, `/approvals`, `/model` and
+  `/use`, `agentos chat --model`/`--session` startup notices, the background
+  task-group status line, and `agentos projects delete`/`move` printed a
+  user-supplied or gateway-controlled string (a session title, a
+  saved-transcript path, an approval scope/target, a model id, a
+  `--session`/`--model` value, a subagent's error message, recorded free-text
+  turn fields) straight into a Rich `console.print` call -- a bracketed value
+  like `[redacted]` was either swallowed or raised a markup error and crashed
+  the command. Escaped every site with `markup_escape` (`replay`'s transcript
+  now prints with `markup=False, emoji=False, soft_wrap=True` to keep its
+  plain-string contract), matching the fix already applied to `projects
+  create`/`show`/`update` and chat's `/rename` (#2820/#2823/#2920, fixed in
+  #2822/#2824/#2923) (#3319)
 - musebook skill: migrate bundled references, publisher URL, and BASE_URL from
   the expired `musebook.lol` domain to the live `musebook.me` domain, and
   refresh `references/muse.txt` from the live board spec (#3435).

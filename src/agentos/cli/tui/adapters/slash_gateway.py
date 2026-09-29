@@ -208,7 +208,7 @@ async def handle_gateway_slash_command(
         except Exception:  # noqa: BLE001 - network/timeout; non-fatal
             pass
         sync_session_chrome_from_state(state)
-        label = f" ({title})" if title else ""
+        label = f" ({markup_escape(title)})" if title else ""
         console.print(f"[green]Started new session{label}:[/green] {session_key}")
         return True
 
@@ -344,12 +344,12 @@ async def handle_gateway_slash_command(
 
     if parts := _slash_parts(cmd, "/model"):
         if len(parts) == 1:
-            console.print(f"[dim]model={state.model or 'default'}[/dim]")
+            console.print(f"[dim]model={markup_escape(state.model or 'default')}[/dim]")
         else:
             new_model = parts[1].strip()
             await client.patch_session(state.session_key, model=new_model)
             state.model = new_model
-            console.print(f"[green]model:[/green] {new_model}")
+            console.print(f"[green]model:[/green] {markup_escape(new_model)}")
         return True
 
     if cmd == "/cost":
@@ -385,7 +385,7 @@ async def handle_gateway_slash_command(
         # misleading here; show the model itself as the active route.
         state.router_hold_tier = model
         sync_session_chrome_from_state(state)
-        console.print(f"[{ACCENT}]router pinned to model[/] {model}")
+        console.print(f"[{ACCENT}]router pinned to model[/] {markup_escape(model)}")
         return True
 
     if cmd in {"/c0", "/c1", "/c2", "/c3"}:
@@ -647,7 +647,7 @@ async def _save_gateway_transcript_command(
     if not markdown.strip():
         markdown = state.transcript.to_markdown()
     target.write_text(markdown, encoding="utf-8")
-    console.print(f"[green]Saved transcript:[/green] {target}")
+    console.print(f"[green]Saved transcript:[/green] {markup_escape(str(target))}")
 
 
 def _image_prompt_from_command(command: str) -> str:
@@ -744,7 +744,10 @@ async def _handle_approvals_command(cmd: str, client: object | None = None) -> N
             console.print(f"[{ACCENT}]Approval mode reset to prompt; cache cleared.[/]")
             return
         entries = [
-            f"  [dim]{scope}[/dim] {s}: {k}:{t}" if s else f"  [dim]{scope}[/dim] {k}:{t}"
+            f"  [dim]{markup_escape(scope)}[/dim] {markup_escape(s)}: "
+            f"{markup_escape(k)}:{markup_escape(t)}"
+            if s
+            else f"  [dim]{markup_escape(scope)}[/dim] {markup_escape(k)}:{markup_escape(t)}"
             for (s, k, t), (_exp, scope) in cache._entries.items()  # noqa: SLF001
         ]
         console.print(f"[{ACCENT}]mode:[/] {queue.get_settings().mode}")
@@ -782,7 +785,10 @@ async def _handle_approvals_command(cmd: str, client: object | None = None) -> N
     if not approval_entries:
         console.print("  [dim](none)[/dim]")
     for e in approval_entries:
-        console.print(f"  [dim]{e.get('scope')}[/dim] {e.get('kind')}:{e.get('target')}")
+        console.print(
+            f"  [dim]{markup_escape(e.get('scope'))}[/dim] "
+            f"{markup_escape(e.get('kind'))}:{markup_escape(e.get('target'))}"
+        )
 
 
 async def _handle_forget_command(cmd: str, client: object | None = None) -> None:
