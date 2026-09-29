@@ -178,7 +178,10 @@ export function useDeskFrame(input: {
   const { pauseAll } = missions
   const startFresh = useCallback(() => {
     void pauseAll().then((ok) => {
-      if (ok) mintFresh()
+      if (!ok) return
+      mintFresh()
+      // The chat stays mounted across the new key: ask it for the composer.
+      useUi.getState().requestComposerFocus()
     })
   }, [pauseAll, mintFresh])
 

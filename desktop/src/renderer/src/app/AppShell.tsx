@@ -143,8 +143,15 @@ export function useShellShortcuts() {
       // the pen button make it: the keyless home is Chat mode, so going there
       // would leave the desk.
       const startFreshDesk = useTradingUi.getState().startFreshDesk
-      if (startFreshDesk) startFreshDesk()
-      else void navigate('/sessions')
+      if (startFreshDesk) {
+        startFreshDesk()
+        return
+      }
+      void navigate('/sessions')
+      // The chat usually stays mounted across the new session, so it will not
+      // take focus by itself: ask for it, or typing goes nowhere (#3524). The
+      // desk asks once its fresh session is minted.
+      useUi.getState().requestComposerFocus()
     },
   )
   useKeyboardShortcut(

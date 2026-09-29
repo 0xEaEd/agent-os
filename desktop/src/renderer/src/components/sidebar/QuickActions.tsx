@@ -26,6 +26,7 @@ export function QuickActions() {
   const skillsOpen = useUi((s) => s.skillsOpen)
   const openJobs = useUi((s) => s.openJobs)
   const openSkills = useUi((s) => s.openSkills)
+  const requestComposerFocus = useUi((s) => s.requestComposerFocus)
   const panels = {
     jobs: { open: jobsOpen, show: openJobs },
     skills: { open: skillsOpen, show: openSkills },
@@ -68,7 +69,14 @@ export function QuickActions() {
           )
         }
         return (
-          <Link key={label} to={to ?? '/'} className="mac-row">
+          <Link
+            key={label}
+            to={to ?? '/'}
+            className="mac-row"
+            // New session, as ⌘N: the chat stays mounted, so it is asked for
+            // the composer (on the home itself the route does not even change).
+            onClick={to === '/sessions' ? requestComposerFocus : undefined}
+          >
             {body}
           </Link>
         )

@@ -71,6 +71,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   right, away from the sidebar. There is now one toggle, always on the
   left; it reads "Hide sidebar" or "Show sidebar" to match what it will do,
   and its tooltip shows ⌘⇧S (#3522)
+- Desktop: after ⌘N the new session's composer often had no focus, so
+  typing went nowhere until you clicked into it. The chat view stays mounted
+  across a new session and the composer only focused itself on mount; it is
+  now focused on every new session, from ⌘N, ⌘⇧O, `/new`, the pen button or
+  the sidebar's New session, in Chat mode and at the trading desk (#3524)
 
 ## [2026.9.28] - 2026-09-28
 
