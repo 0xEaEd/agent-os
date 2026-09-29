@@ -247,6 +247,7 @@ export function ChatPage() {
     routerFxEnabled,
     setRouterFxEnabled,
     history,
+    addSystemMessage,
     runState,
     pinnedToTail,
     scrollToTail,
@@ -488,9 +489,16 @@ export function ChatPage() {
   }, [rpc, sessionKey])
 
   // Slash catalog + execution (chat.js:2615/2842). `new_chat` is now WIRED through
-  // `onSessionAction` (this task owns the session-swap primitives); every
-  // RPC-backed command (reset/usage/model/router.hold) already worked.
-  const { commands, execute: executeSlash } = useSlashCommands({ sessionKey, onSessionAction })
+  // `onSessionAction` (this task owns the session-swap primitives). `/model`
+  // writes its list into the transcript, and a route hold set by a command
+  // (`/c3`, `/use`, `/auto`) has the route picker re-read it — the picker reads
+  // the hold only on mount, on a session switch and on reconnect.
+  const { commands, execute: executeSlash } = useSlashCommands({
+    sessionKey,
+    onSessionAction,
+    addSystemMessage,
+    onRouteHoldChange: route.reload,
+  })
 
   useEffect(() => {
     document.title = 'Chat - AgentOS Control'

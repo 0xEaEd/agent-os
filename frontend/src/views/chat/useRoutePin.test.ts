@@ -529,4 +529,30 @@ describe('useRoutePin', () => {
 
     expect(result.current.imageTiers).toEqual([])
   })
+
+  it('keeps the latest of two overlapping hold reads, whatever order they land in', async () => {
+    // `/c3` then `/auto` each have the chip re-read the hold. The first read's
+    // answer (still pinned) arriving last must not put the cleared pin back.
+    const answers: ((value: unknown) => void)[] = []
+    const rpc = {
+      call: vi.fn((method: string) =>
+        method === 'router.hold.get'
+          ? new Promise((resolve) => answers.push(resolve))
+          : Promise.resolve(MODELS_OK),
+      ),
+      on: vi.fn(() => () => {}),
+      waitForConnection: vi.fn(() => Promise.resolve()),
+    } as unknown as WsRpcClient
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(answers).toHaveLength(1))
+    await act(async () => answers[0]!(HOLD_GET_OK))
+
+    act(() => result.current.reload())
+    act(() => result.current.reload())
+    await waitFor(() => expect(answers).toHaveLength(3))
+    await act(async () => answers[2]!(HOLD_GET_OK))
+    await act(async () => answers[1]!({ ...HOLD_GET_OK, hold: { tier: 'c3' } }))
+
+    expect(result.current.pinned).toBeNull()
+  })
 })

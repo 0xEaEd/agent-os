@@ -169,12 +169,17 @@ export function useRoutePin(
   // for the first connection itself; the reconnect listener below must not
   // double it, only cover the connections after that one.
   const connectedOnce = useRef(false)
+  // Latest-wins across overlapping hold reads, as for the catalog below: a
+  // slash command's re-read can overlap another (`/c3` then `/auto`), and a
+  // slow earlier answer must not put back a pin that was since cleared.
+  const holdSeq = useRef(0)
 
   const live = hold.session === sessionKey ? hold : EMPTY_HOLD
   const liveRouted = routed.session === sessionKey ? routed : EMPTY_ROUTED
 
   const refresh = useCallback(() => {
     const forSession = sessionKey
+    const seq = ++holdSeq.current
     // Wait for the socket. The chat mounts before the gateway connection is
     // up (the desktop app opens straight onto the home chat while the gateway
     // is still starting), and a call on a closed socket rejects at once with
@@ -187,6 +192,7 @@ export function useRoutePin(
         return rpc.call('router.hold.get', { key: forSession })
       })
       .then((res: unknown) => {
+        if (seq !== holdSeq.current) return
         const result = (res ?? {}) as HoldGetResult
         // A model pin still names the tier hosting it; only `targetType` says
         // which of the two the user actually chose, so the picker must not read
@@ -212,6 +218,7 @@ export function useRoutePin(
       .catch(() => {
         // A gateway without the RPC (older build) or a dropped socket: leave the
         // picker disabled rather than surfacing an error the user cannot act on.
+        if (seq !== holdSeq.current) return
         setHold({ session: forSession, ...EMPTY_HOLD })
       })
   }, [rpc, sessionKey])
