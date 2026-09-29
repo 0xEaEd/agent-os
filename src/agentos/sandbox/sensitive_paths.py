@@ -138,6 +138,9 @@ _ROOT_TARGET_SEGMENTS = frozenset({"", ".", "..", "*"})
 _BRACKET_EXPRESSION_RE = re.compile(r"\[[^]]*\]")
 _GLOB_ONLY_CHARS = frozenset("*?.")
 
+# Home-relative spelling of Windows' default ``%APPDATA%``, casefolded.
+_APPDATA_ROAMING = "~/appdata/roaming"
+
 # Windows runners resolve ``/`` to a drive root (``C:\``), so the drive letter
 # is stripped before the segment check.
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
@@ -201,6 +204,13 @@ def _comparison_path_candidates(path: str) -> list[str]:
     if raw.startswith("~/") and home is not None:
         expanded_home = str(home).replace("\\", "/") + raw[1:]
         candidates.append(expanded_home.casefold() if os.name == "nt" else expanded_home)
+    # ``%APPDATA%`` is ``~/AppData/Roaming`` by default but can be redirected
+    # (roaming profiles, folder redirection), so the ``~/AppData/Roaming/...``
+    # entries also match wherever it actually points.
+    appdata = os.environ.get("APPDATA")
+    if appdata and raw.casefold().startswith(_APPDATA_ROAMING + "/"):
+        expanded_appdata = appdata.replace("\\", "/").rstrip("/") + raw[len(_APPDATA_ROAMING) :]
+        candidates.append(expanded_appdata.casefold() if os.name == "nt" else expanded_appdata)
     return list(dict.fromkeys(candidates))
 
 

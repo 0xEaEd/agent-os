@@ -559,7 +559,8 @@ async def test_apply_patch_supports_hunk_header_without_explicit_counts(
 @pytest.mark.parametrize(
     "header",
     [
-        "@@@",
+        # A bare "@@@" is no longer here: it opens a context-anchored hunk,
+        # like a bare "@@" (test_apply_patch_context_anchored_hunks.py).
         "@@@ @@@",
         "@@@ -abc +def @@@",
         "@@@ - +1 @@@",

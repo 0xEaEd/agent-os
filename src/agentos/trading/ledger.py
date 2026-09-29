@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +29,7 @@ from agentos.trading.pnl import Lot
 
 log = structlog.get_logger(__name__)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Version 6 repair: a native receipt booked as a separate deposit is matched
 # to its swap within this many seconds, and a phantom withdrawal to the swap
@@ -44,12 +44,27 @@ REPAIR_PENDING_MESSAGE = "full sync required"
 
 OPENING_NOTE = "opening balance"
 
-ENTRY_KINDS = ("swap", "deposit", "withdraw", "approval", "gas", "unwrap")
+ENTRY_KINDS = (
+    "swap",
+    "deposit",
+    "withdraw",
+    "approval",
+    "gas",
+    "unwrap",
+    "lp_collect",
+    "lp_remove",
+    "lp_add",
+)
 # What an order does. A swap trades one token for another through a
 # provider; a send moves one token to an address the user named; a revoke
 # sets an ERC-20 allowance back to zero. Sends in one multisend share a
-# batch_id and are decided together.
-ORDER_KINDS = ("swap", "send", "revoke")
+# batch_id and are decided together. The lp_* kinds are Uniswap V4 position
+# writes (docs/lp-write.md): their plan lives in quote_json.
+LP_ORDER_KINDS = ("lp_collect", "lp_remove", "lp_add")
+ORDER_KINDS = ("swap", "send", "revoke", *LP_ORDER_KINDS)
+# LP orders that bring tokens in: they spend nothing, so they never count
+# toward an agent's daily cap while they are in flight.
+_NON_SPENDING_KINDS = ("lp_collect", "lp_remove")
 ORDER_STATUSES = (
     "quoted",
     "awaiting_approval",
@@ -186,10 +201,64 @@ CREATE TABLE IF NOT EXISTS orders (
     batch_id TEXT,
     -- A caller's own idempotency key: the same key from the same wallet
     -- (and, for a multisend, to the same recipient) is the same order.
-    client_order_id TEXT
+    client_order_id TEXT,
+    -- The DCA mandate that placed this order (docs/dca.md), if any.
+    mandate_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_wallet ON orders (wallet, created_at DESC);
+
+-- Recurring buys the engine runs by itself (docs/dca.md). The cap, the
+-- schedule and the stop rules live here, not in a prompt; spent_usd is a
+-- cache of the confirmed value of the mandate's orders.
+CREATE TABLE IF NOT EXISTS mandates (
+    mandate_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'dca',
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    status_reason TEXT,
+    chain_id INTEGER NOT NULL,
+    wallet TEXT NOT NULL,
+    token_out TEXT NOT NULL,
+    token_in TEXT NOT NULL,
+    usd_per_run REAL NOT NULL,
+    cap_usd REAL NOT NULL,
+    runs_max INTEGER,
+    every_seconds INTEGER NOT NULL,
+    max_price_usd REAL,
+    slippage_pct REAL,
+    start_now INTEGER NOT NULL DEFAULT 1,
+    anchor_at REAL,
+    next_run_at REAL,
+    last_run_at REAL,
+    spent_usd REAL NOT NULL DEFAULT 0,
+    runs_done INTEGER NOT NULL DEFAULT 0,
+    runs_skipped INTEGER NOT NULL DEFAULT 0,
+    runs_failed INTEGER NOT NULL DEFAULT 0,
+    bad_streak INTEGER NOT NULL DEFAULT 0,
+    initiator TEXT NOT NULL,
+    session_key TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    approved_at REAL,
+    expires_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_mandates_status ON mandates (status, created_at DESC);
+
+-- One row per attempt of a mandate, whatever came of it.
+CREATE TABLE IF NOT EXISTS mandate_runs (
+    run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mandate_id TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    at REAL NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    usd REAL,
+    price_usd REAL,
+    order_id TEXT,
+    manual INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_mandate_runs ON mandate_runs (mandate_id, n DESC);
 
 -- ERC-20 allowances this wallet has granted, as seen in its Approval logs.
 -- Only the (token, spender) pairs are remembered; the live amount is read
@@ -313,6 +382,14 @@ _CLIENT_INDEX = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_client ON orders "
     "(client_order_id, wallet, COALESCE(recipient, '')) WHERE client_order_id IS NOT NULL"
 )
+# Created after the version-7 migration has added ``orders.mandate_id``.
+_MANDATE_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_orders_mandate ON orders (mandate_id) "
+    "WHERE mandate_id IS NOT NULL"
+)
+# A mandate run whose order is still open: waiting for the chain (pending)
+# or for the user (parked).
+RUN_OPEN_STATUSES = ("pending", "parked")
 
 
 def default_ledger_path() -> Path:
@@ -387,11 +464,14 @@ class Ledger:
                 if version < 6:
                     self._add_full_synced_column()
                     self._repair_native_receipts()
+                if version < 7:
+                    self._add_order_mandate_column()
                 if version < SCHEMA_VERSION:
                     self._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
             self._conn.execute(_OPENING_INDEX)
             self._conn.execute(_BATCH_INDEX)
             self._conn.execute(_CLIENT_INDEX)
+            self._conn.execute(_MANDATE_INDEX)
             self._commit()
 
     def _add_token_columns(self) -> None:
@@ -422,6 +502,12 @@ class Ledger:
         have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(orders)")}
         if "client_order_id" not in have:
             self._conn.execute("ALTER TABLE orders ADD COLUMN client_order_id TEXT")
+
+    def _add_order_mandate_column(self) -> None:
+        """Version 7: the DCA mandate an order was placed by (``docs/dca.md``)."""
+        have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(orders)")}
+        if "mandate_id" not in have:
+            self._conn.execute("ALTER TABLE orders ADD COLUMN mandate_id TEXT")
 
     def _add_full_synced_column(self) -> None:
         """Version 6: when the last full rebuild of a wallet/chain landed."""
@@ -1276,14 +1362,28 @@ class Ledger:
     # ── orders ─────────────────────────────────────────────────────────
 
     def insert_order(self, order: dict[str, Any]) -> None:
+        """Insert an order row; a mandate's order is tied to its run in the same write.
+
+        A DCA run inserts its ``pending`` run row before it places the order
+        (``docs/dca.md``); the order that run creates adopts it here, so the
+        link between the two survives a crash between the insert and the
+        pipeline's first answer.
+        """
         columns = list(order.keys())
-        with self._lock:
+        with self.transaction():
             self._conn.execute(
                 f"INSERT INTO orders ({', '.join(columns)}) "  # noqa: S608
                 f"VALUES ({', '.join('?' for _ in columns)})",
                 [order[c] for c in columns],
             )
-            self._commit()
+            if order.get("mandate_id"):
+                self._conn.execute(
+                    "UPDATE mandate_runs SET order_id = ? WHERE run_id = ("
+                    "SELECT run_id FROM mandate_runs WHERE mandate_id = ? "
+                    "AND status = 'pending' AND order_id IS NULL "
+                    "ORDER BY run_id DESC LIMIT 1)",
+                    (order["order_id"], order["mandate_id"]),
+                )
 
     def update_order(
         self, order_id: str, *, expect_status: str | None = None, **fields: Any
@@ -1360,12 +1460,20 @@ class Ledger:
         """
         ts = time.time() if now is None else now
         placeholders = ", ".join("?" for _ in ORDER_OPEN_STATUSES)
+        free = ", ".join("?" for _ in _NON_SPENDING_KINDS)
         with self._lock:
             row = self._conn.execute(
                 "SELECT COALESCE(SUM(value_usd), 0) AS usd FROM orders "
                 "WHERE wallet = ? AND initiator = 'agent' AND order_id != ? AND "
+                f"kind NOT IN ({free}) AND "
                 f"(status IN ({placeholders}) OR (status = 'quoted' AND created_at > ?))",
-                (wallet.lower(), exclude_order_id or "", *sorted(ORDER_OPEN_STATUSES), ts - 3600),
+                (
+                    wallet.lower(),
+                    exclude_order_id or "",
+                    *_NON_SPENDING_KINDS,
+                    *sorted(ORDER_OPEN_STATUSES),
+                    ts - 3600,
+                ),
             ).fetchone()
         return float(row["usd"]) if row and row["usd"] is not None else 0.0
 
@@ -1449,6 +1557,255 @@ class Ledger:
                     expired.append({**row, "status": "expired", "reason": "expired"})
             self._commit()
         return expired
+
+    # ── DCA mandates (docs/dca.md) ─────────────────────────────────────
+
+    def insert_mandate(self, mandate: dict[str, Any]) -> None:
+        columns = list(mandate.keys())
+        with self._lock:
+            self._conn.execute(
+                f"INSERT INTO mandates ({', '.join(columns)}) "  # noqa: S608
+                f"VALUES ({', '.join('?' for _ in columns)})",
+                [mandate[c] for c in columns],
+            )
+            self._commit()
+
+    def get_mandate(self, mandate_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            return _row(
+                self._conn.execute(
+                    "SELECT * FROM mandates WHERE mandate_id = ?", (mandate_id,)
+                ).fetchone()
+            )
+
+    def list_mandates(
+        self,
+        *,
+        statuses: Iterable[str] | None = None,
+        wallet: str | None = None,
+        due_before: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """Mandates, newest first; ``due_before`` keeps those whose next run is due."""
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if statuses is not None:
+            wanted = list(statuses)
+            if not wanted:
+                return []
+            clauses.append(f"status IN ({', '.join('?' for _ in wanted)})")
+            params.extend(wanted)
+        if wallet:
+            clauses.append("wallet = ?")
+            params.append(wallet.lower())
+        if due_before is not None:
+            clauses.append("next_run_at IS NOT NULL AND next_run_at <= ?")
+            params.append(float(due_before))
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    f"SELECT * FROM mandates WHERE {' AND '.join(clauses)} "  # noqa: S608
+                    "ORDER BY created_at DESC, rowid DESC",
+                    params,
+                )
+            )
+
+    def update_mandate(
+        self,
+        mandate_id: str,
+        *,
+        now: float,
+        expect_status: str | Iterable[str] | None = None,
+        expect_next_run_at: float | None | object = ...,
+        **fields: Any,
+    ) -> dict[str, Any] | None:
+        """Update a mandate; each ``expect_*`` makes it a compare-and-set.
+
+        ``expect_status`` (one status or several) decides races between two
+        writers of the state (approve vs. expire, pause vs. auto-pause);
+        ``expect_next_run_at`` makes the schedule advance claim a run, so two
+        passes that both saw it due cannot both buy. The loser gets ``None``.
+        """
+        fields["updated_at"] = float(now)
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        where = "mandate_id = ?"
+        params: list[Any] = [*fields.values(), mandate_id]
+        guarded = False
+        if expect_status is not None:
+            wanted = [expect_status] if isinstance(expect_status, str) else list(expect_status)
+            where += f" AND status IN ({', '.join('?' for _ in wanted)})"
+            params.extend(wanted)
+            guarded = True
+        if expect_next_run_at is not ...:
+            where += " AND next_run_at IS ?"
+            params.append(expect_next_run_at)
+            guarded = True
+        with self._lock:
+            cursor = self._conn.execute(
+                f"UPDATE mandates SET {sets} WHERE {where}",  # noqa: S608
+                params,
+            )
+            self._commit()
+            if cursor.rowcount == 0 and guarded:
+                return None
+        return self.get_mandate(mandate_id)
+
+    def add_mandate_counts(self, mandate_id: str, *, now: float, **deltas: int) -> None:
+        """Add to the run counters (``runs_done``, ``runs_skipped``, …) in one write."""
+        allowed = {"runs_done", "runs_skipped", "runs_failed", "bad_streak"}
+        unknown = set(deltas) - allowed
+        if unknown:
+            raise ValueError(f"not a mandate counter: {sorted(unknown)}")
+        if not deltas:
+            return
+        sets = ", ".join(f"{k} = {k} + ?" for k in deltas)
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE mandates SET {sets}, updated_at = ? WHERE mandate_id = ?",  # noqa: S608
+                [*(int(v) for v in deltas.values()), float(now), mandate_id],
+            )
+            self._commit()
+
+    def insert_run(self, run: dict[str, Any]) -> int:
+        columns = list(run.keys())
+        with self._lock:
+            cursor = self._conn.execute(
+                f"INSERT INTO mandate_runs ({', '.join(columns)}) "  # noqa: S608
+                f"VALUES ({', '.join('?' for _ in columns)})",
+                [run[c] for c in columns],
+            )
+            self._commit()
+            return int(cursor.lastrowid or 0)
+
+    def get_run(self, run_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            return _row(
+                self._conn.execute(
+                    "SELECT * FROM mandate_runs WHERE run_id = ?", (int(run_id),)
+                ).fetchone()
+            )
+
+    def update_run(
+        self, run_id: int, *, expect_status: Iterable[str] | None = None, **fields: Any
+    ) -> dict[str, Any] | None:
+        """Update a run; with ``expect_status`` only a run still in one of them moves."""
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        where = "run_id = ?"
+        params: list[Any] = [*fields.values(), int(run_id)]
+        if expect_status is not None:
+            wanted = list(expect_status)
+            where += f" AND status IN ({', '.join('?' for _ in wanted)})"
+            params.extend(wanted)
+        with self._lock:
+            cursor = self._conn.execute(
+                f"UPDATE mandate_runs SET {sets} WHERE {where}",  # noqa: S608
+                params,
+            )
+            self._commit()
+            if expect_status is not None and cursor.rowcount == 0:
+                return None
+        return self.get_run(run_id)
+
+    def list_runs(self, mandate_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        """A mandate's runs, newest first."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM mandate_runs WHERE mandate_id = ? "
+                    "ORDER BY n DESC, run_id DESC LIMIT ?",
+                    (mandate_id, max(1, int(limit))),
+                )
+            )
+
+    def run_attempts(self, mandate_id: str) -> int:
+        """How many runs a mandate has had (the highest ``n``)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(n), 0) AS n FROM mandate_runs WHERE mandate_id = ?",
+                (mandate_id,),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def open_runs(self, mandate_id: str | None = None) -> list[dict[str, Any]]:
+        """Runs whose order has not settled yet, oldest first."""
+        placeholders = ", ".join("?" for _ in RUN_OPEN_STATUSES)
+        sql = f"SELECT * FROM mandate_runs WHERE status IN ({placeholders})"  # noqa: S608
+        params: list[Any] = list(RUN_OPEN_STATUSES)
+        if mandate_id is not None:
+            sql += " AND mandate_id = ?"
+            params.append(mandate_id)
+        with self._lock:
+            return _rows(self._conn.execute(sql + " ORDER BY run_id ASC", params))
+
+    def run_for_order(self, order_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            return _row(
+                self._conn.execute(
+                    "SELECT * FROM mandate_runs WHERE order_id = ? ORDER BY run_id DESC LIMIT 1",
+                    (order_id,),
+                ).fetchone()
+            )
+
+    def orders_for_mandate(self, mandate_id: str) -> list[dict[str, Any]]:
+        """Every order a mandate placed, oldest first."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM orders WHERE mandate_id = ? ORDER BY created_at ASC, rowid ASC",
+                    (mandate_id,),
+                )
+            )
+
+    def mandate_spend(self, mandate_id: str) -> tuple[float, float, int, float]:
+        """``(confirmed_usd, reserved_usd, received_out_raw, gas_usd)`` of a mandate.
+
+        Read from its orders, not from the cached ``spent_usd``: confirmed is
+        the value of confirmed orders, reserved the value of the ones still
+        open (awaiting approval, approved, submitted), received the raw
+        amount the confirmed ones delivered and gas every fee booked for any
+        of them (approvals and reverted attempts included).
+        """
+        open_statuses = sorted(ORDER_OPEN_STATUSES)
+        placeholders = ", ".join("?" for _ in open_statuses)
+        with self._lock:
+            sums = self._conn.execute(
+                "SELECT "
+                "COALESCE(SUM(CASE WHEN status = 'confirmed' THEN value_usd END), 0) AS spent, "
+                f"COALESCE(SUM(CASE WHEN status IN ({placeholders}) THEN value_usd END), 0) "
+                "AS reserved FROM orders WHERE mandate_id = ?",
+                (*open_statuses, mandate_id),
+            ).fetchone()
+            received = self._conn.execute(
+                "SELECT received_out_raw FROM orders WHERE mandate_id = ? "
+                "AND status = 'confirmed' AND received_out_raw IS NOT NULL "
+                "AND (delivered_token IS NULL OR delivered_token = token_out)",
+                (mandate_id,),
+            ).fetchall()
+            gas = self._conn.execute(
+                "SELECT COALESCE(SUM(e.gas_usd), 0) AS gas FROM entries e "
+                "JOIN orders o ON o.order_id = e.order_id WHERE o.mandate_id = ?",
+                (mandate_id,),
+            ).fetchone()
+        received_raw = sum(int(r["received_out_raw"] or 0) for r in received)
+        return (
+            float(sums["spent"] or 0.0),
+            float(sums["reserved"] or 0.0),
+            received_raw,
+            float(gas["gas"] or 0.0),
+        )
+
+    def order_gas_usd(self, order_ids: Iterable[str]) -> dict[str, float]:
+        """Gas booked per order (every entry that carries the order id)."""
+        ids = list(dict.fromkeys(order_ids))
+        if not ids:
+            return {}
+        placeholders = ", ".join("?" for _ in ids)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT order_id, SUM(gas_usd) AS gas FROM entries "  # noqa: S608
+                f"WHERE order_id IN ({placeholders}) AND gas_usd IS NOT NULL GROUP BY order_id",
+                ids,
+            ).fetchall()
+        return {str(r["order_id"]): float(r["gas"]) for r in rows}
 
     # ── daily spend ────────────────────────────────────────────────────
 

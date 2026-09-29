@@ -6,12 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Trading: **DCA mandates** — `agentos trade dca create ETH --usd 10 --every
+  1d --cap 300` sets up a recurring buy the engine runs by itself. The cap,
+  the schedule, the optional `--runs` and `--max-price` guards are ledger
+  rows (schema v7: `mandates`, `mandate_runs`, `orders.mandate_id`), not a
+  prompt; each buy is an ordinary swap order under the usual guardrails
+  (threshold, daily cap, vault signing) and no LLM turn is spent on it.
+  From an agent a mandate parks as `awaiting_approval`; the operator
+  approves it once (desktop card, Missions panel, or `agentos trade dca
+  approve`). `dca list|show|approve|reject|pause|resume|stop|run|update`
+  round it out. Each `--json` command publishes an
+  `application/vnd.agentos.dca+json` card that the chat renders with a
+  live countdown to the next buy, a spent-of-cap progress bar, average buy
+  price vs now, a buys chart and, on the desktop, the controls (Approve &
+  start, Pause, Buy now, Stop). Gateway methods `trading.dca.*` (create/
+  get/list agent-callable, the rest operator-only). The desk's DCA presets
+  now create mandates instead of cron jobs; existing cron-based DCA
+  missions keep running unchanged. Contract: `docs/dca.md`.
+
 ### Changed
-- Desktop: the mode pill reads Chat | Trade, and the strip no longer says
-  LIVE while a reply streams. The tab is a verb like its sibling, and the
-  streaming reply is visible in the chat itself; the word only repeated it.
-  AWAITING and RUNNING stay: a pending decision and a mission in flight are
-  things the chat does not show on its own.
+- Desktop: sessions multi-selected in the sidebar show an accent tint only,
+  without the 1px accent outline on each row, which stacked into a column of
+  boxed pills over a run of adjacent selected rows. The tint goes from 16% to
+  22% (32% on the selected open chat) so it still reads apart from the open
+  chat's grey without the outline; in the default light palette the old tint
+  and that grey were near identical (#3512).
 
 ### Fixed
 - CLI: `agentos replay`, chat's `/new`, `/save`, `/approvals`, `/model` and
@@ -27,6 +47,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   plain-string contract), matching the fix already applied to `projects
   create`/`show`/`update` and chat's `/rename` (#2820/#2823/#2920, fixed in
   #2822/#2824/#2923) (#3319)
+- musebook skill: migrate bundled references, publisher URL, and BASE_URL from
+  the expired `musebook.lol` domain to the live `musebook.me` domain, and
+  refresh `references/muse.txt` from the live board spec (#3435).
+- Chat (web UI and desktop): the copy button on an assistant reply keeps the
+  reply's line breaks. It read the rendered bubble's `textContent`, which
+  drops every `<br>` and paragraph break, so a multi-line reply pasted as one
+  run-on line. The copied text now follows what is drawn: soft line breaks,
+  blank lines between paragraphs, list markers, tab-separated table cells and
+  verbatim code blocks, without the code block's language label or its own
+  Copy button.
+
+## [2026.9.28] - 2026-09-28
+
+### Added
+- Desktop: select several sessions in the sidebar and act on them at once.
+  Cmd-click toggles a row, Shift-click selects the range from the last row
+  clicked (in the order shown, chats in open project folders included),
+  Cmd+A selects every row shown and Escape clears. Right-clicking inside the
+  selection opens one menu for all of it: Pin, Mark as unread, Archive and
+  **Delete N sessions…**, which asks once and sends a single
+  `sessions.delete` with `keys`. Rows the gateway could not delete stay
+  selected and a toast gives the count. A plain click still opens the chat
+  and clears the selection. Deleting one session also reads the gateway's
+  per-key `errors` now, instead of reporting a failed delete as done (#3485).
+- Trading: `agentos trade lp pool|ranges|position|positions` read Uniswap V4
+  liquidity on Base and Robinhood Chain — a token's deepest pool (reserves,
+  TVL, market cap, launcher, whether the LP is locked), its liquidity
+  distribution, one position NFT, or every position of the vault's wallets.
+  Backed by the read-only gateway methods `trading.lp.*` (allowed for an
+  agent), the engine's own RPCs and the V4 library of the bundled
+  `senior-unilp-manager` skill. Each command also writes an
+  `application/vnd.agentos.lp+json` card for the chat unless `--no-card`
+  (payload: `docs/lp-cards.md`).
+- Trading: `agentos trade lp collect|remove|add` change a vault wallet's
+  Uniswap V4 positions — collect fees, remove liquidity (`--pct 100` burns
+  the NFT), add liquidity (`--usd` or token amounts, `--range
+  mcap:LO-HI|pct:N|full|ticks:LO:HI`, `--to-position` to top up) — through
+  the order pipeline: every LP write is simulated, then **always** parks for
+  approval (agent or not; an agent's add counts toward the daily cap), is
+  re-checked against the approved bounds on approval (`trading.price_moved`),
+  approves exactly what it may pull through Permit2 (never unlimited), sends
+  `modifyLiquidities` and books `lp_collect` / `lp_remove` / `lp_add` ledger
+  entries, including a mint's new tokenId. New gateway methods
+  `trading.lp.collect|remove|add` (agent-callable; approval stays
+  operator-only); with `--json` a confirmed order is followed by the
+  refreshed position card. The phase-1 read methods now echo `request` so a
+  card can refresh itself. Contract: `docs/lp-write.md`.
+- Desktop: each project folder in the sidebar has a `+` just left of its chat
+  count that starts a new chat in that project with its agent, as the
+  folder's **New chat** menu item does. It shows on hover, on keyboard focus
+  and while the folder's menu is open, and the count does not move when it
+  appears (#3489).
+
+### Changed
+- Desktop: the mode pill reads Chat | Trade, and the strip no longer says
+  LIVE while a reply streams. The tab is a verb like its sibling, and the
+  streaming reply is visible in the chat itself; the word only repeated it.
+  AWAITING and RUNNING stay: a pending decision and a mission in flight are
+  things the chat does not show on its own.
+- Desktop: the inline new-project row in the sidebar no longer draws a ring
+  of its own around the whole row, so the focused name field shows one
+  outline instead of two (#3484).
+
+### Fixed
+- Chat (desktop and Web UI): a message queued while a turn was running no
+  longer follows you into the next session and gets sent there. The pending
+  queue is now kept per session — switching sessions (or starting a new chat)
+  leaves it with its own session, which sends it once that turn ends (on
+  return, if the turn finished while you were elsewhere).
+- `apply_patch` refused every patch a GPT model wrote. OpenAI models open
+  hunks on a bare `@@` (or `@@ <a line to search past>`) with no line numbers,
+  and the parser knew only the numbered `@@@ -a,b +c,d @@@` header, so each
+  call failed with "expected a '@@@ ' hunk header" and the retry with a bare
+  `@@@` failed the same way. Context-anchored hunks are now located by their
+  context and removed lines (after the anchor, from where the previous hunk
+  ended), along with a headerless first hunk, `*** End of File`, and a
+  unified-diff `@@ -a,b +c,d @@` header. The located lines must still match
+  the file exactly, and a miss in any file leaves every file untouched (#3490).
 - Security: secret redaction and the payload guard matched connection strings
   against a scheme list that carried `redis` and `amqp` but not their TLS
   spellings, so `rediss://user:password@host` (what `REDIS_TLS_URL` holds) and
@@ -135,6 +233,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   readability floor was applied without checking the shot boundary, so a shot
   shorter than 800 ms emitted a cue that overlapped the next one; such a shot
   now gets a cue spanning the whole shot (#2588).
+- `agentos migrate openclaw`: a multi-paragraph daily note stays whole under its
+  `## Imported daily memory:` header instead of losing the header and landing
+  under an unrelated heading when its first paragraph already existed in
+  `MEMORY.md`. Re-running the migration after adding your own notes or a
+  `memory add` entry still reports `skipped`, and a sibling workspace's
+  `MEMORY.md` paragraphs are still deduped one by one (#3092).
 - `apply_patch`: a hunk whose start line lies past the end of the file is
   rejected with `Hunk start line N exceeds file length (M lines)` and the file
   is left untouched. A hunk of only `+` lines never reached the bounds check,
@@ -159,6 +263,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   memory. `skipped_pages` lists at most 1000 pages and counts the rest under
   `skipped_pages_omitted`, and the open-ended ranges `N-` (to the last page)
   and `-M` (from page 1) are accepted (#2996).
+- Safety: `wrap_untrusted_boundary()` now entity-escapes a close marker that
+  carries attributes or a slash (`</untrusted foo>`, `</untrusted\tbar=1>`,
+  `</untrusted/>`), so fetched content can no longer appear to close the
+  untrusted envelope early. The pattern stays bounded on hostile input: a
+  1 MiB body of unterminated `</untrusted ` markers is scanned in tens of
+  milliseconds (#3017).
+- Gateway: the in-memory usage query applies `tool_name`, `start_date` and
+  `end_date`. A gateway's tracker has no database, so `usage.cost` with a tool
+  filter used to return every turn row; a tool filter now returns nothing,
+  and dates are read as the SQLite path reads them (#3034).
+- `git_diff` tool: before the first commit, the default staged + unstaged view
+  diffs against the empty tree (the SHA-1 or SHA-256 id, from the repository's
+  object format) instead of bare `--cached`, so edits made after staging are
+  no longer dropped (#3072).
+- Sandbox: `gh`'s Windows config directory (`%APPDATA%\GitHub CLI`, where
+  `hosts.yml` holds the token) is now on the sensitive-path denylist, and the
+  `~/AppData/Roaming` entries also follow a redirected `%APPDATA%`. A
+  `hosts.yml` anywhere else, such as an Ansible inventory, is masked when read
+  but not blocked (#3078).
 
 ## [2026.9.26] - 2026-09-26
 

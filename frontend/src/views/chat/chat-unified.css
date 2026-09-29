@@ -589,6 +589,1897 @@
   display: none;
 }
 
+/* Uniswap V4 liquidity cards (lp.ts, docs/lp-cards.md). One renderer, four
+   layouts keyed by `.lp-card[data-lp-kind]` (the host wrapper only carries
+   `data-lp-host`); status colours come from the theme's
+   --ok/--warn tokens, so light and dark follow the console theme. The pill
+   always carries the status word as well — colour is never the only signal. */
+.chat-surface .msg-artifact-lp-group {
+  display: grid;
+  gap: 0.625rem;
+  max-width: min(40rem, 100%);
+}
+
+.chat-surface .msg-artifact-lp {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .msg-artifact-lp__body:empty {
+  display: none;
+}
+
+.chat-surface .msg-artifact-lp__status {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-surface);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .msg-artifact-lp__status[hidden] {
+  display: none;
+}
+
+.chat-surface .lp-card {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-surface .lp-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.chat-surface .lp-card__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+  min-width: 0;
+}
+
+.chat-surface .lp-card__pair {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.chat-surface .lp-card__slash {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.chat-surface .lp-card__meta {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-card__head-end {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.chat-surface .lp-pill {
+  --lp-tone: var(--dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--lp-tone) 45%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--lp-tone) 12%, transparent);
+  color: var(--lp-tone);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-pill[data-lp-status='in-range'] {
+  --lp-tone: var(--ok);
+}
+
+.chat-surface .lp-pill[data-lp-status='above-range'],
+.chat-surface .lp-pill[data-lp-status='below-range'] {
+  --lp-tone: var(--warn);
+}
+
+.chat-surface .lp-pill__dot {
+  font-size: 0.5rem;
+}
+
+.chat-surface .lp-badge {
+  padding: 0.0625rem 0.4375rem;
+  border: 1px dashed color-mix(in srgb, var(--warn) 60%, transparent);
+  border-radius: var(--radius-pill);
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.chat-surface .lp-card__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+/* The positions strip (count · out of range · value · fees): four across when
+   the strip is 700px or wider, else a 2×2 grid, never three and a lone fourth.
+   The track minimum flips from a quarter to a half of the strip at 700px. */
+.chat-surface .lp-card__stats.lp-totals {
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(clamp(calc(25% - 0.5rem), calc((700px - 100%) * 999), calc(50% - 0.5rem)), 1fr)
+  );
+}
+
+.chat-surface .lp-stat {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius-control);
+  background: var(--background);
+}
+
+.chat-surface .lp-stat__label,
+.chat-surface .lp-card__row-label,
+.chat-surface .lp-card__section-title,
+.chat-surface .lp-hero__label {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .lp-stat__value {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-stat__value[data-lp-tone='warn'] {
+  color: var(--warn);
+}
+
+.chat-surface .lp-card [data-lp-no-price] {
+  color: var(--muted-foreground);
+  cursor: help;
+}
+
+.chat-surface .lp-card__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+  min-width: 0;
+}
+
+.chat-surface .lp-card__row-label {
+  min-width: 4.5rem;
+}
+
+.chat-surface .lp-amount__usd,
+.chat-surface .lp-sep {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-amount__symbol {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-safety__lock {
+  padding: 0 0.4375rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-safety__lock[data-lp-locked='true'] {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+
+.chat-surface .lp-safety__lock[data-lp-locked='false'] {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.chat-surface .lp-safety__note {
+  flex-basis: 100%;
+  padding-left: 5.125rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-card__ranges {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.chat-surface .lp-card__section-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.chat-surface .lp-ranges {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .lp-ranges__row {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) minmax(3rem, 1fr) 3.5rem minmax(0, 6rem);
+  align-items: center;
+  gap: 0.625rem;
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-ranges__meter {
+  height: 0.375rem;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.chat-surface .lp-ranges__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.chat-surface .lp-ranges__share {
+  text-align: right;
+}
+
+.chat-surface .lp-ranges__owner {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-card__empty-line,
+.chat-surface .lp-card__empty {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-card__empty {
+  padding: 1rem 0.25rem;
+  text-align: center;
+}
+
+/* A closed position: its figures are gone, so one muted line says when it was last seen. */
+.chat-surface .lp-card__closed-note {
+  margin: 0;
+  padding: 0.25rem 0;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+
+/* Distribution chart: plain SVG bars stretched to the plot box; every label is
+   HTML positioned in % so text never scales with the viewBox. */
+.chat-surface .lp-chart {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.chat-surface .lp-chart__plot {
+  position: relative;
+  padding-top: 1.375rem;
+}
+
+.chat-surface .lp-chart__svg {
+  display: block;
+  width: 100%;
+  height: 8.5rem;
+  overflow: visible;
+}
+
+.chat-surface .lp-chart__baseline {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.chat-surface .lp-chart__hit {
+  fill: transparent;
+}
+
+.chat-surface .lp-chart__fill {
+  fill: color-mix(in srgb, var(--foreground) 24%, transparent);
+  transition: fill 120ms ease;
+}
+
+.chat-surface .lp-chart__bar[data-active='true'] .lp-chart__fill {
+  fill: var(--primary);
+}
+
+.chat-surface .lp-chart__bar[data-hover='true'] .lp-chart__fill {
+  fill: color-mix(in srgb, var(--foreground) 48%, transparent);
+}
+
+.chat-surface .lp-chart__bar[data-active='true'][data-hover='true'] .lp-chart__fill {
+  fill: color-mix(in srgb, var(--primary) 80%, var(--foreground));
+}
+
+.chat-surface .lp-chart__bar {
+  outline: none;
+  cursor: default;
+}
+
+.chat-surface .lp-chart__bar:focus-visible .lp-chart__fill {
+  stroke: var(--ring);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.chat-surface .lp-chart__now-line {
+  stroke: var(--foreground);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.chat-surface .lp-chart__now,
+.chat-surface .lp-chart__tick,
+.chat-surface .lp-range__now {
+  position: absolute;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.chat-surface
+  :is(.lp-chart__now, .lp-chart__tick, .lp-range__now, .lp-chart__tooltip)[data-align='start'] {
+  transform: none;
+}
+
+.chat-surface
+  :is(.lp-chart__now, .lp-chart__tick, .lp-range__now, .lp-chart__tooltip)[data-align='end'] {
+  transform: translateX(-100%);
+}
+
+.chat-surface .lp-chart__now {
+  top: 0;
+  color: var(--foreground);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.chat-surface .lp-chart__axis {
+  position: relative;
+  height: 1rem;
+}
+
+.chat-surface .lp-chart__tick {
+  top: 0;
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+}
+
+/* A tick that would touch its neighbour at the measured width (visibleTicks). */
+.chat-surface .lp-chart__tick[data-lp-hidden] {
+  visibility: hidden;
+}
+
+.chat-surface .lp-chart__caption {
+  color: var(--dim);
+  font-size: 0.625rem;
+  text-align: center;
+}
+
+.chat-surface .lp-chart__tooltip {
+  position: absolute;
+  top: 1.625rem;
+  z-index: 2;
+  display: grid;
+  gap: 0.125rem;
+  padding: 0.4375rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--popover);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.chat-surface .lp-chart__tooltip[hidden] {
+  display: none;
+}
+
+.chat-surface .lp-chart__tooltip-line[data-lp-line='range'] {
+  font-weight: 600;
+}
+
+.chat-surface .lp-chart__tooltip-line:not([data-lp-line='range']) {
+  color: var(--muted-foreground);
+}
+
+/* Position card. */
+.chat-surface .lp-card__hero {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.75rem;
+}
+
+.chat-surface .lp-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+}
+
+.chat-surface .lp-hero__value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Unclaimed fees: green only when there are some; "$0.00" stays muted. */
+.chat-surface .lp-hero[data-lp-hero='fees'] .lp-hero__value[data-lp-fees='positive'] {
+  color: var(--ok);
+}
+
+.chat-surface .lp-hero[data-lp-hero='fees'] .lp-hero__value[data-lp-fees='zero'] {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-range__row {
+  display: grid;
+  grid-template-columns: auto minmax(8rem, 1fr);
+  align-items: center;
+  gap: 0.625rem;
+  padding: 1.125rem 0 1.25rem;
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-range__axis {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .lp-range__track {
+  position: relative;
+  height: 0.5rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.chat-surface .lp-range__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+.chat-surface .lp-card[data-lp-status='in-range'] .lp-range__band {
+  background: color-mix(in srgb, var(--ok) 55%, transparent);
+}
+
+.chat-surface
+  .lp-card:is([data-lp-status='above-range'], [data-lp-status='below-range'])
+  .lp-range__band {
+  background: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
+.chat-surface .lp-range__pin {
+  position: absolute;
+  top: -0.25rem;
+  width: 2px;
+  height: 1rem;
+  border-radius: var(--radius-pill);
+  background: var(--foreground);
+  transform: translateX(-50%);
+}
+
+.chat-surface .lp-range__pin[data-pinned] {
+  opacity: 0.55;
+}
+
+/* The range's own bounds sit on the band's edges, above the track. */
+.chat-surface .lp-range__lower,
+.chat-surface .lp-range__upper {
+  position: absolute;
+  bottom: calc(100% + 0.3125rem);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-range__upper {
+  transform: translateX(-100%);
+}
+
+.chat-surface .lp-range__now {
+  top: calc(100% + 0.375rem);
+  color: var(--foreground);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .lp-range__now[data-outside] {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* Measured by the mounter (layoutLpCard): a band too narrow for both bounds
+   lifts the upper one a line; a reading too long for the track stacks its
+   distance and side under it. Each adds the line it takes to the row. */
+.chat-surface .lp-range[data-lp-bounds='stacked'] .lp-range__row {
+  padding-top: 2.125rem;
+}
+
+.chat-surface .lp-range[data-lp-bounds='stacked'] .lp-range__upper {
+  bottom: calc(100% + 1.3125rem);
+}
+
+.chat-surface .lp-range[data-lp-now-wrap] .lp-range__row {
+  padding-bottom: 2.25rem;
+}
+
+.chat-surface .lp-range[data-lp-now-wrap] .lp-range__now-side {
+  display: block;
+}
+
+.chat-surface .lp-range__now[data-align='center'] {
+  text-align: center;
+}
+
+.chat-surface .lp-range__now[data-align='end'] {
+  text-align: right;
+}
+
+.chat-surface .lp-card__amounts {
+  color: var(--foreground);
+  font-size: 0.8125rem;
+}
+
+.chat-surface .lp-card__amounts--fees {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* Positions list. The rows share the list's columns (subgrid), so every
+   column lines up down the list and is sized to its widest cell. Each row is
+   two lines — status · pair · value over chain · owner · fees — until the
+   mounter measures the card at 760px or wider (LP_DENSE_MIN_PX in lp.ts) and
+   stamps `.lp-card[data-lp-layout='dense']`, which folds it onto one line.
+   Only the owner may ellipsize: every other column is sized to its content. */
+.chat-surface .lp-rows {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  column-gap: 0.625rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-rows {
+  grid-template-columns:
+    max-content minmax(max-content, 1fr) max-content minmax(0, max-content)
+    max-content max-content;
+}
+
+.chat-surface .lp-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  row-gap: 0.1875rem;
+  padding: 0.4375rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-row__chain {
+  grid-area: 1 / 3;
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-row__wallet {
+  grid-area: 1 / 4;
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-row__fees {
+  grid-area: 1 / 5;
+}
+
+.chat-surface .lp-card[data-lp-layout='dense'] .lp-row__value {
+  grid-area: 1 / 6;
+}
+
+.chat-surface .lp-row__pair {
+  grid-area: 1 / 2;
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__pair .lp-card__pair {
+  font-size: 0.8125rem;
+}
+
+.chat-surface .lp-row__fee,
+.chat-surface .lp-row__wallet {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-row__chain {
+  grid-area: 2 / 1;
+  justify-self: start;
+  padding: 0 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__wallet {
+  grid-area: 2 / 2;
+  justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__wallet[data-lp-external] {
+  font-style: italic;
+}
+
+.chat-surface .lp-row__status {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__distance {
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.chat-surface .lp-row__fees {
+  grid-area: 2 / 3;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__fees[data-lp-fees='positive'] {
+  color: var(--ok);
+}
+
+/* Links inside a card: specific enough to beat `.msg.assistant .msg-body a`. */
+.chat-surface .msg-body .lp-card a:is(.lp-card__action, .lp-row__wallet) {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+
+.chat-surface .msg-body .lp-card a:is(.lp-card__action, .lp-row__wallet):hover,
+.chat-surface .msg-body .lp-card a:is(.lp-card__action, .lp-row__wallet):focus-visible {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+
+.chat-surface a.lp-row__wallet::after {
+  content: ' ↗';
+  color: var(--dim);
+}
+
+.chat-surface .lp-row__value {
+  grid-area: 1 / 3;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.chat-surface .lp-row__no-price {
+  font-size: 0.6875rem;
+  font-weight: 400;
+}
+
+/* Narrow: the mounter measured the card under 440px (LP_NARROW_MAX_PX in
+   lp.ts — the desk with its Book panel open). Status, pair and value no
+   longer share a line without the pair being cut, so each row takes three:
+   status · distance | value, pair · fee tier | fees, chain | owner. Rows
+   drop the book's shared columns (each sizes its own) and the pair may wrap
+   instead of clipping; the owner is still the only thing that ellipsizes. */
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-rows {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row {
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  column-gap: 0.625rem;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__status {
+  grid-area: 1 / 1 / 2 / 3;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__value {
+  grid-area: 1 / 3;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__pair {
+  grid-area: 2 / 1 / 3 / 3;
+  flex-wrap: wrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__fees {
+  grid-area: 2 / 3;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__chain {
+  grid-area: 3 / 1;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-row__wallet {
+  grid-area: 3 / 2 / 4 / 4;
+}
+
+/* The strip stays 2×2 (the quarter/half clamp already gives that under
+   700px) with tighter tiles and figures, so a "$34,982.73" total is not cut. */
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-card__stats.lp-totals {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-stat {
+  padding: 0.375rem 0.5rem;
+}
+
+.chat-surface .lp-card[data-lp-layout='narrow'] .lp-stat__value {
+  font-size: 0.8125rem;
+}
+
+.chat-surface .lp-card__warnings {
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+
+.chat-surface .lp-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .lp-card__actions {
+  display: inline-flex;
+  gap: 0.75rem;
+}
+
+.chat-surface .lp-card__action {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  gap: 0.25rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.chat-surface .lp-card__action:hover,
+.chat-surface .lp-card__action:focus-visible {
+  color: var(--foreground);
+}
+
+.chat-surface .lp-card__copy .lp-card__action-label {
+  color: var(--dim);
+}
+
+.chat-surface .lp-card__copy[data-lp-copied='true'] {
+  color: var(--ok);
+}
+
+.chat-surface .lp-card__copy[data-lp-copied='failed'] {
+  color: var(--danger);
+}
+
+/* ↻ keeps the old figures on screen, dimmed, until the re-read lands. */
+.chat-surface .lp-card[data-lp-refreshing] > :not(.lp-card__foot) {
+  opacity: 0.5;
+  transition: opacity 160ms ease-out;
+}
+
+.chat-surface .lp-card__refresh:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.chat-surface .lp-card__refresh-error {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+
+@media (max-width: 36rem) {
+  .chat-surface .lp-ranges__row {
+    grid-template-columns: minmax(0, 1fr) 3.5rem;
+  }
+
+  .chat-surface .lp-ranges__meter,
+  .chat-surface .lp-ranges__owner {
+    display: none;
+  }
+}
+
+/* DCA mandate cards (dca.ts, docs/dca.md). One renderer, two layouts keyed by
+   `.dca-card[data-dca-kind]` (mandate | mandates). It should read like an
+   instrument, not a form: the plan as a large figure, a live countdown, a
+   budget bar and four tabular stats. Status colours come from the theme's
+   --ok/--warn/--info tokens, so light and dark follow the console theme; the
+   pill always carries the status word as well. `data-dca-layout` (wide |
+   narrow) is stamped by the mounter from the measured card width. */
+.chat-surface .msg-artifact-dca-group {
+  display: grid;
+  gap: 0.625rem;
+  max-width: min(40rem, 100%);
+}
+
+.chat-surface .msg-artifact-dca {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .msg-artifact-dca__body:empty {
+  display: none;
+}
+
+.chat-surface .msg-artifact-dca__status {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-surface);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .msg-artifact-dca__status[hidden] {
+  display: none;
+}
+
+.chat-surface .dca-card {
+  --dca-tone: var(--dim);
+  display: grid;
+  gap: 0.875rem;
+  min-width: 0;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-surface .dca-card[data-dca-status='awaiting_approval'],
+.chat-surface .dca-row[data-dca-status='awaiting_approval'],
+.chat-surface .dca-pill[data-status='awaiting_approval'] {
+  --dca-tone: var(--warn);
+}
+
+.chat-surface .dca-card[data-dca-status='active'],
+.chat-surface .dca-row[data-dca-status='active'],
+.chat-surface .dca-pill[data-status='active'] {
+  --dca-tone: var(--ok);
+}
+
+.chat-surface .dca-card[data-dca-status='completed'],
+.chat-surface .dca-row[data-dca-status='completed'],
+.chat-surface .dca-pill[data-status='completed'] {
+  --dca-tone: var(--info);
+}
+
+.chat-surface .dca-card[data-dca-status='paused'],
+.chat-surface .dca-row[data-dca-status='paused'],
+.chat-surface .dca-pill[data-status='paused'] {
+  --dca-tone: var(--dim);
+}
+
+.chat-surface
+  .dca-card:is(
+    [data-dca-status='stopped'],
+    [data-dca-status='rejected'],
+    [data-dca-status='expired']
+  ),
+.chat-surface
+  .dca-row:is(
+    [data-dca-status='stopped'],
+    [data-dca-status='rejected'],
+    [data-dca-status='expired']
+  ),
+.chat-surface
+  .dca-pill:is([data-status='stopped'], [data-status='rejected'], [data-status='expired']) {
+  --dca-tone: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
+}
+
+.chat-surface .dca-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  min-width: 0;
+}
+
+.chat-surface .dca-card__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .dca-card__pair,
+.chat-surface .dca-card__list-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.chat-surface .dca-pair__arrow,
+.chat-surface .dca-sep {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.chat-surface .dca-pair__quote {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.chat-surface .dca-chain {
+  padding: 0.0625rem 0.4375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-card__name,
+.chat-surface .dca-card__count {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-card__name {
+  overflow: hidden;
+  max-width: 50%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--dca-tone) 45%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--dca-tone) 12%, transparent);
+  color: var(--dca-tone);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-pill__dot {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* A pending proposal breathes, softly: it is waiting on the user. */
+.chat-surface .dca-pill[data-status='awaiting_approval'] .dca-pill__dot {
+  animation: dca-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes dca-pulse {
+  50% {
+    box-shadow: 0 0 0 0.25rem color-mix(in srgb, var(--warn) 22%, transparent);
+    opacity: 0.55;
+  }
+}
+
+/* Hero: the plan as the largest figure on the card, then the live line. */
+.chat-surface .dca-card__hero {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.chat-surface .dca-card__hero-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.375rem;
+  margin: 0;
+}
+
+.chat-surface .dca-card__usd {
+  font-size: 1.75rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.chat-surface .dca-card__every {
+  color: var(--muted-foreground);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.chat-surface .dca-card__next {
+  color: var(--dca-tone);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-card__next[data-dca-due] {
+  font-weight: 600;
+}
+
+.chat-surface .dca-card__reason {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-card[data-dca-status='paused'] .dca-card__reason {
+  color: var(--warn);
+}
+
+/* Budget: spent solid, the in-flight reservation hatched after it. */
+.chat-surface .dca-card__progress {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.chat-surface .dca-progress {
+  position: relative;
+  overflow: hidden;
+  height: 0.5rem;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+
+.chat-surface .dca-progress--mini {
+  height: 0.25rem;
+}
+
+.chat-surface .dca-progress__spent {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--dca-tone);
+}
+
+.chat-surface .dca-progress__reserved {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--dca-tone) 70%, transparent) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.chat-surface .dca-progress__labels {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.125rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-progress__runs,
+.chat-surface .dca-progress__extra,
+.chat-surface .dca-progress__reserved-note {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-progress__reserved-note {
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-card__guards {
+  margin: -0.375rem 0 0;
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+/* Stats: 2×2, 4 across once the card is wide. */
+.chat-surface .dca-card__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.chat-surface .dca-card[data-dca-layout='wide'] .dca-card__stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.chat-surface .dca-stat {
+  display: grid;
+  align-content: start;
+  gap: 0.125rem;
+  min-width: 0;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius-control);
+  background: var(--background);
+}
+
+.chat-surface .dca-stat__label {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-stat__value {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-stat__symbol {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.chat-surface .dca-stat__sub {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-card [data-dca-tone='up'] {
+  color: var(--ok);
+}
+
+.chat-surface .dca-card [data-dca-tone='down'] {
+  color: var(--danger);
+}
+
+.chat-surface .dca-card [data-dca-no-price] {
+  color: var(--muted-foreground);
+  cursor: help;
+}
+
+/* Buys chart: plain SVG stretched to the plot box; every label is HTML
+   positioned in % so text never scales with the viewBox. */
+.chat-surface .dca-chart {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.chat-surface .dca-chart--empty {
+  color: var(--dim);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-chart__plot {
+  --dca-plot-pad: 0.75rem;
+  --dca-plot-h: 7.5rem;
+  position: relative;
+  padding-top: var(--dca-plot-pad);
+}
+
+.chat-surface .dca-chart__svg {
+  display: block;
+  width: 100%;
+  height: var(--dca-plot-h);
+  overflow: visible;
+}
+
+.chat-surface .dca-chart__baseline {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.chat-surface .dca-chart__hit {
+  fill: transparent;
+}
+
+.chat-surface .dca-chart__bar {
+  fill: color-mix(in srgb, var(--foreground) 26%, transparent);
+  transition: fill 120ms ease;
+}
+
+.chat-surface .dca-chart__col[data-hover='true'] .dca-chart__bar {
+  fill: color-mix(in srgb, var(--foreground) 55%, transparent);
+}
+
+.chat-surface .dca-chart__parked {
+  fill: color-mix(in srgb, var(--warn) 10%, transparent);
+  stroke: var(--warn);
+  stroke-dasharray: 3 2;
+  stroke-width: 1;
+}
+
+.chat-surface .dca-chart__pending {
+  fill: none;
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 2 2;
+  stroke-width: 1;
+  animation: dca-pending 1.4s ease-in-out infinite;
+}
+
+.chat-surface .dca-chart__skip {
+  fill: none;
+  stroke: var(--warn);
+  stroke-width: 1.25;
+}
+
+.chat-surface .dca-chart__void {
+  stroke: var(--dim);
+  stroke-width: 1.5;
+}
+
+.chat-surface .dca-chart__col {
+  outline: none;
+  cursor: default;
+}
+
+.chat-surface .dca-chart__col:focus-visible .dca-chart__hit {
+  fill: color-mix(in srgb, var(--ring) 14%, transparent);
+}
+
+.chat-surface .dca-chart__avg-line {
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 6 4;
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.chat-surface .dca-chart__now-line {
+  stroke: var(--foreground);
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+.chat-surface .dca-chart__now-line[data-dca-tone='up'] {
+  stroke: var(--ok);
+}
+
+.chat-surface .dca-chart__now-line[data-dca-tone='down'] {
+  stroke: var(--danger);
+}
+
+.chat-surface .dca-chart__avg,
+.chat-surface .dca-chart__now,
+.chat-surface .dca-chart__fail {
+  position: absolute;
+  font-family: var(--font-mono);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.chat-surface .dca-chart__avg,
+.chat-surface .dca-chart__now {
+  padding: 0.0625rem 0.25rem;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  font-size: 0.625rem;
+  transform: translateY(calc(-100% - 2px));
+}
+
+.chat-surface .dca-chart__avg {
+  left: 0;
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-chart__avg[data-dca-flip] {
+  transform: translateY(2px);
+}
+
+.chat-surface .dca-chart__now {
+  right: 0;
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.chat-surface .dca-chart__fail {
+  bottom: 0.25rem;
+  color: var(--danger);
+  font-size: 0.875rem;
+  font-weight: 700;
+  transform: translateX(-50%);
+}
+
+/* The y axis: the top and bottom of the padded price range, at the left
+   edge. The top label hangs below the plot's top, the bottom one sits on the
+   baseline; dca.ts sets each `top` from the two plot lengths. */
+.chat-surface .dca-chart__ylabel {
+  position: absolute;
+  left: 0;
+  padding: 0 0.25rem;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.chat-surface .dca-chart__ylabel[data-edge='bottom'] {
+  transform: translateY(calc(-100% - 1px));
+}
+
+.chat-surface .dca-chart__axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+}
+
+.chat-surface .dca-chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.125rem 0.75rem;
+  color: var(--dim);
+  font-size: 0.625rem;
+}
+
+.chat-surface .dca-chart__key::before {
+  display: inline-block;
+  width: 0.75rem;
+  margin-right: 0.25rem;
+  content: '';
+  vertical-align: middle;
+}
+
+.chat-surface .dca-chart__key[data-key='bar']::before {
+  height: 0.5rem;
+  background: color-mix(in srgb, var(--foreground) 26%, transparent);
+}
+
+.chat-surface .dca-chart__key[data-key='avg']::before {
+  border-top: 1px dashed var(--muted-foreground);
+}
+
+.chat-surface .dca-chart__key[data-key='now']::before {
+  border-top: 2px dotted var(--foreground);
+}
+
+.chat-surface .dca-chart__key[data-key='parked']::before {
+  height: 0.5rem;
+  border: 1px dashed var(--warn);
+}
+
+.chat-surface .dca-chart__key[data-key='pending']::before {
+  height: 0.5rem;
+  border: 1px dashed var(--muted-foreground);
+}
+
+.chat-surface .dca-chart__key[data-key='skipped']::before {
+  height: 0.1875rem;
+  border: 1px solid var(--warn);
+}
+
+.chat-surface .dca-chart__key[data-key='failed']::before {
+  width: auto;
+  color: var(--danger);
+  content: '×';
+  font-weight: 700;
+}
+
+/* The tooltip sits inside the plot, anchored on the hovered column's mark;
+   dca.ts sets `top` / `bottom` / `left` inline so every skin agrees, and
+   clamps it to the plot's edges. The short hide delay in dca.ts lets the
+   pointer travel onto its tx link. The `top` here is only a pre-placement
+   default; the inline values always win. */
+.chat-surface .dca-chart__tooltip {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  z-index: 2;
+  display: grid;
+  gap: 0.125rem;
+  padding: 0.4375rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--popover);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.chat-surface .dca-chart__tooltip[data-align='start'] {
+  transform: none;
+}
+
+.chat-surface .dca-chart__tooltip[data-align='end'] {
+  transform: translateX(-100%);
+}
+
+.chat-surface .dca-chart__tooltip[hidden] {
+  display: none;
+}
+
+.chat-surface .dca-chart__tooltip-line[data-dca-line='when'] {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-chart__tooltip-line[data-dca-line='detail'] {
+  font-weight: 600;
+}
+
+.chat-surface .dca-chart__tooltip-line[data-dca-run-status='skipped'],
+.chat-surface .dca-chart__tooltip-line[data-dca-run-status='parked'] {
+  color: var(--warn);
+}
+
+.chat-surface .dca-chart__tooltip-line[data-dca-run-status='failed'] {
+  color: var(--danger);
+}
+
+/* Recent buys: one mono line each, newest first. */
+.chat-surface .dca-runs {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.chat-surface .dca-runs__title {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+
+.chat-surface .dca-runs__list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .dca-run {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  min-width: 0;
+  padding: 0.25rem 0;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-run__n {
+  min-width: 1.75rem;
+  color: var(--dim);
+}
+
+.chat-surface .dca-run__ago {
+  min-width: 3.5rem;
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-run__status {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .dca-run[data-dca-run-status='filled'] .dca-run__status {
+  color: var(--ok);
+}
+
+.chat-surface
+  .dca-run:is([data-dca-run-status='skipped'], [data-dca-run-status='parked'])
+  .dca-run__status {
+  color: var(--warn);
+}
+
+.chat-surface .dca-run[data-dca-run-status='failed'] .dca-run__status {
+  color: var(--danger);
+}
+
+/* A buy in flight: muted and breathing until the order settles. */
+.chat-surface .dca-run[data-dca-run-status='pending'] .dca-run__status {
+  color: var(--muted-foreground);
+  animation: dca-pending 1.4s ease-in-out infinite;
+}
+
+@keyframes dca-pending {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.chat-surface .dca-run > :not(.dca-run__detail) {
+  flex-shrink: 0;
+}
+
+.chat-surface .dca-run__detail {
+  overflow: hidden;
+  flex: 1 1 0;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-run__manual {
+  padding: 0 0.3125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+}
+
+.chat-surface .msg-body .dca-card a:is(.dca-run__link, .dca-chart__tx) {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+
+.chat-surface .msg-body .dca-card a:is(.dca-run__link, .dca-chart__tx):hover,
+.chat-surface .msg-body .dca-card a:is(.dca-run__link, .dca-chart__tx):focus-visible {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+
+.chat-surface .dca-run__link {
+  margin-left: auto;
+}
+
+/* Controls (desktop desk only: the web never renders them). */
+.chat-surface .dca-actions {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.chat-surface .dca-actions__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.chat-surface .dca-action {
+  padding: 0.3125rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.chat-surface .dca-action:hover:not(:disabled),
+.chat-surface .dca-action:focus-visible {
+  border-color: color-mix(in srgb, var(--foreground) 40%, transparent);
+}
+
+.chat-surface .dca-action[data-dca-tone='primary'] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 600;
+}
+
+.chat-surface .dca-action[data-dca-tone='danger'] {
+  color: var(--danger);
+}
+
+.chat-surface .dca-action[data-dca-confirm] {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  font-weight: 600;
+}
+
+.chat-surface .dca-action[data-dca-compact] {
+  padding: 0.125rem 0.5rem;
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-action:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+.chat-surface .dca-action[data-dca-pending] {
+  opacity: 0.8;
+}
+
+.chat-surface .dca-actions__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-actions__error[hidden] {
+  display: none;
+}
+
+.chat-surface .dca-card__warnings {
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-card__actions {
+  display: inline-flex;
+  gap: 0.75rem;
+}
+
+.chat-surface .dca-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chat-surface .dca-card__action:hover,
+.chat-surface .dca-card__action:focus-visible {
+  color: var(--foreground);
+}
+
+.chat-surface .dca-card__copy[data-dca-copied='true'] {
+  color: var(--ok);
+}
+
+.chat-surface .dca-card__copy[data-dca-copied='failed'] {
+  color: var(--danger);
+}
+
+.chat-surface .dca-card__refresh:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.chat-surface .dca-card__refresh-error {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+
+/* A card still drawing its artifact snapshot (live read in flight, or
+   failed): controls off, not "busy" — nothing is running on them. */
+.chat-surface .dca-card[data-dca-stale] .dca-action:disabled {
+  cursor: not-allowed;
+}
+
+.chat-surface .dca-card__stale {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-card__stale-refresh {
+  padding: 0 0.25rem;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-surface .dca-card__stale-refresh:hover,
+.chat-surface .dca-card__stale-refresh:focus-visible {
+  color: var(--foreground);
+}
+
+.chat-surface .dca-card__stale-refresh:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+/* ↻ and a control in flight keep the old figures on screen, dimmed. */
+.chat-surface .dca-card[data-dca-refreshing] > :not(.dca-card__foot),
+.chat-surface .dca-card[data-dca-busy] > :not(.dca-actions, .dca-card__foot) {
+  opacity: 0.6;
+  transition: opacity 160ms ease-out;
+}
+
+/* The list: one row per mandate, status dot · pair · plan · state, a mini
+   budget bar and the countdown under it, compact controls on the right. */
+.chat-surface .dca-totals {
+  margin: -0.25rem 0 0;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .dca-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 0.25rem 0.625rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.chat-surface .dca-row__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--dca-tone);
+}
+
+.chat-surface .dca-row__main {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.chat-surface .dca-row__name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .dca-row__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .dca-row__pair {
+  font-weight: 500;
+}
+
+.chat-surface .dca-row__plan {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .dca-row__state {
+  color: var(--dca-tone);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-surface .dca-row__progress {
+  display: grid;
+  grid-template-columns: minmax(3rem, 10rem) max-content;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chat-surface .dca-row__spent,
+.chat-surface .dca-row__next {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .dca-card[data-dca-layout='narrow'] .dca-row {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.chat-surface .dca-card[data-dca-layout='narrow'] .dca-row .dca-actions {
+  grid-column: 2;
+}
+
+.chat-surface .dca-card__empty {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-surface .dca-pill[data-status='awaiting_approval'] .dca-pill__dot,
+  .chat-surface .dca-chart__pending,
+  .chat-surface .dca-run[data-dca-run-status='pending'] .dca-run__status {
+    animation: none;
+  }
+}
+
 /* Crosshair readout. lightweight-charts has no tooltip, so this strip carries
    the hovered candle's OHLC and its move. It takes its own row above the
    canvas rather than floating over it, so it can neither be clipped by the

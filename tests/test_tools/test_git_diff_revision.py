@@ -149,6 +149,68 @@ async def test_repository_without_a_commit_still_diffs(empty_repo: Path) -> None
     assert "+hello" in out
 
 
+async def test_repository_without_a_commit_includes_staged_and_unstaged(
+    empty_repo: Path,
+) -> None:
+    """A file staged and further modified before first commit must report both."""
+    (empty_repo / "first.txt").write_text("hello\n", encoding="utf-8", newline="\n")
+    _git(empty_repo, "add", "-A")
+    (empty_repo / "first.txt").write_text("hello\nworld\n", encoding="utf-8", newline="\n")
+
+    out = await git.git_diff()
+
+    assert "+hello" in out
+    assert "+world" in out
+
+
+async def test_repository_without_a_commit_staged_only_excludes_unstaged(
+    empty_repo: Path,
+) -> None:
+    """``staged=True`` before first commit shows only the indexed content."""
+    (empty_repo / "first.txt").write_text("hello\n", encoding="utf-8", newline="\n")
+    _git(empty_repo, "add", "-A")
+    (empty_repo / "first.txt").write_text("hello\nworld\n", encoding="utf-8", newline="\n")
+
+    out = await git.git_diff(staged=True)
+
+    assert "+hello" in out
+    assert "+world" not in out
+
+
+async def test_sha256_repository_without_a_commit_includes_staged_and_unstaged(
+    empty_repo: Path,
+) -> None:
+    """The empty tree is the SHA-256 one here; the SHA-1 id is an unknown revision."""
+    sha256_repo = empty_repo / "sha256"
+    sha256_repo.mkdir()
+    try:
+        _git(sha256_repo, "init", "-q", "--object-format=sha256")
+    except subprocess.CalledProcessError:
+        pytest.skip("this git cannot create a SHA-256 repository")
+    (sha256_repo / "first.txt").write_text("hello\n", encoding="utf-8", newline="\n")
+    _git(sha256_repo, "add", "-A")
+    (sha256_repo / "first.txt").write_text("hello\nworld\n", encoding="utf-8", newline="\n")
+
+    out = await git.git_diff(workdir="sha256")
+
+    assert "+hello" in out
+    assert "+world" in out
+
+
+async def test_unknown_object_format_keeps_the_cached_fallback(
+    empty_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No known empty tree must degrade to the staged half, not to an error."""
+    monkeypatch.setattr(git, "_EMPTY_TREES", {})
+    (empty_repo / "first.txt").write_text("hello\n", encoding="utf-8", newline="\n")
+    _git(empty_repo, "add", "-A")
+
+    out = await git.git_diff()
+
+    assert "+hello" in out
+
+
 async def test_diff_revision_resolves_head_only_when_a_commit_exists(
     empty_repo: Path,
 ) -> None:

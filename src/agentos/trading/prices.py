@@ -19,9 +19,10 @@ A price miss never raises into a caller: it returns ``None``.
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
@@ -36,8 +37,17 @@ GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2"
 
 ROBINHOOD_STOCK_SUFFIX = "• Robinhood Token"
 TOKEN_LIST_TTL_S = 24 * 3600
+# How long an empty (failed) token-list download is kept before retrying.
+TOKEN_LIST_EMPTY_HOLD_S = 60.0
 HISTORY_TTL_S = 6 * 3600
 DEXSCREENER_BATCH = 30
+#: A chunk the source did not answer (429, 5xx, timeout) is answered from that
+#: miss for this long, ± ``UNAVAILABLE_JITTER_S``: long enough that the
+#: portfolio poll and a burst of desk turns do not turn one 429 into a retry
+#: loop, short enough that the next read gets through. Jittered so callers
+#: held together do not all come back in the same instant.
+UNAVAILABLE_HOLD_S = 3.0
+UNAVAILABLE_JITTER_S = 1.0
 
 
 @dataclass
@@ -89,6 +99,9 @@ class PriceInfo:
     #: The price source did not answer (network, 5xx, bad body). Distinct
     #: from "answered and found no pair": only the latter means "worthless".
     unavailable: bool = False
+    #: For an ``unavailable`` answer: seconds until the source is asked again
+    #: (a retry sooner only gets this same miss back).
+    retry_in_s: float = 0.0
 
 
 # The gas token has no DexScreener pair of its own; use CoinGecko's own art.
@@ -145,6 +158,8 @@ class PriceService:
         self.ttl_s = ttl_s
         self._now = now
         self._prices: dict[tuple[int, str], PriceInfo] = {}
+        #: Cached ``unavailable`` misses: key -> when the source is asked again.
+        self._held_until: dict[tuple[int, str], float] = {}
         self._token_lists: dict[int, tuple[float, dict[str, TokenMeta]]] = {}
         self._history: dict[tuple[int, str, int], tuple[float, float | None]] = {}
         self._list_locks: dict[int, asyncio.Lock] = {}
@@ -190,8 +205,13 @@ class PriceService:
                     meta = self._meta_from_list(chain, raw)
                     if meta is not None:
                         tokens[meta.address] = meta
-            if tokens or cached is None:
+            if tokens:
                 self._token_lists[chain.chain_id] = (self._now(), tokens)
+            elif cached is None:
+                # A failed first download must not become a day of "unknown
+                # symbol": hold the empty list only briefly, then ask again.
+                stamp = self._now() - TOKEN_LIST_TTL_S + TOKEN_LIST_EMPTY_HOLD_S
+                self._token_lists[chain.chain_id] = (stamp, tokens)
             return tokens or (cached[1] if cached else {})
 
     @staticmethod
@@ -252,13 +272,20 @@ class PriceService:
         missing: list[str] = []
         now = self._now()
         for requested, lookup in wanted.items():
-            cached = self._prices.get((chain.chain_id, lookup))
-            if cached and now - cached.fetched_at < self.ttl_s:
+            key = (chain.chain_id, lookup)
+            cached = self._prices.get(key)
+            if cached is not None and cached.unavailable:
+                held = self._held_until.get(key, 0.0) - now
+                if held > 0:
+                    out[requested] = replace(cached, retry_in_s=held)
+                    continue
+            elif cached and now - cached.fetched_at < self.ttl_s:
                 out[requested] = cached
-            elif lookup != NATIVE_ADDRESS:
+                continue
+            if lookup != NATIVE_ADDRESS:
                 missing.append(lookup)
         fetched: dict[str, PriceInfo] = {}
-        unanswered: set[str] = set()
+        unanswered: dict[str, float] = {}
         unique = sorted(set(missing))
         for start in range(0, len(unique), DEXSCREENER_BATCH):
             chunk = unique[start : start + DEXSCREENER_BATCH]
@@ -266,7 +293,12 @@ class PriceService:
                 f"{DEXSCREENER_BASE}/tokens/v1/{chain.dexscreener_slug}/{','.join(chunk)}"
             )
             if body is None:
-                unanswered.update(chunk)
+                # One hold per chunk, so its tokens come back as one request;
+                # never longer than an answer would be kept (``ttl_s``).
+                hold = UNAVAILABLE_HOLD_S + random.uniform(
+                    -UNAVAILABLE_JITTER_S, UNAVAILABLE_JITTER_S
+                )
+                unanswered.update(dict.fromkeys(chunk, min(max(hold, 0.0), self.ttl_s)))
                 continue
             for lookup, info in self._best_pairs(chain, body).items():
                 info.fetched_at = now
@@ -275,12 +307,24 @@ class PriceService:
             if requested in out:
                 continue
             found = fetched.get(lookup)
-            resolved = (
-                found
-                if found is not None
-                else PriceInfo(price_usd=None, fetched_at=now, unavailable=lookup in unanswered)
-            )
-            self._prices[(chain.chain_id, lookup)] = resolved
+            key = (chain.chain_id, lookup)
+            if found is not None:
+                resolved = found
+                self._held_until.pop(key, None)
+            elif lookup in unanswered:
+                # "The source did not answer" is not an answer: held for
+                # seconds, not ``ttl_s`` (a 429 would blank prices for everyone
+                # and no retry could get through), but held -- never cached, a
+                # 429 became an immediate retry from every caller.
+                hold = unanswered[lookup]
+                resolved = PriceInfo(
+                    price_usd=None, fetched_at=now, unavailable=True, retry_in_s=hold
+                )
+                self._held_until[key] = now + hold
+            else:
+                resolved = PriceInfo(price_usd=None, fetched_at=now)
+                self._held_until.pop(key, None)
+            self._prices[key] = resolved
             out[requested] = resolved
         native = out.get(NATIVE_ADDRESS)
         if native is not None and native.price_usd is None:
@@ -314,6 +358,31 @@ class PriceService:
         requested = NATIVE_ADDRESS if is_native(address) else normalize_address(address)
         info = result.get(requested)
         return info.price_usd if info else None
+
+    async def pair_tokens(self, chain: ChainSpec, pair_address: str) -> list[str]:
+        """The two token addresses of a DexScreener pair, lower-cased; empty when unknown.
+
+        A Uniswap V4 pair's address there is its poolId, which is how an LP read
+        recovers the tokens behind a bare poolId without an Initialize log scan.
+        """
+        body = await self._get(
+            f"{DEXSCREENER_BASE}/latest/dex/pairs/{chain.dexscreener_slug}/{pair_address}"
+        )
+        pairs = (body.get("pairs") or []) if isinstance(body, dict) else []
+        out: list[str] = []
+        for pair in pairs:
+            if not isinstance(pair, dict):
+                continue
+            if str(pair.get("pairAddress") or "").lower() != pair_address.lower():
+                continue
+            for side in ("baseToken", "quoteToken"):
+                try:
+                    address = normalize_address(str((pair.get(side) or {}).get("address") or ""))
+                except ValueError:
+                    continue
+                if address not in out:
+                    out.append(address)
+        return out
 
     def _best_pairs(self, chain: ChainSpec, body: Any) -> dict[str, PriceInfo]:
         best: dict[str, tuple[float, PriceInfo]] = {}

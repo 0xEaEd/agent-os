@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { toastOrder, toastOrderRejected, toastOrderSending } from '~/lib/order-toasts'
 import { useNow } from '~/lib/use-now'
 import { useGateway } from '~/stores/gateway'
 import {
@@ -29,7 +30,7 @@ import { EMPTY_TOTALS, errorText, filterHoldings, isAwaitingApproval, sameAddres
 import { Orders } from './Orders'
 import { Overview } from './Overview'
 import { ChainMark } from './ChainMark'
-import { Spinner } from './parts'
+import { PanelBoundary, Spinner } from './parts'
 import { PriceChart } from './PriceChart'
 import { SwapPanel, type SwapPrefill } from './SwapPanel'
 import {
@@ -291,16 +292,11 @@ function Desk({
       { orderId: order.orderId, approve },
       {
         onSuccess: () =>
-          toast.success(
-            approve ? t('trading.approvals.approved') : t('trading.approvals.rejected'),
-            {
-              id: `trd-order-${order.orderId}`,
-            },
-          ),
+          approve
+            ? toastOrderSending(order.orderId, t('trading.approvals.approved'))
+            : toastOrderRejected(order.orderId, t('trading.approvals.rejected')),
         onError: (err) =>
-          toast.error(`${t('trading.approvals.failed')}: ${errorText(err)}`, {
-            id: `trd-order-${order.orderId}`,
-          }),
+          toastOrder('error', order.orderId, `${t('trading.approvals.failed')}: ${errorText(err)}`),
       },
     )
   }
@@ -492,70 +488,76 @@ function Desk({
             </div>
 
             <div className="trd-panel__body" data-tab={tab}>
-              {tab === 'holdings' ? (
-                <>
-                  {picked ? <PriceChart holding={picked} onClose={() => setPicked(null)} /> : null}
-                  <Holdings
-                    holdings={holdings}
-                    loading={portfolio.isPending}
-                    error={portfolio.isError ? portfolio.error : undefined}
-                    onRetry={() => void portfolio.refetch()}
-                    wallets={wallets}
-                    selected={picked}
-                    onSelect={setPicked}
-                    showChain={chain === null}
-                    hiddenCount={portfolio.data?.hiddenCount ?? 0}
-                    showHidden={showHidden}
-                    hiddenLoading={showHidden && portfolio.isPlaceholderData}
-                    onToggleHidden={() => setShowHidden((v) => !v)}
-                    onSetHidden={(h, hidden) =>
-                      tokenVisibility.mutate(
-                        {
+              <PanelBoundary key={tab} name={tab}>
+                {tab === 'holdings' ? (
+                  <>
+                    {picked ? (
+                      <PriceChart holding={picked} onClose={() => setPicked(null)} />
+                    ) : null}
+                    <Holdings
+                      holdings={holdings}
+                      loading={portfolio.isPending}
+                      error={portfolio.isError ? portfolio.error : undefined}
+                      onRetry={() => void portfolio.refetch()}
+                      wallets={wallets}
+                      selected={picked}
+                      onSelect={setPicked}
+                      showChain={chain === null}
+                      hiddenCount={portfolio.data?.hiddenCount ?? 0}
+                      showHidden={showHidden}
+                      hiddenLoading={showHidden && portfolio.isPlaceholderData}
+                      onToggleHidden={() => setShowHidden((v) => !v)}
+                      onSetHidden={(h, hidden) =>
+                        tokenVisibility.mutate(
+                          {
+                            chainId: h.chainId,
+                            address: h.token.address,
+                            hidden,
+                          },
+                          {
+                            onError: (err) =>
+                              toast.error(
+                                `${t('trading.error.tokenVisibility')}: ${errorText(err)}`,
+                              ),
+                          },
+                        )
+                      }
+                      onSwap={(h) =>
+                        setPrefill({
                           chainId: h.chainId,
-                          address: h.token.address,
-                          hidden,
-                        },
-                        {
-                          onError: (err) =>
-                            toast.error(`${t('trading.error.tokenVisibility')}: ${errorText(err)}`),
-                        },
-                      )
-                    }
-                    onSwap={(h) =>
-                      setPrefill({
-                        chainId: h.chainId,
-                        tokenIn: h.token,
-                        wallet: h.wallet ?? (selected === 'all' ? undefined : selected),
-                        seq: Date.now(),
-                      })
-                    }
+                          tokenIn: h.token,
+                          wallet: h.wallet ?? (selected === 'all' ? undefined : selected),
+                          seq: Date.now(),
+                        })
+                      }
+                    />
+                  </>
+                ) : tab === 'history' ? (
+                  <History
+                    entries={history.entries}
+                    loading={history.isPending}
+                    error={history.isError ? history.error : undefined}
+                    onRetry={() => void history.refetch()}
+                    nextBefore={history.nextBefore}
+                    wallet={walletAddress}
+                    chainId={chain ?? undefined}
+                    now={now}
+                    showWallet={showWallet}
                   />
-                </>
-              ) : tab === 'history' ? (
-                <History
-                  entries={history.entries}
-                  loading={history.isPending}
-                  error={history.isError ? history.error : undefined}
-                  onRetry={() => void history.refetch()}
-                  nextBefore={history.nextBefore}
-                  wallet={walletAddress}
-                  chainId={chain ?? undefined}
-                  now={now}
-                  showWallet={showWallet}
-                />
-              ) : (
-                <Orders
-                  orders={orders.orders}
-                  approvalsOnly={tab === 'approvals'}
-                  deciding={decide.isPending ? (decide.variables?.orderId ?? null) : null}
-                  onDecide={onDecide}
-                  showWallet={showWallet}
-                  highlight={highlight}
-                  onHighlighted={() => setHighlight(null)}
-                  error={orders.isError ? orders.error : undefined}
-                  onRetry={() => void orders.refetch()}
-                />
-              )}
+                ) : (
+                  <Orders
+                    orders={orders.orders}
+                    approvalsOnly={tab === 'approvals'}
+                    deciding={decide.isPending ? (decide.variables?.orderId ?? null) : null}
+                    onDecide={onDecide}
+                    showWallet={showWallet}
+                    highlight={highlight}
+                    onHighlighted={() => setHighlight(null)}
+                    error={orders.isError ? orders.error : undefined}
+                    onRetry={() => void orders.refetch()}
+                  />
+                )}
+              </PanelBoundary>
             </div>
           </div>
         </div>

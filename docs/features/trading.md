@@ -57,6 +57,26 @@ gateway RPC surface (`wallet.*`, `trading.*`).
 - **Agent trading** — the agent signs on its own within code-enforced limits
   (below). Orders above the per-order threshold wait for a human in the
   desktop app; the agent is told the outcome and decides what to do next.
+- **Uniswap V4 liquidity** — read a token's pools, their liquidity ranges
+  and the vault's positions (cards in the chat, `docs/lp-cards.md`), and
+  change them: collect fees, remove liquidity (100 % burns the NFT), add
+  liquidity (mint, or top up a position) on Base and Robinhood Chain. Every
+  LP write is an order that **always waits for approval**, whoever asked;
+  on approval the engine re-checks the pool against the approved bounds,
+  approves exactly what the call may pull (ERC-20 → Permit2 → PositionManager,
+  30-minute Permit2 expiry, never unlimited), sends `modifyLiquidities` and
+  books the receipt as `lp_collect` / `lp_remove` / `lp_add` entries. Nothing
+  is swapped to make up a missing side. Contract: [`../lp-write.md`](../lp-write.md).
+- **DCA mandates** — a recurring buy the engine owns: `agentos trade dca
+  create ETH --usd 10 --every 1d --cap 300`. The cap, schedule, `--runs` and
+  `--max-price` guards are ledger rows, enforced by the engine on every tick;
+  each buy is an ordinary swap order under the agent guardrails (a buy under
+  the threshold executes on its own, a larger one parks). An agent may only
+  *propose* a mandate (`awaiting_approval`); the user approves it once from
+  the chat card, the Missions panel or `agentos trade dca approve`. The card
+  in the chat shows the next buy countdown, spent of cap, average buy price
+  vs now and a buys chart, with Pause / Buy now / Stop on the desktop.
+  Contract: [`../dca.md`](../dca.md).
 
 ## Chains
 
@@ -245,6 +265,7 @@ around and one it cannot.
 | Slippage ceiling | 5 % (`agent_max_slippage_pct`) | quote or swap refused with `trading.slippage_too_high`; nothing is queued |
 | Unpriced order | — | treated as above threshold (fails closed) |
 | Approval TTL | 15 min | `expired`; agent is told |
+| LP writes (`trade lp collect/remove/add`) | — | **always** park as `awaiting_approval`, from the agent and from you; an agent's `add` counts toward the daily cap (over it: `rejected`), `collect`/`remove` never do; on approval a pool that moved past the approved bounds fails the order with `trading.price_moved` |
 
 Manual swaps from the app or CLI are your own decision: they never queue
 and do not count toward the agent's cap; if the price moved more than twice
@@ -315,6 +336,10 @@ Every client goes through the same gateway methods:
 | `trading.orders.list`, `trading.orders.get`, `trading.orders.wait`, `trading.orders.batch` | orders (filter by status, wallet, `kind`); one order; block until it settles; every leg of a multisend by `batchId` |
 | `trading.orders.approve`, `trading.orders.reject` | the user's decision on a parked order (operator-only) |
 | `trading.decode` | explain a transaction hash or raw calldata |
+| `trading.lp.pool`, `trading.lp.ranges`, `trading.lp.position`, `trading.lp.positions` | Uniswap V4 read-outs (read-only, allowed for an agent): a token's deepest pool, its liquidity distribution, one position NFT, every position of the vault's (or given) wallets; each echoes `request: {kind, params}` so a card can re-read itself. Payloads: [`../lp-cards.md`](../lp-cards.md) |
+| `trading.lp.collect`, `trading.lp.remove`, `trading.lp.add` | Uniswap V4 writes (allowed for an agent: they only create an order, which always parks for approval). Params mirror the CLI in camelCase — `chainId`, `tokenId`, `pct`, `slippagePct`, `token`, `usd`, `amountBase`, `amountQuote`, `range`, `toPosition`, `wallet`, `note`, `clientOrderId`; the answer is `{"order": …}` with `plan`. Contract: [`../lp-write.md`](../lp-write.md) |
+| `trading.dca.create`, `trading.dca.get`, `trading.dca.list` | DCA mandates (agent-callable; an agent's `create` parks as `awaiting_approval`): propose a recurring buy, read one, list live ones (`all` for finished). Every answer is a full card payload with `request` echoed. Contract: [`../dca.md`](../dca.md) |
+| `trading.dca.approve`, `trading.dca.reject`, `trading.dca.pause`, `trading.dca.resume`, `trading.dca.stop`, `trading.dca.run`, `trading.dca.update` | the user's decisions on a mandate (operator-only): start it, pause/resume, stop for good, buy now, change cap / size / cadence / max price |
 | `trading.history`, `trading.portfolio`, `trading.chart`, `trading.sync`, `trading.lot.setCost` | the ledger; holdings with PnL; price history for a token (GeckoTerminal on Base, the engine's own snapshots on Robinhood Chain); re-read the chain (`full`, a rebuild, is operator-only); correct a lot's cost basis (operator-only) |
 
 ## Ledger and PnL

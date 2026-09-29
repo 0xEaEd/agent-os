@@ -6,6 +6,7 @@ import { projectId, projectName, sessionProjectId, type RawProject } from '@/vie
 import { agentIdFromKey, sessionRunStatus } from '@/views/sessions/logic'
 import { dateGroup, groupKey } from '~/lib/relative-time'
 import type { SessionMarks } from '~/stores/session-marks'
+import type { ListSlot } from '~/stores/session-selection'
 import type { SessionRow } from '~/stores/sessions'
 
 export type Grouping = 'date' | 'agent' | 'project' | 'none'
@@ -222,4 +223,19 @@ export function agentIds(rows: SessionRow[]): string[] {
 /** How many rows the filters hide, for the "n hidden" hint under the list. */
 export function hiddenCount(all: SessionRow[], shown: SessionRow[]): number {
   return Math.max(0, all.length - shown.length)
+}
+
+/**
+ * The session rows as the sidebar draws them, top to bottom: the chats in
+ * each open folder, then the sections. A pinned chat filed in a project is
+ * drawn twice (in its folder and on top), and both copies are listed.
+ */
+export function visibleSlots(
+  folders: ReadonlyArray<readonly SessionRow[]>,
+  sections: ReadonlyArray<{ items: readonly SessionRow[] }>,
+): ListSlot[] {
+  return [
+    ...folders.flat().map((row) => ({ row, nested: true })),
+    ...sections.flatMap((s) => s.items).map((row) => ({ row, nested: false })),
+  ]
 }

@@ -8,10 +8,12 @@ import { t } from '~/i18n'
 import { shortAge } from '~/lib/relative-time'
 import { useLive } from '~/stores/live'
 import { useSessionMarks } from '~/stores/session-marks'
+import { useSessionSelection } from '~/stores/session-selection'
 import { useSessionView } from '~/stores/session-view'
 import type { SessionRow } from '~/stores/sessions'
 import { SESSION_DRAG_TYPE } from '~/views/projects/logic'
 import { useSessionActions } from './session-actions'
+import { SessionBulkMenuItems } from './SessionBulk'
 import { SessionMenuItems } from './SessionMenu'
 
 /** Route path for a session; keys carry colons, so they are encoded once. */
@@ -23,7 +25,9 @@ export function sessionPath(key: string): string {
  * One session row. Draggable so it can be filed into a project folder;
  * right-click (or the "…" that appears on hover) opens its menu; "Rename…"
  * turns the title into a field in place. The dot at the left is the state:
- * a pin, an archive box, a breathing light while a turn runs.
+ * a pin, an archive box, a breathing light while a turn runs. Cmd-click and
+ * Shift-click select rows instead of opening them; right-clicking inside a
+ * selection of several opens the menu for all of them.
  */
 export function SessionRowLink({ row, nested = false }: { row: SessionRow; nested?: boolean }) {
   const liveLocally = useLive((s) => s.ids.has(row.key))
@@ -33,6 +37,9 @@ export function SessionRowLink({ row, nested = false }: { row: SessionRow; neste
   const unread = useSessionMarks((s) => s.unread.has(row.key))
   const showAge = useSessionView((s) => s.view.ages)
   const actions = useSessionActions(row)
+  const selected = useSessionSelection((s) => s.keys.has(row.key))
+  const several = useSessionSelection((s) => s.keys.size > 1)
+  const bulk = selected && several
 
   const [menu, setMenu] = useState<MenuPlace | null>(null)
   const [renaming, setRenaming] = useState(false)
@@ -41,15 +48,29 @@ export function SessionRowLink({ row, nested = false }: { row: SessionRow; neste
   const linkRef = useRef<HTMLAnchorElement>(null)
   const closeMenu = useCallback(() => setMenu(null), [])
 
+  function openMenu(place: MenuPlace) {
+    // Finder: a right-click outside the selection makes this row the selection.
+    const selection = useSessionSelection.getState()
+    if (selection.keys.size > 0 && !selection.keys.has(row.key)) selection.select([row.key])
+    setMenu(place)
+  }
+
   function openAtRow() {
     const rect = linkRef.current?.getBoundingClientRect()
-    if (rect) setMenu({ anchor: rect, align: 'start' })
+    if (rect) openMenu({ anchor: rect, align: 'start' })
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLAnchorElement>) {
+    const selection = useSessionSelection.getState()
     if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
       e.preventDefault()
       openAtRow()
+    } else if (e.key === 'Escape' && selection.keys.size > 0) {
+      e.preventDefault()
+      selection.clear()
+    } else if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault()
+      selection.selectAll()
     }
   }
 
@@ -71,7 +92,7 @@ export function SessionRowLink({ row, nested = false }: { row: SessionRow; neste
       onContextMenu={(e) => {
         if (renaming) return
         e.preventDefault()
-        setMenu({ at: { x: e.clientX, y: e.clientY } })
+        openMenu({ at: { x: e.clientX, y: e.clientY } })
       }}
     >
       {renaming ? (
@@ -95,9 +116,24 @@ export function SessionRowLink({ row, nested = false }: { row: SessionRow; neste
           data-live={live}
           data-unread={unread}
           data-archived={archived}
+          data-selected={selected}
           title={row.title}
           draggable
           onKeyDown={onKeyDown}
+          onClick={(e) => {
+            // Cmd and Shift select; without them the click opens the chat as
+            // always, and clears the selection.
+            const selection = useSessionSelection.getState()
+            if (e.metaKey) {
+              e.preventDefault()
+              selection.toggle(row.key, nested)
+            } else if (e.shiftKey) {
+              e.preventDefault()
+              selection.extend(row.key, nested)
+            } else {
+              selection.click(row.key, nested)
+            }
+          }}
           onDragStart={(e) => {
             e.dataTransfer.setData(SESSION_DRAG_TYPE, row.key)
             e.dataTransfer.setData('text/plain', row.title)
@@ -125,7 +161,8 @@ export function SessionRowLink({ row, nested = false }: { row: SessionRow; neste
           onClick={(e) => {
             e.stopPropagation()
             const rect = e.currentTarget.getBoundingClientRect()
-            setMenu(menu ? null : { anchor: rect, align: 'end' })
+            if (menu) setMenu(null)
+            else openMenu({ anchor: rect, align: 'end' })
           }}
         >
           <MoreHorizontal className="size-3.5" strokeWidth={2} aria-hidden />
@@ -135,15 +172,19 @@ export function SessionRowLink({ row, nested = false }: { row: SessionRow; neste
         <PopMenu
           place={menu}
           onClose={closeMenu}
-          label={t('session.menu.label')}
+          label={bulk ? t('session.bulk.menu.label') : t('session.menu.label')}
           triggerRef={moreRef}
         >
-          <SessionMenuItems
-            row={row}
-            actions={actions}
-            onRename={() => setRenaming(true)}
-            onDelete={() => setConfirmDelete(true)}
-          />
+          {bulk ? (
+            <SessionBulkMenuItems />
+          ) : (
+            <SessionMenuItems
+              row={row}
+              actions={actions}
+              onRename={() => setRenaming(true)}
+              onDelete={() => setConfirmDelete(true)}
+            />
+          )}
         </PopMenu>
       ) : null}
       {confirmDelete ? (

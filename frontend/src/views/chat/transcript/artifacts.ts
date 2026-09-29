@@ -33,6 +33,8 @@ export { publishArtifactTargetName } from './tools'
 
 import { isCardsArtifact } from './cards'
 import { isChartArtifact } from './chart'
+import { isDcaArtifact } from './dca'
+import { isLpArtifact } from './lp'
 
 /* ── Artifact shape ─────────────────────────────────────────────────────── */
 
@@ -105,13 +107,15 @@ export function artifactExtension(name: string): string {
 }
 
 // chat.js:7538-7549 — category: visual | audio | data | document | code | file,
-// plus the AgentOS-native 'chart' (chart.ts) and 'cards' (cards.ts) categories,
-// which have no legacy counterpart: they render inline rather than as a
-// download chip.
+// plus the AgentOS-native 'chart' (chart.ts), 'cards' (cards.ts), 'lp' (lp.ts)
+// and 'dca' (dca.ts) categories, which have no legacy counterpart: they render
+// inline rather than as a download chip.
 // NOTE: image/* maps to 'visual' (NOT 'image' — the brief example was wrong).
 export function artifactCategory(artifact: Artifact | null | undefined): string {
   if (isChartArtifact(artifact)) return 'chart'
   if (isCardsArtifact(artifact)) return 'cards'
+  if (isLpArtifact(artifact)) return 'lp'
+  if (isDcaArtifact(artifact)) return 'dca'
   const mime = artifactMime(artifact)
   if (mime.startsWith('image/')) return 'visual'
   if (mime.startsWith('audio/')) return 'audio'
@@ -131,6 +135,10 @@ export function artifactCategoryLabel(category: string): string {
       return 'chart'
     case 'cards':
       return 'cards'
+    case 'lp':
+      return 'lp'
+    case 'dca':
+      return 'dca'
     case 'data':
       return 'data'
     case 'document':
@@ -462,7 +470,11 @@ export function createArtifactRenderer(deps: ArtifactRendererDeps) {
             ? 'chart'
             : category === 'cards'
               ? 'cards'
-              : 'file'
+              : category === 'lp'
+                ? 'lp'
+                : category === 'dca'
+                  ? 'dca'
+                  : 'file'
       if (groupKind !== openGroup) {
         closeGroup()
         html +=
@@ -472,7 +484,11 @@ export function createArtifactRenderer(deps: ArtifactRendererDeps) {
               ? '<div class="msg-artifact-charts">'
               : groupKind === 'cards'
                 ? '<div class="msg-artifact-cards-group">'
-                : '<div class="msg-artifact-files">'
+                : groupKind === 'lp'
+                  ? '<div class="msg-artifact-lp-group">'
+                  : groupKind === 'dca'
+                    ? '<div class="msg-artifact-dca-group">'
+                    : '<div class="msg-artifact-files">'
         openGroup = groupKind
       }
       const name = artifactName(artifact)
@@ -516,6 +532,24 @@ export function createArtifactRenderer(deps: ArtifactRendererDeps) {
           <div class="msg-artifact-cards__grid"></div>
           <p class="msg-artifact-cards__overflow" hidden></p>
           <p class="msg-artifact-cards__status">${escAttr(t('chat.cardsLoading'))}</p>
+        </div>`
+      } else if (category === 'lp') {
+        // A mount placeholder for a Uniswap V4 liquidity card (lp.ts,
+        // docs/lp-cards.md): the LP mounter fetches `data-lp-src` and builds
+        // the card into `__body`. Like cards, no download affordance.
+        const payloadUrl = artifactPreviewUrl(artifact || {}, { sessionKey, token })
+        html += `<div class="msg-artifact-lp" data-lp-src="${escAttr(payloadUrl)}" data-artifact-category="${escAttr(category)}" data-artifact-id="${escAttr(artifact?.id || '')}" data-artifact-name="${escAttr(name)}">
+          <div class="msg-artifact-lp__body"></div>
+          <p class="msg-artifact-lp__status">${escAttr(t('chat.lpLoading'))}</p>
+        </div>`
+      } else if (category === 'dca') {
+        // A mount placeholder for a DCA mandate card (dca.ts, docs/dca.md):
+        // the DCA mounter fetches `data-dca-src` and builds the card into
+        // `__body`. Like the LP card, no download affordance.
+        const payloadUrl = artifactPreviewUrl(artifact || {}, { sessionKey, token })
+        html += `<div class="msg-artifact-dca" data-dca-src="${escAttr(payloadUrl)}" data-artifact-category="${escAttr(category)}" data-artifact-id="${escAttr(artifact?.id || '')}" data-artifact-name="${escAttr(name)}">
+          <div class="msg-artifact-dca__body"></div>
+          <p class="msg-artifact-dca__status">${escAttr(t('chat.dcaLoading'))}</p>
         </div>`
       } else if (isImageArtifact(artifact)) {
         const previewUrl = artifactPreviewUrl(artifact || {}, { sessionKey, token })

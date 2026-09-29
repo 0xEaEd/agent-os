@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "kind": "ranges",
+  "chain": { "id": 8453, "key": "base", "name": "Base", "explorer": "https://basescan.org" },
+  "asOfBlock": 21044901,
+  "fetchedAt": "2026-09-27T09:30:00Z",
+  "partialScan": false,
+  "warnings": [],
+  "request": {
+    "kind": "ranges",
+    "params": { "token": "0x6982508145454ce325ddbe47a25d4ec3d2311933", "chainId": 8453 }
+  },
+  "token": {
+    "address": "0x6982508145454ce325ddbe47a25d4ec3d2311933",
+    "symbol": "PEPE",
+    "decimals": 18,
+    "priceUsd": 0.00000921
+  },
+  "quote": {
+    "address": "0x4200000000000000000000000000000000000006",
+    "symbol": "WETH",
+    "decimals": 18,
+    "priceUsd": 2450.5
+  },
+  "pool": {
+    "poolId": "0x9f3c1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+    "hook": null,
+    "tickSpacing": 200,
+    "feePct": "1%",
+    "tick": -190000,
+    "liquidity": "184467440737095516",
+    "priceUsd": 0.00000921,
+    "mcapUsd": 3870000,
+    "tvlUsd": 412000
+  },
+  "current": { "tick": -190000, "priceUsd": 0.00000921, "mcapUsd": 3870000 },
+  "segments": [
+    {
+      "tickLower": -220000,
+      "tickUpper": -201000,
+      "priceLower": 0.00000000028,
+      "priceUpper": 0.0000000019,
+      "mcapLower": 310000,
+      "mcapUpper": 2100000,
+      "liquidity": "18446744073709551",
+      "share": 0.1,
+      "base": { "raw": "0", "human": "0", "usd": 0 },
+      "quote": { "raw": "8400000000000000000", "human": "8.4", "usd": 20584.2 },
+      "active": false
+    },
+    {
+      "tickLower": -201000,
+      "tickUpper": -190000,
+      "priceLower": 0.0000000019,
+      "priceUpper": 0.0000000056,
+      "mcapLower": 2100000,
+      "mcapUpper": 3870000,
+      "liquidity": "55340232221128654",
+      "share": 0.3,
+      "base": { "raw": "0", "human": "0", "usd": 0 },
+      "quote": { "raw": "31200000000000000000", "human": "31.2", "usd": 76455.6 },
+      "active": false
+    },
+    {
+      "tickLower": -190000,
+      "tickUpper": -180000,
+      "priceLower": 0.0000000056,
+      "priceUpper": 0.0000000154,
+      "mcapLower": 3870000,
+      "mcapUpper": 9800000,
+      "liquidity": "77476325109580116",
+      "share": 0.42,
+      "base": { "raw": "9800000000000000000000000000", "human": "9800000000", "usd": 90258 },
+      "quote": { "raw": "44465000000000000000", "human": "44.465", "usd": 108961.5 },
+      "active": true
+    },
+    {
+      "tickLower": -180000,
+      "tickUpper": -160000,
+      "priceLower": 0.0000000154,
+      "priceUpper": 0.000000112,
+      "mcapLower": 9800000,
+      "mcapUpper": 71400000,
+      "liquidity": "14757395258967641",
+      "share": 0.08,
+      "base": { "raw": "12567000000000000000000000000", "human": "12567000000", "usd": 115742 },
+      "quote": { "raw": "0", "human": "0", "usd": 0 },
+      "active": false
+    },
+    {
+      "tickLower": -160000,
+      "tickUpper": -140000,
+      "priceLower": 0.000000112,
+      "priceUpper": 0.00000083,
+      "mcapLower": 71400000,
+      "mcapUpper": 529000000,
+      "liquidity": "18446744073709551",
+      "share": 0.1,
+      "base": { "raw": "1200000000000000000000000000", "human": "1200000000", "usd": 11052 },
+      "quote": { "raw": "0", "human": "0", "usd": 0 },
+      "active": false
+    }
+  ],
+  "scan": { "mode": "ticks", "scannedWords": 40, "fullWords": 40, "truncated": false }
+}

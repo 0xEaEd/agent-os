@@ -763,6 +763,568 @@ async def _trading_decode(params: dict | None, ctx: RpcContext) -> dict[str, Any
         raise _raise(exc) from exc
 
 
+# ── trading.lp.* (Uniswap V4 read-outs; payloads in docs/lp-cards.md) ─────
+#
+# Read-only, so an agent may call every one of them. Each runs the blocking V4
+# library in a worker thread (see ``agentos.trading.lp``).
+
+
+def _lp_target(p: dict[str, Any]) -> str:
+    value = _str(p, "target") or _str(p, "token") or _str(p, "poolId")
+    if not value:
+        raise ValueError("params.target (a token symbol, address or poolId) is required")
+    return value
+
+
+def _with_request(result: dict[str, Any], kind: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Echo ``request: {kind, params}`` into a card payload so the card can re-run itself.
+
+    ``params`` are what ``trading.lp.<kind>`` takes, normalised; ``None`` values
+    are left out. A single-chain read that found its pool on one chain names
+    that chain, so a refresh reads the same pool rather than probing again.
+    """
+    if not isinstance(result, dict):  # a test double may answer with anything
+        return result
+    clean = {k: v for k, v in params.items() if v is not None}
+    return {**result, "request": {"kind": kind, "params": clean}}
+
+
+def _read_chain_id(result: Any, chain: ChainSpec | None) -> int | None:
+    found = result.get("chain") if isinstance(result, dict) else None
+    if isinstance(found, dict) and isinstance(found.get("id"), int):
+        return int(found["id"])
+    return chain.chain_id if chain is not None else None
+
+
+@_d.method("trading.lp.pool")
+async def _trading_lp_pool(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """A token's (deepest) V4 pool: reserves, launcher, lock status, biggest ranges."""
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p, required=False)
+    target = _lp_target(p)
+    quote = _str(p, "quote")
+    service = _service(ctx)
+    try:
+        fee = lp.parse_fee(p.get("feePct"))
+        result = await lp.lp_pool(service, chain=chain, target=target, quote=quote, fee=fee)
+    except Exception as exc:
+        raise _raise(exc) from exc
+    echo = {
+        "target": target,
+        "chainId": _read_chain_id(result, chain),
+        "quote": quote,
+        "feePct": lp.fee_label(fee) if fee is not None else None,
+    }
+    return _with_request(result, "pool", echo)
+
+
+@_d.method("trading.lp.ranges")
+async def _trading_lp_ranges(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """A pool's liquidity distribution as contiguous tick segments."""
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p, required=False)
+    target = _lp_target(p)
+    quote = _str(p, "quote")
+    service = _service(ctx)
+    try:
+        fee = lp.parse_fee(p.get("feePct"))
+        result = await lp.lp_ranges(service, chain=chain, target=target, quote=quote, fee=fee)
+    except Exception as exc:
+        raise _raise(exc) from exc
+    echo = {
+        "target": target,
+        "chainId": _read_chain_id(result, chain),
+        "quote": quote,
+        "feePct": lp.fee_label(fee) if fee is not None else None,
+    }
+    return _with_request(result, "ranges", echo)
+
+
+@_d.method("trading.lp.position")
+async def _trading_lp_position(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """One V4 position NFT: range, status, principal, uncollected fees."""
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    token_id = _raw_amount(p, "tokenId")
+    if token_id is None or token_id <= 0:
+        raise ValueError("params.tokenId must be a positive integer")
+    service = _service(ctx)
+    try:
+        result = await lp.lp_position(service, chain=chain, token_id=token_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+    echo = {"tokenId": str(token_id), "chainId": chain.chain_id}
+    return _with_request(result, "position", echo)
+
+
+@_d.method("trading.lp.positions")
+async def _trading_lp_positions(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Every V4 position of the vault's wallets (or ``wallets``) on one or both chains.
+
+    ``chainId`` (one) or ``chainIds`` (several); neither reads both chains.
+    ``budgetSeconds`` bounds the read (default 25, 5-300); past it the card is partial.
+    """
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p, required=False)
+    raw_chains = p.get("chainIds")
+    chains: list[ChainSpec] | None = [chain] if chain is not None else None
+    if raw_chains is not None:
+        if chain is not None:
+            raise ValueError("pass params.chainId or params.chainIds, not both")
+        if not isinstance(raw_chains, list) or not raw_chains:
+            raise ValueError("params.chainIds must be a non-empty list of chain ids")
+        chains = []
+        for value in raw_chains:
+            spec = _chain({"chainId": value})
+            assert spec is not None
+            if spec not in chains:
+                chains.append(spec)
+    raw_budget = p.get("budgetSeconds")
+    if raw_budget is not None and (
+        isinstance(raw_budget, bool) or not isinstance(raw_budget, int | float)
+    ):
+        raise ValueError("params.budgetSeconds must be a number of seconds")
+    raw_wallets = p.get("wallets")
+    if raw_wallets is None:
+        wallets: list[str] = []
+    elif isinstance(raw_wallets, list) and all(isinstance(w, str) for w in raw_wallets):
+        wallets = [w for w in raw_wallets if w.strip()]
+    else:
+        raise ValueError("params.wallets must be a list of addresses")
+    include_closed = p.get("all", False)
+    if not isinstance(include_closed, bool):
+        raise ValueError("params.all must be a boolean")
+    service = _service(ctx)
+    try:
+        result = await lp.lp_positions(
+            service,
+            chains=chains,
+            wallets=wallets,
+            include_closed=include_closed,
+            budget_s=float(raw_budget) if raw_budget is not None else None,
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    echo: dict[str, Any] = {
+        "chainIds": [c.chain_id for c in chains] if chains else None,
+        "wallets": wallets or None,
+        "all": True if include_closed else None,
+        "budgetSeconds": float(raw_budget) if raw_budget is not None else None,
+    }
+    return _with_request(result, "positions", echo)
+
+
+# ── trading.lp.collect|remove|add (docs/lp-write.md) ─────────────────────────
+#
+# An agent may call these: each only creates an order, and every LP write parks
+# as ``awaiting_approval`` whoever asked. Approving, rejecting and waiting stay
+# on ``trading.orders.approve|reject|wait`` (approve/reject are operator-only).
+
+
+def _lp_token_id(p: dict[str, Any], key: str, *, required: bool) -> int | None:
+    value = p.get(key)
+    if value is None or value == "":
+        if required:
+            raise ValueError(f"params.{key} is required")
+        return None
+    if isinstance(value, bool) or isinstance(value, float):
+        raise ValueError(f"params.{key} must be a positive integer")
+    text = str(value).strip().lstrip("#")
+    if not text.isdigit() or int(text) <= 0:
+        raise ValueError(f"params.{key} must be a positive integer")
+    return int(text)
+
+
+def _decimal_text(p: dict[str, Any], key: str) -> str | None:
+    value = p.get(key)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        raise ValueError(f"params.{key} must be a decimal string")
+    return str(value).strip()
+
+
+@_d.method("trading.lp.collect")
+async def _trading_lp_collect(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Collect a V4 position's fees: creates an order that always awaits approval.
+
+    A position with nothing uncollected is refused (``trading.lp.nothing_to_collect``)
+    unless ``allowEmpty`` is true.
+    """
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    token_id = _lp_token_id(p, "tokenId", required=True)
+    assert token_id is not None
+    allow_empty = p.get("allowEmpty", False)
+    if not isinstance(allow_empty, bool):
+        raise ValueError("params.allowEmpty must be a boolean")
+    initiator, session_key = _initiator(ctx, p)
+    service = _service(ctx)
+    try:
+        order = await service.lp_collect(
+            chain=chain,
+            token_id=token_id,
+            allow_empty=allow_empty,
+            initiator=initiator,  # type: ignore[arg-type]
+            session_key=session_key,
+            note=_note(p),
+            **_client_order_id(service, "lp_collect", p),
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    return {"order": order}
+
+
+@_d.method("trading.lp.remove")
+async def _trading_lp_remove(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Remove ``pct`` % (default 100: burn) of a V4 position; always awaits approval."""
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    token_id = _lp_token_id(p, "tokenId", required=True)
+    assert token_id is not None
+    pct = _number(p, "pct")
+    initiator, session_key = _initiator(ctx, p)
+    service = _service(ctx)
+    try:
+        order = await service.lp_remove(
+            chain=chain,
+            token_id=token_id,
+            pct=100.0 if pct is None else pct,
+            slippage_pct=_number(p, "slippagePct"),
+            initiator=initiator,  # type: ignore[arg-type]
+            session_key=session_key,
+            note=_note(p),
+            **_client_order_id(service, "lp_remove", p),
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    return {"order": order}
+
+
+@_d.method("trading.lp.add")
+async def _trading_lp_add(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Mint a V4 position (or add to ``toPosition``) from a deposit; always awaits approval.
+
+    ``token`` (or ``target``/``poolId``) names the pool -- a ``TOKEN/QUOTE``
+    pair, or a token with ``quote``; ``feePct`` (``0.05``, ``0.3%``, ``500``)
+    picks the fee tier; sized by ``usd`` or by ``amountBase`` and/or
+    ``amountQuote``; ``range`` is ``mcap:LO-HI``, ``pct:N``, ``above[:N]``
+    (all base token, from just above the price up N %), ``below[:N]`` (all
+    quote token, from just below it down N %; N defaults to 20), ``full`` or
+    ``ticks:LO:HI`` (default ``pct:20``).
+    """
+    from agentos.trading import lp
+
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    target = _str(p, "token") or _str(p, "target") or _str(p, "poolId")
+    to_position = _lp_token_id(p, "toPosition", required=False)
+    if not target and to_position is None:
+        raise ValueError("params.token (a token or poolId) or params.toPosition is required")
+    initiator, session_key = _initiator(ctx, p)
+    service = _service(ctx)
+    try:
+        order = await service.lp_add(
+            chain=chain,
+            target=target,
+            quote=_str(p, "quote"),
+            fee=lp.parse_fee(p.get("feePct")),
+            usd=_number(p, "usd"),
+            amount_base=_decimal_text(p, "amountBase"),
+            amount_quote=_decimal_text(p, "amountQuote"),
+            range_spec=_str(p, "range"),
+            to_position=to_position,
+            wallet=_str(p, "wallet"),
+            slippage_pct=_number(p, "slippagePct"),
+            initiator=initiator,  # type: ignore[arg-type]
+            session_key=session_key,
+            note=_note(p),
+            **_client_order_id(service, "lp_add", p),
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    return {"order": order}
+
+
+# ── trading.dca.* (docs/dca.md) ─────────────────────────────────────────────
+#
+# An agent may create (it only proposes: an agent-bound connection always gets
+# ``awaiting_approval``), get and list. Every other write is the user's, so it
+# is ``@_operator_only``. A malformed param is ``trading.dca.invalid`` naming
+# the field -- never the dispatcher's generic ``INVALID_REQUEST`` -- so a card,
+# the CLI and an agent see one code for "change the input".
+
+_DCA_MIN_EVERY_SECONDS = 60
+#: ``trading.dca.update`` params → the engine's ``dca_update`` keywords.
+_DCA_UPDATE_FIELDS = {
+    "usdPerRun": "usd_per_run",
+    "capUsd": "cap_usd",
+    "runsMax": "runs_max",
+    "everySeconds": "every_seconds",
+    "maxPriceUsd": "max_price_usd",
+    "name": "name",
+}
+_DCA_INT_FIELDS = frozenset({"runsMax", "everySeconds"})
+
+
+def _dca_invalid(message: str) -> RpcHandlerError:
+    return RpcHandlerError("trading.dca.invalid", message)
+
+
+def _dca_id(p: dict[str, Any]) -> str:
+    value = p.get("mandateId")
+    if not isinstance(value, str) or not value.strip():
+        raise _dca_invalid("params.mandateId is required")
+    return value.strip()
+
+
+def _dca_number(p: dict[str, Any], key: str) -> float | None:
+    try:
+        value = _number(p, key)
+    except ValueError as exc:
+        raise _dca_invalid(str(exc)) from exc
+    if value is not None and (value != value or value in (float("inf"), float("-inf"))):
+        raise _dca_invalid(f"params.{key} must be a finite number")
+    return value
+
+
+def _dca_int(p: dict[str, Any], key: str) -> int | None:
+    """A whole number: an int, an integral float (``86400.0``) or a digit string."""
+    value = p.get(key)
+    if value is None or value == "":
+        return None
+    number = _dca_number(p, key)
+    if number is None or number != int(number):
+        raise _dca_invalid(f"params.{key} must be an integer")
+    return int(number)
+
+
+def _dca_bool(p: dict[str, Any], key: str, default: bool) -> bool:
+    value = p.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise _dca_invalid(f"params.{key} must be a boolean")
+    return value
+
+
+def _dca_text(p: dict[str, Any], key: str) -> str | None:
+    """A free-text field a person reads (name, reason): sanitised like a note."""
+    try:
+        return _note(p, key)
+    except ValueError as exc:
+        raise _dca_invalid(str(exc)) from exc
+
+
+def _dca_str(p: dict[str, Any], key: str, *, required: bool = False) -> str | None:
+    try:
+        return _str(p, key, required=required)
+    except ValueError as exc:
+        raise _dca_invalid(str(exc)) from exc
+
+
+def _dca_every(p: dict[str, Any], *, required: bool) -> int | None:
+    every = _dca_int(p, "everySeconds")
+    if every is None:
+        if required:
+            raise _dca_invalid("params.everySeconds is required")
+        return None
+    if every < _DCA_MIN_EVERY_SECONDS:
+        raise _dca_invalid(f"params.everySeconds must be at least {_DCA_MIN_EVERY_SECONDS}")
+    return every
+
+
+@_d.method("trading.dca.create")
+async def _trading_dca_create(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Create a DCA mandate. The operator's starts ``active``; an agent's awaits approval.
+
+    ``initiator`` and ``sessionKey`` are decided by :func:`_initiator`: an
+    agent-bound connection is the agent and files under its bound chat
+    whatever it declares.
+    """
+    p = _params(params)
+    try:
+        chain = _chain(p)
+        initiator, session_key = _initiator(ctx, p)
+    except ValueError as exc:
+        raise _dca_invalid(str(exc)) from exc
+    assert chain is not None
+    token = _dca_str(p, "token", required=True) or ""
+    usd = _dca_number(p, "usdPerRun")
+    if usd is None:
+        raise _dca_invalid("params.usdPerRun is required")
+    cap = _dca_number(p, "capUsd")
+    runs = _dca_int(p, "runsMax")
+    if cap is None and runs is None:
+        raise _dca_invalid("params.capUsd or params.runsMax is required")
+    every = _dca_every(p, required=True)
+    assert every is not None
+    service = _service(ctx)
+    try:
+        return await service.dca_create(
+            chain=chain,
+            token=token,
+            quote=_dca_str(p, "quote"),
+            usd_per_run=usd,
+            cap_usd=cap,
+            runs_max=runs,
+            every_seconds=every,
+            max_price_usd=_dca_number(p, "maxPriceUsd"),
+            wallet=_dca_str(p, "wallet"),
+            slippage_pct=_dca_number(p, "slippagePct"),
+            name=_dca_text(p, "name"),
+            start_now=_dca_bool(p, "startNow", True),
+            initiator=initiator,
+            session_key=session_key,
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.dca.get")
+async def _trading_dca_get(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """One mandate as a ``mandate`` card payload."""
+    mandate_id = _dca_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.dca_get(mandate_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.dca.list")
+async def _trading_dca_list(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Live mandates (every one with ``all``), optionally of one ``wallet``."""
+    p = _params(params)
+    include_all = _dca_bool(p, "all", False)
+    wallet = _dca_str(p, "wallet")
+    service = _service(ctx)
+    try:
+        return await service.dca_list(all=include_all, wallet=wallet)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.dca.approve")
+@_operator_only
+async def _trading_dca_approve(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Approve a pending mandate: it turns ``active`` (first buy on the next tick)."""
+    mandate_id = _dca_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.dca_approve(mandate_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.dca.reject")
+@_operator_only
+async def _trading_dca_reject(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    p = _params(params)
+    mandate_id = _dca_id(p)
+    service = _service(ctx)
+    try:
+        return await service.dca_reject(mandate_id, _dca_text(p, "reason"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.dca.pause")
+@_operator_only
+async def _trading_dca_pause(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    mandate_id = _dca_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.dca_pause(mandate_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.dca.resume")
+@_operator_only
+async def _trading_dca_resume(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    mandate_id = _dca_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.dca_resume(mandate_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.dca.stop")
+@_operator_only
+async def _trading_dca_stop(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Stop for good; the mandate's buys still awaiting approval are rejected."""
+    p = _params(params)
+    mandate_id = _dca_id(p)
+    service = _service(ctx)
+    try:
+        return await service.dca_stop(mandate_id, _dca_text(p, "reason"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.dca.run")
+@_operator_only
+async def _trading_dca_run(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Buy now: one run on an active or paused mandate; the schedule does not move."""
+    p = _params(params)
+    mandate_id = _dca_id(p)
+    wait = _dca_bool(p, "wait", False)
+    service = _service(ctx)
+    try:
+        return await service.dca_run_now(mandate_id, wait=wait)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.dca.update")
+@_operator_only
+async def _trading_dca_update(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Change a mandate's terms; only the keys given are forwarded.
+
+    ``runsMax: 0`` removes the run limit and ``maxPriceUsd: 0`` the price
+    guard (the engine reads 0 that way); ``null`` means "not given".
+    """
+    p = _params(params)
+    mandate_id = _dca_id(p)
+    fields: dict[str, Any] = {}
+    for key, field in _DCA_UPDATE_FIELDS.items():
+        if p.get(key) is None:
+            continue
+        if key == "name":
+            if not isinstance(p["name"], str):
+                raise _dca_invalid("params.name must be a string")
+            fields[field] = _dca_text(p, "name") or ""
+        elif key == "everySeconds":
+            fields[field] = _dca_every(p, required=False)
+        elif key in _DCA_INT_FIELDS:
+            fields[field] = _dca_int(p, key)
+        else:
+            fields[field] = _dca_number(p, key)
+    if not fields:
+        raise _dca_invalid(
+            "nothing to update: pass one of " + ", ".join(f"params.{k}" for k in _DCA_UPDATE_FIELDS)
+        )
+    service = _service(ctx)
+    try:
+        return await service.dca_update(mandate_id, **fields)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
 @_d.method("trading.network")
 async def _trading_network(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """Head block, block age, gas and RPC latency per chain (cached for a few seconds)."""

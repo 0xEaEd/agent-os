@@ -759,3 +759,78 @@ def test_dockercfg_still_reports_its_own_file_entry(fixed_home: Path) -> None:
     name a directory the file does not live in.
     """
     assert is_sensitive_path(str(fixed_home / ".dockercfg")) == "~/.dockercfg"
+
+
+# --- Windows AppData credential dirs (#3078) ---------------------------------
+#
+# On Windows ``gh`` keeps its token in ``%APPDATA%\GitHub CLI\hosts.yml`` and
+# the Cloud SDK in ``%APPDATA%\gcloud``, not under ``~/.config``.
+
+_GH_APPDATA_MARKER = "~/AppData/Roaming/GitHub CLI"
+_GCLOUD_APPDATA_MARKER = "~/AppData/Roaming/gcloud"
+
+
+def test_windows_appdata_credential_dirs_in_home_are_sensitive(
+    fixed_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("APPDATA", raising=False)
+    roaming = fixed_home / "AppData" / "Roaming"
+
+    assert is_sensitive_path(str(roaming / "GitHub CLI" / "hosts.yml")) == _GH_APPDATA_MARKER
+    assert is_sensitive_path(str(roaming / "gcloud" / "credentials.db")) == _GCLOUD_APPDATA_MARKER
+    # Only the two tool directories: the rest of Roaming stays readable.
+    assert is_sensitive_path(str(roaming / "Code" / "User" / "settings.json")) is None
+
+
+def test_windows_gh_dir_with_a_space_is_caught_in_commands(
+    fixed_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("APPDATA", raising=False)
+    gh_dir = fixed_home / "AppData" / "Roaming" / "GitHub CLI"
+
+    assert sensitive_path_in_text(f'cat "{gh_dir / "hosts.yml"}"') == _GH_APPDATA_MARKER
+    assert sensitive_target_in_command(f'rm -rf "{gh_dir}"') == _GH_APPDATA_MARKER
+
+
+@pytest.mark.parametrize(
+    ("relative", "marker"),
+    [
+        (("GitHub CLI", "hosts.yml"), _GH_APPDATA_MARKER),
+        (("gcloud", "credentials.db"), _GCLOUD_APPDATA_MARKER),
+    ],
+)
+def test_redirected_appdata_outside_home_is_sensitive(
+    fixed_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    relative: tuple[str, str],
+    marker: str,
+) -> None:
+    """``%APPDATA%`` can point outside the profile (folder redirection).
+
+    The ``~/AppData/Roaming`` entries have to follow it there, or the home
+    prefix alone would miss the real credential file.
+    """
+    appdata = tmp_path / "redirected" / "Roaming"
+    monkeypatch.setenv("APPDATA", str(appdata))
+    target = appdata.joinpath(*relative)
+
+    assert is_sensitive_path(str(target)) == marker
+    assert sensitive_path_marker(str(target), workspace=tmp_path / "ws") == marker
+    assert sensitive_path_marker(f"$APPDATA/{relative[0]}/{relative[1]}") == marker
+    assert is_sensitive_path(str(appdata / "Code" / "User" / "settings.json")) is None
+
+
+def test_hosts_yml_outside_the_gh_dirs_is_not_blocked(tmp_path: Path) -> None:
+    """``hosts.yml`` is also every Ansible inventory's name.
+
+    The gh token is guarded by its directories, so the filename is kept out
+    of the blocked tails and only gates the redaction pass.
+    """
+    workspace = tmp_path / "ws"
+    inventory = workspace / "inventory" / "hosts.yml"
+
+    assert "hosts.yml" not in _HOST_CREDENTIAL_FILES
+    assert sensitive_path_marker(str(inventory), workspace=workspace) is None
+    assert sensitive_path_in_text(f"cat {inventory}", workspace=workspace) is None
+    assert reads_credential_file("cat inventory/hosts.yml") is True

@@ -227,5 +227,9 @@ describe('Book · rejecting from the Orders tab', () => {
     await waitFor(() =>
       expect(rpcCall.mock.calls.some(([m]) => m === 'trading.orders.reject')).toBe(true),
     )
+    // No note was written: no placeholder reason either.
+    expect(rpcCall.mock.calls.find(([m]) => m === 'trading.orders.reject')?.[1]).toEqual({
+      orderId: 'theirs',
+    })
   })
 })

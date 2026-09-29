@@ -248,6 +248,16 @@ describe('sorting and grouping', () => {
     expect(segs[3]?.pct).toBeCloseTo(14 + 12 + 10 + 8 + 6)
     expect(allocationSegments([])).toEqual([])
   })
+  it('keys each allocation slice by holding, not by symbol', () => {
+    const twoEth = [
+      holding('ETH', { allocationPct: 40, wallet: '0xa' }),
+      holding('ETH', { allocationPct: 30, wallet: '0xb' }),
+      holding('ETH', { allocationPct: 20, chainId: 4663, wallet: '0xa' }),
+    ]
+    const keys = allocationSegments(twoEth).map((s) => s.key)
+    expect(new Set(keys).size).toBe(3)
+    expect(allocationSegments(twoEth).map((s) => s.symbol)).toEqual(['ETH', 'ETH', 'ETH'])
+  })
   it('filters holdings by chain', () => {
     const mixed = [holding('A'), holding('B', { chainId: 4663 })]
     expect(filterHoldings(mixed, 4663).map((h) => h.token.symbol)).toEqual(['B'])

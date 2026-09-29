@@ -70,8 +70,96 @@ export type OrderStatus =
 export type Initiator = 'manual' | 'agent' | 'external'
 
 /** A swap trades through a provider; a send moves one token to an address;
- *  a revoke sets an ERC-20 allowance to zero. Older engines omit `kind`. */
-export type OrderKind = 'swap' | 'send' | 'revoke'
+ *  a revoke sets an ERC-20 allowance to zero; the three `lp_*` kinds collect
+ *  fees from, take liquidity out of, or put liquidity into a Uniswap V4
+ *  position (docs/lp-write.md). Older engines omit `kind`. */
+export type OrderKind = 'swap' | 'send' | 'revoke' | 'lp_collect' | 'lp_remove' | 'lp_add'
+
+/** A chain value as the LP plan carries it: raw base units, the decimal string, USD or null. */
+export interface LpPlanAmount {
+  raw: string
+  human: string
+  usd: number | null
+}
+
+export interface LpPlanToken {
+  address: string
+  symbol: string
+  decimals: number
+  priceUsd: number | null
+}
+
+/**
+ * What an LP write will do, as the engine planned it (`LpPlan` in
+ * docs/lp-write.md). `base` is the token the user named, `quote` the other
+ * side; bounds are raw integers — maxima on an add, minima on a remove.
+ */
+export interface LpPlan {
+  op: 'collect' | 'remove' | 'add'
+  chain?: { id: number; key: string; name: string; explorer?: string } | null
+  /** Null for a fresh mint until it confirms. */
+  tokenId: string | null
+  /** add: true when the deposit goes into an existing position. */
+  increase?: boolean
+  pool: {
+    poolId: string
+    poolKey?: {
+      currency0: string
+      currency1: string
+      fee: number
+      tickSpacing: number
+      hooks: string
+    } | null
+    tick: number | null
+    sqrtPriceX96?: string | null
+    feePct: string
+    /** The pool's hook, null for a hook-less pool (the engine's shortcut for poolKey.hooks). */
+    hook?: string | null
+  }
+  token: LpPlanToken
+  quote: LpPlanToken
+  range: {
+    tickLower: number
+    tickUpper: number
+    priceLower: number | null
+    priceUpper: number | null
+    mcapLower: number | null
+    mcapUpper: number | null
+  }
+  liquidity: string
+  /** Where the price sits against the range, when the engine says; else derived from the ticks. */
+  status?: 'in-range' | 'above-range' | 'below-range' | 'closed' | null
+  /** remove only: the share of the position's liquidity taken out. */
+  pct?: number | null
+  /** remove only: the position NFT is burnt (a 100 % remove). */
+  burn?: boolean
+  expected: { base: LpPlanAmount; quote: LpPlanAmount; usd: number | null }
+  bounds: { base: string; quote: string }
+  /** collect/remove: fees owed at plan time (included in `expected`). */
+  fees?: { base: LpPlanAmount; quote: LpPlanAmount; usd: number | null } | null
+  positionValueUsd?: number | null
+  /** add only: the allowances the approve step will set, in order. */
+  approvals?: {
+    token: string
+    symbol: string
+    step: 'erc20->permit2' | 'permit2->posm'
+    amountRaw: string
+    needed: boolean
+    txHash?: string | null
+  }[]
+  /** add: the range sits entirely on one side of the price, so one token is deposited. */
+  oneSided?: 'base' | 'quote' | null
+  simulation?: {
+    ok: boolean
+    gasUsed: number | null
+    method: string
+    revert: string | null
+  } | null
+  gasUsd?: number | null
+  slippagePct?: number | null
+  planHash?: string
+  createdAtBlock?: number
+}
 
 export interface Order {
   orderId: string
@@ -114,9 +202,172 @@ export interface Order {
   provider?: ProviderId
   /** The caller's idempotency key, when it gave one. */
   clientOrderId?: string | null
+  slippagePct?: number | null
+  /** lp_* orders: what the engine planned (docs/lp-write.md). */
+  plan?: LpPlan | null
+  /** lp_* orders, once confirmed: the position (a mint's new id) and what the receipt moved. */
+  tokenId?: string | null
+  received?: { base: LpPlanAmount; quote: LpPlanAmount } | null
+  spent?: { base: LpPlanAmount; quote: LpPlanAmount } | null
+  /** A buy a DCA mandate fired carries the mandate's id (docs/dca.md); null otherwise. */
+  mandateId?: string | null
 }
 
-export type EntryKind = 'swap' | 'deposit' | 'withdraw' | 'approval' | 'gas' | 'unwrap'
+/* ── DCA mandates (docs/dca.md) ──────────────────────────────────────────── */
+
+export type MandateStatus =
+  'awaiting_approval' | 'active' | 'paused' | 'completed' | 'stopped' | 'rejected' | 'expired'
+
+/** `pending`: the order is placed and not settled yet; `parked`: it waits for the user. */
+export type MandateRunStatus =
+  'pending' | 'filled' | 'parked' | 'skipped' | 'failed' | 'expired' | 'rejected'
+
+/** The card payload's chain, as the LP cards carry it. */
+export interface CardChain {
+  id: number
+  key: string
+  name: string
+  explorer?: string
+}
+
+/** The card payload's token: priced when the engine knows it, null otherwise. */
+export interface CardToken {
+  address: string
+  symbol: string
+  decimals: number
+  priceUsd: number | null
+}
+
+export interface CardWallet {
+  address: string
+  label: string | null
+  inApp?: boolean
+}
+
+/** One attempt of a mandate: a buy, a skip, a failure, or a buy waiting on the user. */
+export interface MandateRun {
+  n: number
+  at: string
+  manual: boolean
+  status: MandateRunStatus
+  /** Human-readable: "ETH at $3,120 above $3,000". */
+  reason: string | null
+  /** Machine-readable: max_price | daily_cap | insufficient_balance | cap_reached | trading.<code>. */
+  reasonCode?: string | null
+  usd: number | null
+  amount: LpPlanAmount | null
+  priceUsd: number | null
+  orderId: string | null
+  txHash: string | null
+  explorerUrl: string | null
+  gasUsd: number | null
+}
+
+/**
+ * A recurring buy the engine owns and runs by itself. Every figure is the
+ * engine's: the desk never counts a budget, it reads `budget`.
+ */
+export interface Mandate {
+  id: string
+  name: string
+  status: MandateStatus
+  statusReason: string | null
+  chain: CardChain
+  wallet: CardWallet
+  /** What is bought. */
+  token: CardToken
+  /** What is spent. */
+  quote: CardToken
+  schedule: {
+    everySeconds: number
+    label: string
+    startNow: boolean
+    anchorAt: string | null
+    nextRunAt: string | null
+    lastRunAt: string | null
+  }
+  budget: {
+    usdPerRun: number
+    capUsd: number
+    spentUsd: number
+    reservedUsd: number
+    remainingUsd: number
+    /** spent / cap, 0–1. */
+    progress: number
+  }
+  runs: { done: number; max: number | null; skipped: number; failed: number; attempts: number }
+  guards: {
+    maxPriceUsd: number | null
+    approvalThresholdUsd: number
+    dailyCapUsd: number
+    slippagePct: number | null
+    buysNeedApproval: boolean
+  }
+  acquired: {
+    amount: LpPlanAmount
+    avgPriceUsd: number | null
+    currentPriceUsd: number | null
+    vsAvgPct: number | null
+    unrealizedUsd: number | null
+    gasUsd: number
+  }
+  /** Newest first, at most 50. */
+  history: MandateRun[]
+  initiator: 'agent' | 'manual'
+  sessionKey: string | null
+  createdAt: string
+  updatedAt: string
+  approvedAt: string | null
+  expiresAt: string | null
+}
+
+interface MandateEnvelope {
+  version: number
+  fetchedAt: string
+  warnings: string[]
+  request?: { kind: 'get' | 'list'; params: Record<string, unknown> }
+}
+
+/** What every `trading.dca.*` write and `trading.dca.get` answer. */
+export interface MandatePayload extends MandateEnvelope {
+  kind: 'mandate'
+  mandate: Mandate
+  /** Only in the answer of `trading.dca.run`. */
+  run?: MandateRun
+}
+
+/** What `trading.dca.list` answers: live first, then newest. */
+export interface MandateListPayload extends MandateEnvelope {
+  kind: 'mandates'
+  mandates: Mandate[]
+  totals: {
+    count: number
+    active: number
+    spentUsd: number
+    capUsd: number
+    acquiredUsd: number | null
+  }
+}
+
+/** Still the user's to act on: awaiting a decision, running, or paused. */
+export function isLiveMandate(status: MandateStatus): boolean {
+  return status === 'awaiting_approval' || status === 'active' || status === 'paused'
+}
+
+export function isLpKind(kind: OrderKind | undefined | null): boolean {
+  return kind === 'lp_collect' || kind === 'lp_remove' || kind === 'lp_add'
+}
+
+export type EntryKind =
+  | 'swap'
+  | 'deposit'
+  | 'withdraw'
+  | 'approval'
+  | 'gas'
+  | 'unwrap'
+  | 'lp_add'
+  | 'lp_collect'
+  | 'lp_remove'
 
 /** A wrapped-ETH holding an L2 handed back: one click turns it into ETH. */
 export function isWrappedEth(token: Pick<Token, 'symbol' | 'native'>): boolean {

@@ -2,6 +2,7 @@ import { t } from '@/i18n'
 import '@/i18n/en/chat'
 
 import type { MarkdownDep, TranscriptHeaderStateRef } from './stream'
+import { renderedPlainText } from './plainText'
 import { modelDisplayName } from './routerFx'
 import {
   stripDirectiveTags,
@@ -196,10 +197,15 @@ export function createMessageRenderer(deps: MessageRendererDeps) {
     // `.thinking-block` is the collapsible reasoning disclosure the history and
     // stream renderers prepend inside `.msg-body`; its summary label and lazily
     // fetched body are chrome, not reply text, so they never reach the clipboard.
+    // `.code-block-header` holds a fenced block's language label and its own
+    // Copy button, which would otherwise land above the code.
     clone
-      .querySelectorAll('.msg-actions, .msg-meta, .thinking-block')
+      .querySelectorAll('.msg-actions, .msg-meta, .thinking-block, .code-block-header')
       .forEach((node) => node.remove())
-    return (clone.textContent || '').trim()
+    // Assistant bubbles are rendered markdown, where line breaks live in `<br>`
+    // and block tags that `textContent` drops; other rows hold their text
+    // verbatim under `white-space: pre-wrap`.
+    return renderedPlainText(clone, !row.classList.contains('assistant'))
   }
 
   function copyText(text: string): Promise<void> {

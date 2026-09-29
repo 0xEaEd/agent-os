@@ -48,6 +48,8 @@ describe('desktop chat CSS geometry contract', () => {
     const dock = css.match(/\.chat-jump-dock \{[\s\S]*?\n\}/)?.[0]
     expect(dock).toMatch(/height: 0;/)
     expect(dock).toMatch(/pointer-events: none;/)
+    // A flex item of `.chat-stage` now (above the approvals region): it may not grow.
+    expect(dock).toMatch(/flex: none;/)
     expect(css).toMatch(/\.chat-jump-dock\[data-visible='false'\] \{[\s\S]*?visibility: hidden;/)
   })
 })
@@ -143,5 +145,398 @@ describe('desktop artifact file card', () => {
     expect(css).toMatch(
       /^\.msg-artifact-chip \.msg-file-chip__icon::before \{[\s\S]*?mask: var\(--artifact-glyph\) center \/ contain no-repeat;/m,
     )
+  })
+})
+
+// LP cards (frontend lp.ts) are the console's markup; the desktop draws them as
+// desk instruments through the `data-lp-*` hooks the renderer stamps. These pin
+// the hooks the skin depends on and the parts that make it the desk's, not the
+// console's: a status rail rather than a border, figures in mono, and an
+// explorer link that `.msg-body a` cannot repaint.
+/**
+ * Columns `repeat(auto-fit, minmax(clamp(A, (700px - 100%) * 999, B), 1fr))`
+ * yields for four stats in a strip `width` px wide with a `gap` px column gap:
+ * the most tracks n such that n·min + (n − 1)·gap ≤ width, capped at 4.
+ */
+function stripColumns(block: string, width: number, gap: number): number {
+  const px = (v: string): number => (v.endsWith('rem') ? parseFloat(v) * 16 : parseFloat(v))
+  const m =
+    /minmax\(clamp\(calc\((\d+)% - ([\d.]+(?:px|rem))\), calc\(\((\d+)px - 100%\) \* (\d+)\), calc\((\d+)% - ([\d.]+(?:px|rem))\)\), 1fr\)/.exec(
+      block.replace(/\s+/g, ' '),
+    )
+  if (!m) throw new Error('strip columns are not the quarter/half clamp')
+  const lo = (Number(m[1]) / 100) * width - px(m[2]!)
+  const flip = (Number(m[3]) - width) * Number(m[4])
+  const hi = (Number(m[5]) / 100) * width - px(m[6]!)
+  const min = Math.min(Math.max(flip, lo), hi)
+  return Math.min(4, Math.floor((width + gap) / (min + gap)))
+}
+
+describe('desktop LP card skin', () => {
+  const card = css.match(/^\.lp-card \{[\s\S]*?^\}/m)?.[0]
+
+  it('draws the plate with a hairline and a status rail, not a border', () => {
+    expect(card).toBeTruthy()
+    expect(card).toMatch(/inset 3px 0 0 var\(--lp-rail\)/)
+    expect(card).not.toMatch(/\bborder:/)
+    expect(card).toMatch(/font-variant-numeric: tabular-nums;/)
+  })
+
+  it('tones the rail and the pill from the renderer-stamped status', () => {
+    for (const status of ['in-range', 'above-range', 'below-range']) {
+      expect(selectors, status).toContain(`.lp-card[data-lp-status='${status}']`)
+      expect(selectors, status).toContain(`.lp-pill[data-lp-status='${status}']`)
+    }
+    expect(css).toMatch(/\.lp-card\[data-lp-status='in-range'\] \{\s*--lp-rail: var\(--ok\);/)
+  })
+
+  it('sets every figure in mono and keeps lime for the live bar', () => {
+    expect(css).toMatch(
+      /\.lp-stat__value,[\s\S]*?\.lp-row__value,[\s\S]*?font-family: var\(--font-mono\);/,
+    )
+    expect(css).toMatch(
+      /\.lp-chart__bar\[data-active='true'\] \.lp-chart__fill \{\s*fill: var\(--primary\);/,
+    )
+  })
+
+  it('outranks the transcript link rule for the explorer action', () => {
+    const action = css.match(/^\.msg-body \.lp-card__action \{[\s\S]*?^\}/m)?.[0]
+    expect(action).toMatch(/text-decoration: none;/)
+    expect(action).toMatch(/color: var\(--muted-foreground\);/)
+  })
+
+  it('never changes the case of a token symbol', () => {
+    // The pair and the price caption both carry symbols ("boar", "WETH per boar").
+    for (const rule of ['.lp-card__pair', '.lp-chart__caption']) {
+      const block = css.match(new RegExp(`^\\${rule} \\{[\\s\\S]*?^\\}`, 'm'))?.[0]
+      expect(block, rule).toBeTruthy()
+      expect(block, rule).not.toMatch(/text-transform/)
+    }
+  })
+
+  it('keys the layout on the card, never on the host wrapper', () => {
+    expect(selectors.some((s) => s.includes('.msg-artifact-lp[data-lp-kind'))).toBe(false)
+    expect(selectors).toContain(".lp-card[data-lp-kind='positions']")
+  })
+
+  it('keeps position rows at desk density with fees and distance columns', () => {
+    const rule = (selector: string): string | undefined =>
+      css.match(
+        new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+      )?.[0]
+    const columns = (block: string | undefined): string[] | undefined =>
+      block
+        ?.match(/grid-template-columns:\s*([^;]+);/)?.[1]
+        ?.trim()
+        .split(/\s+(?![^(]*\))/)
+    const row = rule('.lp-row')
+    expect(row).toMatch(/min-height: 26px;/)
+    // Every row shares the book's columns, so they line up and size to content.
+    expect(row).toMatch(/grid-template-columns: subgrid;/)
+    // Stacked (default, < 760px): two 26px-or-less lines —
+    // status+distance | pair | value over chain | owner | fees.
+    expect(row).toMatch(/grid-template-rows: 26px 22px;/)
+    const book = rule('.lp-card .lp-rows')
+    expect(columns(book)).toEqual(['max-content', 'minmax(0, 1fr)', 'max-content'])
+    // Outranks `.msg-body :is(ul, ol)`, which indented the book by 1.3em.
+    expect(book).toMatch(/padding: 0;/)
+    expect(css).toMatch(/\.lp-card \.lp-row \+ \.lp-row \{\s*margin-top: 0;/)
+    // Dense (the mounter measured >= 760px): one 26px line, six columns.
+    expect(rule(".lp-card[data-lp-layout='dense'] .lp-row")).toMatch(/grid-template-rows: 26px;/)
+    expect(columns(rule(".lp-card[data-lp-layout='dense'] .lp-rows"))).toHaveLength(6)
+    expect(selectors).toContain('.lp-row__distance')
+    expect(selectors).toContain('.lp-row__fees')
+  })
+
+  it('gives a narrow card (< 440px) three lines per row and one fact per line', () => {
+    const rule = (selector: string): string | undefined =>
+      css.match(
+        new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+      )?.[0]
+    const n = ".lp-card[data-lp-layout='narrow']"
+    expect(rule(`${n} .lp-rows`)).toMatch(/grid-template-columns: minmax\(0, 1fr\);/)
+    const row = rule(`${n} .lp-row`)
+    expect(row).toMatch(/grid-template-columns: max-content minmax\(0, 1fr\) max-content;/)
+    // Three lines; the pair's line grows if a long symbol wraps.
+    expect(row).toMatch(/grid-template-rows: 24px minmax\(20px, auto\) 20px;/)
+    // Rows no longer inherit the book's column gap, so they carry their own
+    // (without it "ROBINHOOD CHAIN" ran into the owner).
+    expect(row).toMatch(/column-gap: 10px;/)
+    expect(rule(`${n} .lp-row__status`)).toMatch(/grid-area: 1 \/ 1 \/ 2 \/ 3;/)
+    expect(rule(`${n} .lp-row__value`)).toMatch(/grid-area: 1 \/ 3;/)
+    const pair = rule(`${n} .lp-row__pair`)
+    expect(pair).toMatch(/grid-area: 2 \/ 1 \/ 3 \/ 3;/)
+    expect(pair).toMatch(/overflow: visible;/)
+    expect(pair).toMatch(/white-space: normal;/)
+    expect(rule(`${n} .lp-row__fees`)).toMatch(/grid-area: 2 \/ 3;/)
+    expect(rule(`${n} .lp-row__chain`)).toMatch(/grid-area: 3 \/ 1;/)
+    expect(rule(`${n} .lp-row__wallet`)).toMatch(/grid-area: 3 \/ 2 \/ 4 \/ 4;/)
+    // Facts one per line (label left, figure right), smaller figures.
+    expect(css).toMatch(
+      /\.lp-card\[data-lp-layout='narrow'\] \.lp-card__stats,\s*\.lp-card\[data-lp-layout='narrow'\] \.lp-card__stats\.lp-totals \{\s*grid-template-columns: minmax\(0, 1fr\);/,
+    )
+    expect(rule(`${n} .lp-stat__value`)).toMatch(/font-size: 11px;/)
+    expect(css).not.toMatch(/data-lp-layout='narrow'\][^{]*\{[^}]*text-overflow: ellipsis/)
+  })
+
+  it('never cuts what a row means: only the owner may ellipsize', () => {
+    const ellipsized = [...css.matchAll(/^(\.lp-row[^{]*) \{[^}]*text-overflow: ellipsis/gm)].map(
+      (m) => m[1],
+    )
+    expect(ellipsized).toEqual(['.lp-row__wallet'])
+    const status = css.match(/^\.lp-row__status \{[\s\S]*?^\}/m)?.[0]
+    expect(status).not.toMatch(/overflow: hidden/)
+    // The fixed 140px status column clipped "−100.0%" to "-100.".
+    expect(css).not.toMatch(/grid-template-columns: 140px/)
+  })
+
+  it('styles the measured label states the mounter stamps', () => {
+    expect(selectors).toContain(".lp-range[data-lp-bounds='stacked'] .lp-range__upper")
+    expect(css).toMatch(/\.lp-range\[data-lp-now-wrap\] \.lp-range__now-side \{\s*display: block;/)
+    expect(css).toMatch(/\.lp-chart__tick\[data-lp-hidden\] \{\s*visibility: hidden;/)
+  })
+
+  it('draws the link arrow only on an owner that is a link', () => {
+    expect(selectors).not.toContain('.lp-row__wallet[data-lp-external]::before')
+    expect(selectors).toContain('.lp-row__wallet[data-lp-link]::after')
+    expect(selectors).toContain('.msg-body .lp-row__wallet[data-lp-link]')
+  })
+
+  it('lays the positions strip out 4-up from 700px and 2×2 below, never 3 + 1', () => {
+    const strip = css.match(/^\.lp-card__stats\.lp-totals \{[\s\S]*?^\}/m)?.[0]
+    expect(strip).toBeTruthy()
+    const gap = 18 // .lp-card__stats gap: 0 18px
+    // The live report: a 608px card (581px strip) wrapped FEES onto its own line.
+    expect(stripColumns(strip!, 581, gap)).toBe(2)
+    expect(stripColumns(strip!, 699, gap)).toBe(2)
+    expect(stripColumns(strip!, 700, gap)).toBe(4)
+    expect(stripColumns(strip!, 1000, gap)).toBe(4)
+    for (let w = 240; w <= 1400; w += 1) expect(stripColumns(strip!, w, gap)).not.toBe(3)
+  })
+
+  it('greens unclaimed fees only when there are some', () => {
+    expect(css).toMatch(/^\.lp-row__fees \{[^}]*color: var\(--muted-foreground\);/m)
+    expect(css).toMatch(/^\.lp-row__fees\[data-lp-fees='positive'\] \{\s*color: var\(--ok\);/m)
+    expect(css).toMatch(
+      /^\.lp-hero\[data-lp-hero='fees'\] \.lp-hero__value\[data-lp-fees='positive'\] \{\s*color: var\(--ok\);/m,
+    )
+    expect(css).toMatch(
+      /^\.lp-hero\[data-lp-hero='fees'\] \.lp-hero__value\[data-lp-fees='zero'\] \{\s*color: var\(--muted-foreground\);/m,
+    )
+    expect(css).not.toMatch(/lp-hero__value:not\(\[data-lp-no-price\]\)/)
+  })
+
+  it('shows both copy outcomes', () => {
+    expect(css).toMatch(/\.lp-card__copy\[data-lp-copied='true'\] \{\s*color: var\(--ok\);/)
+    expect(css).toMatch(/\.lp-card__copy\[data-lp-copied='failed'\] \{\s*color: var\(--danger\);/)
+  })
+
+  it('hangs the range bounds on the band edges, above the rule', () => {
+    expect(css).toMatch(/\.lp-range__lower,\s*\.lp-range__upper \{[\s\S]*?position: absolute;/)
+    expect(css).toMatch(/\.lp-range__upper \{\s*transform: translateX\(-100%\);/)
+  })
+})
+
+// DCA cards (frontend dca.ts, docs/dca.md "Rendering") are the console's
+// markup too; the desktop draws them as desk instruments through the
+// `data-dca-*` hooks. These pin the hooks the skin reads and what makes it
+// the desk's: a rail that follows the mandate's state (breathing while it
+// waits for approval), figures in tabular mono, and actions that only exist
+// at the desk and cannot be repainted by `.msg-body a`.
+describe('desktop DCA card skin', () => {
+  const rule = (selector: string): string | undefined =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+    )?.[0]
+
+  it('joins the artifact grid next to the LP group', () => {
+    expect(css).toMatch(/\.msg-artifact-lp-group,\s*\.msg-artifact-dca-group \{\s*display: grid;/)
+    expect(css).toMatch(/^\.msg-artifact-dca-group \{\s*max-width: min\(38rem, 100%\);/m)
+  })
+
+  it('draws a hairline plate with a status rail, not a border, and mono numerals', () => {
+    const card = rule('.dca-card')
+    expect(card).toBeTruthy()
+    expect(card).toMatch(/--dca-rail: var\(--dim\);/)
+    expect(card).toMatch(/box-shadow: inset 0 0 0 1px var\(--hairline\);/)
+    expect(card).not.toMatch(/\bborder:/)
+    expect(card).toMatch(/font-variant-numeric: tabular-nums;/)
+    expect(rule('.dca-card::before')).toMatch(/background: var\(--dca-rail\);/)
+    expect(css).toMatch(/\.dca-card__usd \{[^}]*font-family: var\(--font-mono\);/)
+    expect(css).toMatch(
+      /\.dca-stat__value,[\s\S]*?\.dca-run,[\s\S]*?font-family: var\(--font-mono\);/,
+    )
+  })
+
+  it('tones the rail and the pill from every renderer-stamped status', () => {
+    const tones: Record<string, string> = {
+      awaiting_approval: 'warn',
+      active: 'ok',
+      completed: 'info',
+    }
+    for (const [status, tone] of Object.entries(tones)) {
+      expect(css, status).toMatch(
+        new RegExp(
+          `\\.dca-card\\[data-dca-status='${status}'\\] \\{\\s*--dca-rail: var\\(--${tone}\\);`,
+        ),
+      )
+      expect(css, status).toMatch(
+        new RegExp(
+          `\\.dca-pill\\[data-status='${status}'\\] \\{\\s*--dca-tone: var\\(--${tone}\\);`,
+        ),
+      )
+    }
+    for (const status of ['paused', 'stopped', 'rejected', 'expired']) {
+      expect(selectors, status).toContain(`.dca-card[data-dca-status='${status}']`)
+    }
+  })
+
+  it('breathes the rail while a mandate waits for approval, and holds still on reduced motion', () => {
+    expect(rule(".dca-card[data-dca-status='awaiting_approval']::before")).toMatch(
+      /animation: dca-rail-breathe/,
+    )
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.dca-card\[data-dca-status='awaiting_approval'\]::before,[\s\S]*?animation: none;/,
+    )
+  })
+
+  it('keys layout, busy and due states on the card hooks, never on the host', () => {
+    expect(selectors).toContain(".dca-card[data-dca-layout='wide'] .dca-card__stats")
+    expect(selectors).toContain(".dca-card[data-dca-layout='narrow'] .dca-card__stats")
+    expect(selectors).toContain(
+      '.dca-card[data-dca-busy] > :not(.dca-actions):not(.dca-card__foot)',
+    )
+    expect(selectors).toContain('.dca-card__next[data-dca-next-at]')
+    expect(selectors.some((s) => s.includes('.msg-artifact-dca[data-dca-kind'))).toBe(false)
+    expect(selectors).toContain(".dca-card[data-dca-kind='mandates']")
+  })
+
+  it('styles every documented part of the card', () => {
+    for (const part of [
+      '.dca-card__head',
+      '.dca-card__hero',
+      '.dca-card__next',
+      '.dca-card__progress',
+      '.dca-card__stats',
+      '.dca-chart',
+      '.dca-runs',
+      '.dca-actions',
+      '.dca-actions__error',
+      '.dca-card__warnings',
+      '.dca-card__foot',
+      '.dca-pill',
+    ]) {
+      expect(selectors, part).toContain(part)
+    }
+    // The reserved buy is hatched on the gauge, not a second solid colour.
+    expect(rule('.dca-progress__reserved')).toMatch(/repeating-linear-gradient\(/)
+  })
+
+  it('sets the two plot lengths the renderer positions the chart labels from', () => {
+    // dca.ts places the avg / now labels at calc(var(--dca-plot-pad) +
+    // var(--dca-plot-h) * y): the skin must define both and build the plot
+    // from them, or the labels float off their lines.
+    const plot = rule('.dca-chart__plot')
+    expect(plot).toMatch(/--dca-plot-pad: [\d.]+(px|rem);/)
+    expect(plot).toMatch(/--dca-plot-h: [\d.]+(px|rem);/)
+    expect(plot).toMatch(/padding-top: var\(--dca-plot-pad\);/)
+    expect(plot).toMatch(/position: relative;/)
+    expect(rule('.dca-chart__svg')).toMatch(/height: var\(--dca-plot-h\);/)
+    expect(css).toMatch(
+      /\.dca-chart__avg,\s*\.dca-chart__now,\s*\.dca-chart__fail \{\s*position: absolute;/,
+    )
+    expect(rule('.dca-chart__tooltip')).toMatch(/position: absolute;/)
+    for (const kind of [
+      'bar',
+      'parked',
+      'pending',
+      'skip',
+      'void',
+      'fail',
+      'avg-line',
+      'now-line',
+    ]) {
+      expect(selectors, kind).toContain(`.dca-chart__${kind}`)
+    }
+  })
+
+  it('spells out an armed Stop and marks the call in flight', () => {
+    expect(rule('.msg-body .dca-action[data-dca-confirm]')).toMatch(/color: var\(--danger\);/)
+    expect(selectors).toContain('.msg-body .dca-action[data-dca-pending]')
+    expect(selectors).toContain('.dca-actions[data-dca-busy] .dca-action')
+  })
+
+  it('outranks the transcript link rule for the actions and makes Approve the one filled control', () => {
+    expect(rule('.msg-body .dca-action')).toMatch(/cursor: default;/)
+    expect(rule(".msg-body .dca-action[data-dca-tone='primary']")).toMatch(
+      /background: var\(--primary\);/,
+    )
+    expect(rule(".msg-body .dca-action[data-dca-tone='danger']")).toMatch(/color: var\(--danger\);/)
+    expect(rule('.msg-body .dca-card__action')).toMatch(/text-decoration: none;/)
+  })
+
+  it('shows a stale card: controls off, the as-of amber, the refresh still live', () => {
+    const off = css.match(
+      /^\.dca-card\[data-dca-stale\] \.dca-actions \.dca-action,[^{]*\{[\s\S]*?^\}/m,
+    )?.[0]
+    expect(off).toBeTruthy()
+    expect(off).toMatch(/opacity: 0\.\d+;/)
+    expect(off).toMatch(/pointer-events: none;/)
+    // Only a failed re-read turns the as-of amber; the quiet mount-time
+    // "checking" pass must not flash the footer.
+    expect(selectors).toContain(".dca-card[data-dca-stale='failed'] .dca-card__ago")
+    expect(selectors).not.toContain('.dca-card[data-dca-stale] .dca-card__ago')
+    expect(css).toMatch(
+      /\.dca-card\[data-dca-stale='failed'\] \.dca-card__as-of,\s*\.dca-card\[data-dca-stale='failed'\] \.dca-card__ago \{\s*color: var\(--warn\);/,
+    )
+    expect(rule('.dca-card__stale')).toMatch(/display: flex;/)
+    // The footer's ↻ is how a stale card recovers: nothing may switch it off.
+    expect(
+      selectors.some((sel) => /data-dca-stale\][^,]*\.dca-card__(action|refresh)/.test(sel)),
+    ).toBe(false)
+  })
+
+  it('leads a list row with the mandate name in the text face, figures still mono', () => {
+    const name = rule('.dca-row__name')
+    expect(name).toMatch(/font-family: var\(--font-sans\);/)
+    expect(name).toMatch(/font-weight: 500;/)
+    expect(name).toMatch(/order: -1;/)
+    expect(name).toMatch(/text-overflow: ellipsis;/)
+    expect(name).not.toMatch(/text-transform/)
+    expect(css).toMatch(
+      /\.dca-row__spent,\s*\.dca-card__foot \{\s*font-family: var\(--font-mono\);/,
+    )
+  })
+
+  it("hangs quiet mono y-axis labels at the plot's left edge", () => {
+    const axis = rule('.dca-chart__y')
+    expect(axis).toMatch(/position: absolute;/)
+    expect(axis).toMatch(/pointer-events: none;/)
+    const label = rule('.dca-chart__ylabel')
+    expect(label).toMatch(/position: absolute;/)
+    expect(label).toMatch(/left: 0;/)
+    expect(label).toMatch(/font-family: var\(--font-mono\);/)
+    expect(label).toMatch(/color: var\(--dim\);/)
+    expect(Number(label?.match(/font-size: ([\d.]+)px;/)?.[1])).toBeLessThanOrEqual(10)
+  })
+
+  it('keeps the tooltip legible wherever the renderer places it', () => {
+    const tip = rule('.dca-chart__tooltip')
+    expect(tip).toMatch(/background: var\(--elevated\);/)
+    expect(tip).toMatch(/border: 1px solid var\(--border\);/)
+    expect(tip).toMatch(/backdrop-filter: blur\(\d+px\);/)
+    // Above the bars and every plot label (the y axis sits at 1).
+    const z = Number(tip?.match(/z-index: (\d+);/)?.[1])
+    expect(z).toBeGreaterThan(Number(rule('.dca-chart__y')?.match(/z-index: (\d+);/)?.[1] ?? 0))
+    // Placed under the columns inline: the skin's default `bottom` must yield.
+    expect(rule(".dca-chart__tooltip[data-dca-place='below']")).toMatch(/bottom: auto;/)
+  })
+
+  it('never changes the case of a token symbol', () => {
+    for (const r of ['.dca-card__pair,', '.dca-card__name', '.dca-stat__symbol']) {
+      const block = css.match(new RegExp(`^\\${r}[^{]*\\{[\\s\\S]*?^\\}`, 'm'))?.[0]
+      expect(block, r).toBeTruthy()
+      expect(block, r).not.toMatch(/text-transform/)
+    }
   })
 })

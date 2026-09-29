@@ -11,6 +11,8 @@ import { useTheme } from '@/stores/theme'
 import { chatMarkdown } from './markdown'
 import { createCardsMounter, type CardsMounter } from './transcript/cards'
 import { createChartMounter, type ChartMounter } from './transcript/chart'
+import { createDcaMounter, type DcaActions, type DcaMounter } from './transcript/dca'
+import { createLpMounter, type LpActions, type LpMounter } from './transcript/lp'
 import {
   createStreamController,
   JUMP_TO_TAIL_GAP_PX,
@@ -51,6 +53,7 @@ import {
   replayGapShouldWarn,
   sessionChangeIsTerminal,
   sessionRunStatus,
+  stripAssistantText,
   stripDirectiveTags,
   stripGeneratedArtifactMarkers,
   stripProtocolTextLeak,
@@ -238,6 +241,19 @@ export function useTranscript(opts: {
    * duration — see `isRoutePinned` in `createRouterFxRenderer`.
    */
   routePinned?: boolean
+  /**
+   * Collect/Remove on the user's own LP positions (lp.ts). Only an operator
+   * connection can have those orders approved, so only the desktop's desk
+   * passes it; without it the cards carry no write buttons. Read live, so it
+   * may come and go without remounting the transcript.
+   */
+  lpActions?: LpActions | null
+  /**
+   * The DCA mandate controls (dca.ts: approve, pause, resume, buy now, stop).
+   * Operator-only like `lpActions`, so only the desktop's desk passes it;
+   * without it the cards carry no `.dca-actions`. Read live.
+   */
+  dcaActions?: DcaActions | null
 }): {
   containerRef: React.RefObject<HTMLDivElement | null>
   routerFxDockRef: React.RefObject<HTMLDivElement | null>
@@ -481,6 +497,56 @@ export function useTranscript(opts: {
   const [cardsMounter] = useState<CardsMounter>(() =>
     createCardsMounter({ fetchPayload: fetchChartPayload }),
   )
+  // Uniswap V4 liquidity cards (lp.ts). Owns a once-a-minute clock for the
+  // "2m ago" stamps and the copy-button resets, both cleared on unmount. ↻
+  // re-runs a card's read over this connection (the reads are agent-callable);
+  // the write buttons exist only while the caller hands over `lpActions`.
+  const lpActionsRef = useRef<LpActions | null>(opts.lpActions ?? null)
+  useEffect(() => {
+    lpActionsRef.current = opts.lpActions ?? null
+  }, [opts.lpActions])
+  // eslint-disable-next-line react-hooks/refs -- the factory stores the getters and reads .current only later, inside click handlers and renders outside React's render
+  const [lpMounter] = useState<LpMounter>(() =>
+    createLpMounter({
+      fetchPayload: fetchChartPayload,
+      call: (method, params) => rpc.call(method, params),
+      actions: () => lpActionsRef.current,
+    }),
+  )
+  // DCA mandate cards (dca.ts). Owns the countdown clock (1 s under an hour
+  // to the next buy, 1 min above) and the copy / Stop-confirm resets, all
+  // cleared on unmount. ↻ re-reads over this connection (`trading.dca.get` /
+  // `list` are agent-callable); the controls exist only while the caller hands
+  // over `dcaActions`.
+  const dcaActionsRef = useRef<DcaActions | null>(opts.dcaActions ?? null)
+  useEffect(() => {
+    dcaActionsRef.current = opts.dcaActions ?? null
+  }, [opts.dcaActions])
+  // eslint-disable-next-line react-hooks/refs -- the factory stores the getters and reads .current only later, inside click handlers and renders outside React's render
+  const [dcaMounter] = useState<DcaMounter>(() =>
+    createDcaMounter({
+      fetchPayload: fetchChartPayload,
+      call: (method, params) => rpc.call(method, params),
+      actions: () => dcaActionsRef.current,
+    }),
+  )
+  // A parked LP write's button waits for its order to settle; a DCA card
+  // re-reads itself when one of its buys settles.
+  useEffect(
+    () =>
+      rpc.on('trading.order.finished', (payload: unknown) => {
+        const order = (payload as { order?: { orderId?: unknown } } | null)?.order
+        if (typeof order?.orderId !== 'string') return
+        lpMounter.orderFinished(order.orderId)
+        dcaMounter.orderFinished(order.orderId)
+      }),
+    [rpc, lpMounter, dcaMounter],
+  )
+  // Every mandate state change carries the full mandate: swap it in place.
+  useEffect(
+    () => rpc.on('trading.dca.changed', (payload: unknown) => dcaMounter.mandateChanged(payload)),
+    [rpc, dcaMounter],
+  )
 
   // One seam for both inline-artifact renderers. The downstream deps (stream.ts,
   // history.ts, artifacts.ts) call this whenever new rows land; keeping a single
@@ -490,8 +556,10 @@ export function useTranscript(opts: {
     (container: HTMLElement) => {
       chartMounter.mountCharts(container)
       cardsMounter.mountCards(container)
+      lpMounter.mountLp(container)
+      dcaMounter.mountDca(container)
     },
-    [chartMounter, cardsMounter],
+    [chartMounter, cardsMounter, lpMounter, dcaMounter],
   )
 
   useEffect(() => {
@@ -500,8 +568,10 @@ export function useTranscript(opts: {
       unsubscribe()
       chartMounter.destroyAll()
       cardsMounter.destroyAll()
+      lpMounter.destroyAll()
+      dcaMounter.destroyAll()
     }
-  }, [chartMounter, cardsMounter])
+  }, [chartMounter, cardsMounter, lpMounter, dcaMounter])
 
   // eslint-disable-next-line react-hooks/refs -- factory stores the refs and reads .current only later, inside methods invoked outside render (never at creation)
   const [controller] = useState<StreamController>(() =>
@@ -913,7 +983,7 @@ export function useTranscript(opts: {
       attachHoverActions: (row, role) => messageRendererRef.current?.attachHoverActions(row, role),
       reconstructToolCalls: (row, segments) =>
         controller.reconstructToolCalls(row, segments, {
-          stripText: (text) => stripDirectiveTags(stripProtocolTextLeak(text)),
+          stripText: stripAssistantText,
           renderText: (text, into) => {
             into.innerHTML = chatMarkdown.render(text)
             chatMarkdown.bindCopy(into)

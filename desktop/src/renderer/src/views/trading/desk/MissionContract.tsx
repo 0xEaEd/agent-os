@@ -5,7 +5,8 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { sameAddress, walletLabel } from '../logic'
 import { Sheet } from '../parts'
-import { CHAINS, type Limits, type Wallet } from '../types'
+import { CHAINS, type Limits, type Mandate, type Wallet } from '../types'
+import { DcaContract } from './DcaContract'
 import {
   composeMissionPrompt,
   INTERVALS,
@@ -16,31 +17,10 @@ import {
   type MissionForm,
   type MissionKind,
 } from './desk-logic'
+import { isMandatePreset, type DcaForm } from './mandate-logic'
 import { formFromPreset, presetDefaults, type Knob, type MissionPreset } from './presets'
 
-/**
- * The contract: what the mission may do, with what money, how often, until
- * when. The prompt the agent will read is composed from these fields and
- * shown in full, so nothing is signed that was not seen. A `swap` contract
- * is a one-shot prompt; everything else becomes a scheduled job.
- *
- * Arriving from a preset, the two or three numbers that actually differ are
- * the whole form and the rest waits under "Advanced" — twelve fields at once
- * was the reason nobody finished one.
- */
-export function MissionContract({
-  kind,
-  preset,
-  job,
-  wallets,
-  primary,
-  limits,
-  onBack,
-  onClose,
-  onSend,
-  onCreate,
-  onUpdate,
-}: {
+type ContractProps = {
   kind: MissionKind
   /** Chosen from the catalogue; null for a blank contract or an edit. */
   preset?: MissionPreset | null
@@ -58,7 +38,69 @@ export function MissionContract({
   onCreate: (form: MissionForm, prompt: string) => Promise<unknown>
   /** Resolves false when the gateway refused: the contract stays open to retry. */
   onUpdate: (id: string, form: MissionForm, prompt: string) => Promise<unknown>
+}
+
+/**
+ * The contract sheet. A DCA — the `dca` kind, the two DCA presets, or an
+ * existing mandate — is a mandate the engine runs (docs/dca.md) and gets its
+ * own form; every other mission, and an old cron-based DCA being edited,
+ * keeps the cron contract below.
+ */
+export function MissionContract({
+  mandate,
+  onCreateMandate,
+  onUpdateMandate,
+  ...props
+}: ContractProps & {
+  /** Editing an existing DCA mandate. */
+  mandate?: Mandate | null
+  /** Resolves null when the engine refused: the form stays open to retry. */
+  onCreateMandate: (form: DcaForm) => Promise<unknown>
+  onUpdateMandate: (mandate: Mandate, patch: Record<string, unknown>) => Promise<unknown>
 }) {
+  const dca =
+    Boolean(mandate) || (!props.job && (props.kind === 'dca' || isMandatePreset(props.preset)))
+  if (dca) {
+    return (
+      <DcaContract
+        preset={props.preset}
+        mandate={mandate ?? null}
+        wallets={props.wallets}
+        primary={props.primary}
+        limits={props.limits}
+        onBack={props.onBack}
+        onClose={props.onClose}
+        onCreate={onCreateMandate}
+        onUpdate={onUpdateMandate}
+      />
+    )
+  }
+  return <CronContract {...props} />
+}
+
+/**
+ * The contract: what the mission may do, with what money, how often, until
+ * when. The prompt the agent will read is composed from these fields and
+ * shown in full, so nothing is signed that was not seen. A `swap` contract
+ * is a one-shot prompt; everything else becomes a scheduled job.
+ *
+ * Arriving from a preset, the two or three numbers that actually differ are
+ * the whole form and the rest waits under "Advanced" — twelve fields at once
+ * was the reason nobody finished one.
+ */
+function CronContract({
+  kind,
+  preset,
+  job,
+  wallets,
+  primary,
+  limits,
+  onBack,
+  onClose,
+  onSend,
+  onCreate,
+  onUpdate,
+}: ContractProps) {
   const [params, setParams] = useState<Record<string, string>>(() =>
     preset ? presetDefaults(preset) : {},
   )

@@ -29,7 +29,7 @@ import httpx
 import structlog
 
 from agentos import __version__
-from agentos.trading import guardrails
+from agentos.trading import dca, guardrails
 from agentos.trading.aggregator import AGGREGATOR_BASE, AggregatorClient, AggregatorProvider
 from agentos.trading.chains import (
     CHAINS,
@@ -64,6 +64,7 @@ from agentos.trading.evm import (
     receipt_transfers,
 )
 from agentos.trading.ledger import (
+    LP_ORDER_KINDS,
     ORDER_FINAL_STATUSES,
     Ledger,
     local_day,
@@ -106,6 +107,9 @@ Initiator = Literal["manual", "agent"]
 Broadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 RECEIPT_TIMEOUT_S = 180.0
+#: A fee-paying LP increase may return up to its planned native fees plus
+#: 1/this of them (fees accrue between planning and the transaction).
+LP_FEE_GROWTH_TOLERANCE_DIV = 10
 # A submitted transaction with no receipt after this long is treated as
 # dropped. Until then ``tick`` keeps polling for it.
 SUBMITTED_GIVE_UP_S = 6 * 3600.0
@@ -153,6 +157,13 @@ GAS_CEILING_SHARE = 0.05
 # What a caller's idempotency key may look like.
 CLIENT_ORDER_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 BROADCAST_REJECTED = "broadcast rejected:"
+# Ledger log index for a native (ETH) leg of an LP write: it has no Transfer
+# log of its own, and must not collide with an ERC-20 leg's index.
+LP_NATIVE_LOG_INDEX = 1_000_000
+LP_PROVIDER = "uniswap_v4"
+LP_PROVIDER_LABEL = "Uniswap V4"
+# ``(chain, event loop) -> lp.ChainEnv``: how LP writes reach the chain (tests swap it).
+LpEnvFactory = Callable[[ChainSpec, asyncio.AbstractEventLoop], Any]
 
 
 def _thin(points: list[dict[str, float]], limit: int) -> list[dict[str, float]]:
@@ -337,6 +348,7 @@ class TradingService:
         sign_tx: Callable[[dict[str, Any], bytes], str] = _sign_tx,
         sign_permit: Callable[[dict[str, Any], bytes], str] = _sign_permit,
         background: bool = True,
+        lp_env_factory: LpEnvFactory | None = None,
     ) -> None:
         self._gateway_config = config
         self.config = getattr(config, "trading", config)
@@ -356,6 +368,7 @@ class TradingService:
         self._sign_tx = sign_tx
         self._sign_permit = sign_permit
         self._background = background
+        self.lp_env_factory = lp_env_factory
         self._evm: dict[int, EvmClient] = {}
         self._uniswap: UniswapClient | None = None
         self._uniswap_key = ""
@@ -367,6 +380,9 @@ class TradingService:
         self._wallet_locks: dict[str, asyncio.Lock] = {}
         self._settling: set[str] = set()
         self._sync_lock = asyncio.Lock()
+        # One DCA pass (or buy-now) at a time: a slow run must not overlap the
+        # next tick's pass and fire the same mandate twice.
+        self._dca_lock = asyncio.Lock()
         self.syncing = False
         self.last_sync_at: float | None = None
         self.discovery = BlockscoutDiscovery(http=self._http, now=now)
@@ -519,8 +535,12 @@ class TradingService:
             await asyncio.sleep(interval)
 
     async def tick(self) -> None:
-        """One pass of housekeeping: expire approvals, settle strays, sync wallets."""
+        """One pass of housekeeping: expire approvals, run due DCA buys, settle strays, sync."""
         await self.expire_orders()
+        try:
+            await self.dca_run_due()
+        except Exception as exc:  # one bad mandate must not stop the housekeeping
+            log.warning("trading.dca_error", error=str(exc))
         if self.vault.initialized:
             await self.recover_submitted()
             await self.sync_all()
@@ -1002,7 +1022,7 @@ class TradingService:
             }
             pre_native = await evm.get_balance(record.address)
             tx_hash = await self._send(chain, record, key, tx)
-        receipt = await evm.wait_for_receipt(tx_hash, timeout_s=RECEIPT_TIMEOUT_S)
+        receipt = await evm.wait_for_sealed_receipt(tx_hash, timeout_s=RECEIPT_TIMEOUT_S)
         if receipt is None:
             raise TradingError(
                 "trading.tx_pending",
@@ -1954,6 +1974,37 @@ class TradingService:
             "provider": row.get("provider") or DEFAULT_PROVIDER_ID,
             "providerLabel": provider_label(row.get("provider") or DEFAULT_PROVIDER_ID),
             "clientOrderId": row.get("client_order_id"),
+            "mandateId": row.get("mandate_id"),
+            **(self._lp_order_fields(row) if row.get("kind") in LP_ORDER_KINDS else {}),
+        }
+
+    @staticmethod
+    def _lp_plan(row: dict[str, Any]) -> dict[str, Any]:
+        try:
+            plan = json.loads(str(row.get("quote_json") or "{}"))
+        except ValueError:
+            return {}
+        return plan if isinstance(plan, dict) else {}
+
+    def _lp_order_fields(self, row: dict[str, Any]) -> dict[str, Any]:
+        """What an LP write adds to the order JSON (``docs/lp-write.md``, order model).
+
+        ``plan`` is the LpPlan the user approves; once confirmed, ``received`` /
+        ``spent`` (``{base, quote}`` Amounts from the receipt) and, for a mint,
+        the new ``tokenId``.
+        """
+        plan = self._lp_plan(row)
+        settlement = plan.pop("settlement", None) or {}
+        return {
+            "plan": plan or None,
+            "tokenId": plan.get("tokenId"),
+            "received": settlement.get("received"),
+            "spent": settlement.get("spent"),
+            "expectedOut": None,
+            "minOut": None,
+            "receivedOut": None,
+            "provider": LP_PROVIDER,
+            "providerLabel": LP_PROVIDER_LABEL,
         }
 
     def get_order(self, order_id: str) -> dict[str, Any]:
@@ -2153,7 +2204,7 @@ class TradingService:
         if verdict.decision == "blocked_daily_cap":
             for order_id in order_ids:
                 self.ledger.update_order(order_id, status="rejected", reason=verdict.reason)
-                await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+                await self._order_finished(self.get_order(order_id))
             return
         if verdict.decision == "needs_approval":
             ttl = int(self.config.approval_ttl_seconds)
@@ -2216,7 +2267,7 @@ class TradingService:
             order_id, expect_status=status, status="failed", reason=f"{error.code}: {error}"
         )
         log.warning("trading.order_failed", order=order_id, error=str(error))
-        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+        await self._order_finished(self.get_order(order_id))
 
     async def revoke(
         self,
@@ -2281,6 +2332,612 @@ class TradingService:
         await self._decide_batch([order_id], verdict, batch_id=None, wait=wait)
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
         return self.get_order(order_id)
+
+    # ── Uniswap V4 LP writes (docs/lp-write.md) ────────────────────────
+
+    def _lp_env(self, chain: ChainSpec) -> Any:
+        """A fresh ``lp.ChainEnv`` for one plan: the engine's RPC, prices and vault."""
+        from agentos.trading import lp
+
+        loop = asyncio.get_running_loop()
+        if self.lp_env_factory is not None:
+            return self.lp_env_factory(chain, loop)
+        return lp._engine_env(self, chain, loop)
+
+    async def _lp_run(self, chain: ChainSpec, work: Callable[[Any], Any]) -> Any:
+        """Run blocking LP work against a started env in a worker thread; errors coded."""
+        from agentos.trading import lp
+
+        env = self._lp_env(chain)
+        try:
+            return await asyncio.to_thread(lambda: work(lp.start(env)))
+        except Exception as exc:
+            raise lp._as_trading_error(exc, chain) from exc
+
+    def _lp_preflight(
+        self, initiator: str, client_order_id: str | None
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        """(validated idempotency key, the order it already names — if any)."""
+        if not getattr(self.config, "enabled", True):
+            raise TradingError("trading.disabled", "Trading is disabled in config")
+        if initiator not in ("manual", "agent"):
+            raise TradingError("trading.invalid", "initiator must be 'manual' or 'agent'")
+        client_id = _client_order_id(client_order_id)
+        if client_id is not None:
+            existing = self.ledger.find_orders_by_client_id(client_id)
+            if existing:
+                return client_id, self._order_dict(existing[0])
+        if not self.ensure_unlocked():
+            raise TradingError("wallet.locked", "Wallet vault is locked")
+        return client_id, None
+
+    async def lp_collect(
+        self,
+        *,
+        chain: ChainSpec,
+        token_id: int,
+        initiator: Initiator,
+        session_key: str | None,
+        note: str | None,
+        client_order_id: str | None = None,
+        allow_empty: bool = False,
+    ) -> dict[str, Any]:
+        """Park an order that collects a V4 position's fees (always awaits approval).
+
+        Nothing uncollected is ``trading.lp.nothing_to_collect`` unless ``allow_empty``.
+        """
+        from agentos.trading import lp_write
+
+        client_id, existing = self._lp_preflight(initiator, client_order_id)
+        if existing is not None:
+            return existing
+        plan = await self._lp_run(
+            chain,
+            lambda env: lp_write.plan_collect(env, int(token_id), allow_empty=allow_empty),
+        )
+        return await self._lp_order(
+            chain, plan, initiator=initiator, session_key=session_key, note=note,
+            client_id=client_id,
+        )  # fmt: skip
+
+    async def lp_remove(
+        self,
+        *,
+        chain: ChainSpec,
+        token_id: int,
+        pct: float = 100.0,
+        slippage_pct: float | None = None,
+        initiator: Initiator,
+        session_key: str | None,
+        note: str | None,
+        client_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Park an order that removes ``pct`` % of a position (100 burns it), fees included."""
+        from agentos.trading import lp_write
+
+        client_id, existing = self._lp_preflight(initiator, client_order_id)
+        if existing is not None:
+            return existing
+        self._check_agent_slippage(initiator, slippage_pct)
+        plan = await self._lp_run(
+            chain,
+            lambda env: lp_write.plan_remove(env, int(token_id), float(pct), slippage_pct),
+        )
+        return await self._lp_order(
+            chain, plan, initiator=initiator, session_key=session_key, note=note,
+            client_id=client_id,
+        )  # fmt: skip
+
+    async def lp_add(
+        self,
+        *,
+        chain: ChainSpec,
+        target: str | None,
+        quote: str | None = None,
+        fee: int | None = None,
+        usd: float | None = None,
+        amount_base: str | None = None,
+        amount_quote: str | None = None,
+        range_spec: str | None = None,
+        to_position: int | None = None,
+        wallet: str | None = None,
+        slippage_pct: float | None = None,
+        initiator: Initiator,
+        session_key: str | None,
+        note: str | None,
+        client_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Park an order that mints a position (or adds to ``to_position``) from a deposit.
+
+        ``target`` may be a ``TOKEN/QUOTE`` pair; ``quote`` and ``fee`` (a V4 fee,
+        ``lp.parse_fee``) narrow the pool among those holding the token.
+        """
+        from agentos.trading import lp, lp_write
+
+        client_id, existing = self._lp_preflight(initiator, client_order_id)
+        if existing is not None:
+            return existing
+        self._check_agent_slippage(initiator, slippage_pct)
+        if target:
+            target, quote = lp.split_pair(target, quote)
+        address = await lp._resolve_address(self, chain, target) if target else None
+        quote_address = await lp._resolve_address(self, chain, quote) if quote else None
+        if to_position is None:
+            owner: str | None = self.vault.resolve(wallet).address
+        else:
+            owner = self.vault.resolve(wallet).address if wallet else None
+        plan = await self._lp_run(
+            chain,
+            lambda env: lp_write.plan_add(
+                env,
+                address,
+                quote=quote_address,
+                fee=fee,
+                usd=usd,
+                amount_base=amount_base,
+                amount_quote=amount_quote,
+                range_spec=range_spec,
+                to_position=to_position,
+                wallet=owner,
+                slippage_pct=slippage_pct,
+            ),
+        )
+        return await self._lp_order(
+            chain, plan, initiator=initiator, session_key=session_key, note=note,
+            client_id=client_id,
+        )  # fmt: skip
+
+    def _lp_remember(self, chain: ChainSpec, token: dict[str, Any]) -> str:
+        """Keep a plan token in the token table (so orders can show it); its key."""
+        address = str(token.get("address") or NATIVE_ADDRESS)
+        if is_native(address):
+            return NATIVE_ADDRESS
+        key = normalize_address(address)
+        if self.ledger.get_token(chain.chain_id, key) is None:
+            symbol = str(token.get("symbol") or "")
+            decimals = int(token.get("decimals") or 18)
+            self._remember_token(TokenMeta(chain.chain_id, key, symbol, symbol, decimals))
+        # The user put money into (or took it out of) this token on purpose.
+        self.ledger.touch_token(chain.chain_id, key)
+        return key
+
+    async def _lp_order(
+        self,
+        chain: ChainSpec,
+        plan: dict[str, Any],
+        *,
+        initiator: str,
+        session_key: str | None,
+        note: str | None,
+        client_id: str | None,
+    ) -> dict[str, Any]:
+        """Insert the order for a plan and park it: every LP write waits for a human."""
+        from agentos.trading.lp_write import ORDER_KIND
+
+        op = str(plan["op"])
+        kind = ORDER_KIND[op]
+        try:
+            record = self.vault.get(str(plan["wallet"]))
+        except (VaultError, WalletNotFoundError) as exc:
+            raise TradingError(
+                "trading.lp.not_owner", f"{plan['wallet']} is not a wallet in this vault"
+            ) from exc
+        base = self._lp_remember(chain, plan["token"])
+        quote = self._lp_remember(chain, plan["quote"])
+        value = (plan.get("expected") or {}).get("usd")
+        liquidity = int(plan.get("liquidity") or 0)
+        # Spend is read before the row exists, so the order does not count against itself.
+        spent = self._spent_today(record)
+        order_id = new_order_id()
+        now = self._now()
+        try:
+            self.ledger.insert_order(
+                {
+                    "order_id": order_id,
+                    "created_at": now,
+                    "updated_at": now,
+                    "chain_id": chain.chain_id,
+                    "wallet": record.key,
+                    "token_in": base,
+                    "token_out": quote,
+                    "amount_raw": str(liquidity),
+                    "amount_human": str(liquidity),
+                    "value_usd": value,
+                    "gas_usd": plan.get("gasUsd"),
+                    "slippage_pct": plan.get("slippagePct"),
+                    "status": "quoted",
+                    "initiator": initiator,
+                    "session_key": session_key,
+                    "note": note,
+                    "kind": kind,
+                    "recipient": record.key if op in ("collect", "remove") else None,
+                    "quote_json": json.dumps(plan),
+                    "provider": LP_PROVIDER,
+                    "client_order_id": client_id,
+                }
+            )
+        except sqlite3.IntegrityError:
+            if client_id is not None:
+                twins = self.ledger.find_orders_by_client_id(client_id)
+                if twins:
+                    return self._order_dict(twins[0])
+            raise
+        verdict = guardrails.evaluate_lp_write(
+            op=op,
+            initiator=initiator,
+            value_usd=value,
+            daily_cap_usd=self.config.daily_cap_usd,
+            spent_today_usd=spent,
+        )
+        await self._decide_batch([order_id], verdict, batch_id=None, wait=False)
+        await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
+        return self.get_order(order_id)
+
+    async def _execute_lp(self, row: dict[str, Any], *, wait: bool) -> None:
+        """Re-validate an approved LP plan, run its approvals, then ``modifyLiquidities``.
+
+        Approvals are exact (the plan's maxima, never unlimited) and go through
+        ``_send`` like a swap's: ``ERC20.approve(Permit2)`` when that allowance
+        is short, then ``Permit2.approve(token, PositionManager, amount, now +
+        30 min)`` when that one is short or lapsing. Each waits for its receipt
+        -- and for the node to show it -- before the next step.
+        """
+        from agentos.trading import lp, lp_write
+
+        order_id = str(row["order_id"])
+        chain = CHAINS[int(row["chain_id"])]
+        record = self.vault.get(str(row["wallet"]))
+        key = self.vault.private_key(record.address)
+        plan = self._lp_plan(row)
+        plan.pop("settlement", None)
+        evm = self.evm(chain)
+        for token in {NATIVE_ADDRESS, str(row["token_in"]), str(row["token_out"])}:
+            await self.syncer.ensure_opening(record, chain, token, evm)
+        permit2 = str(lp.unilp().chains.CHAINS[chain.key]["permit2"]).lower()
+        async with self._wallet_lock(record.key):
+            check = await self._lp_run(chain, lambda env: lp_write.revalidate(env, plan))
+            for step in [s for s in check["approvals"] if s["needed"]]:
+                expiration = int(check["timestamp"]) + lp_write.PERMIT2_EXPIRY_S
+
+                def encode(env: Any, s: dict[str, Any] = step, exp: int = expiration) -> Any:
+                    return lp_write.approval_call(env, s, exp)
+
+                to, data = await self._lp_run(chain, encode)
+                tx_hash = await self._send(
+                    chain,
+                    record,
+                    key,
+                    {
+                        "from": record.address,
+                        "to": to,
+                        "data": data,
+                        "value": "0",
+                        "chainId": chain.chain_id,
+                    },
+                    order_id=order_id,
+                    hash_field="approval_tx_hash",
+                    value_usd=row.get("value_usd"),
+                )
+                receipt = await evm.wait_for_sealed_receipt(tx_hash, timeout_s=RECEIPT_TIMEOUT_S)
+                if receipt is None:
+                    raise TradingError(
+                        "trading.tx_pending",
+                        f"approval {tx_hash} was not mined within the wait window; "
+                        "approve the order again once it lands",
+                    )
+                if not receipt_succeeded(receipt):
+                    raise TradingError(
+                        "trading.tx_failed", f"approval transaction failed ({tx_hash})"
+                    )
+                await self._record_gas(
+                    chain,
+                    record,
+                    receipt,
+                    kind="approval",
+                    order_id=order_id,
+                    initiator=str(row["initiator"]),
+                )
+                self._lp_mark_approval(plan, step, tx_hash)
+                self.ledger.update_order(order_id, quote_json=json.dumps(plan))
+                amount = int(step["amountRaw"])
+                if step["step"] == "erc20->permit2":
+                    await self._await_allowance(
+                        evm,
+                        token=str(step["token"]).lower(),
+                        owner=record.address,
+                        spenders=frozenset({permit2}),
+                        amount_raw=amount,
+                    )
+                else:
+                    await self._await_permit2(chain, record.address, step, check)
+            # The approvals above can take minutes each: sign with a deadline
+            # counted from the chain's clock now, not from the re-validation.
+            deadline = await self._lp_deadline(chain, int(check["deadline"]))
+            to, data, value = lp_write.modify_liquidities_call(plan, deadline)
+            pre_native = await evm.get_balance(record.address)
+            tx_hash = await self._send(
+                chain,
+                record,
+                key,
+                {
+                    "from": record.address,
+                    "to": to,
+                    "data": data,
+                    "value": value,
+                    "chainId": chain.chain_id,
+                },
+                order_id=order_id,
+                value_usd=row.get("value_usd"),
+            )
+        await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
+        await self._watch(order_id, tx_hash, {"in": 0, "out": 0, "native": pre_native}, wait=wait)
+
+    async def _lp_deadline(self, chain: ChainSpec, previous: int) -> int:
+        """A ``modifyLiquidities`` deadline counted from the latest block (else wall clock).
+
+        Never earlier than ``previous``; ``plan_hash`` leaves the deadline out,
+        so moving it later does not invalidate the approved plan.
+        """
+        from agentos.trading import lp_write
+
+        try:
+            ts = int(await self._lp_run(chain, lp_write.block_timestamp))
+        except TradingError as exc:
+            log.warning("trading.lp_deadline_clock", error=str(exc))
+            ts = 0
+        if ts <= 0:
+            ts = int(self._now())
+        return max(previous, ts + lp_write.DEADLINE_S)
+
+    @staticmethod
+    def _lp_mark_approval(plan: dict[str, Any], step: dict[str, Any], tx_hash: str) -> None:
+        """Record a mined approval's hash on the plan's matching ``approvals[]`` entry."""
+        steps = plan.setdefault("approvals", [])
+        for entry in steps:
+            same_token = str(entry.get("token")).lower() == str(step["token"]).lower()
+            if same_token and entry.get("step") == step["step"]:
+                entry["txHash"] = tx_hash
+                entry["amountRaw"] = step["amountRaw"]
+                return
+        steps.append({**step, "txHash": tx_hash})
+
+    async def _await_permit2(
+        self, chain: ChainSpec, owner: str, step: dict[str, Any], check: dict[str, Any]
+    ) -> None:
+        """Wait until the node shows the Permit2 allowance just mined (never fatal)."""
+        from agentos.trading import lp_write
+
+        amount = int(step["amountRaw"])
+        token = str(step["token"])
+        now = int(check["timestamp"])
+        for attempt in range(CHAIN_CATCHUP_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(CHAIN_CATCHUP_POLL_S)
+            try:
+                seen = await self._lp_run(
+                    chain,
+                    lambda env: lp_write.permit2_visible(env, owner, token, amount, now),
+                )
+            except TradingError:
+                continue
+            if seen:
+                return
+        log.warning("trading.permit2_not_visible", token=step["token"], owner=owner)
+
+    async def _lp_native_delta(
+        self,
+        evm: EvmClient,
+        record: WalletRecord,
+        receipt: dict[str, Any],
+        *,
+        gas_wei: int,
+        pre_native: int,
+        plausible: Callable[[int], bool],
+    ) -> tuple[int | None, int | None]:
+        """(native the write moved for the wallet, gas excluded; its balance after).
+
+        ETH has no Transfer log: a deposit is ``value`` less the SWEEP refund, a
+        payout is an internal call. So the balance is read -- against the
+        pre-send snapshot first (retried until the node has the block), then
+        pinned to the receipt's block and the one before it, which no lagging
+        ``latest`` can distort. A delta ``plausible`` rejects is not believed.
+        ``(None, None)`` when nothing believable came back.
+        """
+        if pre_native:
+            post = await self._native_after(evm, record.address, receipt, pre=pre_native)
+            delta = post - pre_native + gas_wei
+            if post != pre_native and plausible(delta):
+                return delta, post
+        block_number = int(str(receipt.get("blockNumber") or "0x0"), 16)
+        if block_number > 0:
+            try:
+                before = await evm.get_balance(record.address, hex(block_number - 1))
+                after = await evm.get_balance(record.address, hex(block_number))
+            except (EvmRpcError, EvmTransportError) as exc:
+                log.warning("trading.lp_native_read_failed", error=str(exc))
+            else:
+                delta = after - before + gas_wei
+                if plausible(delta):
+                    return delta, after
+        return None, None
+
+    async def _settle_lp(
+        self,
+        order_id: str,
+        row: dict[str, Any],
+        tx_hash: str,
+        receipt: dict[str, Any],
+        pre: dict[str, int],
+        chain: ChainSpec,
+        record: WalletRecord,
+    ) -> None:
+        """Book a mined LP write from its receipt (``docs/lp-write.md``, execution 7).
+
+        ERC-20 legs are the receipt's Transfer logs to and from the wallet; the
+        native leg is measured (see ``_lp_native_delta``) and, failing that,
+        taken from the plan. Entries of the order's kind, lots by the
+        deposit/withdraw convention, the new tokenId of a mint, and -- for an
+        agent's ``add`` -- the day's spend, all with the confirmation.
+        """
+        from agentos.trading import lp
+        from agentos.trading.lp_write import minted_token_id
+        from agentos.trading.sync import lp_note
+
+        kind = str(row["kind"])
+        evm = self.evm(chain)
+        gas_wei = receipt_gas_wei(receipt)
+        gas_usd = await self._gas_usd(chain, gas_wei)
+        if not receipt_succeeded(receipt):
+            await self._settle_reverted(
+                order_id,
+                row,
+                tx_hash,
+                gas_wei,
+                gas_usd,
+                chain,
+                record,
+                note=f"reverted {kind.replace('_', ' ')}",
+            )
+            return
+        plan = self._lp_plan(row)
+        plan.pop("settlement", None)
+        wallet = record.key
+        ins: dict[str, list[int]] = {}
+        outs: dict[str, list[int]] = {}
+        for t in receipt_transfers(receipt):
+            if t.recipient == wallet and t.sender != wallet:
+                ins.setdefault(t.token, [0, t.log_index])[0] += t.amount
+            elif t.sender == wallet and t.recipient != wallet:
+                outs.setdefault(t.token, [0, t.log_index])[0] += t.amount
+        key = (plan.get("pool") or {}).get("poolKey") or {}
+        native_leg = is_native(str(key.get("currency0") or "0x1"))
+        post_native: int | None = None
+        if native_leg:
+            expected_native = self._lp_native_expected(plan)
+            fee_native = 0
+            if kind == "lp_add":
+                ceiling = int(plan.get("value") or 0)
+                # An increase that closes each currency pays uncollected fees
+                # beyond what the new liquidity needs back out: with native
+                # fees larger than the deposit, the wallet nets ETH *in*. Up to
+                # those fees (plus what they may have grown since planning).
+                if "CLOSE_CURRENCY" in (plan.get("actions") or []):
+                    fee_native = self._lp_native_expected(plan, "fees")
+                payout = fee_native + fee_native // LP_FEE_GROWTH_TOLERANCE_DIV
+
+                def plausible(delta: int) -> bool:
+                    return -ceiling <= delta <= payout
+            else:
+
+                def plausible(delta: int) -> bool:
+                    return delta >= 0
+
+            delta, post_native = await self._lp_native_delta(
+                evm,
+                record,
+                receipt,
+                gas_wei=gas_wei,
+                pre_native=int(pre.get("native") or 0),
+                plausible=plausible,
+            )
+            if delta is None:
+                log.warning("trading.lp_native_assumed", order=order_id, booked=expected_native)
+                delta = fee_native - expected_native if kind == "lp_add" else expected_native
+            if delta > 0:
+                ins[NATIVE_ADDRESS] = [delta, LP_NATIVE_LOG_INDEX]
+            elif delta < 0:
+                outs[NATIVE_ADDRESS] = [-delta, LP_NATIVE_LOG_INDEX]
+        reason: str | None = None
+        if kind == "lp_add" and not plan.get("increase"):
+            minted = minted_token_id(receipt, str(plan.get("positionManager") or ""), wallet)
+            if minted is None:
+                reason = "mined, but the new position's tokenId was not in the receipt"
+                log.warning("trading.lp_mint_id_missing", order=order_id, tx=tx_hash)
+            else:
+                plan["tokenId"] = str(minted)
+        block_number = int(str(receipt.get("blockNumber") or "0x0"), 16)
+        ts: int | None = None
+        if block_number:
+            try:
+                ts = await evm.block_timestamp(block_number)
+            except (EvmRpcError, EvmTransportError) as exc:
+                log.warning("trading.block_timestamp_failed", order=order_id, error=str(exc))
+        in_list = [(t, a, i) for t, (a, i) in ins.items()]
+        out_list = [(t, a, i) for t, (a, i) in outs.items()]
+        await self.syncer._book_lp(
+            record,
+            chain,
+            kind=kind,
+            ins=in_list,
+            outs=out_list,
+            ts=float(ts or self._now()),
+            tx_hash=tx_hash,
+            initiator=str(row["initiator"]),
+            gas_usd=gas_usd,
+            order_id=order_id,
+            session_key=row.get("session_key"),
+            note=row.get("note") or lp_note(kind, plan),
+        )
+        # The balance cache follows, so the next sync does not book the LP
+        # write's movements a second time as deposits or withdrawals.
+        for token in {str(row["token_in"]), str(row["token_out"])} - {NATIVE_ADDRESS}:
+            meta = await self._token_meta(chain, token)
+            cached = self.ledger.get_balance(chain.chain_id, wallet, token) or 0
+            moved = ins.get(token, [0])[0] - outs.get(token, [0])[0]
+            post = await self._balance_after(chain, record, meta, fallback=max(0, cached + moved))
+            self.ledger.set_balance(chain.chain_id, wallet, token, post)
+        if post_native is None:
+            post_native = await self._native_after(evm, record.address, receipt)
+        self.ledger.set_balance(chain.chain_id, wallet, NATIVE_ADDRESS, post_native)
+
+        async def side(moves: dict[str, list[int]]) -> dict[str, Any]:
+            out: dict[str, Any] = {}
+            for which in ("token", "quote"):
+                token = plan.get(which) or {}
+                address = str(token.get("address") or NATIVE_ADDRESS).lower()
+                address = NATIVE_ADDRESS if is_native(address) else address
+                raw = moves.get(address, [0])[0]
+                price = await self.prices.price(chain, address) if raw else None
+                out["base" if which == "token" else "quote"] = lp.amount_json(
+                    raw, int(token.get("decimals") or 18), price
+                )
+            return out
+
+        plan["settlement"] = {
+            "txHash": tx_hash,
+            "block": block_number,
+            "tokenId": plan.get("tokenId"),
+            "received": await side(ins),
+            "spent": await side(outs),
+            "ins": [list(m) for m in in_list],
+            "outs": [list(m) for m in out_list],
+            "gasUsd": gas_usd,
+        }
+        self.ledger.settle_order(
+            order_id,
+            expect_status="submitted",
+            spend=self._spend_for(row, record) if kind == "lp_add" else None,
+            status="confirmed",
+            reason=reason,
+            gas_wei=str(gas_wei),
+            gas_usd=gas_usd,
+            quote_json=json.dumps(plan),
+        )
+        self._wake(order_id)
+        await self._order_finished(self.get_order(order_id))
+        await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
+
+    @staticmethod
+    def _lp_native_expected(plan: dict[str, Any], field: str = "expected") -> int:
+        """The plan's native (ETH) amount: what an add deposits or a removal pays out.
+
+        ``field="fees"``: the native side of the position's uncollected fees.
+        """
+        expected = plan.get(field) or {}
+        for which, leg in (("token", "base"), ("quote", "quote")):
+            if is_native(str((plan.get(which) or {}).get("address") or "0x1")):
+                return int(((expected.get(leg) or {}).get("raw")) or 0)
+        return 0
 
     # ── allowances ─────────────────────────────────────────────────────
 
@@ -2677,6 +3334,7 @@ class TradingService:
         expected_out_raw: int | None = None,
         min_out_raw: int | None = None,
         quote_id: str | None = None,
+        mandate_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Swap from one or many wallets; one order per wallet.
 
@@ -2684,6 +3342,9 @@ class TradingService:
         same key returns the orders it created the first time and creates
         nothing — a client that lost the reply to a timeout can ask again
         without a second swap going out.
+
+        ``mandate_id`` marks the order as a buy of that DCA mandate
+        (``docs/dca.md``); its settlement then settles the mandate's run.
 
         ``expected_out_raw`` / ``min_out_raw`` / ``quote_id`` are the quote
         the client confirmed. The engine always re-quotes, but the client's
@@ -2741,6 +3402,7 @@ class TradingService:
                         note,
                         client_order_id=client_id,
                         quote_json=client_quote,
+                        mandate_id=mandate_id,
                     )
                 except sqlite3.IntegrityError:
                     # Two identical calls raced past the lookup above: the
@@ -2782,10 +3444,11 @@ class TradingService:
                             "note": note,
                             "slippage_pct": slippage,
                             "client_order_id": client_id,
+                            **({"mandate_id": mandate_id} if mandate_id else {}),
                         }
                     )
                     log.warning("trading.order_failed", order=order_id, error=str(error))
-                    await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+                    await self._order_finished(self.get_order(order_id))
                 else:
                     await self._fail_order(order_id, error)
             results.append(self.get_order(order_id))
@@ -2843,6 +3506,7 @@ class TradingService:
         note: str | None,
         client_order_id: str | None = None,
         quote_json: str | None = None,
+        mandate_id: str | None = None,
     ) -> dict[str, Any]:
         now = self._now()
         row = {
@@ -2865,6 +3529,8 @@ class TradingService:
         }
         if quote_json is not None:
             row["quote_json"] = quote_json
+        if mandate_id is not None:
+            row["mandate_id"] = mandate_id
         self.ledger.insert_order(row)
         return row
 
@@ -2946,7 +3612,7 @@ class TradingService:
         )
         if verdict.decision == "blocked_daily_cap":
             self.ledger.update_order(row["order_id"], status="rejected", reason=verdict.reason)
-            await self._emit("trading.order.finished", {"order": self.get_order(row["order_id"])})
+            await self._order_finished(self.get_order(row["order_id"]))
             return
         if verdict.decision == "needs_approval":
             ttl = int(self.config.approval_ttl_seconds)
@@ -2971,6 +3637,9 @@ class TradingService:
             return
         if kind == "revoke":
             await self._execute_revoke(row, wait=wait)
+            return
+        if kind in LP_ORDER_KINDS:
+            await self._execute_lp(row, wait=wait)
             return
         chain = CHAINS[int(row["chain_id"])]
         record = self.vault.get(str(row["wallet"]))
@@ -3024,7 +3693,9 @@ class TradingService:
                         hash_field="approval_tx_hash",
                         value_usd=row.get("value_usd"),
                     )
-                    receipt = await evm.wait_for_receipt(tx_hash, timeout_s=RECEIPT_TIMEOUT_S)
+                    receipt = await evm.wait_for_sealed_receipt(
+                        tx_hash, timeout_s=RECEIPT_TIMEOUT_S
+                    )
                     if receipt is None:
                         raise TradingError(
                             "trading.tx_pending",
@@ -3529,7 +4200,7 @@ class TradingService:
         meta_out = await self.token_meta(chain, str(row["token_out"]))
         evm = self.evm(chain)
         try:
-            receipt = await evm.wait_for_receipt(tx_hash, timeout_s=timeout_s)
+            receipt = await evm.wait_for_sealed_receipt(tx_hash, timeout_s=timeout_s)
         except (EvmRpcError, EvmTransportError) as exc:
             receipt = None
             log.warning("trading.receipt_error", order=order_id, error=str(exc))
@@ -3553,7 +4224,7 @@ class TradingService:
                     ),
                 )
                 self._wake(order_id)
-                await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+                await self._order_finished(self.get_order(order_id))
             elif not rejected:
                 # The refusal is kept as the reason: it is what decides the
                 # shorter give-up above, and what the user should see.
@@ -3574,6 +4245,8 @@ class TradingService:
                 )
             elif kind == "revoke":
                 await self._settle_revoke(order_id, row, tx_hash, receipt, chain, record, meta_in)
+            elif kind in LP_ORDER_KINDS:
+                await self._settle_lp(order_id, row, tx_hash, receipt, pre, chain, record)
             else:
                 await self._settle(
                     order_id, row, tx_hash, receipt, pre, chain, record, meta_in, meta_out
@@ -3624,7 +4297,7 @@ class TradingService:
             note=note,
         )
         self._wake(order_id)
-        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+        await self._order_finished(self.get_order(order_id))
 
     async def _settle_send(
         self,
@@ -3697,7 +4370,7 @@ class TradingService:
             gas_wei=str(gas_wei),
         )
         self._wake(order_id)
-        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+        await self._order_finished(self.get_order(order_id))
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
 
     async def _settle_revoke(
@@ -3743,7 +4416,7 @@ class TradingService:
             gas_wei=str(gas_wei),
         )
         self._wake(order_id)
-        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+        await self._order_finished(self.get_order(order_id))
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
 
     @staticmethod
@@ -3918,7 +4591,7 @@ class TradingService:
                 order_id=order_id,
                 note="reverted swap",
             )
-            await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+            await self._order_finished(self.get_order(order_id))
             return
         # Every read from here on is *after* the receipt: the swap is on
         # chain whatever the node says next, so a read that fails is retried
@@ -4049,7 +4722,7 @@ class TradingService:
             delivered_token=delivered,
         )
         self._wake(order_id)
-        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+        await self._order_finished(self.get_order(order_id))
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
 
     # ── approvals ──────────────────────────────────────────────────────
@@ -4084,6 +4757,8 @@ class TradingService:
                 self.ledger.update_order(
                     member, expect_status="awaiting_approval", status="expired", reason="expired"
                 )
+                if row.get("mandate_id"):
+                    await self._dca_on_order(member)
             raise TradingError("trading.quote_expired", f"order {order_id} expired")
         # Compare-and-set: two approvals racing each other both passed the
         # status read above; only the one that flips the row may execute.
@@ -4126,7 +4801,7 @@ class TradingService:
             )
         for member in rejected:
             self._wake(member)
-            await self._emit("trading.order.finished", {"order": self.get_order(member)})
+            await self._order_finished(self.get_order(member))
         await self._emit(
             "trading.changed",
             {"reason": "approval", "orderId": order_id, "batchId": row.get("batch_id")},
@@ -4157,10 +4832,780 @@ class TradingService:
             self._wake(str(row["order_id"]))
             order = self.get_order(str(row["order_id"]))
             out.append(order)
-            await self._emit("trading.order.finished", {"order": order})
+            await self._order_finished(order)
         if out:
             await self._emit("trading.changed", {"reason": "approval"})
         return out
+
+    # ── DCA mandates (docs/dca.md) ─────────────────────────────────────
+
+    async def _order_finished(self, order: dict[str, Any]) -> None:
+        """Announce a finished order; a DCA buy also settles its mandate's run."""
+        await self._emit("trading.order.finished", {"order": order})
+        if order.get("mandateId"):
+            try:
+                await self._dca_on_order(str(order["orderId"]))
+            except Exception as exc:  # the order is settled either way
+                log.warning("trading.dca_settle_failed", order=order.get("orderId"), error=str(exc))
+
+    def _dca_row(self, mandate_id: str) -> dict[str, Any]:
+        row = self.ledger.get_mandate(str(mandate_id or "").strip())
+        if row is None:
+            raise TradingError("trading.dca.not_found", f"no DCA mandate {mandate_id!r}")
+        return row
+
+    @staticmethod
+    def _dca_bad_state(row: dict[str, Any], action: str) -> TradingError:
+        return TradingError(
+            "trading.dca.bad_state",
+            f"cannot {action} DCA mandate {row['mandate_id']}: it is {row['status']}",
+            details={"mandateId": row["mandate_id"], "status": row["status"]},
+        )
+
+    @staticmethod
+    def _dca_number(value: Any, field_name: str) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise TradingError("trading.dca.invalid", f"{field_name} must be a number") from None
+        if number != number or number in (float("inf"), float("-inf")):
+            raise TradingError("trading.dca.invalid", f"{field_name} must be a finite number")
+        return number
+
+    @staticmethod
+    def _dca_int(value: Any, field_name: str) -> int:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise TradingError("trading.dca.invalid", f"{field_name} must be an integer") from None
+        if number != number or number != int(number):
+            raise TradingError("trading.dca.invalid", f"{field_name} must be an integer")
+        return int(number)
+
+    async def _dca_token(self, chain: ChainSpec, value: str) -> TokenMeta:
+        try:
+            return await self.resolve_token(chain, value)
+        except TradingError as exc:
+            if exc.code == "trading.invalid" and str(exc).startswith("Unknown token"):
+                raise TradingError("trading.token_not_found", str(exc)) from exc
+            raise
+        except Exception as exc:
+            raise _err(exc) from exc
+
+    async def _dca_price(self, chain: ChainSpec, address: str) -> float | None:
+        try:
+            price = await self.prices.price(chain, address)
+        except Exception:  # a price feed hiccup is "unknown", never an error here
+            return None
+        return float(price) if price is not None and price > 0 else None
+
+    @staticmethod
+    def _dca_schedule(now: float, every: int, start_now: bool) -> tuple[float, float]:
+        """``(anchor_at, next_run_at)`` at activation: first buy now, or one interval on."""
+        return now, now if start_now else now + every
+
+    async def dca_create(
+        self,
+        *,
+        chain: ChainSpec,
+        token: str,
+        quote: str | None = None,
+        usd_per_run: float,
+        cap_usd: float | None = None,
+        runs_max: int | None = None,
+        every_seconds: int,
+        max_price_usd: float | None = None,
+        wallet: str | None = None,
+        slippage_pct: float | None = None,
+        name: str | None = None,
+        start_now: bool = True,
+        initiator: str,
+        session_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a mandate: ``active`` for the operator, ``awaiting_approval`` for an agent.
+
+        ``initiator`` comes from the RPC layer, which derives it from the
+        connection (as for ``swap``); it is never read from the caller's params.
+        """
+        if not getattr(self.config, "enabled", True):
+            raise TradingError("trading.disabled", "Trading is disabled in config")
+        if initiator not in ("manual", "agent"):
+            raise TradingError("trading.invalid", "initiator must be 'manual' or 'agent'")
+        usd = self._dca_number(usd_per_run, "usdPerRun")
+        runs = None if runs_max is None else self._dca_int(runs_max, "runsMax")
+        every = self._dca_int(every_seconds, "everySeconds")
+        if cap_usd is None:
+            if runs is None:
+                raise TradingError("trading.dca.invalid", "capUsd or runsMax is required")
+            cap = usd * runs
+        else:
+            cap = self._dca_number(cap_usd, "capUsd")
+        max_price = (
+            None if max_price_usd is None else self._dca_number(max_price_usd, "maxPriceUsd")
+        )
+        problem = dca.validate_terms(
+            usd_per_run=usd,
+            cap_usd=cap,
+            runs_max=runs,
+            every_seconds=every,
+            max_price_usd=max_price,
+            creating=True,
+        )
+        if problem:
+            raise TradingError("trading.dca.invalid", problem)
+        slippage = None if slippage_pct is None else self._dca_number(slippage_pct, "slippagePct")
+        if slippage is not None:
+            ceiling = self._agent_max_slippage()
+            if not 0 < slippage <= ceiling:
+                raise TradingError(
+                    "trading.dca.invalid",
+                    f"slippagePct must be above 0 and at most {ceiling:.2f}% "
+                    "(every buy runs under the agent's slippage ceiling)",
+                )
+        if isinstance(wallet, str) and wallet.strip().lower() == "all":
+            raise TradingError("trading.dca.invalid", "a mandate buys from one wallet")
+        try:
+            record = self._wallets_for(wallet or None)[0]
+        except TradingError:
+            raise
+        except Exception as exc:
+            raise _err(exc) from exc
+        meta_out = await self._dca_token(chain, token)
+        quote_ref = (quote or "").strip() or chain.usdc
+        if not quote_ref:
+            raise TradingError(
+                "trading.dca.invalid",
+                f"quote is required on {chain.name}: it has no canonical USDC",
+            )
+        meta_in = await self._dca_token(chain, quote_ref)
+        if meta_in.address == meta_out.address:
+            raise TradingError("trading.dca.invalid", "token and quote are the same token")
+        label = " ".join(str(name or "").split())[: dca.MAX_NAME_LENGTH]
+        label = label or f"DCA {meta_out.symbol or 'token'}"
+        now = self._now()
+        agent = initiator == "agent"
+        mandate_id = dca.new_mandate_id()
+        row: dict[str, Any] = {
+            "mandate_id": mandate_id,
+            "kind": dca.MANDATE_KIND,
+            "name": label,
+            "status": "awaiting_approval" if agent else "active",
+            "status_reason": None,
+            "chain_id": chain.chain_id,
+            "wallet": record.key,
+            "token_out": meta_out.address,
+            "token_in": meta_in.address,
+            "usd_per_run": usd,
+            "cap_usd": cap,
+            "runs_max": runs,
+            "every_seconds": every,
+            "max_price_usd": max_price,
+            "slippage_pct": slippage,
+            "start_now": 1 if start_now else 0,
+            "initiator": initiator,
+            "session_key": session_key,
+            "created_at": now,
+            "updated_at": now,
+        }
+        if agent:
+            row["expires_at"] = now + dca.PENDING_TTL
+        else:
+            row["anchor_at"], row["next_run_at"] = self._dca_schedule(now, every, start_now)
+            row["approved_at"] = now
+        self.ledger.insert_mandate(row)
+        log.info("trading.dca_created", mandate=mandate_id, status=row["status"])
+        mandate, warnings = await self._dca_changed(self._dca_row(mandate_id))
+        return dca.mandate_payload(mandate, fetched_at=self._now(), warnings=warnings)
+
+    async def dca_get(self, mandate_id: str) -> dict[str, Any]:
+        mandate, warnings = await self._dca_build(self._dca_row(mandate_id))
+        return dca.mandate_payload(mandate, fetched_at=self._now(), warnings=warnings)
+
+    async def dca_list(
+        self,
+        *,
+        all: bool = False,
+        wallet: str | None = None,
+    ) -> dict[str, Any]:
+        """Live mandates (or every one with ``all``), optionally for one wallet."""
+        key: str | None = None
+        if wallet:
+            try:
+                key = self._wallets_for(wallet)[0].key
+            except TradingError:
+                raise
+            except Exception as exc:
+                raise _err(exc) from exc
+        rows = self.ledger.list_mandates(
+            statuses=None if all else sorted(dca.LIVE_STATUSES), wallet=key
+        )
+        mandates = [(await self._dca_build(row))[0] for row in rows]
+        return dca.mandates_payload(mandates, fetched_at=self._now(), all=all, wallet=wallet)
+
+    async def dca_approve(self, mandate_id: str) -> dict[str, Any]:
+        """Start an agent's proposal; the first buy fires on the next tick (``startNow``)."""
+        row = self._dca_row(mandate_id)
+        if row["status"] != "awaiting_approval":
+            raise self._dca_bad_state(row, "approve")
+        now = self._now()
+        if row.get("expires_at") is not None and float(row["expires_at"]) <= now:
+            await self._dca_expire(row, now)
+            raise self._dca_bad_state(self._dca_row(mandate_id), "approve")
+        anchor, first = self._dca_schedule(now, int(row["every_seconds"]), bool(row["start_now"]))
+        updated = self.ledger.update_mandate(
+            row["mandate_id"],
+            now=now,
+            expect_status="awaiting_approval",
+            status="active",
+            status_reason=None,
+            approved_at=now,
+            anchor_at=anchor,
+            next_run_at=first,
+            expires_at=None,
+        )
+        if updated is None:
+            raise self._dca_bad_state(self._dca_row(mandate_id), "approve")
+        return await self._dca_answer(updated)
+
+    async def dca_reject(self, mandate_id: str, reason: str | None = None) -> dict[str, Any]:
+        row = self._dca_row(mandate_id)
+        if row["status"] != "awaiting_approval":
+            raise self._dca_bad_state(row, "reject")
+        updated = self.ledger.update_mandate(
+            row["mandate_id"],
+            now=self._now(),
+            expect_status="awaiting_approval",
+            status="rejected",
+            status_reason=self._dca_user_reason(reason),
+            expires_at=None,
+        )
+        if updated is None:
+            raise self._dca_bad_state(self._dca_row(mandate_id), "reject")
+        return await self._dca_answer(updated)
+
+    async def dca_pause(self, mandate_id: str) -> dict[str, Any]:
+        row = self._dca_row(mandate_id)
+        if row["status"] != "active":
+            raise self._dca_bad_state(row, "pause")
+        updated = self.ledger.update_mandate(
+            row["mandate_id"],
+            now=self._now(),
+            expect_status="active",
+            status="paused",
+            status_reason="user",
+        )
+        if updated is None:
+            raise self._dca_bad_state(self._dca_row(mandate_id), "pause")
+        return await self._dca_answer(updated)
+
+    async def dca_resume(self, mandate_id: str) -> dict[str, Any]:
+        """Back to ``active``; missed buys are not made up, the next slot is the next buy."""
+        row = self._dca_row(mandate_id)
+        if row["status"] != "paused":
+            raise self._dca_bad_state(row, "resume")
+        now = self._now()
+        anchor = float(row["anchor_at"]) if row.get("anchor_at") is not None else now
+        updated = self.ledger.update_mandate(
+            row["mandate_id"],
+            now=now,
+            expect_status="paused",
+            status="active",
+            status_reason=None,
+            anchor_at=anchor,
+            next_run_at=dca.next_run_after(anchor, int(row["every_seconds"]), now),
+            bad_streak=0,
+        )
+        if updated is None:
+            raise self._dca_bad_state(self._dca_row(mandate_id), "resume")
+        return await self._dca_answer(updated)
+
+    async def dca_stop(self, mandate_id: str, reason: str | None = None) -> dict[str, Any]:
+        """Terminal. A buy still waiting for approval is rejected with it."""
+        row = self._dca_row(mandate_id)
+        if row["status"] not in dca.LIVE_STATUSES:
+            raise self._dca_bad_state(row, "stop")
+        updated = self.ledger.update_mandate(
+            row["mandate_id"],
+            now=self._now(),
+            expect_status=sorted(dca.LIVE_STATUSES),
+            status="stopped",
+            status_reason=self._dca_user_reason(reason),
+            next_run_at=None,
+            expires_at=None,
+        )
+        if updated is None:
+            raise self._dca_bad_state(self._dca_row(mandate_id), "stop")
+        for order in self.ledger.orders_for_mandate(row["mandate_id"]):
+            if order["status"] == "awaiting_approval":
+                with contextlib.suppress(TradingError):
+                    await self.reject(str(order["order_id"]), "DCA mandate stopped")
+        return await self._dca_answer(self._dca_row(mandate_id))
+
+    async def dca_update(self, mandate_id: str, **fields: Any) -> dict[str, Any]:
+        """Change the terms of a live mandate.
+
+        Fields: ``usd_per_run``, ``cap_usd``, ``runs_max``, ``every_seconds``,
+        ``max_price_usd``, ``name``. ``None`` means "not given"; ``runs_max=0``
+        drops the run limit and ``max_price_usd=0`` the price guard. A cap
+        below what is already spent completes the mandate; a new interval
+        re-anchors the schedule at now (next buy = now + every).
+        """
+        allowed = ("usd_per_run", "cap_usd", "runs_max", "every_seconds", "max_price_usd", "name")
+        unknown = sorted(set(fields) - set(allowed))
+        if unknown:
+            raise TradingError("trading.dca.invalid", f"cannot update {', '.join(unknown)}")
+        given = {k: v for k, v in fields.items() if v is not None}
+        if not given:
+            raise TradingError("trading.dca.invalid", "nothing to update")
+        row = self._dca_row(mandate_id)
+        if row["status"] not in dca.LIVE_STATUSES:
+            raise self._dca_bad_state(row, "update")
+        now = self._now()
+        sets: dict[str, Any] = {}
+        usd = float(row["usd_per_run"])
+        cap = float(row["cap_usd"])
+        runs: int | None = int(row["runs_max"]) if row.get("runs_max") is not None else None
+        every = int(row["every_seconds"])
+        max_price = float(row["max_price_usd"]) if row.get("max_price_usd") is not None else None
+        if "usd_per_run" in given:
+            usd = sets["usd_per_run"] = self._dca_number(given["usd_per_run"], "usdPerRun")
+        if "cap_usd" in given:
+            cap = sets["cap_usd"] = self._dca_number(given["cap_usd"], "capUsd")
+        if "runs_max" in given:
+            value = self._dca_int(given["runs_max"], "runsMax")
+            runs = sets["runs_max"] = value or None
+        if "every_seconds" in given:
+            every = self._dca_int(given["every_seconds"], "everySeconds")
+            sets["every_seconds"] = every
+        if "max_price_usd" in given:
+            price = self._dca_number(given["max_price_usd"], "maxPriceUsd")
+            max_price = sets["max_price_usd"] = price or None
+        if "name" in given:
+            label = " ".join(str(given["name"]).split())[: dca.MAX_NAME_LENGTH]
+            if not label:
+                raise TradingError("trading.dca.invalid", "name must not be empty")
+            sets["name"] = label
+        problem = dca.validate_terms(
+            usd_per_run=usd,
+            cap_usd=cap,
+            runs_max=runs,
+            every_seconds=every,
+            max_price_usd=max_price,
+            creating=False,
+        )
+        if problem:
+            raise TradingError("trading.dca.invalid", problem)
+        if "every_seconds" in sets and row["status"] != "awaiting_approval":
+            sets["anchor_at"] = now
+            sets["next_run_at"] = now + every
+        updated = self.ledger.update_mandate(
+            row["mandate_id"], now=now, expect_status=row["status"], **sets
+        )
+        if updated is None:
+            raise self._dca_bad_state(self._dca_row(mandate_id), "update")
+        updated = self._dca_complete_if_done(updated, now) or updated
+        return await self._dca_answer(updated)
+
+    async def dca_run_now(self, mandate_id: str, *, wait: bool = False) -> dict[str, Any]:
+        """Buy now: one run on an active or paused mandate; the schedule does not move."""
+        row = self._dca_row(mandate_id)
+        if row["status"] not in ("active", "paused"):
+            raise self._dca_bad_state(row, "run")
+        async with self._dca_lock:
+            run_row = await self._dca_fire(row["mandate_id"], manual=True, wait=wait)
+        mandate, warnings = await self._dca_build(self._dca_row(mandate_id))
+        run = self._dca_run_json(run_row) if run_row is not None else None
+        return dca.mandate_payload(mandate, fetched_at=self._now(), warnings=warnings, run=run)
+
+    async def dca_run_due(self) -> None:
+        """One pass: expire stale proposals, settle strays, fire every due buy.
+
+        Called from :meth:`tick`. A pass still running (a slow quote) makes
+        the next one a no-op rather than a second runner beside it.
+        """
+        if self._dca_lock.locked():
+            return
+        async with self._dca_lock:
+            now = self._now()
+            for row in self.ledger.list_mandates(statuses=["awaiting_approval"]):
+                if row.get("expires_at") is not None and float(row["expires_at"]) <= now:
+                    await self._dca_expire(row, now)
+            await self._dca_reconcile(now)
+            for row in self.ledger.list_mandates(statuses=["active"], due_before=now):
+                try:
+                    await self._dca_fire(str(row["mandate_id"]), manual=False)
+                except Exception as exc:  # one mandate failing never blocks the others
+                    log.warning("trading.dca_run_error", mandate=row["mandate_id"], error=str(exc))
+
+    @staticmethod
+    def _dca_user_reason(reason: str | None) -> str:
+        text = " ".join(str(reason or "").split())[:200]
+        return f"user: {text}" if text else "user"
+
+    async def _dca_expire(self, row: dict[str, Any], now: float) -> None:
+        updated = self.ledger.update_mandate(
+            row["mandate_id"],
+            now=now,
+            expect_status="awaiting_approval",
+            status="expired",
+            status_reason="no decision within 24 h",
+        )
+        if updated is not None:
+            await self._dca_changed(updated)
+
+    async def _dca_reconcile(self, now: float) -> None:
+        """Settle runs whose order moved on while nobody was listening (restart, crash)."""
+        for run in self.ledger.open_runs():
+            order_id = run.get("order_id")
+            if order_id:
+                order = self.ledger.get_order(str(order_id))
+                if order is None:
+                    continue
+                if order["status"] in ORDER_FINAL_STATUSES or (
+                    order["status"] == "awaiting_approval" and run["status"] == "pending"
+                ):
+                    await self._dca_on_order(str(order_id))
+            elif run["status"] == "pending" and now - float(run["at"]) > dca.ORPHAN_RUN_S:
+                await self._dca_settle_run(
+                    int(run["run_id"]),
+                    "failed",
+                    dca.reason("trading.interrupted", "the engine stopped before the order"),
+                )
+
+    async def _dca_fire(
+        self, mandate_id: str, *, manual: bool, wait: bool = False
+    ) -> dict[str, Any] | None:
+        """One run of a mandate. ``None`` when another runner claimed this slot first.
+
+        The schedule advances (compare-and-set on ``next_run_at``) and the run
+        row is written before the order is placed, so a crash mid-run can
+        never buy twice for one slot.
+        """
+        row = self._dca_row(mandate_id)
+        now = self._now()
+        if manual:
+            claimed = self.ledger.update_mandate(
+                mandate_id, now=now, expect_status=("active", "paused"), last_run_at=now
+            )
+            if claimed is None:
+                raise self._dca_bad_state(self._dca_row(mandate_id), "run")
+        else:
+            anchor = float(row["anchor_at"]) if row.get("anchor_at") is not None else now
+            claimed = self.ledger.update_mandate(
+                mandate_id,
+                now=now,
+                expect_status="active",
+                expect_next_run_at=row.get("next_run_at"),
+                anchor_at=anchor,
+                next_run_at=dca.next_run_after(anchor, int(row["every_seconds"]), now),
+                last_run_at=now,
+            )
+            if claimed is None:
+                return None
+        row = claimed
+        chain = CHAINS[int(row["chain_id"])]
+        token = self._token_dict(chain.chain_id, str(row["token_out"])) or {}
+        symbol = str(token.get("symbol") or "token")
+        spent, reserved, _, _ = self.ledger.mandate_spend(mandate_id)
+        in_flight = len(self.ledger.open_runs(mandate_id))
+        runs_max = int(row["runs_max"]) if row.get("runs_max") is not None else None
+        usd_per_run = float(row["usd_per_run"])
+        size = dca.run_size(usd_per_run, float(row["cap_usd"]), spent, reserved)
+        # Every attempt carries its size, skips included, so the history shows what was tried.
+        run_id = self.ledger.insert_run(
+            {
+                "mandate_id": mandate_id,
+                "n": self.ledger.run_attempts(mandate_id) + 1,
+                "at": now,
+                "status": "pending",
+                "manual": 1 if manual else 0,
+                "usd": size,
+            }
+        )
+
+        async def skip(code: str, detail: str) -> dict[str, Any] | None:
+            await self._dca_settle_run(run_id, "skipped", dca.reason(code, detail))
+            return self.ledger.get_run(run_id)
+
+        if runs_max is not None and int(row["runs_done"]) + in_flight >= runs_max:
+            return await skip("cap_reached", f"all {runs_max} buys are placed")
+        # ``size < dust`` only when the remainder itself is under it (``dca.dust_for``), so
+        # with nothing in flight this skip always completes the mandate in the same pass.
+        if size < dca.dust_for(usd_per_run):
+            left = max(0.0, float(row["cap_usd"]) - spent - reserved)
+            return await skip("cap_reached", f"{dca.usd_text(left)} left of the cap")
+        price = await self._dca_price(chain, str(row["token_out"]))
+        self.ledger.update_run(run_id, price_usd=price)
+        max_price = row.get("max_price_usd")
+        if max_price is not None:
+            if price is None:
+                return await skip("max_price", "price unknown: max-price guard cannot be checked")
+            if price > float(max_price):
+                return await skip(
+                    "max_price",
+                    f"{symbol} at {dca.usd_text(price)} above {dca.usd_text(float(max_price))}",
+                )
+        try:
+            record = self.vault.get(str(row["wallet"]))
+            meta_in = await self.token_meta(chain, str(row["token_in"]))
+            need = await self._raw_for_usd(chain, meta_in, size)
+            have = await self._balance_raw(chain, record, meta_in)
+        except Exception as exc:
+            error = _err(exc)
+            await self._dca_settle_run(run_id, "failed", dca.reason(error.code, str(error)))
+            return self.ledger.get_run(run_id)
+        if have < need:
+            return await skip(
+                "insufficient_balance",
+                f"{record.label} holds {format_amount(have, meta_in.decimals)} "
+                f"{meta_in.symbol or 'tokens'}, needs {format_amount(need, meta_in.decimals)}",
+            )
+        buy = int(row["runs_done"]) + in_flight + 1
+        try:
+            orders = await self.swap(
+                chain=chain,
+                wallets=record.key,
+                token_in=str(row["token_in"]),
+                token_out=str(row["token_out"]),
+                amount_in=None,
+                amount_pct=None,
+                slippage_pct=row.get("slippage_pct"),
+                initiator="agent",
+                session_key=row.get("session_key"),
+                note=dca.run_note(str(row["name"]), buy, runs_max),
+                wait=wait,
+                amount_usd=size,
+                mandate_id=mandate_id,
+            )
+        except Exception as exc:
+            error = _err(exc)
+            await self._dca_settle_run(run_id, "failed", dca.reason(error.code, str(error)))
+            return self.ledger.get_run(run_id)
+        order_id = str(orders[0]["orderId"]) if orders else None
+        run = self.ledger.get_run(run_id) or {}
+        if order_id and not run.get("order_id"):
+            self.ledger.update_run(run_id, order_id=order_id)
+        if order_id and await self._dca_on_order(order_id):
+            return self.ledger.get_run(run_id)
+        # Still on its way (submitted, or settled before this line): say so.
+        run = self.ledger.get_run(run_id) or {}
+        if run.get("status") in dca.RUN_OPEN_STATUSES:
+            await self._emit(
+                "trading.dca.run", {"mandateId": mandate_id, "run": self._dca_run_json(run)}
+            )
+            await self._dca_changed(self._dca_row(mandate_id))
+        return self.ledger.get_run(run_id)
+
+    async def _dca_on_order(self, order_id: str) -> bool:
+        """Move the run of a mandate's order to what the order became. ``True`` if it moved."""
+        order = self.ledger.get_order(order_id)
+        if order is None or not order.get("mandate_id"):
+            return False
+        run = self.ledger.run_for_order(order_id)
+        if run is None or run["status"] not in dca.RUN_OPEN_STATUSES:
+            return False
+        status = str(order["status"])
+        text = str(order.get("reason") or "")
+        code, detail = dca.split_reason(text)
+        run_id = int(run["run_id"])
+        if status == "awaiting_approval":
+            if run["status"] != "pending":
+                return False
+            return await self._dca_settle_run(
+                run_id, "parked", dca.reason("needs_approval", text or None)
+            )
+        if status == "confirmed":
+            return await self._dca_settle_run(
+                run_id, "filled", None, usd=order.get("value_usd") or run.get("usd")
+            )
+        if status == "expired":
+            return await self._dca_settle_run(run_id, "expired", "expired")
+        if status == "rejected":
+            if run["status"] == "pending" and text.startswith("daily cap"):
+                return await self._dca_settle_run(run_id, "skipped", dca.reason("daily_cap", text))
+            return await self._dca_settle_run(run_id, "rejected", text or "rejected")
+        if status == "failed":
+            if code == "trading.insufficient_balance":
+                return await self._dca_settle_run(
+                    run_id, "skipped", dca.reason("insufficient_balance", detail)
+                )
+            return await self._dca_settle_run(
+                run_id, "failed", dca.reason(code or "trading.failed", detail or text or None)
+            )
+        return False
+
+    async def _dca_settle_run(
+        self, run_id: int, status: str, reason: str | None, **fields: Any
+    ) -> bool:
+        """Move an open run to ``status`` (once), book it on the mandate and announce it."""
+        expect = ("pending",) if status == "parked" else tuple(sorted(dca.RUN_OPEN_STATUSES))
+        run = self.ledger.update_run(
+            run_id, expect_status=expect, status=status, reason=reason, **fields
+        )
+        if run is None:
+            return False
+        mandate_id = str(run["mandate_id"])
+        now = self._now()
+        code = dca.split_reason(reason)[0]
+        deltas: dict[str, int] = {}
+        if status == "filled":
+            deltas["runs_done"] = 1
+        elif status == "skipped":
+            deltas["runs_skipped"] = 1
+            if code in dca.BAD_SKIPS:
+                deltas["bad_streak"] = 1
+        elif status == "failed":
+            deltas["runs_failed"] = 1
+            deltas["bad_streak"] = 1
+        self.ledger.add_mandate_counts(mandate_id, now=now, **deltas)
+        spent = self.ledger.mandate_spend(mandate_id)[0]
+        extra: dict[str, Any] = {"spent_usd": spent}
+        if status == "filled":
+            extra["bad_streak"] = 0
+        mandate = self.ledger.update_mandate(mandate_id, now=now, **extra)
+        if mandate is not None and mandate["status"] == "active":
+            streak = int(mandate.get("bad_streak") or 0)
+            if streak >= dca.BAD_STREAK_LIMIT and "bad_streak" in deltas:
+                quote = self._token_dict(int(mandate["chain_id"]), str(mandate["token_in"])) or {}
+                mandate = (
+                    self.ledger.update_mandate(
+                        mandate_id,
+                        now=now,
+                        expect_status="active",
+                        status="paused",
+                        status_reason=dca.pause_reason(
+                            streak, code, str(quote.get("symbol") or "")
+                        ),
+                    )
+                    or mandate
+                )
+        if mandate is not None:
+            mandate = self._dca_complete_if_done(mandate, now) or mandate
+        await self._emit(
+            "trading.dca.run", {"mandateId": mandate_id, "run": self._dca_run_json(run)}
+        )
+        if mandate is not None:
+            await self._dca_changed(mandate)
+        return True
+
+    def _dca_complete_if_done(self, row: dict[str, Any], now: float) -> dict[str, Any] | None:
+        """Complete an active/paused mandate whose cap or run limit is reached."""
+        if row["status"] not in ("active", "paused"):
+            return None
+        mandate_id = str(row["mandate_id"])
+        spent, reserved, _, _ = self.ledger.mandate_spend(mandate_id)
+        why = dca.completion_reason(
+            usd_per_run=float(row["usd_per_run"]),
+            cap_usd=float(row["cap_usd"]),
+            spent_usd=spent,
+            reserved_usd=reserved,
+            runs_done=int(row.get("runs_done") or 0),
+            runs_max=int(row["runs_max"]) if row.get("runs_max") is not None else None,
+            in_flight=len(self.ledger.open_runs(mandate_id)),
+        )
+        if why is None:
+            return None
+        return self.ledger.update_mandate(
+            mandate_id,
+            now=now,
+            expect_status=("active", "paused"),
+            status="completed",
+            status_reason=why,
+            next_run_at=None,
+        )
+
+    def _dca_run_json(self, run: dict[str, Any]) -> dict[str, Any]:
+        """One ``Run`` for an event or a buy-now answer (token priced from the order only)."""
+        mandate = self.ledger.get_mandate(str(run["mandate_id"])) or {}
+        chain = CHAINS.get(int(mandate.get("chain_id") or 0))
+        order = self.ledger.get_order(str(run["order_id"])) if run.get("order_id") else None
+        decimals = self._decimals(int(mandate.get("chain_id") or 0), str(mandate["token_out"]))
+        gas = self.ledger.order_gas_usd([str(run["order_id"])]) if run.get("order_id") else {}
+        price = None
+        if order is not None and order.get("value_usd") and order.get("received_out_raw"):
+            human = float(to_human(int(order["received_out_raw"]), decimals))
+            price = float(order["value_usd"]) / human if human > 0 else None
+        return dca.run_payload(
+            run,
+            order,
+            chain=chain,
+            token_decimals=decimals,
+            token_price=price,
+            gas_usd=gas.get(str(run.get("order_id"))),
+        )
+
+    async def _dca_build(self, row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        """The ``Mandate`` payload object and the card's warnings."""
+        mandate_id = str(row["mandate_id"])
+        chain = CHAINS[int(row["chain_id"])]
+        token = self._token_dict(chain.chain_id, str(row["token_out"])) or {}
+        quote = self._token_dict(chain.chain_id, str(row["token_in"])) or {}
+        token_price = await self._dca_price(chain, str(row["token_out"]))
+        quote_price = await self._dca_price(chain, str(row["token_in"]))
+        spend = self.ledger.mandate_spend(mandate_id)
+        rows = self.ledger.list_runs(mandate_id, limit=dca.HISTORY_LIMIT)
+        order_ids = [str(r["order_id"]) for r in rows if r.get("order_id")]
+        orders = {oid: self.ledger.get_order(oid) for oid in order_ids}
+        gas = self.ledger.order_gas_usd(order_ids)
+        decimals = int(token.get("decimals", 18))
+        runs = [
+            dca.run_payload(
+                r,
+                orders.get(str(r.get("order_id"))),
+                chain=chain,
+                token_decimals=decimals,
+                token_price=token_price,
+                gas_usd=gas.get(str(r.get("order_id"))),
+            )
+            for r in rows
+        ]
+        try:
+            label: str | None = self.vault.get(str(row["wallet"])).label
+        except Exception:
+            label = None
+        limits = self._limits_dict()
+        mandate = dca.mandate_json(
+            row,
+            chain=chain,
+            wallet=dca.wallet_json(str(row["wallet"]), label),
+            token=token,
+            quote=quote,
+            token_price=token_price,
+            quote_price=quote_price,
+            spend=spend,
+            runs=runs,
+            attempts=self.ledger.run_attempts(mandate_id),
+            approval_threshold_usd=float(limits["approvalThresholdUsd"]),
+            daily_cap_usd=float(limits["dailyCapUsd"]),
+            default_slippage_pct=getattr(self.config, "default_slippage_pct", None),
+        )
+        balance = self.ledger.get_balance(chain.chain_id, str(row["wallet"]), str(row["token_in"]))
+        balance_usd = (
+            float(to_human(balance, int(quote.get("decimals", 18)))) * quote_price
+            if balance is not None and quote_price is not None
+            else None
+        )
+        warnings = dca.mandate_warnings(
+            row,
+            token_symbol=str(token.get("symbol") or ""),
+            quote_symbol=str(quote.get("symbol") or ""),
+            token_price=token_price,
+            quote_balance_usd=balance_usd,
+            spend=spend,
+            approval_threshold_usd=float(limits["approvalThresholdUsd"]),
+        )
+        return mandate, warnings
+
+    async def _dca_changed(self, row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        """Announce a mandate's new state; returns what was announced."""
+        mandate, warnings = await self._dca_build(row)
+        await self._emit("trading.changed", {"reason": "dca", "mandateId": row["mandate_id"]})
+        await self._emit("trading.dca.changed", {"mandate": mandate})
+        return mandate, warnings
+
+    async def _dca_answer(self, row: dict[str, Any]) -> dict[str, Any]:
+        mandate, warnings = await self._dca_changed(row)
+        return dca.mandate_payload(mandate, fetched_at=self._now(), warnings=warnings)
 
 
 # ── module singleton ───────────────────────────────────────────────────────

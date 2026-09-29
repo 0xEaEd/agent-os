@@ -25,7 +25,7 @@ import { desktopApi } from '~/lib/desktop-api'
 import { shortAge } from '~/lib/relative-time'
 import { useNow } from '~/lib/use-now'
 import { useUnwrap } from '~/stores/trading'
-import { HIGH_RISK_USD } from './desk/desk-logic'
+import { HIGH_RISK_USD, lpOrderAmounts, lpOrderLine } from './desk/desk-logic'
 import {
   approvalSecondsLeft,
   errorText,
@@ -200,6 +200,27 @@ function Fact({
 /** The headline of a row: a swap's two legs, a send's destination, a revoke's spender. */
 function Legs({ order }: { order: Order }) {
   const kind = order.kind ?? 'swap'
+  if (kind === 'lp_collect' || kind === 'lp_remove' || kind === 'lp_add') {
+    // Never `amountIn`: on an LP order it is the liquidity (raw L), not tokens.
+    const moved = lpOrderAmounts(order)
+    return (
+      <>
+        <span className="trd-order__leg">
+          <i>{t(`trading.orders.kind.${kind}`)}</i> {lpOrderLine(order, { usd: moved === null })}
+        </span>
+        {moved ? (
+          <span
+            className="trd-order__leg"
+            data-testid="order-lp-amounts"
+            data-estimate={order.status !== 'confirmed' ? 'true' : undefined}
+            title={moved.full}
+          >
+            <i>{t(`trading.orders.lp.${moved.side}`)}</i> {moved.text}
+          </span>
+        ) : null}
+      </>
+    )
+  }
   if (kind === 'send') {
     return (
       <>
@@ -372,6 +393,16 @@ function OrderRow({
           {order.batchId ? (
             <span className="trd-mono" title={order.batchId}>
               {t('trading.orders.batch')} {order.batchId.slice(4, 10)}
+            </span>
+          ) : null}
+          {order.mandateId ? (
+            // A buy a DCA mandate fired: the chip names the mandate it belongs to.
+            <span
+              className="trd-order__dca trd-mono"
+              title={order.mandateId}
+              data-testid="order-dca"
+            >
+              {t('trading.orders.dca')}
             </span>
           ) : null}
         </span>

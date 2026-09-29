@@ -1,10 +1,15 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  cardCallFromResult,
+  dcaCallFromResult,
   commandFromToolInput,
   exitCodeOf,
   ledgerRuns,
+  lpCallFromResult,
   parseTradeCommand,
   parseTradeResult,
+  withLiveMandate,
 } from './ledger'
 
 describe('commandFromToolInput', () => {
@@ -333,5 +338,426 @@ describe('sends, allowances, decode and network rows', () => {
     )
     expect(probe.summary).toBe('Base ✓ 2s · Robinhood Chain ✗ 90s')
     expect(probe.error).toBe('1 chain unhealthy')
+  })
+})
+
+describe('liquidity reads (agentos trade lp)', () => {
+  const MARKER =
+    'publish_artifact path=.agentos/lp/ranges-boar-base-20260927T105305Z.json mime=application/vnd.agentos.lp+json'
+
+  it('names the call instead of calling it a generic trade call', () => {
+    const call = parseTradeCommand('agentos trade lp pool boar --chain base --json')!
+    expect(call).toMatchObject({ kind: 'lp', title: 'Liquidity read', detail: 'pool boar · Base' })
+    expect(
+      parseTradeCommand('cd /w && uv run agentos trade lp positions --wallet 0xabc --json'),
+    ).toMatchObject({ kind: 'lp', detail: 'positions' })
+  })
+
+  it('labels the result by kind, subject and chain, never by its JSON', () => {
+    const call = parseTradeCommand('agentos trade lp pool boar --chain base --json')!
+    const body = {
+      version: 1,
+      kind: 'pool',
+      chain: { id: 8453, key: 'base', name: 'Base', explorer: 'https://basescan.org' },
+      token: { address: '0x1', symbol: 'boar', decimals: 18, priceUsd: 0.0001 },
+      pool: { poolId: '0x2', tvlUsd: 1_447_702, mcapUsd: 2_514_887 },
+    }
+    const out = parseTradeResult(call, `exit_code=0\n${JSON.stringify(body, null, 2)}\n${MARKER}`)
+    expect(out.detail).toBe('pool boar (Base)')
+    expect(out.summary).not.toContain('{')
+    expect(out.summary).toBe('TVL $1.4M · mcap $2.5M')
+    expect(out.error).toBeNull()
+  })
+
+  it('summarises a multi-chain positions read', () => {
+    const call = parseTradeCommand('agentos trade lp positions --json')!
+    const body = {
+      version: 1,
+      kind: 'positions',
+      chain: null,
+      wallets: [{ address: '0x1' }, { address: '0x2' }],
+      chains: [
+        { key: 'base', name: 'Base' },
+        { key: 'robinhood', name: 'Robinhood' },
+      ],
+      positions: [],
+      totals: { valueUsd: null, feesUsd: null, count: 3, outOfRange: 1 },
+    }
+    const out = parseTradeResult(call, JSON.stringify(body))
+    expect(out.detail).toBe('positions · 2 wallets (Base + Robinhood)')
+    expect(out.summary).toBe('3 open · 1 out of range')
+  })
+
+  describe('positions chain label never comes from a row', () => {
+    const row = (key: string, name: string) =>
+      `{"chain": {"id": 4663, "key": "${key}", "name": "${name}", "explorer": "https://x"}, "tokenId": "7"`
+    const prefix =
+      '{"version": 1, "kind": "positions", "chain": null, "asOfBlock": 5, ' +
+      '"asOfBlocks": {"base": 5, "robinhood": 9}, "wallets": [{"address": "0xde93"}], ' +
+      '"chains": [{"id": 8453, "key": "base", "name": "Base"}, {"id": 4663, "key": "robinhood", "name": "Robinhood Chain"}], ' +
+      `"positions": [${row('robinhood', 'Robinhood Chain')}, "own`
+
+    it('names every scanned chain from asOfBlocks when the JSON is truncated', () => {
+      const call = parseTradeCommand('agentos trade lp positions --wallet 0xde93 --json')!
+      const out = parseTradeResult(call, prefix)
+      expect(out.detail).toBe('positions (Base + Robinhood)')
+    })
+
+    it('names the chains from the envelope when the JSON parses', () => {
+      const call = parseTradeCommand('agentos trade lp positions --wallet 0xde93 --json')!
+      const body = {
+        version: 1,
+        kind: 'positions',
+        chain: null,
+        asOfBlocks: { base: 5, robinhood: 9 },
+        wallets: [{ address: '0xde93' }],
+        chains: [
+          { key: 'base', name: 'Base' },
+          { key: 'robinhood', name: 'Robinhood Chain' },
+        ],
+        positions: [{ chain: { key: 'robinhood', name: 'Robinhood Chain' }, tokenId: '7' }],
+        totals: { valueUsd: 12, feesUsd: 0, count: 1, outOfRange: 0 },
+      }
+      const out = parseTradeResult(call, JSON.stringify(body))
+      expect(out.detail).toBe('positions · 1 wallet (Base + Robinhood)')
+    })
+
+    it('falls back to the command line when even asOfBlocks was cut', () => {
+      const cut = `{"version": 1, "kind": "positions", "chain": null, "asOfBlo`
+      const both = parseTradeCommand('agentos trade lp positions --wallet 0xde93 --json')!
+      expect(parseTradeResult(both, cut).detail).toBe('positions (Base + Robinhood)')
+      const one = parseTradeCommand(
+        'agentos trade lp positions --wallet 0xde93 --chain base --json',
+      )!
+      expect(parseTradeResult(one, cut).detail).toBe('positions (Base)')
+      const two = parseTradeCommand(
+        'agentos trade lp positions --chain robinhood --chain=base --json',
+      )!
+      expect(parseTradeResult(two, cut).detail).toBe('positions (Robinhood + Base)')
+    })
+
+    it('uses the command flags over a row when asOfBlocks is gone', () => {
+      const call = parseTradeCommand('agentos trade lp positions --chain base --json')!
+      const noBlocks = `{"version": 1, "kind": "positions", "chain": null, "positions": [${row('robinhood', 'Robinhood Chain')}`
+      expect(parseTradeResult(call, noBlocks).detail).toBe('positions (Base)')
+    })
+
+    it('omits the chain when neither the result nor the command names it', () => {
+      const call = lpCallFromResult(`${prefix.slice(0, 60)}\n${MARKER}`)!
+      const cut = `{"version": 1, "kind": "positions", "chain": null, "positions": [${row('robinhood', 'Robinhood Chain')}`
+      expect(parseTradeResult(call, cut).detail).toBe('positions')
+    })
+  })
+
+  it('still labels a result truncated past valid JSON', () => {
+    const call = parseTradeCommand('agentos trade lp ranges boar --chain base --json')!
+    const truncated =
+      '{"version": 1, "kind": "ranges", "chain": {"id": 8453, "key": "base", "name": "Base", ' +
+      '"explorer": "https://basescan.org"}, "asOfBlock": 1, "token": {"address": "0x1", "symbol": "boar", "dec'
+    const out = parseTradeResult(call, truncated)
+    expect(out.detail).toBe('ranges boar (Base)')
+    expect(out.summary).not.toContain('{')
+  })
+
+  it('reports an lp error as an error', () => {
+    const call = parseTradeCommand('agentos trade lp pool nope --chain base --json')!
+    const out = parseTradeResult(
+      call,
+      'exit_code=1\n{"error": {"code": "trading.lp.pool_not_found", "message": "no V4 pool for nope"}}',
+    )
+    expect(out.error).toBe('no V4 pool for nope')
+  })
+
+  it('recognises a liquidity read from the card announcement alone', () => {
+    expect(lpCallFromResult(`{"kind": "pool"}\n${MARKER}`)).toMatchObject({
+      kind: 'lp',
+      title: 'Liquidity read',
+    })
+    expect(
+      lpCallFromResult(
+        '[generated artifact omitted: pool-boar-base-1.json (application/vnd.agentos.lp+json)]',
+      ),
+    ).not.toBeNull()
+    expect(lpCallFromResult('publish_artifact path=a.png mime=image/png')).toBeNull()
+    expect(lpCallFromResult('{"kind": "pool"}')).toBeNull()
+  })
+
+  it('recognises all three shapes of the card line: raw, live-rewritten, projected', () => {
+    const body = '{"version": 1, "kind": "positions"'
+    // What the CLI prints.
+    expect(lpCallFromResult(`${body}\n${MARKER}`)).not.toBeNull()
+    // What a live tool result carries: publish_inline_artifacts rewrote the line (no mime).
+    const live =
+      '[inline artifact published and already rendered for the user: ' +
+      'lp-cards/positions-wallets-20260927T105305Z.json. Do not call publish_artifact for it.]'
+    expect(lpCallFromResult(`${body}\n${live}`)).toMatchObject({
+      kind: 'lp',
+      title: 'Liquidity read',
+    })
+    expect(
+      lpCallFromResult(
+        '[inline artifact published and already rendered for the user: ' +
+          '/w/lp-cards/pool-boar-base-1.json. Do not call publish_artifact for it.]',
+      ),
+    ).not.toBeNull()
+    // What a history projection leaves.
+    expect(
+      lpCallFromResult(
+        `${body}\n[generated artifact omitted: positions-wallets-1.json (application/vnd.agentos.lp+json)]`,
+      ),
+    ).not.toBeNull()
+    // Some other inline artifact is not a liquidity read.
+    expect(
+      lpCallFromResult(
+        '[inline artifact published and already rendered for the user: charts/boar.png. Do not call publish_artifact for it.]',
+      ),
+    ).toBeNull()
+    expect(lpCallFromResult('[inline artifact not published: no such file]')).toBeNull()
+  })
+
+  it('keeps only the subject in the command detail, never a flag value', () => {
+    expect(parseTradeCommand('agentos trade lp positions --budget-seconds 60 --json')!.detail).toBe(
+      'positions',
+    )
+    expect(
+      parseTradeCommand('agentos trade lp positions --budget-seconds=60 --all --wallet 0xabc')!
+        .detail,
+    ).toBe('positions')
+    expect(
+      parseTradeCommand('agentos trade lp pool --quote USDC --json boar --no-card --chain base')!
+        .detail,
+    ).toBe('pool boar · Base')
+    expect(parseTradeCommand('agentos trade lp position --chain=base 12345 --json')!.detail).toBe(
+      'position 12345 · Base',
+    )
+  })
+
+  it('keeps the full chain name when a positions read spans one chain', () => {
+    const call = parseTradeCommand('agentos trade lp positions --chain robinhood --json')!
+    const cut = '{"version": 1, "kind": "positions", "chain": null, "asOfBlo'
+    expect(parseTradeResult(call, cut).detail).toBe('positions (Robinhood Chain)')
+  })
+})
+
+describe('trade status from history', () => {
+  it('reads a status cut past valid JSON as the route, never the raw JSON', () => {
+    const call = parseTradeCommand('agentos trade status --json')!
+    const full = {
+      enabled: true,
+      version: '2026.9.27',
+      provider: 'aggregator',
+      providers: [{ id: 'aggregator', label: 'AgentOS Aggregator', active: true }],
+      apiKeyConfigured: true,
+      chains: Array.from({ length: 30 }, (_, i) => ({ chainId: i, name: `chain ${i}` })),
+      unlocked: true,
+    }
+    const whole = parseTradeResult(call, JSON.stringify(full, null, 2))
+    expect(whole.provider).toBe('aggregator')
+    expect(whole.summary).toBe('via AgentOS Aggregator · vault unlocked')
+    for (const cut of [
+      JSON.stringify(full).slice(0, 400),
+      `exit_code=0\n${JSON.stringify(full, null, 2).slice(0, 400)}`,
+    ]) {
+      const out = parseTradeResult(call, cut)
+      expect(out.provider).toBe('aggregator')
+      expect(out.summary).toBe('via AgentOS Aggregator')
+      expect(out.summary).not.toContain('{')
+      expect(out.error).toBeNull()
+    }
+    // A failed status still reads as its error line.
+    expect(parseTradeResult(call, 'exit_code=1\ngateway unreachable').error).toBe(
+      'gateway unreachable',
+    )
+  })
+})
+
+describe('DCA mandates (agentos trade dca)', () => {
+  const FIXTURE = readFileSync(
+    'src/renderer/src/views/trading/desk/__fixtures__/dca/mandate.json',
+    'utf8',
+  )
+  const MARKER =
+    'publish_artifact path=/tmp/dca-cards/mandate-dca-eth-20260928T060000Z.json mime=application/vnd.agentos.dca+json'
+
+  it('titles every subcommand and summarises its arguments', () => {
+    expect(
+      parseTradeCommand('agentos trade dca create ETH --usd 10 --every 1d --cap 300 --json'),
+    ).toMatchObject({ kind: 'dca_create', title: 'Start DCA', detail: 'ETH · $10 / day' })
+    expect(
+      parseTradeCommand(
+        'agentos trade dca create eth --usd 25 --every 6h --runs 12 --chain base --max-price 3000 --json',
+      ),
+    ).toMatchObject({ detail: 'ETH · $25 / 6 h · Base' })
+    expect(
+      parseTradeCommand('agentos trade dca create ETH --usd 5 --every 30m --json')?.detail,
+    ).toBe('ETH · $5 / 30 min')
+    const rows: [string, string, string, string][] = [
+      ['agentos trade dca show dca_1a2b3c4d --json', 'dca', 'DCA status', 'dca_1a2b3c4d'],
+      ['agentos trade dca list --json', 'dca_list', 'DCA list', ''],
+      ['agentos trade dca list --all --json', 'dca_list', 'DCA list', 'all'],
+      ['agentos trade dca pause dca_1a2b3c4d --json', 'dca_pause', 'Pause DCA', 'dca_1a2b3c4d'],
+      ['agentos trade dca resume dca_1a2b3c4d --json', 'dca_resume', 'Resume DCA', 'dca_1a2b3c4d'],
+      ['agentos trade dca run dca_1a2b3c4d --wait --json', 'dca_run', 'Buy now', 'dca_1a2b3c4d'],
+      [
+        'agentos trade dca stop dca_1a2b3c4d --reason "done" --json',
+        'dca_stop',
+        'Stop DCA',
+        'dca_1a2b3c4d',
+      ],
+      [
+        'agentos trade dca approve dca_1a2b3c4d --json',
+        'dca_approve',
+        'Approve DCA',
+        'dca_1a2b3c4d',
+      ],
+      [
+        'agentos trade dca update dca_1a2b3c4d --cap 500 --json',
+        'dca_update',
+        'Update DCA',
+        'dca_1a2b3c4d',
+      ],
+    ]
+    for (const [command, kind, title, detail] of rows) {
+      expect(parseTradeCommand(command), command).toMatchObject({ kind, title, detail })
+    }
+  })
+
+  it('reads a mandate card as pair, cadence, state and money — never its JSON', () => {
+    const call = parseTradeCommand('agentos trade dca show dca_1a2b3c4d --json')!
+    const out = parseTradeResult(call, `${FIXTURE}\n${MARKER}`)
+    expect(out.detail).toBe('ETH ← USDC · $10 / day')
+    expect(out.summary).toBe('active · $120 of $300 · 12/30 buys')
+    expect(out.error).toBeNull()
+    expect(out.summary).not.toContain('{')
+  })
+
+  it('names the fired buy of a Buy now and earns the awaiting stamp when it parks', () => {
+    const payload = JSON.parse(FIXTURE) as Record<string, unknown> & {
+      mandate: { history: Record<string, unknown>[] }
+    }
+    const parked = { ...payload, run: payload.mandate.history[0] }
+    const call = parseTradeCommand('agentos trade dca run dca_1a2b3c4d --json')!
+    const out = parseTradeResult(call, JSON.stringify(parked))
+    expect(out.summary.startsWith('buy #14 awaiting approval')).toBe(true)
+    expect(out.awaiting).toBe(true)
+    expect(out.orderId).toBe('ord_7c2e91')
+    const filled = { ...payload, run: payload.mandate.history[2] }
+    const done = parseTradeResult(call, JSON.stringify(filled))
+    expect(done.summary.startsWith('buy #12 filled')).toBe(true)
+    expect(done.confirmed).toBe(true)
+    expect(done.txHash).toMatch(/^0x0c/)
+  })
+
+  it('reads a list, and an agent proposal as awaiting approval', () => {
+    const payload = JSON.parse(FIXTURE) as { mandate: Record<string, unknown> }
+    const proposal = { ...payload.mandate, id: 'dca_99', status: 'awaiting_approval' }
+    const list = {
+      version: 1,
+      kind: 'mandates',
+      fetchedAt: '2026-09-28T06:00:00Z',
+      warnings: [],
+      mandates: [payload.mandate, proposal],
+      totals: { count: 2, active: 1, spentUsd: 120, capUsd: 600, acquiredUsd: 127.9 },
+    }
+    const call = parseTradeCommand('agentos trade dca list --json')!
+    const out = parseTradeResult(call, JSON.stringify(list))
+    expect(out.detail).toBe('2 mandates')
+    expect(out.summary).toBe('1 active · 1 awaiting approval · $120 of $600')
+    expect(out.awaiting).toBe(true)
+    const empty = { ...list, mandates: [], totals: { count: 0, active: 0, spentUsd: 0, capUsd: 0 } }
+    expect(parseTradeResult(call, JSON.stringify(empty)).summary).toBe('none yet')
+  })
+
+  it('reads a result cut past valid JSON from its first fields', () => {
+    const call = parseTradeCommand(
+      'agentos trade dca create ETH --usd 10 --every 1d --cap 300 --json',
+    )!
+    const cut = FIXTURE.replace('"active"', '"awaiting_approval"').slice(0, 900)
+    const out = parseTradeResult(call, cut)
+    expect(out.detail).toBe('DCA ETH')
+    expect(out.summary).toBe('awaiting approval · dca_1a2b3c4d')
+    expect(out.awaiting).toBe(true)
+  })
+
+  it('lets a Start DCA row follow its mandate in the live list, else stay as recorded', () => {
+    const call = parseTradeCommand(
+      'agentos trade dca create ETH --usd 10 --every 1d --cap 300 --json',
+    )!
+    const payload = JSON.parse(FIXTURE) as { mandate: Record<string, unknown> }
+    const proposed = { ...payload, mandate: { ...payload.mandate, status: 'awaiting_approval' } }
+    const out = parseTradeResult(call, JSON.stringify(proposed))
+    expect(out.mandateId).toBe('dca_1a2b3c4d')
+    expect(out.mandateStatus).toBe('awaiting_approval')
+    expect(out.awaiting).toBe(true)
+    // Not in any loaded list: exactly as recorded.
+    expect(withLiveMandate(out, undefined)).toBe(out)
+    // Completed since: the pill and the status word follow the mandate.
+    const done = withLiveMandate(out, 'completed')
+    expect(done.awaiting).toBe(false)
+    expect(done.mandateLive).toBe('completed')
+    expect(done.summary.startsWith('done · ')).toBe(true)
+    expect(withLiveMandate(out, 'active').summary.startsWith('active · ')).toBe(true)
+    const still = withLiveMandate(out, 'awaiting_approval')
+    expect(still.awaiting).toBe(true)
+    expect(still.summary).toBe(out.summary)
+    // A truncated result keeps the id too.
+    const cut = FIXTURE.replace('"active"', '"awaiting_approval"').slice(0, 900)
+    const truncated = withLiveMandate(parseTradeResult(call, cut), 'stopped')
+    expect(truncated.summary).toBe('stopped · dca_1a2b3c4d')
+    expect(truncated.awaiting).toBe(false)
+    // A projected result on a command that names the mandate: the id is the command's.
+    const pause = parseTradeCommand('agentos trade dca pause dca_1a2b3c4d --json')!
+    const projected = parseTradeResult(pause, '{"version": 1, "kind": "mandate", "mandate": {')
+    expect(projected.mandateId).toBe('dca_1a2b3c4d')
+    // A Buy now that parked an order keeps the order's pill.
+    const parked = parseTradeResult(
+      parseTradeCommand('agentos trade dca run dca_1a2b3c4d --json')!,
+      JSON.stringify({
+        ...payload,
+        run: (payload.mandate as { history: unknown[] }).history[0],
+      }),
+    )
+    expect(withLiveMandate(parked, 'active')).toBe(parked)
+  })
+
+  it('reports an operator-only refusal plainly', () => {
+    const call = parseTradeCommand('agentos trade dca approve dca_1a2b3c4d --json')!
+    const out = parseTradeResult(
+      call,
+      'exit_code=1\n{"error": {"code": "trading.operator_required", "message": "only the operator may approve"}}',
+    )
+    expect(out.error).toBe('only the operator may approve')
+  })
+
+  it('recognises a DCA call from its card line alone, in all three shapes', () => {
+    const body = '{"version": 1, "kind": "mandate"'
+    expect(dcaCallFromResult(`${body}\n${MARKER}`)).toMatchObject({
+      kind: 'dca',
+      title: 'DCA status',
+    })
+    const live =
+      '[inline artifact published and already rendered for the user: ' +
+      'dca-cards/mandates-all-20260928T060000Z.json. Do not call publish_artifact for it.]'
+    expect(dcaCallFromResult(`{"version": 1, "kind": "mandates"}\n${live}`)).toMatchObject({
+      kind: 'dca_list',
+      title: 'DCA list',
+    })
+    expect(
+      dcaCallFromResult(
+        '[generated artifact omitted: mandate-dca-eth-1.json (application/vnd.agentos.dca+json)]',
+      ),
+    ).not.toBeNull()
+    // Neither an LP card nor a stray image is a DCA.
+    expect(
+      dcaCallFromResult('publish_artifact path=a.json mime=application/vnd.agentos.lp+json'),
+    ).toBeNull()
+    expect(dcaCallFromResult('publish_artifact path=a.png mime=image/png')).toBeNull()
+    expect(cardCallFromResult(`${body}\n${MARKER}`)?.kind).toBe('dca')
+    expect(
+      cardCallFromResult('publish_artifact path=a.json mime=application/vnd.agentos.lp+json')?.kind,
+    ).toBe('lp')
+    // The live rewrite ends in "]" after the JSON; the row still reads the card.
+    const out = parseTradeResult(dcaCallFromResult(`${FIXTURE}\n${live}`)!, `${FIXTURE}\n${live}`)
+    expect(out.detail).toBe('ETH ← USDC · $10 / day')
   })
 })

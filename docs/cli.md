@@ -32,7 +32,7 @@ available without `uv tool list` or `pip show`.
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
 | `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
-| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL. |
+| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL; Uniswap V4 liquidity; DCA mandates. |
 | `agentos skills` | List, search, view, install, update, publish, inspect, and tap skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
@@ -880,7 +880,7 @@ agentos trade swap  --chain robinhood --in ETH --out <addr> --amount 0.01 --wall
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]   # the daily cap is per wallet: this spends up to N caps
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --client-id dca-eth-$(date +%Y%m%dT%H%M)   # idempotency key: one id per intended order, the same id on every retry; minute resolution so sub-daily jobs never collide
 agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --expected-out-raw <quote.expectedOutRaw> --min-out-raw <quote.minOutRaw>   # pin the fill to the quote shown; worse than 2× slippage → trading.price_moved
-agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--kind swap|send|revoke] [--limit N]
+agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--kind swap|send|revoke|lp_collect|lp_remove|lp_add] [--limit N]
 agentos trade order <id> --wait --wait-seconds 600 / approve <id> / reject <id> [--reason <text>]   # --wait-seconds without --wait returns at once
 agentos trade send --chain base --token USDC --to <addr> --amount 25 [--wallet <addr>] [--note <text>] [--client-id <id>] [--wait] [--wait-seconds 1..900] [--as-agent]
 agentos trade send --chain base --token ETH --to <a> --to <b> --usd 5        # multisend: one batch, $5 of ETH to each
@@ -889,7 +889,21 @@ agentos trade allowances [--chain base|robinhood] [--wallet <addr>] [--full] [--
 agentos trade revoke --chain base --token <addr> --spender <addr> [--wallet <addr>] [--note <text>] [--wait] [--wait-seconds 1..900]   # approve(spender, 0)
 agentos trade decode --chain base <txhash> / --data <0x…> [--to <addr>]   # what a transaction called and what moved
 agentos trade network [--fresh]             # head block, block age, gas, RPC latency and health per chain
-agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden]
+agentos trade lp pool <token|TOKEN/QUOTE|poolId> [--chain base|robinhood] [--quote <token>] [--fee <tier>] [--json] [--no-card]   # Uniswap V4: a token's deepest pool (or the one on --fee) — reserves, TVL, mcap, launcher, LP lock, biggest ranges
+agentos trade lp ranges <token|TOKEN/QUOTE|poolId> [--chain base|robinhood] [--quote <token>] [--fee <tier>] [--json] [--no-card]   # the pool's liquidity spread over price / market-cap ranges
+agentos trade lp position <tokenId> --chain base|robinhood [--json] [--no-card]        # one position NFT: range, in/out of range, principal, uncollected fees
+agentos trade lp positions [--wallet <addr|label>]… [--chain base|robinhood]… [--all] [--budget-seconds N] [--json] [--no-card]   # every V4 position of the vault's wallets (or --wallet), out of range first; ≤ 50 rows, totals over all; answers within 25 s (--budget-seconds 5-300), partial if cut short
+agentos trade lp collect <tokenId> --chain base|robinhood [--allow-empty] [--note <text>] [--client-id <id>] [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # collect a vault position's fees; always waits for approval
+agentos trade lp remove <tokenId> --chain base|robinhood [--pct 100] [--slippage 1] [--note …] [--client-id …] [--wait …] [--json] [--no-card]   # take liquidity (and every fee) out; --pct 100 burns the NFT
+agentos trade lp add <token|TOKEN/QUOTE|poolId> --chain base|robinhood [--quote <token>] [--fee <tier>] (--usd X | --amount-base A [--amount-quote B]) [--range mcap:2M-10M|pct:20|above[:20]|below[:20]|full|ticks:LO:HI] [--to-position <tokenId>] [--wallet <addr|label>] [--slippage 1] [--note …] [--client-id …] [--wait …] [--json] [--no-card]   # mint a position (or top one up); default range pct:20
+agentos trade dca create <token> --usd X --every 30m|2h|1d|1w|<seconds> (--cap X | --runs N | both) [--max-price X] [--quote <token>] [--chain base|robinhood] [--wallet <addr|label>] [--slippage 1] [--name <text>] [--start now|next] [--json] [--no-card]   # DCA mandate: the engine buys on schedule under a hard cap; from an agent it waits for approval
+agentos trade dca list [--all] [--wallet <addr|label>] [--json] [--no-card]   # live mandates (awaiting approval, active, paused); --all adds completed/stopped/rejected/expired
+agentos trade dca show <id> [--json] [--no-card]            # one mandate: schedule, progress, avg buy vs price now, recent runs
+agentos trade dca approve <id> / reject <id> [--reason <text>] [--json] [--no-card]   # operator-only
+agentos trade dca pause <id> / resume <id> / stop <id> [--reason <text>] [--json] [--no-card]   # operator-only; stop is final
+agentos trade dca run <id> [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # buy now (operator-only); the next scheduled buy does not move
+agentos trade dca update <id> [--usd X] [--cap X] [--runs N] [--every 12h] [--max-price X] [--name <text>] [--json] [--no-card]   # operator-only; --runs 0 / --max-price 0 remove the limit
+agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval|lp_collect|lp_remove|lp_add] [--limit N] [--hidden]
 agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
 agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
 agentos trade sync [--wallet <addr>] [--full]   # re-read the chain into the ledger; --full rebuilds it (operator-only) — run it once after an upgrade when `trade status` shows ledgerRepair
@@ -977,7 +991,11 @@ slippage worse than that quote. `--wait --wait-seconds N` blocks until each
 order settles (`confirmed`, `failed`, `rejected`, `expired`) or N seconds
 pass; `--wait-seconds` alone, without `--wait`, returns at once. A
 `submitted` order survives a gateway restart and is marked `failed` after 6
-hours without a receipt. `--client-id <id>` on `swap` and `send` is an
+hours without a receipt. On Base and Robinhood Chain the first receipt a node
+serves can be a preconfirmation whose `l1Fee` is provisional, so every order
+kind (swap, send, revoke, approval, LP write) is settled from the receipt
+re-read once the head is past its block (up to 15 s; if that never happens
+the first one is used and `trading.receipt_provisional` is logged). `--client-id <id>` on `swap` and `send` is an
 idempotency key: a second call with the same id returns the existing order
 instead of placing another, so a retry after a timeout cannot trade twice
 — one id per intended order, the same id on every retry of it. After
@@ -1006,8 +1024,154 @@ dollars); `trade revoke` sends `approve(spender, 0)`. `trade decode` names
 the function behind a hash or calldata (ERC-20, WETH, Permit2 and the
 Uniswap routers are known; anything else is reported as its selector, never
 guessed) and lists the receipt's transfers and approvals with token
-metadata. `trade network` reads each chain's head block and gas and flags a
+metadata; `tx.gasWei` is what the sender paid, the L1 data fee (`tx.l1FeeWei`)
+included on Base and Robinhood Chain. `trade network` reads each chain's head block and gas and flags a
 head older than a minute — the sign of an RPC that is behind.
+
+`trade lp` reads Uniswap V4 liquidity on Base and Robinhood Chain and never
+signs anything, so every form is allowed from an agent's connection
+(gateway methods `trading.lp.pool`, `trading.lp.ranges`, `trading.lp.position`,
+`trading.lp.positions`). Reads use the engine's RPCs (`trading.rpc_urls`) and
+the V4 library bundled with the `senior-unilp-manager` skill. `<token>` is an
+address or a symbol the engine resolves on that chain; with no `--chain`,
+`pool` and `ranges` try Base, then Robinhood Chain. A token's pools are found
+through the launchpad registries (Clanker, Liquid, Doppler), the hook-less
+fee tiers and — where the chain's public node serves full-history logs, as
+Robinhood Chain's does — the PoolManager's `Initialize` log, which also finds
+pools at unconventional fees. A log request that times out or hits a rate
+limit is asked once more and, for pool discovery, then searched over the last
+2,000,000 blocks only (the card says so and is partial); every pool found is
+remembered per token, so a later failed log request still finds it. Only an
+explicit span refusal is remembered (for ten minutes) as "this node will not
+serve full history". The one shown is the deepest: pools with active
+liquidity before empty ones, pairs against the chain's quote assets (WETH,
+ETH, USDC, USDG) before other pairs, then by TVL; liquidity comes from the
+tick bitmap. A poolId's PoolKey is recovered the same ways; when none works
+the error is `trading.lp.pool_key_unknown` — pass the token instead.
+`pool`, `ranges` and `add` take a pair as `TOKEN/QUOTE` (`ETH/USDC`) or as a
+token with `--quote USDC` (RPC `quote`; both at once must agree), and
+`--fee <tier>` (RPC `feePct`) to pick a fee tier among the pair's pools: a
+percent (`0.05`, `0.05%`, `0.3`, `1`), V4's own units — any whole number of
+100 or more, hundredths of a bip (`500` = 0.05 %, `3000` = 0.3 %) — or
+`dynamic`. Several pools on that tier (other hooks or tick spacings): the
+deepest wins. Naming a tier also derives its hook-less pools at the usual
+tick spacings, so an unusual tier is found where a node serves no logs. No
+pool on the tier is `trading.lp.not_found`, whose message and
+`details.tiers` name the tiers that do exist (`no 0.05% Uniswap V4 pool for
+BONER/USDG on Robinhood Chain; tiers that exist: 0.3%, 1%`); a poolId on a
+different tier than `--fee` is `trading.invalid`. "ETH/USDC 0.05 %" is
+`trade lp add ETH --quote USDC --fee 0.05 …` (or `add ETH/USDC --fee 0.05`).
+`positions` without `--wallet` covers every wallet in the vault on both
+chains; `--chain` may be repeated (`--chain base --chain robinhood`), while
+`pool`, `ranges` and `position` take one and refuse a repeat with
+`INVALID_ARGUMENT`. `--wallet` may name any address (read-only), but a token contract
+there fails with `trading.lp.not_a_wallet` and names the `trade lp pool`
+command to use instead. Closed positions are left out unless `--all`. A
+card lists at most 50 positions (out of range first, then by value) while
+its totals cover every position found. The scan usually takes under 15 s
+and never much more than its budget — 25 s by default, `--budget-seconds`
+(5–300) to change it: when the budget runs out the search stops, the card is
+`partialScan` and a warning names what was not read (the indexer's remaining
+pages, Transfer logs before a block) and how many of each wallet's positions
+were found; `totals.count` is everything found. A wallet holding more than 60
+distinct tokens has USD prices looked up only for the chain's quote assets,
+the listed rows' tokens and the most-held others (up to 60); every other
+position is valued at its own pool's price, and a warning says so.
+With `--json`, the JSON is the first line of stdout; unless `--no-card` is
+also given, the result is written to `lp-cards/<kind>-…json` in the working
+directory (the 20 newest cards there are kept) and the last line on stdout is
+`publish_artifact path=<file> mime=application/vnd.agentos.lp+json`, which an
+agent's shell turns into a card in the chat. Without `--json` the command
+prints a table and writes nothing. An error writes no card; with `--json`
+every error, including a bad or missing option, is `{"error": {"code", …}}`
+on stderr, and input errors (`INVALID_ARGUMENT`, `trading.invalid`,
+`trading.lp.not_a_wallet`, `trading.lp.pool_key_unknown`) exit 2. The
+payload is specified in [`lp-cards.md`](lp-cards.md); every card also echoes
+`request: {kind, params}` — the `trading.lp.<kind>` call that re-reads it.
+
+`trade lp collect|remove|add` change a Uniswap V4 position of a vault wallet
+through the same order pipeline as a swap or a send (gateway methods
+`trading.lp.collect`, `trading.lp.remove`, `trading.lp.add`; the contract is
+[`lp-write.md`](lp-write.md)). Each creates **one order that always waits for
+approval** — from an agent or from you, whatever the amount — which is then
+approved in the app or with `trade approve <id>`. The engine plans the call
+with the `senior-unilp-manager` skill's V4 encoders, simulates it from the
+wallet (`eth_simulateV1`, with any pending approvals run first; a node
+without it gets `eth_call`), and refuses a call that would revert with
+`trading.simulation_failed`. On approval it re-reads the pool: an `add` whose
+required amounts now exceed the approved maxima, or a `remove` whose amounts
+fall below the approved minimums, fails with `trading.price_moved`; the
+deadline is the latest block's timestamp + 600 s, set then. An `add` first
+approves exactly what it may pull — `ERC20.approve(Permit2, max)` and
+`Permit2.approve(token, PositionManager, max, now + 30 min)`, each only when
+short — never an unlimited amount. `collect` is a zero-liquidity decrease (no
+slippage); `remove --pct N` takes N % of the liquidity with minimums `--slippage`
+(default 1 %) under today's amounts, plus every uncollected fee, and 100
+burns the NFT; `add` takes `--usd` (split between the two sides as the range
+needs at today's price) or token amounts (`--amount-base` and/or
+`--amount-quote`; the binding one wins), `--range` `mcap:LO-HI` (`2M`,
+`2.5m`, `750k`, `1e6`), `pct:N` (± N % around the price), `above[:N]`
+(one-sided, all base token: from just above the price up N %), `below[:N]`
+(one-sided, all quote token: from just below the price down N %; N defaults
+to 20 for both, and the band is snapped to the tick spacing and kept off the
+current tick, so `plan.oneSided` is `base` / `quote`), `full` or
+`ticks:LO:HI` (multiples of the tick spacing) — default `pct:20` — and
+`--to-position` to top up an existing position instead of minting (with
+`--to-position`, a `--quote`/`--fee` given must describe that position's
+pool, else `trading.invalid`). `collect` on a position whose uncollected
+fees read as zero on both sides is refused with
+`trading.lp.nothing_to_collect` — it would only pay gas — unless
+`--allow-empty` (RPC `allowEmpty: true`). Nothing
+is swapped for you: a wallet short of a side the range needs is refused with
+`trading.insufficient_balance` naming that side (a range entirely above or
+below the price needs only one token). The position must belong to a vault
+wallet (`trading.lp.not_owner`) and hold liquidity
+(`trading.lp.position_closed`). An agent's `add` counts toward the daily cap;
+`collect` and `remove` do not. The output is `{"order": …}` like `trade
+revoke`, with `order.plan` (the LpPlan) and, once confirmed, `received`,
+`spent` and a mint's new `tokenId`; `--wait` blocks until the order is
+decided and settled. With `--json`, a confirmed order is followed by the
+refreshed card — `lp position` (after a burn, the wallet's `lp positions`) —
+written to `lp-cards/` and announced by the `publish_artifact` line, the last
+on stdout, unless `--no-card`. Input errors (`trading.invalid`,
+`trading.lp.range_invalid`, `trading.lp.not_owner`,
+`trading.lp.position_closed`, `trading.lp.nothing_to_collect`,
+`trading.lp.not_found`) exit 2; everything
+else exits 1. The ledger books a confirmed write as `lp_collect`,
+`lp_remove` or `lp_add` entries, one per token moved.
+
+`trade dca` manages **DCA mandates**: a recurring buy the engine owns and
+runs itself — `create ETH --usd 10 --every 1d --cap 300` buys $10 of ETH
+with the chain's USDC every day until $300 is spent (gateway methods
+`trading.dca.create|get|list|approve|reject|pause|resume|stop|run|update`;
+the contract is [`dca.md`](dca.md)). The cap, the run count and the schedule
+are rows in the ledger, enforced by the engine; every buy is an ordinary swap
+order (guardrails, approval threshold, daily cap, ledger) with the mandate's
+id and a `DCA ETH · buy 3/30` note, and no agent turn is spent on it.
+`--every` takes `30m`, `2h`, `1d`, `1w` or a plain number of seconds
+(minimum 60); `create` needs `--cap`, `--runs` or both (the cap defaults to
+`--usd × --runs`); `--quote` defaults to the chain's USDC and is required
+on Robinhood Chain; `--max-price` skips a buy while the token's price is
+above it (no price known → skipped too); `--start next` puts the first buy
+one interval after activation instead of at once. A mandate created from an
+agent's shell always answers `status: "awaiting_approval"` and expires after
+24 h without a decision; yours starts `active`. `create`, `list` and `show`
+are allowed from an agent; `approve`, `reject`, `pause`, `resume`, `stop`,
+`run` and `update` are the user's and answer `trading.operator_required` to
+an agent. Three skipped (balance, daily cap) or failed buys in a row pause
+the mandate; `resume` does not make up missed buys. `update --every`
+re-anchors the schedule at now; lowering `--cap` below what is spent
+completes the mandate. `run --wait` waits for the order it placed (like
+`swap --wait`) and prints the mandate again once it settled. With `--json`
+the payload is the first line of stdout and, unless `--no-card`, it is
+written to `dca-cards/<mandate|mandates>-<id|live|all>-<utc stamp>.json`
+(the 20 newest kept) and announced by the last line,
+`publish_artifact path=<file> mime=application/vnd.agentos.dca+json`;
+without `--json` a mandate prints as a panel and `list` as a table. Input
+and state errors (`INVALID_ARGUMENT`, `trading.dca.invalid`,
+`trading.dca.bad_state`, `trading.dca.not_found`, `trading.invalid`,
+`trading.token_not_found`) exit 2; everything else exits 1; under `--json`
+every error is `{"error": …}` on stderr and writes no card.
 
 `[trading]` config keys (each also an environment variable with the
 `AGENTOS_TRADING_` prefix): `enabled`, `provider` (`aggregator` |

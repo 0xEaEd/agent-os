@@ -75,7 +75,7 @@ describe('tradingAgentFiles · reading an order', () => {
   it('reads dollar, token and share sizes without asking', () => {
     expect(files['AGENTS.md']).toContain('## Reading an order')
     expect(files['AGENTS.md']).toMatch(/`0\.1\$ ETH`.*`--usd 0\.1`/s)
-    expect(files['AGENTS.md']).toMatch(/`hết`.*`--pct 100`/s)
+    expect(files['AGENTS.md']).toMatch(/`everything`.*`--pct 100`/s)
     expect(files['AGENTS.md']).toMatch(/states the default you will take/)
   })
   it('places a clear chat order with one swap command', () => {
@@ -120,7 +120,9 @@ describe('tradingAgentFiles · reading an order', () => {
     expect(agents).toMatch(/reuse the same `--client-id <id>`/)
     expect(agents).toMatch(/instead of trading twice/)
     expect(tools).toMatch(/no `&`, `nohup`, `setsid`/)
-    expect(tools).toMatch(/`--client-id <id>` on `swap` and `send` is the order's idempotency key/)
+    expect(tools).toMatch(
+      /`--client-id <id>` on `swap`, `send` and `lp collect\|remove\|add` is\s+the order's idempotency key/,
+    )
     // Both command lines the agent copies carry the flag.
     expect(tools).toMatch(/agentos trade swap .*--client-id <id> --wait/)
     expect(tools).toMatch(/agentos trade send .*--client-id <id> --wait/)
@@ -190,7 +192,7 @@ describe('tradingAgentFiles · reading an order', () => {
   it('answers a bridge request in one message and runs nothing for it', () => {
     // No command moves funds between chains. Asked to "bridge" ETH to
     // Robinhood Chain, a desk opened the skill to look for one; asked to
-    // "chuyển 0.001 ETH qua Robinhood chain", it read a send there and
+    // "deposit 0.001 ETH into Robinhood Chain", it read a send there and
     // asked the user for a recipient address.
     const agents = files['AGENTS.md']
     expect(agents).toContain('## Bridging')
@@ -198,7 +200,7 @@ describe('tradingAgentFiles · reading an order', () => {
       /The desk cannot bridge: no command moves funds from one chain to another/,
     )
     expect(agents).toMatch(/is a bridge, whatever\s+the verb/)
-    expect(agents).toContain('`chuyển 0.01 ETH qua Robinhood chain`')
+    expect(agents).toContain('`deposit ETH into Robinhood Chain`')
     expect(agents).toMatch(/It is not a send, and it has no\s+recipient to ask for/)
     expect(agents).toMatch(/Run nothing for it, not even `agentos trade status`/)
     expect(agents).toMatch(/no send to a bridge address or to the\s+wallet's own address/)
@@ -207,6 +209,48 @@ describe('tradingAgentFiles · reading an order', () => {
   })
   it('bumped the version with the text, so every desk rewrites its files', () => {
     expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(9)
+  })
+  it('creates a DCA as an engine mandate, never a cron job, and never approves it (v18)', () => {
+    // A DCA used to be a cron job whose prompt asked the agent to count its
+    // own budget. It is now a mandate the engine runs: one command, parked
+    // for the user's approval, read back in one line.
+    const agents = files['AGENTS.md']
+    const tools = files['TOOLS.md']
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(18)
+    expect(agents).toContain('## DCA')
+    // The hard rule keeps its words and names its one exception.
+    expect(agents).toMatch(/Never create a cron job or `cron --script` job that trades/)
+    expect(agents).toMatch(/The one exception is a DCA mandate the user asked for/)
+    expect(agents).toMatch(/A DCA is never a\s+cron job and never one swap per turn/)
+    expect(tools).toMatch(
+      /Never schedule a trade \(`agentos cron …`,\s+`cron --script`\); missions are started from the desk\. The one exception\s+is a DCA mandate \(`agentos trade dca create`\), which parks for the\s+user's approval/,
+    )
+    // The reading rules.
+    expect(agents).toMatch(/"DCA \$10 ETH every day, max \$300" → `--usd 10 --every 1d --cap 300`/)
+    expect(agents).toMatch(/"30 buys".*→ `--runs 30`/s)
+    expect(agents).toMatch(/"only under 3000".*→ `--max-price 3000`/s)
+    expect(agents).toMatch(/`agentos trade dca list --json`/)
+    expect(agents).toMatch(/\*\*Approve & start\*\*/)
+    expect(agents).toMatch(/Always report the mandate id/)
+    expect(agents).toMatch(/`agentos trade dca approve`/)
+    // Every command with the CLI's own flags.
+    for (const cmd of [
+      'agentos trade dca create <token> --usd 10 --every 1d (--cap 300 | --runs 30 | both) [--max-price 3000] [--quote USDC] [--chain base|robinhood] [--wallet ADDR|label] [--slippage 1] [--name "DCA ETH"] [--start now|next] --json',
+      'agentos trade dca list [--all] [--wallet …] --json',
+      'agentos trade dca show <id> --json',
+      'agentos trade dca pause|resume|stop <id> [--reason "…"] --json',
+      'agentos trade dca run <id> [--wait --wait-seconds N] --json',
+      'agentos trade dca update <id> [--usd X] [--cap X] [--runs N] [--every 12h] [--max-price X] [--name …] --json',
+      'agentos trade dca approve|reject|pause|resume|stop|run|update',
+      '`trading.dca.invalid`',
+      '`trading.dca.bad_state`',
+    ]) {
+      expect(tools).toContain(cmd)
+    }
+    // English only, whatever the user writes in.
+    for (const name of ['AGENTS.md', 'TOOLS.md']) {
+      expect(files[name]).not.toMatch(/[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i)
+    }
   })
 })
 
@@ -221,6 +265,13 @@ describe('syncTradingAgent', () => {
     const rpc: AgentRpc = { call: call as AgentRpc['call'] }
     return { rpc, calls }
   }
+
+  it('never reports a mandate status from memory (v19)', () => {
+    const agents = tradingAgentFiles()['AGENTS.md'] ?? ''
+    expect(agents).toContain('Never state a mandate')
+    expect(agents).toContain('in the same turn first')
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(19)
+  })
 
   it('creates the agent when the registry lacks it, then writes its files', async () => {
     const { rpc, calls } = rpcWith([{ id: 'main' }])

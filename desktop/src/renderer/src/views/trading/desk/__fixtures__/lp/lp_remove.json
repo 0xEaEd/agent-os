@@ -1,0 +1,142 @@
+{
+  "orderId": "lpo_r7d02b",
+  "kind": "lp_remove",
+  "recipient": "0x7A3f9C21b4D5e6F708192a3B4c5D6e7F80919e3F",
+  "recipientLabel": null,
+  "batchId": null,
+  "createdAt": 1790501400000,
+  "updatedAt": 1790501400000,
+  "chainId": 8453,
+  "wallet": "0x7A3f9C21b4D5e6F708192a3B4c5D6e7F80919e3F",
+  "tokenIn": {
+    "chainId": 8453,
+    "address": "0x6982508145454Ce325dDbE47a25d4ec3d2311933",
+    "symbol": "PEPE",
+    "name": "Pepe",
+    "decimals": 18,
+    "logoUrl": null,
+    "native": false,
+    "verified": true
+  },
+  "tokenOut": {
+    "chainId": 8453,
+    "address": "0x4200000000000000000000000000000000000006",
+    "symbol": "WETH",
+    "name": "Wrapped Ether",
+    "decimals": 18,
+    "logoUrl": null,
+    "native": false,
+    "verified": true
+  },
+  "amountIn": "0.000912873401928374",
+  "amountInRaw": "912873401928374",
+  "expectedOut": null,
+  "minOut": null,
+  "receivedOut": null,
+  "valueUsd": 1284.2,
+  "priceImpactPct": null,
+  "gasUsd": 0.03,
+  "slippagePct": 1.0,
+  "status": "awaiting_approval",
+  "reason": null,
+  "initiator": "agent",
+  "sessionKey": "agent:trading:webchat:desk",
+  "note": null,
+  "txHash": null,
+  "approvalTxHash": null,
+  "explorerUrl": null,
+  "expiresAt": 1790502300000,
+  "deliveredToken": null,
+  "provider": "aggregator",
+  "providerLabel": "AgentOS Aggregator",
+  "clientOrderId": null,
+  "plan": {
+    "op": "remove",
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "tokenId": "48213",
+    "increase": false,
+    "pool": {
+      "poolId": "0x9f3c1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+      "poolKey": {
+        "currency0": "0x4200000000000000000000000000000000000006",
+        "currency1": "0x6982508145454Ce325dDbE47a25d4ec3d2311933",
+        "fee": 10000,
+        "tickSpacing": 200,
+        "hooks": "0x0000000000000000000000000000000000000000"
+      },
+      "tick": -190000,
+      "sqrtPriceX96": "5943070261314813398283",
+      "feePct": "1%"
+    },
+    "token": {
+      "address": "0x6982508145454Ce325dDbE47a25d4ec3d2311933",
+      "symbol": "PEPE",
+      "decimals": 18,
+      "priceUsd": 9.21e-6
+    },
+    "quote": {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "priceUsd": 2450.5
+    },
+    "range": {
+      "tickLower": -201000,
+      "tickUpper": -180000,
+      "priceLower": 1.9e-9,
+      "priceUpper": 1.54e-8,
+      "mcapLower": 2100000,
+      "mcapUpper": 9800000
+    },
+    "liquidity": "912873401928374",
+    "pct": 100,
+    "expected": {
+      "base": {
+        "raw": "61240000000000000000000000",
+        "human": "61240000",
+        "usd": 564.02
+      },
+      "quote": {
+        "raw": "294000000000000000",
+        "human": "0.294",
+        "usd": 720.18
+      },
+      "usd": 1284.2
+    },
+    "bounds": {
+      "base": "60627600000000000000000000",
+      "quote": "291060000000000000"
+    },
+    "fees": {
+      "base": {
+        "raw": "1240000000000000000000000",
+        "human": "1240000",
+        "usd": 11.42
+      },
+      "quote": {
+        "raw": "1840000000000000",
+        "human": "0.00184",
+        "usd": 4.51
+      },
+      "usd": 15.93
+    },
+    "positionValueUsd": 1284.2,
+    "approvals": [],
+    "oneSided": null,
+    "simulation": {
+      "ok": true,
+      "gasUsed": 236000,
+      "method": "eth_simulateV1",
+      "revert": null
+    },
+    "gasUsd": 0.03,
+    "slippagePct": 1.0,
+    "planHash": "0x5e6f7a8b",
+    "createdAtBlock": 21044901
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "kind": "positions",
+  "chain": null,
+  "asOfBlock": 21044901,
+  "fetchedAt": "2026-09-27T09:30:00Z",
+  "partialScan": false,
+  "warnings": [],
+  "wallets": [
+    {
+      "address": "0x7a3f9c21b4d5e6f708192a3b4c5d6e7f80919e3f",
+      "label": "Main",
+      "inApp": true
+    }
+  ],
+  "chains": [
+    {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    {
+      "id": 4663,
+      "key": "robinhood",
+      "name": "Robinhood Chain",
+      "explorer": "https://explorer.robinhood.example"
+    }
+  ],
+  "positions": [],
+  "totals": {
+    "valueUsd": null,
+    "feesUsd": null,
+    "count": 0,
+    "outOfRange": 0
+  }
+}

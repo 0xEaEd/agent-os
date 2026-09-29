@@ -16,15 +16,23 @@ agent out of them.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 import time
+from collections.abc import Callable
+from datetime import UTC, datetime, tzinfo
+from pathlib import Path
 from typing import Any
 
+import click
 import typer
+from rich.panel import Panel
 from rich.table import Table
+from typer.core import TyperGroup
 
 from agentos.cli.gateway_rpc import run_gateway_sync
-from agentos.cli.output import emit_error, print_json
+from agentos.cli.output import emit_error, print_json, print_text
 from agentos.cli.ui import ACCENT, ACCENT_HEADER, console, markup_escape
 from agentos.cli.wallet_cmd import (
     NATIVE_ADDRESS,
@@ -166,7 +174,43 @@ def _order_legs(order: dict[str, Any]) -> str:
     if kind == "revoke":
         who = order.get("recipientLabel") or short_address(order.get("recipient"))
         return f"revoke {token_symbol(order.get('tokenIn'))} for {who}"
+    if kind in LP_KINDS:
+        return _lp_legs(order)
     return f"{amount} → {token_symbol(order.get('tokenOut'))}"
+
+
+#: Order kinds of the Uniswap V4 LP writes (``trade lp collect|remove|add``).
+LP_KINDS = ("lp_collect", "lp_remove", "lp_add")
+ORDER_KINDS = ("swap", "send", "revoke", *LP_KINDS)
+
+
+def _lp_pair(order: dict[str, Any]) -> str:
+    return f"{token_symbol(order.get('tokenIn'))}/{token_symbol(order.get('tokenOut'))}"
+
+
+def _lp_legs(order: dict[str, Any]) -> str:
+    """The order in words: "Collect fees · #48213", "Remove liquidity · #48213 · 100%"."""
+    kind = str(order.get("kind") or "")
+    plan = _dict(order.get("plan"))
+    token_id = order.get("tokenId") or plan.get("tokenId")
+    where = f" · #{token_id}" if token_id else ""
+    if kind == "lp_collect":
+        return f"Collect fees{where}"
+    if kind == "lp_remove":
+        pct = plan.get("pct")
+        return f"Remove liquidity{where}" + (f" · {float(pct):g}%" if pct is not None else "")
+    return f"Add liquidity · {_lp_pair(order)}{where}"
+
+
+def _lp_amounts(pair: Any) -> str | None:
+    """``{base, quote}`` Amounts as "1.2 PEPE + 0.01 WETH"; None when both are zero."""
+    legs = _dict(pair)
+    parts = []
+    for key in ("base", "quote"):
+        leg = _dict(legs.get(key))
+        if leg.get("raw") not in (None, "0"):
+            parts.append(f"{leg.get('human')} {leg.get('symbol') or key}")
+    return " + ".join(parts) or None
 
 
 def _order_table(orders: list[dict[str, Any]], title: str = "Orders") -> Table:
@@ -197,6 +241,9 @@ def _print_order(order: dict[str, Any]) -> None:
     table.add_column("Field", style=ACCENT)
     table.add_column("Value")
     kind = str(order.get("kind") or "swap")
+    if kind in LP_KINDS:
+        _print_lp_order(order, table)
+        return
     recipient = order.get("recipient")
     if recipient and order.get("recipientLabel"):
         recipient = f"{recipient} ({order['recipientLabel']})"
@@ -229,6 +276,83 @@ def _print_order(order: dict[str, Any]) -> None:
         ("note", order.get("note")),
     ):
         if value in (None, "", "—"):
+            continue
+        table.add_row(field, markup_escape(str(value)))
+    console.print(table)
+
+
+def _named(pair: Any, plan: dict[str, Any]) -> dict[str, Any]:
+    """Amounts with their token symbols (the plan's ``token``/``quote``) attached."""
+    out = {}
+    for key, which in (("base", "token"), ("quote", "quote")):
+        leg = dict(_dict(_dict(pair).get(key)))
+        leg["symbol"] = _dict(plan.get(which)).get("symbol")
+        out[key] = leg
+    return out
+
+
+def _print_lp_order(order: dict[str, Any], table: Table) -> None:
+    plan = _dict(order.get("plan"))
+    rng = _dict(plan.get("range"))
+    pool = _dict(plan.get("pool"))
+    expected = _dict(plan.get("expected"))
+    sim = _dict(plan.get("simulation"))
+    op = str(plan.get("op") or "")
+    moves = "you receive" if op in ("collect", "remove") else "you deposit"
+    bound = "minimum" if op == "remove" else ("maximum" if op == "add" else None)
+    approvals = [
+        f"{a.get('symbol')} {a.get('step')}" + (f" ({a['txHash']})" if a.get("txHash") else "")
+        for a in plan.get("approvals") or []
+        if isinstance(a, dict) and (a.get("needed") or a.get("txHash"))
+    ]
+    bounds = _dict(plan.get("bounds"))
+    rows = (
+        ("kind", _lp_legs(order)),
+        ("status", order.get("status")),
+        ("reason", order.get("reason")),
+        ("chain", chain_label(order.get("chainId"))),
+        ("wallet", order.get("wallet")),
+        ("pool", f"{_lp_pair(order)} · {pool.get('feePct')} · {pool.get('poolId')}"),
+        ("hook", pool.get("hook")),
+        (
+            "range",
+            f"{rng.get('tickLower')} → {rng.get('tickUpper')} ({_range_text(rng)})"
+            + (f" · {plan.get('rangeSpec')}" if plan.get("rangeSpec") else "")
+            if rng
+            else None,
+        ),
+        ("one-sided", plan.get("oneSided")),
+        (moves, _lp_amounts(_named(expected, plan))),
+        ("worth", _usd(expected.get("usd")) if expected else None),
+        (
+            "fees included" if op == "remove" else "fees",
+            _lp_amounts(_named(plan.get("fees"), plan)),
+        ),
+        (
+            bound,
+            _lp_amounts(
+                _named(
+                    {k: {"raw": v, "human": v} for k, v in bounds.items()},
+                    plan,
+                )
+            )
+            if bound
+            else None,
+        ),
+        ("approvals", ", ".join(approvals) or None),
+        ("simulation", f"{sim.get('method')}: {'ok' if sim.get('ok') else sim.get('revert')}"),
+        ("gas", _usd(order.get("gasUsd"))),
+        ("received", _lp_amounts(_named(order.get("received"), plan))),
+        ("spent", _lp_amounts(_named(order.get("spent"), plan))),
+        ("initiator", order.get("initiator")),
+        ("plan", plan.get("planHash")),
+        ("tx", order.get("txHash")),
+        ("explorer", order.get("explorerUrl")),
+        ("expires", order.get("expiresAt")),
+        ("note", order.get("note")),
+    )
+    for field, value in rows:
+        if field is None or value in (None, "", "—"):
             continue
         table.add_row(field, markup_escape(str(value)))
     console.print(table)
@@ -1136,7 +1260,9 @@ def trade_network(
 def trade_orders(
     status: str | None = typer.Option(None, "--status", help="Filter by status"),
     wallet: str | None = typer.Option(None, "--wallet", help="Filter by wallet address"),
-    kind: str | None = typer.Option(None, "--kind", help="swap, send or revoke"),
+    kind: str | None = typer.Option(
+        None, "--kind", help="swap, send, revoke, lp_collect, lp_remove or lp_add"
+    ),
     limit: int = typer.Option(50, "--limit", help="Max rows", min=1, max=500),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
@@ -1148,8 +1274,10 @@ def trade_orders(
     if wallet:
         params["wallet"] = wallet
     if kind:
-        if kind not in ("swap", "send", "revoke"):
-            _bad_argument("--kind must be swap, send or revoke", json_output=json_output)
+        if kind not in ORDER_KINDS:
+            _bad_argument(
+                f"--kind must be one of {', '.join(ORDER_KINDS)}", json_output=json_output
+            )
         params["kind"] = kind
 
     async def _run(client):
@@ -1197,10 +1325,11 @@ def trade_approve(
     order_id: str = typer.Argument(..., help="Order id awaiting approval"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
-    """Approve a parked agent order.
+    """Approve a parked order.
 
     Agent swaps park above the approval threshold or the price-impact ceiling,
-    or when the engine cannot price them; agent sends and revokes always park.
+    or when the engine cannot price them; agent sends and revokes always park,
+    and so does every LP write (``trade lp collect|remove|add``), whoever asked.
     """
 
     async def _run(client):
@@ -1241,7 +1370,11 @@ def trade_reject(
 def trade_history(
     wallet: str | None = typer.Option(None, "--wallet", help="Filter by wallet address"),
     chain: str | None = typer.Option(None, "--chain", help="base or robinhood"),
-    kind: str | None = typer.Option(None, "--kind", help="swap, deposit, withdraw, gas, approval"),
+    kind: str | None = typer.Option(
+        None,
+        "--kind",
+        help="swap, deposit, withdraw, gas, approval, unwrap, lp_add, lp_collect, lp_remove",
+    ),
     limit: int = typer.Option(100, "--limit", help="Max rows", min=1, max=1000),
     hidden: bool = typer.Option(False, "--hidden", help="Include entries of hidden (junk) tokens"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
@@ -1429,3 +1562,1387 @@ def trade_limits(
     table.add_row("approval threshold", money(result.get("approvalThresholdUsd")))
     table.add_row("approval TTL", f"{result.get('approvalTtlSeconds', '—')} s")
     console.print(table)
+
+
+# ── trade lp: Uniswap V4 liquidity read-outs (docs/lp-cards.md) ────────────
+
+LP_MIME = "application/vnd.agentos.lp+json"
+#: Where ``trade lp --json`` writes its card payloads, relative to the working
+#: directory (an agent's shell runs in its workspace, which is what lets the
+#: gateway publish the file).
+LP_CARD_DIR = "lp-cards"
+#: Card files kept in ``LP_CARD_DIR``; older ones are deleted after each write.
+#: The gateway copies a published card into its artifact store, so the file in
+#: the workspace is only needed until the command's output has been read.
+LP_CARDS_KEPT = 20
+_LP_SLUG = re.compile(r"[^A-Za-z0-9._-]+")
+_LP_CARD_FILE = re.compile(r"^(pool|ranges|position|positions)-[A-Za-z0-9._-]*\.json$")
+#: Gateway error codes that mean "change the input", not "something broke".
+_LP_USAGE_CODES = frozenset(
+    {"trading.invalid", "trading.lp.not_a_wallet", "trading.lp.pool_key_unknown"}
+)
+
+
+class _LpGroup(TyperGroup):
+    """``trade lp``: a usage error under ``--json`` is a JSON error on stderr, exit 2.
+
+    Click reports a bad or missing option with a Rich usage panel, which an
+    agent reading stderr for ``{"error": …}`` cannot parse. The same error
+    without ``--json`` still gets the panel.
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        args = [*getattr(ctx, "_protected_args", []), *ctx.args]
+        try:
+            return super().invoke(ctx)
+        except click.UsageError as exc:
+            if "--json" not in args:
+                raise
+            _bad_argument(exc.format_message(), json_output=True)
+
+
+lp_app = typer.Typer(
+    cls=_LpGroup,
+    help=(
+        "Uniswap V4 liquidity on Base and Robinhood Chain: read a token's pool, its "
+        "liquidity ranges, one position or every position of your wallets; collect fees, "
+        "remove or add liquidity (every write waits for your approval)."
+    ),
+)
+app.add_typer(lp_app, name="lp")
+
+
+def _lp_chain(chains: list[str] | None, command: str, *, json_output: bool) -> int | None:
+    """The one ``--chain`` a single-card command takes; a repeat is refused, not truncated.
+
+    Click keeps only the last of a repeated option, so ``--chain base --chain
+    robinhood`` silently read Robinhood alone; the option is a list so the
+    repeat can be seen and refused.
+    """
+    values = [c for c in chains or [] if c.strip()]
+    if len(values) > 1:
+        _bad_argument(
+            f"`trade lp {command}` takes one --chain (got {', '.join(values)}); "
+            "omit it to try base, then robinhood",
+            json_output=json_output,
+        )
+    return chain_id_from_arg(values[0]) if values else None
+
+
+def _lp_chains(chains: list[str] | None) -> list[int]:
+    """Every ``--chain`` given, validated and de-duplicated, in order."""
+    return list(dict.fromkeys(chain_id_from_arg(c) for c in chains or [] if c.strip()))
+
+
+def _lp_call(method: str, params: dict[str, Any], *, json_output: bool) -> Any:
+    """Call a ``trading.lp.*`` method; an input the engine rejects exits 2, not 1."""
+
+    async def _run(client):
+        from agentos.cli.gateway_client import GatewayRPCError
+
+        try:
+            return await client.call(method, params)
+        except GatewayRPCError as exc:
+            if exc.code not in _LP_USAGE_CODES:
+                raise
+            emit_error(exc.message, json_output=json_output, code=exc.code, details=exc.data)
+            raise typer.Exit(2) from exc
+
+    return run_gateway_sync(_run, json_output=json_output)
+
+
+def _usd(value: Any) -> str:
+    """Dollars, keeping significant digits for sub-cent prices; "—" when unknown."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if 0 < abs(number) < 0.01:
+        return f"${number:.4g}"
+    return money(number)
+
+
+def _lp_card_name(result: dict[str, Any]) -> str:
+    kind = str(result.get("kind") or "lp")
+    if kind == "positions":
+        slug = "wallets"
+    elif kind == "position":
+        position = _dict(result.get("position"))
+        chain = _dict(position.get("chain")).get("key") or ""
+        slug = f"{position.get('tokenId') or ''}-{chain}"
+    else:
+        token = _dict(result.get("token"))
+        slug = f"{token.get('symbol') or 'token'}-{_dict(result.get('chain')).get('key') or ''}"
+    slug = _LP_SLUG.sub("", slug).strip("-") or kind
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{LP_CARD_DIR}/{kind}-{slug}-{stamp}.json"
+
+
+def _write_lp_card(result: dict[str, Any]) -> None:
+    """Write the card payload and announce it; the marker is the last line on stdout.
+
+    Never fatal: the reading has already been printed, and a card that could not
+    be written must not turn it into a failure.
+    """
+    name = _lp_card_name(result)
+    try:
+        path = Path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"[card not written: {exc}]", err=True)
+        return
+    _prune_lp_cards(path.parent)
+    print_text(f"publish_artifact path={name} mime={LP_MIME}")
+
+
+def _prune_lp_cards(directory: Path, keep: int = LP_CARDS_KEPT) -> None:
+    """Keep the ``keep`` newest card files in ``directory``; never touch anything else."""
+    _prune_cards(directory, _LP_CARD_FILE, keep)
+
+
+def _prune_cards(directory: Path, pattern: re.Pattern[str], keep: int) -> None:
+    """Keep the ``keep`` newest files matching ``pattern``; never touch anything else."""
+    try:
+        cards = [p for p in directory.iterdir() if p.is_file() and pattern.match(p.name)]
+        cards.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+        for old in cards[keep:]:
+            old.unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def _lp_emit(
+    result: Any, *, json_output: bool, no_card: bool, render: Callable[[dict[str, Any]], None]
+) -> None:
+    """``--json``: the payload, then the card and its marker. Otherwise the table only."""
+    payload = _dict(result)
+    if not json_output:
+        render(payload)
+        return
+    print_json(payload)
+    if not no_card and payload.get("kind"):
+        _write_lp_card(payload)
+
+
+def _lp_footer(result: dict[str, Any]) -> None:
+    if result.get("partialScan"):
+        console.print("[yellow]partial scan[/]: some liquidity or positions were not read")
+    for warning in result.get("warnings") or []:
+        console.print(f"• {markup_escape(str(warning))}")
+    console.print(f"as of block {result.get('asOfBlock')} · {result.get('fetchedAt')}")
+
+
+def _range_text(item: dict[str, Any]) -> str:
+    low, high = item.get("mcapLower"), item.get("mcapUpper")
+    if low is not None and high is not None:
+        return f"{_usd(low)} → {_usd(high)} mcap"
+    return f"{item.get('priceLower')} → {item.get('priceUpper')}"
+
+
+def _render_lp_pool(result: dict[str, Any]) -> None:
+    token, quote = _dict(result.get("token")), _dict(result.get("quote"))
+    pool, reserves = _dict(result.get("pool")), _dict(result.get("reserves"))
+    guard = _dict(result.get("safety"))
+    launcher = _dict(guard.get("launcher"))
+    locked = guard.get("locked")
+    table = Table(
+        title=f"{token.get('symbol')}/{quote.get('symbol')} · "
+        f"{_dict(result.get('chain')).get('name')} · {pool.get('feePct')}",
+        show_header=False,
+    )
+    table.add_column("Field", style=ACCENT)
+    table.add_column("Value")
+    for field, value in (
+        ("pool", pool.get("poolId")),
+        ("hook", pool.get("hook") or "none"),
+        ("price", _usd(pool.get("priceUsd"))),
+        ("market cap", _usd(pool.get("mcapUsd"))),
+        ("TVL", _usd(pool.get("tvlUsd"))),
+        (
+            f"reserve {token.get('symbol')}",
+            f"{_dict(reserves.get('base')).get('human')} "
+            f"({_usd(_dict(reserves.get('base')).get('usd'))})",
+        ),
+        (
+            f"reserve {quote.get('symbol')}",
+            f"{_dict(reserves.get('quote')).get('human')} "
+            f"({_usd(_dict(reserves.get('quote')).get('usd'))})",
+        ),
+        ("launcher", launcher.get("name") or "—"),
+        ("LP locked", "unknown" if locked is None else ("yes" if locked else "no")),
+        ("note", guard.get("note")),
+    ):
+        if value in (None, ""):
+            continue
+        table.add_row(field, markup_escape(str(value)))
+    console.print(table)
+    top = [r for r in result.get("topRanges") or [] if isinstance(r, dict)]
+    if top:
+        ranges = Table(title="Largest ranges", show_header=True, header_style=ACCENT_HEADER)
+        ranges.add_column("Range")
+        ranges.add_column("Share", justify="right")
+        ranges.add_column("Owner")
+        for r in top:
+            share = r.get("share")
+            ranges.add_row(
+                markup_escape(_range_text(r)),
+                "—" if share is None else f"{float(share) * 100:.1f}%",
+                short_address(r.get("owner")) or "—",
+            )
+        console.print(ranges)
+    _lp_footer(result)
+
+
+def _render_lp_ranges(result: dict[str, Any]) -> None:
+    token, quote = _dict(result.get("token")), _dict(result.get("quote"))
+    current = _dict(result.get("current"))
+    table = Table(
+        title=f"{token.get('symbol')}/{quote.get('symbol')} liquidity · "
+        f"now {_usd(current.get('priceUsd'))} ({_usd(current.get('mcapUsd'))} mcap)",
+        show_header=True,
+        header_style=ACCENT_HEADER,
+    )
+    table.add_column("Range")
+    table.add_column("Share", justify="right")
+    table.add_column(str(token.get("symbol") or "base"), justify="right")
+    table.add_column(str(quote.get("symbol") or "quote"), justify="right")
+    table.add_column("")
+    for seg in result.get("segments") or []:
+        if not isinstance(seg, dict):
+            continue
+        share = seg.get("share")
+        table.add_row(
+            markup_escape(_range_text(seg)),
+            "—" if share is None else f"{float(share) * 100:.1f}%",
+            str(_dict(seg.get("base")).get("human")),
+            str(_dict(seg.get("quote")).get("human")),
+            "◀ now" if seg.get("active") else "",
+        )
+    console.print(table)
+    _lp_footer(result)
+
+
+def _position_row(position: dict[str, Any]) -> list[str]:
+    token, quote = _dict(position.get("token")), _dict(position.get("quote"))
+    fees = _dict(position.get("fees"))
+    owner = _dict(position.get("owner"))
+    return [
+        f"#{position.get('tokenId')}",
+        chain_label(_dict(position.get("chain")).get("id")),
+        f"{token.get('symbol')}/{quote.get('symbol')}",
+        str(position.get("status") or ""),
+        str(position.get("band") or "—"),
+        _usd(position.get("valueUsd")),
+        _usd(fees.get("usd")) if fees else "—",
+        str(owner.get("label") or short_address(owner.get("address"))),
+    ]
+
+
+def _positions_table(positions: list[dict[str, Any]], title: str) -> Table:
+    table = Table(title=title, show_header=True, header_style=ACCENT_HEADER)
+    for column in ("Position", "Chain", "Pair", "Status", "Band"):
+        table.add_column(column)
+    table.add_column("Value", justify="right")
+    table.add_column("Fees", justify="right")
+    table.add_column("Owner")
+    for position in positions:
+        table.add_row(*(markup_escape(cell) for cell in _position_row(position)))
+    return table
+
+
+def _render_lp_position(result: dict[str, Any]) -> None:
+    position = _dict(result.get("position"))
+    console.print(_positions_table([position], "Position"))
+    principal = _dict(position.get("principal"))
+    token, quote = _dict(position.get("token")), _dict(position.get("quote"))
+    console.print(
+        f"principal {_dict(principal.get('base')).get('human')} {token.get('symbol')} + "
+        f"{_dict(principal.get('quote')).get('human')} {quote.get('symbol')}"
+    )
+    _lp_footer(result)
+
+
+def _render_lp_positions(result: dict[str, Any]) -> None:
+    positions = [p for p in result.get("positions") or [] if isinstance(p, dict)]
+    totals = _dict(result.get("totals"))
+    if not positions:
+        wallets = ", ".join(
+            str(w.get("label") or short_address(w.get("address")))
+            for w in result.get("wallets") or []
+            if isinstance(w, dict)
+        )
+        chains = ", ".join(
+            str(c.get("name")) for c in result.get("chains") or [] if isinstance(c, dict)
+        )
+        console.print(f"No Uniswap V4 positions in {wallets or 'no wallets'} on {chains}.")
+    else:
+        console.print(
+            _positions_table(
+                positions,
+                f"V4 positions · {totals.get('count')} · {_usd(totals.get('valueUsd'))} "
+                f"· {totals.get('outOfRange')} out of range",
+            )
+        )
+    _lp_footer(result)
+
+
+_PAIR_TARGET_HELP = "Token symbol or address, a TOKEN/QUOTE pair (ETH/USDC), or a V4 poolId"
+_QUOTE_HELP = "Only pools paired with this token (same as writing TOKEN/QUOTE)"
+_FEE_HELP = (
+    "Only pools on this fee tier: a percent (0.05, 0.3%, 1) or V4 units (500, 3000), "
+    "or 'dynamic'; the deepest wins if several share it"
+)
+
+
+def _lp_pool_params(params: dict[str, Any], quote: str | None, fee: str | None) -> dict[str, Any]:
+    if quote:
+        params["quote"] = quote
+    if fee is not None and fee.strip():
+        params["feePct"] = fee.strip()
+    return params
+
+
+@lp_app.command("pool")
+def lp_pool(
+    target: str = typer.Argument(..., help=_PAIR_TARGET_HELP),
+    chain: list[str] | None = typer.Option(
+        None, "--chain", help="base or robinhood (default: try both)"
+    ),
+    quote: str | None = typer.Option(None, "--quote", help=_QUOTE_HELP),
+    fee: str | None = typer.Option(None, "--fee", help=_FEE_HELP),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """A token's deepest V4 pool: reserves, TVL, launcher, LP lock, biggest ranges."""
+
+    params: dict[str, Any] = {"target": target}
+    chain_id = _lp_chain(chain, "pool", json_output=json_output)
+    if chain_id is not None:
+        params["chainId"] = chain_id
+    _lp_pool_params(params, quote, fee)
+
+    result = _lp_call("trading.lp.pool", params, json_output=json_output)
+    _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_pool)
+
+
+@lp_app.command("ranges")
+def lp_ranges(
+    target: str = typer.Argument(..., help=_PAIR_TARGET_HELP),
+    chain: list[str] | None = typer.Option(
+        None, "--chain", help="base or robinhood (default: try both)"
+    ),
+    quote: str | None = typer.Option(None, "--quote", help=_QUOTE_HELP),
+    fee: str | None = typer.Option(None, "--fee", help=_FEE_HELP),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """How a pool's liquidity is spread across price (market-cap) ranges."""
+
+    params: dict[str, Any] = {"target": target}
+    chain_id = _lp_chain(chain, "ranges", json_output=json_output)
+    if chain_id is not None:
+        params["chainId"] = chain_id
+    _lp_pool_params(params, quote, fee)
+
+    result = _lp_call("trading.lp.ranges", params, json_output=json_output)
+    _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_ranges)
+
+
+@lp_app.command("position")
+def lp_position(
+    token_id: str = typer.Argument(..., help="Position NFT id"),
+    chain: list[str] = typer.Option(..., "--chain", help="base or robinhood"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """One V4 position: range, in/out of range, principal, uncollected fees."""
+
+    text = token_id.strip().lstrip("#")
+    if not text.isdigit() or int(text) <= 0:
+        _bad_argument("tokenId must be a positive integer", json_output=json_output)
+    params = {"chainId": _lp_chain(chain, "position", json_output=json_output), "tokenId": text}
+
+    result = _lp_call("trading.lp.position", params, json_output=json_output)
+    _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_position)
+
+
+@lp_app.command("positions")
+def lp_positions(
+    wallet: list[str] | None = typer.Option(
+        None, "--wallet", help="Address (or vault label) to read; repeatable. Default: the vault"
+    ),
+    chain: list[str] | None = typer.Option(
+        None, "--chain", help="base or robinhood; repeatable (default: both)"
+    ),
+    include_closed: bool = typer.Option(False, "--all", help="Include closed (empty) positions"),
+    budget_seconds: float | None = typer.Option(
+        None,
+        "--budget-seconds",
+        help="Stop searching after this many seconds and answer with what was found "
+        "(default 25; 5-300)",
+        min=5,
+        max=300,
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """Every V4 position of your vault wallets (or --wallet), out-of-range first."""
+
+    params: dict[str, Any] = {}
+    chain_ids = _lp_chains(chain)
+    if len(chain_ids) == 1:
+        params["chainId"] = chain_ids[0]
+    elif chain_ids:
+        params["chainIds"] = chain_ids
+    if wallet:
+        params["wallets"] = list(wallet)
+    if include_closed:
+        params["all"] = True
+    if budget_seconds is not None:
+        params["budgetSeconds"] = budget_seconds
+
+    result = _lp_call("trading.lp.positions", params, json_output=json_output)
+    _lp_emit(result, json_output=json_output, no_card=no_card, render=_render_lp_positions)
+
+
+# ── trade lp collect|remove|add: LP writes (docs/lp-write.md) ──────────────
+
+#: Engine codes that mean "change the input" for an LP write: exit 2, not 1.
+_LP_WRITE_USAGE_CODES = frozenset(
+    {
+        "trading.invalid",
+        "trading.lp.range_invalid",
+        "trading.lp.not_owner",
+        "trading.lp.position_closed",
+        "trading.lp.nothing_to_collect",
+        "trading.lp.not_found",
+        "trading.lp.pool_key_unknown",
+        "trading.slippage_too_high",
+        "trading.unknown_token",
+    }
+)
+
+
+def _lp_token_id(value: str, name: str, *, json_output: bool) -> str:
+    text = value.strip().lstrip("#")
+    if not text.isdigit() or int(text) <= 0:
+        _bad_argument(f"{name} must be a positive integer", json_output=json_output)
+    return text
+
+
+async def _lp_card_after(client: Any, order: dict[str, Any]) -> dict[str, Any] | None:
+    """The refreshed card for a confirmed write: the position, or (after a burn) the wallet's."""
+    plan = _dict(order.get("plan"))
+    chain_id = order.get("chainId")
+    try:
+        if plan.get("op") == "remove" and plan.get("burn"):
+            payload = await client.call(
+                "trading.lp.positions", {"chainId": chain_id, "wallets": [order.get("wallet")]}
+            )
+        else:
+            token_id = order.get("tokenId") or plan.get("tokenId")
+            if not token_id:
+                return None
+            payload = await client.call(
+                "trading.lp.position", {"chainId": chain_id, "tokenId": str(token_id)}
+            )
+    except Exception as exc:  # noqa: BLE001 - the order is confirmed; the card is a bonus
+        typer.echo(f"[card not refreshed: {exc}]", err=True)
+        return None
+    return payload if isinstance(payload, dict) and payload.get("kind") else None
+
+
+def _lp_write(
+    method: str,
+    params: dict[str, Any],
+    *,
+    wait: bool,
+    wait_seconds: int,
+    json_output: bool,
+    no_card: bool,
+) -> None:
+    """Create an LP write order, optionally wait for it, and print it like ``trade send``.
+
+    With ``--json`` a *confirmed* order is followed by the refreshed position
+    card (``lp position``; after a burn, the wallet's ``lp positions``) written
+    to ``lp-cards/`` and announced by the marker, the last line on stdout.
+    """
+    session_key = os.environ.get("AGENTOS_SESSION_KEY", "").strip()
+    params = {**params, "initiator": initiator_for(False)}
+    if session_key:
+        params["sessionKey"] = session_key
+
+    async def _run(client):
+        from agentos.cli.gateway_client import GatewayRPCError
+
+        try:
+            result = await client.call(method, params)
+        except GatewayRPCError as exc:
+            if exc.code not in _LP_WRITE_USAGE_CODES:
+                raise
+            emit_error(exc.message, json_output=json_output, code=exc.code, details=exc.data)
+            raise typer.Exit(2) from exc
+        order = _dict(result).get("order")
+        if wait and isinstance(order, dict) and order.get("status") in _PENDING_STATUSES:
+            waited = await client.call(
+                "trading.orders.wait",
+                {"orderId": order.get("orderId"), "timeoutSeconds": wait_seconds},
+            )
+            if isinstance(waited, dict) and isinstance(waited.get("order"), dict):
+                result, order = waited, waited["order"]
+        card = None
+        if json_output and not no_card and _dict(order).get("status") == "confirmed":
+            card = await _lp_card_after(client, _dict(order))
+        return {"result": result, "card": card}
+
+    out = run_gateway_sync(_run, json_output=json_output)
+    result = _dict(out).get("result")
+    if json_output:
+        print_json(result)
+        card = _dict(out).get("card")
+        if card:
+            _write_lp_card(card)
+        return
+    order = _dict(_dict(result).get("order"))
+    _print_order(order)
+    if order.get("status") == "awaiting_approval":
+        console.print(
+            f"Waiting for approval in the app (or: agentos trade approve {order.get('orderId')})."
+        )
+
+
+def _lp_common(params: dict[str, Any], note: str | None, client_id: str | None) -> dict[str, Any]:
+    if note:
+        params["note"] = note
+    if client_id:
+        params["clientOrderId"] = client_id.strip()
+    return params
+
+
+_CLIENT_ID_HELP = (
+    "Idempotency key; re-running with the same id returns the same order instead of a second one"
+)
+
+
+@lp_app.command("collect")
+def lp_collect(
+    token_id: str = typer.Argument(..., help="Position NFT id"),
+    chain: list[str] = typer.Option(..., "--chain", help="base or robinhood"),
+    allow_empty: bool = typer.Option(
+        False,
+        "--allow-empty",
+        help="Collect even when the position has no uncollected fees (refused otherwise)",
+    ),
+    note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
+    client_id: str | None = typer.Option(None, "--client-id", help=_CLIENT_ID_HELP),
+    wait: bool = typer.Option(False, "--wait", help="Block until the order is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the refreshed position card"
+    ),
+) -> None:
+    """Collect a position's uncollected fees. Always waits for your approval.
+
+    A position with no uncollected fees is refused (it would only pay gas)
+    unless --allow-empty.
+    """
+
+    params: dict[str, Any] = {
+        "chainId": _lp_chain(chain, "collect", json_output=json_output),
+        "tokenId": _lp_token_id(token_id, "tokenId", json_output=json_output),
+    }
+    if allow_empty:
+        params["allowEmpty"] = True
+    _lp_write(
+        "trading.lp.collect",
+        _lp_common(params, note, client_id),
+        wait=wait,
+        wait_seconds=wait_seconds,
+        json_output=json_output,
+        no_card=no_card,
+    )
+
+
+@lp_app.command("remove")
+def lp_remove(
+    token_id: str = typer.Argument(..., help="Position NFT id"),
+    chain: list[str] = typer.Option(..., "--chain", help="base or robinhood"),
+    pct: float = typer.Option(
+        100.0, "--pct", help="Share of the liquidity to take out; 100 (default) burns the NFT"
+    ),
+    slippage: float | None = typer.Option(
+        None, "--slippage", help="Slippage % below today's amounts (default 1)"
+    ),
+    note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
+    client_id: str | None = typer.Option(None, "--client-id", help=_CLIENT_ID_HELP),
+    wait: bool = typer.Option(False, "--wait", help="Block until the order is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the refreshed position card"
+    ),
+) -> None:
+    """Remove liquidity (fees included) from a position. Always waits for your approval."""
+
+    if not 0 < pct <= 100:
+        _bad_argument("--pct must be above 0 and at most 100", json_output=json_output)
+    params: dict[str, Any] = {
+        "chainId": _lp_chain(chain, "remove", json_output=json_output),
+        "tokenId": _lp_token_id(token_id, "tokenId", json_output=json_output),
+        "pct": pct,
+    }
+    if slippage is not None:
+        params["slippagePct"] = slippage
+    _lp_write(
+        "trading.lp.remove",
+        _lp_common(params, note, client_id),
+        wait=wait,
+        wait_seconds=wait_seconds,
+        json_output=json_output,
+        no_card=no_card,
+    )
+
+
+@lp_app.command("add")
+def lp_add(
+    target: str | None = typer.Argument(
+        None,
+        help=(
+            "Token symbol or address, a TOKEN/QUOTE pair (ETH/USDC), or a V4 poolId "
+            "(optional with --to-position)"
+        ),
+    ),
+    chain: list[str] = typer.Option(..., "--chain", help="base or robinhood"),
+    quote: str | None = typer.Option(None, "--quote", help=_QUOTE_HELP),
+    fee: str | None = typer.Option(None, "--fee", help=_FEE_HELP),
+    usd: float | None = typer.Option(
+        None, "--usd", help="Deposit this many US dollars, split as the range needs"
+    ),
+    amount_base: str | None = typer.Option(
+        None, "--amount-base", help="Deposit this much of the token (human units)"
+    ),
+    amount_quote: str | None = typer.Option(
+        None, "--amount-quote", help="Deposit this much of the quote token (human units)"
+    ),
+    range_spec: str | None = typer.Option(
+        None,
+        "--range",
+        help=(
+            "mcap:2M-10M | pct:20 | above[:20] | below[:20] | full | ticks:LO:HI "
+            "(default pct:20 around the price; above = all token, from just above the "
+            "price up N %; below = all quote, from just below it down N %; N defaults to 20)"
+        ),
+    ),
+    to_position: str | None = typer.Option(
+        None, "--to-position", help="Add to this position (its range) instead of minting"
+    ),
+    wallet: str | None = typer.Option(
+        None, "--wallet", help="Vault wallet address or label (default primary)"
+    ),
+    slippage: float | None = typer.Option(
+        None, "--slippage", help="Slippage % above today's amounts (default 1)"
+    ),
+    note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
+    client_id: str | None = typer.Option(None, "--client-id", help=_CLIENT_ID_HELP),
+    wait: bool = typer.Option(False, "--wait", help="Block until the order is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the refreshed position card"
+    ),
+) -> None:
+    """Add liquidity: mint a position, or top one up. Always waits for your approval.
+
+    No swap is made for you: a wallet short of a side the range needs is refused.
+    A range entirely above or below the price needs only one token.
+    """
+
+    if usd is not None and (amount_base is not None or amount_quote is not None):
+        _bad_argument(
+            "Use --usd or --amount-base/--amount-quote, not both", json_output=json_output
+        )
+    if usd is None and amount_base is None and amount_quote is None:
+        _bad_argument(
+            "Size the deposit with --usd or --amount-base (and/or --amount-quote)",
+            json_output=json_output,
+        )
+    if usd is not None and usd <= 0:
+        _bad_argument("--usd must be above 0", json_output=json_output)
+    if not target and to_position is None:
+        _bad_argument("Name a token or poolId, or pass --to-position", json_output=json_output)
+    if to_position is not None and range_spec:
+        _bad_argument("--range cannot change an existing position's range", json_output=json_output)
+    params: dict[str, Any] = {"chainId": _lp_chain(chain, "add", json_output=json_output)}
+    if target:
+        params["token"] = target
+    _lp_pool_params(params, quote, fee)
+    if usd is not None:
+        params["usd"] = usd
+    if amount_base is not None:
+        params["amountBase"] = amount_base
+    if amount_quote is not None:
+        params["amountQuote"] = amount_quote
+    if range_spec:
+        params["range"] = range_spec
+    if to_position is not None:
+        params["toPosition"] = _lp_token_id(to_position, "--to-position", json_output=json_output)
+    if wallet:
+        params["wallet"] = wallet
+    if slippage is not None:
+        params["slippagePct"] = slippage
+    _lp_write(
+        "trading.lp.add",
+        _lp_common(params, note, client_id),
+        wait=wait,
+        wait_seconds=wait_seconds,
+        json_output=json_output,
+        no_card=no_card,
+    )
+
+
+# ── trade dca: DCA mandates (docs/dca.md) ──────────────────────────────────
+
+DCA_MIME = "application/vnd.agentos.dca+json"
+#: Where ``trade dca --json`` writes its card payloads, relative to the working
+#: directory (same reasoning and pruning as ``LP_CARD_DIR``).
+DCA_CARD_DIR = "dca-cards"
+DCA_CARDS_KEPT = 20
+DCA_MIN_EVERY_SECONDS = 60
+_DCA_CARD_FILE = re.compile(r"^(mandate|mandates)-[A-Za-z0-9._-]*\.json$")
+#: Gateway error codes that mean "change the input" (or the mandate's state):
+#: exit 2, not 1.
+_DCA_USAGE_CODES = frozenset(
+    {
+        "trading.dca.invalid",
+        "trading.dca.bad_state",
+        "trading.dca.not_found",
+        "trading.invalid",
+        "trading.token_not_found",
+    }
+)
+_DCA_EVERY = re.compile(r"^(\d+(?:\.\d+)?)\s*([smhdw]?)$")
+_DCA_EVERY_UNITS = {"": 1, "s": 1, "m": 60, "h": 3_600, "d": 86_400, "w": 604_800}
+#: Run statuses whose order may still move after ``trading.dca.run`` returns.
+_DCA_OPEN_RUNS = frozenset({"pending", "parked"})
+_DCA_BAR_WIDTH = 24
+
+
+class _DcaGroup(_LpGroup):
+    """``trade dca``: a usage error under ``--json`` is a JSON error on stderr, exit 2."""
+
+
+dca_app = typer.Typer(
+    cls=_DcaGroup,
+    help=(
+        "DCA mandates: recurring buys the trading engine runs itself under a hard cap. "
+        "From an agent, create only proposes; you approve, pause, resume, stop, buy now "
+        "and edit."
+    ),
+)
+app.add_typer(dca_app, name="dca")
+
+
+def parse_every(value: str) -> int:
+    """``30m``, ``2h``, ``1d``, ``1w`` or a plain number of seconds → seconds (≥ 60).
+
+    Raises ``ValueError`` with a message fit for the user.
+    """
+    text = str(value or "").strip().lower()
+    match = _DCA_EVERY.match(text)
+    if not match:
+        raise ValueError(
+            f"--every {value!r} is not an interval; use 30m, 2h, 1d, 1w or a number of seconds"
+        )
+    seconds = float(match.group(1)) * _DCA_EVERY_UNITS[match.group(2)]
+    if seconds != int(seconds):
+        raise ValueError(f"--every {value!r} is not a whole number of seconds")
+    if seconds < DCA_MIN_EVERY_SECONDS:
+        raise ValueError(
+            f"--every must be at least {DCA_MIN_EVERY_SECONDS} seconds (got {value!r})"
+        )
+    return int(seconds)
+
+
+def _dca_every(value: str, *, json_output: bool) -> int:
+    try:
+        return parse_every(value)
+    except ValueError as exc:
+        _bad_argument(str(exc), json_output=json_output)
+        raise  # unreachable: _bad_argument exits
+
+
+def _dca_id(value: str, *, json_output: bool) -> str:
+    text = value.strip()
+    if not text:
+        _bad_argument("a mandate id is required (dca_…)", json_output=json_output)
+    return text
+
+
+def _dca_positive(value: float | None, flag: str, *, json_output: bool, zero: bool = False) -> None:
+    """``flag`` must be above 0 (or at least 0 when ``zero`` means "remove the limit")."""
+    if value is None:
+        return
+    if value < 0 or (value == 0 and not zero) or value != value:
+        need = "0 or more" if zero else "above 0"
+        _bad_argument(f"{flag} must be {need}", json_output=json_output)
+
+
+def _dca_card_name(result: dict[str, Any]) -> str:
+    kind = str(result.get("kind") or "mandate")
+    if kind == "mandates":
+        params = _dict(_dict(result.get("request")).get("params"))
+        slug = "all" if params.get("all") else "live"
+    else:
+        slug = str(_dict(result.get("mandate")).get("id") or "")
+    slug = _LP_SLUG.sub("", slug).strip("-") or kind
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{DCA_CARD_DIR}/{kind}-{slug}-{stamp}.json"
+
+
+def _write_dca_card(result: dict[str, Any]) -> None:
+    """Write the card payload and announce it; the marker is the last line on stdout."""
+    name = _dca_card_name(result)
+    try:
+        path = Path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"[card not written: {exc}]", err=True)
+        return
+    _prune_cards(path.parent, _DCA_CARD_FILE, DCA_CARDS_KEPT)
+    print_text(f"publish_artifact path={name} mime={DCA_MIME}")
+
+
+def _dca_call(method: str, params: dict[str, Any], *, json_output: bool) -> Any:
+    """Call one ``trading.dca.*`` method; an input or state the engine refuses exits 2."""
+
+    async def _run(client):
+        return await _dca_rpc(client, method, params, json_output=json_output)
+
+    return run_gateway_sync(_run, json_output=json_output)
+
+
+async def _dca_rpc(client: Any, method: str, params: dict[str, Any], *, json_output: bool) -> Any:
+    from agentos.cli.gateway_client import GatewayRPCError
+
+    try:
+        return await client.call(method, params)
+    except GatewayRPCError as exc:
+        if exc.code not in _DCA_USAGE_CODES:
+            raise
+        emit_error(exc.message, json_output=json_output, code=exc.code, details=exc.data)
+        raise typer.Exit(2) from exc
+
+
+def _dca_emit(result: Any, *, json_output: bool, no_card: bool) -> None:
+    """``--json``: the payload, then the card and its marker. Otherwise a panel or a table."""
+    payload = _dict(result)
+    if json_output:
+        print_json(payload)
+        if not no_card and payload.get("kind") in ("mandate", "mandates"):
+            _write_dca_card(payload)
+        return
+    if payload.get("kind") == "mandates":
+        _render_dca_list(payload)
+    else:
+        _render_dca_mandate(payload)
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _span(seconds: float) -> str:
+    """``3 h 12 m``, ``45 m``, ``2 d 4 h``, ``30 s``."""
+    seconds = int(max(0, seconds))
+    days, rest = divmod(seconds, 86_400)
+    hours, rest = divmod(rest, 3_600)
+    minutes, secs = divmod(rest, 60)
+    if days:
+        return f"{days} d {hours} h" if hours else f"{days} d"
+    if hours:
+        return f"{hours} h {minutes} m" if minutes else f"{hours} h"
+    if minutes:
+        return f"{minutes} m"
+    return f"{secs} s"
+
+
+def _dca_next(mandate: dict[str, Any], now: datetime | None = None) -> str:
+    """The next-buy line: ``in 3 h 12 m``, ``due now``, ``on approval``, ``paused``, ``—``."""
+    status = str(mandate.get("status") or "")
+    if status == "awaiting_approval":
+        return "on approval" if _dict(mandate.get("schedule")).get("startNow") else "after approval"
+    if status == "paused":
+        return "paused"
+    if status != "active":
+        return "—"
+    at = _parse_iso(_dict(mandate.get("schedule")).get("nextRunAt"))
+    if at is None:
+        return "—"
+    delta = (at - (now or datetime.now(UTC))).total_seconds()
+    return "due now" if delta <= 0 else f"in {_span(delta)}"
+
+
+def _dca_bar(progress: Any, width: int = _DCA_BAR_WIDTH) -> str:
+    try:
+        share = min(1.0, max(0.0, float(progress)))
+    except (TypeError, ValueError):
+        share = 0.0
+    filled = round(share * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _dca_amount(amount: Any, symbol: str) -> str:
+    human = _dict(amount).get("human")
+    if human is None or human == "":
+        return "—"
+    try:
+        return f"{float(human):.6g} {symbol}"
+    except (TypeError, ValueError):
+        return f"{human} {symbol}"
+
+
+def _dca_pair(mandate: dict[str, Any]) -> str:
+    return f"{token_symbol(mandate.get('token'))} ← {token_symbol(mandate.get('quote'))}"
+
+
+def _dca_buys(runs: dict[str, Any]) -> str:
+    done, most = runs.get("done") or 0, runs.get("max")
+    return f"{done} of {most} buys" if most else f"{done} buys"
+
+
+def _signed_usd(value: Any) -> str:
+    """``$5.45`` / ``-$1.20``; a value that rounds to zero is ``$0.00``, never ``-$0.00``."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = round(float(value), 2)
+    except (TypeError, ValueError):
+        return str(value)
+    return money(number if number != 0 else 0.0)
+
+
+# The zone run times are shown in. ``None`` is the system's local zone; tests
+# pin it (``time.tzset`` does not exist on Windows, so TZ alone is not enough).
+_DCA_LOCAL_TZ: tzinfo | None = None
+
+
+def _dca_when(at: datetime | None, now: datetime | None = None) -> str:
+    """Local ``HH:MM`` for a run today, ``Mon DD HH:MM`` otherwise, ``—`` when unknown."""
+    if at is None:
+        return "—"
+    local = at.astimezone(_DCA_LOCAL_TZ)
+    today = (now or datetime.now(UTC)).astimezone(_DCA_LOCAL_TZ).date()
+    return local.strftime("%H:%M" if local.date() == today else "%b %d %H:%M")
+
+
+def _dca_run_line(run: dict[str, Any], symbol: str, now: datetime | None = None) -> str:
+    """``#12 · 09:01 · $10.00 → 0.0035 WETH @ $2,860.00 · tx 0x1234…abcd``.
+
+    A skipped or failed run carries its reason; a pending or parked one says it is waiting.
+    """
+    status = str(run.get("status") or "")
+    parts = [f"#{run.get('n')}", _dca_when(_parse_iso(run.get("at")), now)]
+    if run.get("manual"):
+        parts.append("buy now")
+    if status == "filled":
+        parts.append(
+            f"{money(run.get('usd'))} → {_dca_amount(run.get('amount'), symbol)} "
+            f"@ {_usd(run.get('priceUsd'))}"
+        )
+        if run.get("txHash"):
+            parts.append(f"tx {short_address(run.get('txHash'))}")
+    elif status in ("parked", "pending"):
+        what = "awaiting approval" if status == "parked" else "pending, waiting to fill"
+        parts.append(f"{money(run.get('usd'))} {what}")
+        if run.get("orderId"):
+            parts.append(str(run.get("orderId")))
+    else:
+        parts.append(status or "unknown")
+        if run.get("reason"):
+            parts.append(str(run.get("reason")))
+    return " · ".join(parts)
+
+
+def _render_dca_mandate(result: dict[str, Any]) -> None:
+    mandate = _dict(result.get("mandate"))
+    if not mandate:
+        console.print("No mandate in the response.")
+        return
+    schedule, budget = _dict(mandate.get("schedule")), _dict(mandate.get("budget"))
+    runs, acquired = _dict(mandate.get("runs")), _dict(mandate.get("acquired"))
+    guards, wallet = _dict(mandate.get("guards")), _dict(mandate.get("wallet"))
+    chain = _dict(mandate.get("chain"))
+    symbol = token_symbol(mandate.get("token"))
+    status = str(mandate.get("status") or "")
+    reason = mandate.get("statusReason")
+    where = (
+        f"{chain.get('name') or ''} · {wallet.get('label') or short_address(wallet.get('address'))}"
+    )
+    lines = [
+        f"[{ACCENT}]{markup_escape(_dca_pair(mandate))}[/] · {markup_escape(where)}",
+        f"[bold]{money(budget.get('usdPerRun'))} {markup_escape(str(schedule.get('label') or ''))}"
+        f"[/] · next buy {_dca_next(mandate)}",
+        f"{_dca_bar(budget.get('progress'))} {money(budget.get('spentUsd'))} of "
+        f"{money(budget.get('capUsd'))} · {float(budget.get('progress') or 0) * 100:.0f} % · "
+        f"{_dca_buys(runs)}",
+    ]
+    if budget.get("reservedUsd"):
+        lines.append(f"reserved {money(budget.get('reservedUsd'))} (open buys)")
+    lines.append(
+        f"acquired {_dca_amount(acquired.get('amount'), symbol)} · "
+        f"avg {_usd(acquired.get('avgPriceUsd'))} vs now {_usd(acquired.get('currentPriceUsd'))} "
+        f"({percent(acquired.get('vsAvgPct'))})"
+    )
+    lines.append(
+        f"unrealised {_signed_usd(acquired.get('unrealizedUsd'))} · "
+        f"gas {_usd(acquired.get('gasUsd'))}"
+    )
+    guard_bits = []
+    if guards.get("maxPriceUsd"):
+        guard_bits.append(f"only under {_usd(guards.get('maxPriceUsd'))}")
+    if guards.get("buysNeedApproval"):
+        guard_bits.append("each buy waits for your approval")
+    if runs.get("skipped") or runs.get("failed"):
+        guard_bits.append(f"{runs.get('skipped') or 0} skipped, {runs.get('failed') or 0} failed")
+    if guard_bits:
+        lines.append(" · ".join(guard_bits))
+    history = [r for r in mandate.get("history") or [] if isinstance(r, dict)]
+    if history:
+        lines.append("")
+        lines.append("[bold]recent runs[/]")
+        lines.extend(markup_escape(_dca_run_line(r, symbol)) for r in history[:5])
+    for warning in result.get("warnings") or []:
+        lines.append(f"[yellow]•[/] {markup_escape(str(warning))}")
+    title = f"{markup_escape(str(mandate.get('name') or 'DCA'))} · {status}"
+    if reason:
+        title += f" ({markup_escape(str(reason))})"
+    subtitle = f"{mandate.get('id')} · as of {result.get('fetchedAt')}"
+    console.print(Panel("\n".join(lines), title=title, subtitle=subtitle, expand=False))
+    run = _dict(result.get("run"))
+    if run:
+        console.print(f"Run: {markup_escape(_dca_run_line(run, symbol))}")
+    if status == "awaiting_approval":
+        console.print(
+            "Waiting for your approval in the app "
+            f"(or: agentos trade dca approve {mandate.get('id')})."
+        )
+
+
+def _render_dca_list(result: dict[str, Any]) -> None:
+    mandates = [m for m in result.get("mandates") or [] if isinstance(m, dict)]
+    if not mandates:
+        console.print("No DCA mandates yet.")
+        return
+    table = Table(
+        title=f"DCA · {len(mandates)} mandate{'s' if len(mandates) != 1 else ''}",
+        header_style=ACCENT_HEADER,
+    )
+    for column in ("Name", "Pair", "Cadence", "Status", "Progress", "Buys", "Next buy"):
+        # Fold, never ellipsize: a clipped id or cap is worse than a taller row.
+        table.add_column(
+            column,
+            justify="right" if column in ("Progress", "Buys") else "left",
+            overflow="fold",
+        )
+    for mandate in mandates:
+        budget, schedule = _dict(mandate.get("budget")), _dict(mandate.get("schedule"))
+        runs = _dict(mandate.get("runs"))
+        done, most = runs.get("done") or 0, runs.get("max")
+        # The id rides under the name: every other dca command needs it.
+        name = markup_escape(str(mandate.get("name") or "DCA"))
+        table.add_row(
+            f"{name}\n[dim]{markup_escape(str(mandate.get('id') or ''))}[/]",
+            markup_escape(_dca_pair(mandate)),
+            markup_escape(f"{money(budget.get('usdPerRun'))} {schedule.get('label') or ''}"),
+            str(mandate.get("status") or ""),
+            f"{money(budget.get('spentUsd'))} / {money(budget.get('capUsd'))}",
+            f"{done}/{most}" if most else str(done),
+            _dca_next(mandate),
+        )
+    console.print(table)
+    totals = _dict(result.get("totals"))
+    console.print(
+        f"{money(totals.get('spentUsd'))} of {money(totals.get('capUsd'))} · "
+        f"{money(totals.get('acquiredUsd'))} acquired · as of {result.get('fetchedAt')}"
+    )
+
+
+_JSON_HELP = "Emit machine-readable JSON (and write the card)"
+_NO_CARD_HELP = "With --json: do not write the card file"
+
+
+@dca_app.command("create")
+def dca_create(
+    token: str = typer.Argument(..., help="Token to buy: a ticker (ETH, WETH) or an address"),
+    usd: float = typer.Option(..., "--usd", help="US dollars spent per buy"),
+    every: str = typer.Option(
+        ..., "--every", help="Interval: 30m, 2h, 1d, 1w or seconds (minimum 60)"
+    ),
+    cap: float | None = typer.Option(
+        None, "--cap", help="Stop after spending this many US dollars in total"
+    ),
+    runs: int | None = typer.Option(None, "--runs", help="Stop after this many buys"),
+    max_price: float | None = typer.Option(
+        None, "--max-price", help="Skip a buy while the token's price is above this (USD)"
+    ),
+    quote: str | None = typer.Option(
+        None, "--quote", help="Token spent (default the chain's USDC; required on robinhood)"
+    ),
+    chain: str = typer.Option("base", "--chain", help="base or robinhood"),
+    wallet: str | None = typer.Option(
+        None, "--wallet", help="Vault wallet address or label (default primary)"
+    ),
+    slippage: float | None = typer.Option(None, "--slippage", help="Slippage % per buy"),
+    name: str | None = typer.Option(None, "--name", help='Mandate name (default "DCA <token>")'),
+    start: str = typer.Option(
+        "now", "--start", help="now: first buy at activation; next: one interval later"
+    ),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Create a DCA mandate. From an agent it waits for your approval; yours starts at once."""
+
+    every_seconds = _dca_every(every, json_output=json_output)
+    if cap is None and runs is None:
+        _bad_argument("Pass --cap, --runs or both: a DCA needs a limit", json_output=json_output)
+    _dca_positive(usd, "--usd", json_output=json_output)
+    _dca_positive(cap, "--cap", json_output=json_output)
+    _dca_positive(max_price, "--max-price", json_output=json_output)
+    _dca_positive(slippage, "--slippage", json_output=json_output)
+    if runs is not None and runs < 1:
+        _bad_argument("--runs must be at least 1", json_output=json_output)
+    start_key = start.strip().lower()
+    if start_key not in ("now", "next"):
+        _bad_argument(f"--start must be now or next (got {start!r})", json_output=json_output)
+    params: dict[str, Any] = {
+        "chainId": chain_id_from_arg(chain),
+        "token": token,
+        "usdPerRun": usd,
+        "everySeconds": every_seconds,
+        "startNow": start_key == "now",
+        "initiator": initiator_for(False),
+    }
+    for key, value in (
+        ("capUsd", cap),
+        ("runsMax", runs),
+        ("maxPriceUsd", max_price),
+        ("quote", quote),
+        ("wallet", wallet),
+        ("slippagePct", slippage),
+        ("name", name),
+    ):
+        if value is not None:
+            params[key] = value
+    session_key = os.environ.get("AGENTOS_SESSION_KEY", "").strip()
+    if session_key:
+        params["sessionKey"] = session_key
+    result = _dca_call("trading.dca.create", params, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("list")
+def dca_list(
+    all_: bool = typer.Option(False, "--all", help="Include completed, stopped and rejected"),
+    wallet: str | None = typer.Option(None, "--wallet", help="Only this wallet's mandates"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Live DCA mandates (awaiting approval, active, paused), or every one with --all."""
+
+    params: dict[str, Any] = {}
+    if all_:
+        params["all"] = True
+    if wallet:
+        params["wallet"] = wallet
+    result = _dca_call("trading.dca.list", params, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)
+
+
+def _dca_simple(
+    method: str,
+    mandate_id: str,
+    *,
+    json_output: bool,
+    no_card: bool,
+    reason: str | None = None,
+) -> None:
+    params: dict[str, Any] = {"mandateId": _dca_id(mandate_id, json_output=json_output)}
+    if reason:
+        params["reason"] = reason
+    result = _dca_call(method, params, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)
+
+
+_ID_HELP = "Mandate id (dca_…)"
+
+
+@dca_app.command("show")
+def dca_show(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """One mandate: schedule, progress, average buy price and recent runs."""
+    _dca_simple("trading.dca.get", mandate_id, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("approve")
+def dca_approve(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Approve a proposed mandate and start it (yours only; an agent cannot)."""
+    _dca_simple("trading.dca.approve", mandate_id, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("reject")
+def dca_reject(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    reason: str | None = typer.Option(None, "--reason", help="Why (kept on the mandate)"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Reject a proposed mandate."""
+    _dca_simple(
+        "trading.dca.reject", mandate_id, json_output=json_output, no_card=no_card, reason=reason
+    )
+
+
+@dca_app.command("pause")
+def dca_pause(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Pause an active mandate; no buy fires until you resume it."""
+    _dca_simple("trading.dca.pause", mandate_id, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("resume")
+def dca_resume(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Resume a paused mandate; missed buys are not made up, the next one fires when due."""
+    _dca_simple("trading.dca.resume", mandate_id, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("stop")
+def dca_stop(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    reason: str | None = typer.Option(None, "--reason", help="Why (kept on the mandate)"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Stop a mandate for good; its buys still waiting for approval are rejected."""
+    _dca_simple(
+        "trading.dca.stop", mandate_id, json_output=json_output, no_card=no_card, reason=reason
+    )
+
+
+@dca_app.command("run")
+def dca_run(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    wait: bool = typer.Option(False, "--wait", help="Block until the buy is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Buy now: one buy on an active or paused mandate. The next scheduled buy does not move."""
+
+    params = {"mandateId": _dca_id(mandate_id, json_output=json_output)}
+
+    async def _run(client):
+        result = _dict(await _dca_rpc(client, "trading.dca.run", params, json_output=json_output))
+        run = _dict(result.get("run"))
+        order_id = run.get("orderId")
+        if not (wait and order_id and run.get("status") in _DCA_OPEN_RUNS):
+            return result
+        await client.call(
+            "trading.orders.wait", {"orderId": order_id, "timeoutSeconds": wait_seconds}
+        )
+        fresh = _dict(await _dca_rpc(client, "trading.dca.get", params, json_output=json_output))
+        if not fresh:
+            return result
+        history = _dict(fresh.get("mandate")).get("history") or []
+        settled = next(
+            (r for r in history if isinstance(r, dict) and r.get("n") == run.get("n")), run
+        )
+        return {**fresh, "run": settled}
+
+    result = run_gateway_sync(_run, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)
+
+
+@dca_app.command("update")
+def dca_update(
+    mandate_id: str = typer.Argument(..., help=_ID_HELP),
+    usd: float | None = typer.Option(None, "--usd", help="US dollars per buy"),
+    cap: float | None = typer.Option(None, "--cap", help="Total US dollars to spend"),
+    runs: int | None = typer.Option(None, "--runs", help="Number of buys (0 removes the limit)"),
+    every: str | None = typer.Option(
+        None, "--every", help="Interval: 30m, 2h, 1d, 1w or seconds; re-anchors the schedule"
+    ),
+    max_price: float | None = typer.Option(
+        None, "--max-price", help="Skip buys above this price (USD); 0 removes the guard"
+    ),
+    name: str | None = typer.Option(None, "--name", help="New name"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Change a mandate's terms (yours only). Lowering the cap below what is spent completes it."""
+
+    params: dict[str, Any] = {"mandateId": _dca_id(mandate_id, json_output=json_output)}
+    _dca_positive(usd, "--usd", json_output=json_output)
+    _dca_positive(cap, "--cap", json_output=json_output)
+    _dca_positive(max_price, "--max-price", json_output=json_output, zero=True)
+    if runs is not None and runs < 0:
+        _bad_argument("--runs must be 0 or more", json_output=json_output)
+    if name is not None and not name.strip():
+        _bad_argument("--name must not be empty", json_output=json_output)
+    for key, value in (
+        ("usdPerRun", usd),
+        ("capUsd", cap),
+        ("runsMax", runs),
+        ("everySeconds", _dca_every(every, json_output=json_output) if every else None),
+        ("maxPriceUsd", max_price),
+        ("name", name),
+    ):
+        if value is not None:
+            params[key] = value
+    if len(params) == 1:
+        _bad_argument(
+            "Nothing to update: pass --usd, --cap, --runs, --every, --max-price or --name",
+            json_output=json_output,
+        )
+    result = _dca_call("trading.dca.update", params, json_output=json_output)
+    _dca_emit(result, json_output=json_output, no_card=no_card)

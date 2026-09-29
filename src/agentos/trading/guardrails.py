@@ -168,3 +168,54 @@ def evaluate_revoke(*, initiator: str) -> GuardVerdict:
         threshold_usd=0.0,
         reason="manual" if initiator == "manual" else "the agent may not revoke on its own",
     )
+
+
+LpOp = Literal["collect", "remove", "add"]
+
+
+def evaluate_lp_write(
+    *,
+    op: str,
+    initiator: str,
+    value_usd: float | None,
+    daily_cap_usd: float,
+    spent_today_usd: float,
+) -> GuardVerdict:
+    """Decide what happens to a Uniswap V4 LP write (``docs/lp-write.md``).
+
+    Every LP write waits for a human, whoever asked and whatever it is worth:
+    it signs a call whose effect is a pool's, not a transfer the user can read
+    off a line. ``collect`` and ``remove`` bring tokens *in* and never touch
+    the daily cap. ``add`` deposits: from the agent it counts toward the cap
+    like a swap -- a cap of zero switches it off, and one that would push the
+    wallet past the cap is refused outright (``spent_today_usd`` includes
+    orders still in flight). A person's own add is not capped, like a
+    person's swap; it still parks.
+    """
+    spent = max(0.0, float(spent_today_usd))
+    cap = float(daily_cap_usd)
+
+    def verdict(decision: Decision, reason: str) -> GuardVerdict:
+        return GuardVerdict(
+            decision=decision,
+            value_usd=value_usd,
+            spent_today_usd=spent,
+            daily_cap_usd=cap,
+            threshold_usd=0.0,
+            reason=reason,
+        )
+
+    if op not in ("collect", "remove", "add"):
+        raise ValueError(f"unknown LP op {op!r}")
+    if op == "add" and initiator != "manual":
+        if cap <= 0:
+            return verdict(
+                "blocked_daily_cap", "daily cap is 0 USD: agent deposits are switched off"
+            )
+        if value_usd is not None and spent + float(value_usd) > cap:
+            return verdict(
+                "blocked_daily_cap",
+                f"daily cap {cap:.2f} USD would be exceeded "
+                f"({spent:.2f} spent + {float(value_usd):.2f})",
+            )
+    return verdict("needs_approval", "an LP write always waits for you")

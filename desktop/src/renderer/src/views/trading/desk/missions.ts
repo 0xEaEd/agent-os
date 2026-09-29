@@ -5,7 +5,10 @@ import { useRpc } from '@/app/providers'
 import { useConnection } from '@/stores/connection'
 import type { RawJob, RawRun } from '@/views/cron/logic'
 import { t } from '~/i18n'
+import { useNow } from '~/lib/use-now'
+import { useMandateActions, useMandates, type MandateActions } from '~/stores/trading'
 import { errorText } from '../logic'
+import type { Mandate } from '../types'
 import {
   isSessionMission,
   jobText,
@@ -16,12 +19,16 @@ import {
   withoutDryRun,
   type MissionForm,
 } from './desk-logic'
+import { deskMandates } from './mandate-logic'
 
 /**
  * Missions are cron jobs that post into the desk's chat. This hook reads
  * them back, follows their runs over the cron events, and offers the
  * controls above the composer. The engine's scheduler is the source of
  * truth for every state word shown.
+ *
+ * DCA mandates (docs/dca.md) sit beside them: the engine runs those itself,
+ * so the desk only lists them and forwards the user's controls.
  */
 
 const MISSIONS_KEY = ['trading', 'missions'] as const
@@ -83,12 +90,19 @@ export interface MissionsApi {
   runNow: (job: RawJob) => void
   remove: (job: RawJob) => void
   /**
-   * Pause every mission of this session that is still enabled. True when
-   * they are all paused (or there were none); false when one refused
-   * (toasted) — the caller must not walk away from a mission still running.
+   * Pause every mission of this session that is still enabled, and every
+   * active DCA mandate filed to it. True when they are all paused (or there
+   * were none); false when one refused (toasted) — the caller must not walk
+   * away from a mission still running.
    */
   pauseAll: () => Promise<boolean>
   busy: boolean
+  /** This desk's DCA mandates: filed to the session or unfiled; live, or finished within the hour. */
+  mandates: Mandate[]
+  /** Every mandate awaiting the operator's approval, whichever chat proposed it. */
+  awaitingMandates: Mandate[]
+  /** The mandate controls (approve, pause, buy now, update …), toasting their own outcome. */
+  mandate: MandateActions
 }
 
 export function useMissions(sessionKey: string, enabled = true): MissionsApi {
@@ -112,6 +126,21 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
   const missions = useMemo(
     () => (query.data ?? []).filter((job) => isSessionMission(job, sessionKey)),
     [query.data, sessionKey],
+  )
+
+  // Every mandate, so a DCA that just finished (completed, stopped, rejected
+  // or expired) still shows how it ended for an hour; the minute clock only
+  // ages that window, the rows tick on their own.
+  const allMandates = useMandates(true, enabled)
+  const mandateActions = useMandateActions()
+  const minute = useNow(enabled ? 60_000 : 0)
+  const mandates = useMemo(
+    () => deskMandates(allMandates.mandates, sessionKey, minute),
+    [allMandates.mandates, sessionKey, minute],
+  )
+  const awaitingMandates = useMemo(
+    () => allMandates.mandates.filter((m) => m.status === 'awaiting_approval'),
+    [allMandates.mandates],
   )
 
   const stopCompleted = useCallback(
@@ -260,6 +289,9 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
 
   return {
     missions,
+    mandates,
+    awaitingMandates,
+    mandate: mandateActions,
     loading: connected && query.isPending,
     running,
     busy: create.isPending || update.isPending || run.isPending || removeJob.isPending,
@@ -321,19 +353,30 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
     },
     pauseAll: async () => {
       const active = missions.filter((job) => job.id && job.enabled !== false)
-      if (active.length === 0) return true
+      // Only the mandates filed to this session: an unfiled one is the
+      // operator's and stays on screen at the fresh desk too.
+      const running = mandates.filter((m) => m.status === 'active' && m.sessionKey === sessionKey)
+      if (active.length === 0 && running.length === 0) return true
       try {
-        await Promise.all(
-          active.map((job) =>
+        await Promise.all([
+          ...active.map((job) =>
             update.mutateAsync({ id: job.id as string, patch: { enabled: false } }),
           ),
-        )
+          ...running.map((m) =>
+            rpc.call('trading.dca.pause', { mandateId: m.id }).then(() => undefined),
+          ),
+        ])
       } catch (err) {
         fail(t('trading.mission.failed'), err)
         return false
+      } finally {
+        if (running.length) void queryClient.invalidateQueries({ queryKey: ['trading', 'dca'] })
       }
       toast.success(
-        `${t('trading.mission.pausedForFresh')}: ${active.map((job) => job.name || job.id).join(', ')}`,
+        `${t('trading.mission.pausedForFresh')}: ${[
+          ...active.map((job) => job.name || job.id),
+          ...running.map((m) => m.name),
+        ].join(', ')}`,
         { id: 'mission-pause-all' },
       )
       return true

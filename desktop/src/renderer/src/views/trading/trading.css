@@ -1424,11 +1424,14 @@ tr:focus-within .trd-row__actions {
   color: var(--muted-foreground);
   background: color-mix(in srgb, var(--foreground) 7%, transparent);
 }
-.trd-entry__glyph[data-kind='deposit'] {
+.trd-entry__glyph[data-kind='deposit'],
+.trd-entry__glyph[data-kind='lp_collect'],
+.trd-entry__glyph[data-kind='lp_remove'] {
   color: var(--trd-up);
   background: color-mix(in srgb, var(--trd-up) 12%, transparent);
 }
-.trd-entry__glyph[data-kind='withdraw'] {
+.trd-entry__glyph[data-kind='withdraw'],
+.trd-entry__glyph[data-kind='lp_add'] {
   color: var(--trd-down);
   background: color-mix(in srgb, var(--trd-down) 12%, transparent);
 }
@@ -1647,6 +1650,16 @@ tr:focus-within .trd-row__actions {
   align-items: center;
   gap: 4px;
   white-space: nowrap;
+}
+/* A buy a DCA mandate fired. */
+.trd-order__dca {
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 14%, transparent);
 }
 .trd-order__fact b {
   font-family: var(--font-mono);

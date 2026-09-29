@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "kind": "pool",
+  "chain": {
+    "id": 8453,
+    "key": "base",
+    "name": "Base",
+    "explorer": "https://basescan.org"
+  },
+  "asOfBlock": 21044901,
+  "fetchedAt": "2026-09-27T09:30:00Z",
+  "partialScan": false,
+  "warnings": [],
+  "token": {
+    "address": "0x52b492a33E447Cdb854c7FC19F1e57E8BfA1777D",
+    "symbol": "PEPE",
+    "decimals": 18,
+    "priceUsd": 2.5148879334839752e-05
+  },
+  "quote": {
+    "address": "0x4200000000000000000000000000000000000006",
+    "symbol": "WETH",
+    "decimals": 18,
+    "priceUsd": 2512.37
+  },
+  "pool": {
+    "poolId": "0x5c2e4e9a3c4022757cdcdfab4e3a620063d12bfdae89b05d82fec8f89ceb63b5",
+    "hook": "0xb429d62f8f3bFFb98CdB9569533eA23bF0Ba28CC",
+    "tickSpacing": 200,
+    "feePct": "dynamic",
+    "tick": 184206,
+    "liquidity": "7500000000000000000000000",
+    "priceUsd": 2.5148879334839752e-05,
+    "mcapUsd": 2514887.9334839755,
+    "tvlUsd": 1447702.839459645
+  },
+  "reserves": {
+    "base": {
+      "raw": "22210405915985881805559695937",
+      "human": "22210405915.985881805559695937",
+      "usd": 558566.81835894
+    },
+    "quote": {
+      "raw": "353903294936934185819",
+      "human": "353.903294936934185819",
+      "usd": 889136.0211007053
+    }
+  },
+  "safety": {
+    "launcher": {
+      "name": "Clanker v4.1",
+      "address": "0xE85A59c628F7d27878ACeB4bf3b35733630083a9"
+    },
+    "locked": true,
+    "note": "LP owned by launchpad locker (ClankerLpLocker)"
+  },
+  "topRanges": [
+    {
+      "tickLower": 183000,
+      "tickUpper": 184000,
+      "priceLower": 1.0218356662541856e-08,
+      "priceUpper": 1.1292974152717928e-08,
+      "mcapLower": 2567229.2728270283,
+      "mcapUpper": 2837212.9472063943,
+      "liquidity": "9500000000000000000000000",
+      "share": 0.23869346733668342,
+      "owner": null
+    },
+    {
+      "tickLower": 180000,
+      "tickUpper": 183000,
+      "priceLower": 1.1292974152717928e-08,
+      "priceUpper": 1.5243691981922572e-08,
+      "mcapLower": 2837212.9472063943,
+      "mcapUpper": 3829779.4424622813,
+      "liquidity": "8000000000000000000000000",
+      "share": 0.20100502512562815,
+      "owner": null
+    },
+    {
+      "tickLower": 184000,
+      "tickUpper": 186000,
+      "priceLower": 8.366166501212042e-09,
+      "priceUpper": 1.0218356662541856e-08,
+      "mcapLower": 2101890.5732650096,
+      "mcapUpper": 2567229.2728270283,
+      "liquidity": "7500000000000000000000000",
+      "share": 0.1884422110552764,
+      "owner": null
+    },
+    {
+      "tickLower": 186000,
+      "tickUpper": 190000,
+      "priceLower": 5.608121268061238e-09,
+      "priceUpper": 8.366166501212042e-09,
+      "mcapLower": 1408967.5630239013,
+      "mcapUpper": 2101890.5732650096,
+      "liquidity": "6800000000000000000000000",
+      "share": 0.1708542713567839,
+      "owner": null
+    },
+    {
+      "tickLower": 190000,
+      "tickUpper": 200000,
+      "priceLower": 2.0632156694440186e-09,
+      "priceUpper": 5.608121268061238e-09,
+      "mcapLower": 518356.1151441069,
+      "mcapUpper": 1408967.5630239013,
+      "liquidity": "6000000000000000000000000",
+      "share": 0.1507537688442211,
+      "owner": "0x29d17C1A8D851d7d4cA97FAe97AcAdb398D9cCE0"
+    }
+  ]
+}

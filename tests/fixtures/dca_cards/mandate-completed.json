@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "kind": "mandate",
+  "fetchedAt": "2026-09-27T09:15:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "get",
+    "params": {
+      "mandateId": "dca_5e6f7a8b"
+    }
+  },
+  "mandate": {
+    "id": "dca_5e6f7a8b",
+    "name": "Weekend ETH",
+    "status": "completed",
+    "statusReason": "cap reached",
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+      "label": "Key main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "priceUsd": 2350.0
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1.0
+    },
+    "schedule": {
+      "everySeconds": 3600,
+      "label": "every hour",
+      "startNow": true,
+      "anchorAt": "2026-09-20T10:00:00Z",
+      "nextRunAt": null,
+      "lastRunAt": "2026-09-20T12:00:00Z"
+    },
+    "budget": {
+      "usdPerRun": 10.0,
+      "capUsd": 25.0,
+      "spentUsd": 25.0,
+      "reservedUsd": 0.0,
+      "remainingUsd": 0.0,
+      "progress": 1.0
+    },
+    "runs": {
+      "done": 3,
+      "max": null,
+      "skipped": 0,
+      "failed": 0,
+      "attempts": 3
+    },
+    "guards": {
+      "maxPriceUsd": null,
+      "approvalThresholdUsd": 100.0,
+      "dailyCapUsd": 1000.0,
+      "slippagePct": null,
+      "buysNeedApproval": false
+    },
+    "acquired": {
+      "amount": {
+        "raw": "12500000000000000",
+        "human": "0.0125",
+        "usd": 29.375
+      },
+      "avgPriceUsd": 2000.0,
+      "currentPriceUsd": 2350.0,
+      "vsAvgPct": 17.5,
+      "unrealizedUsd": 4.375,
+      "gasUsd": 0.06
+    },
+    "history": [
+      {
+        "n": 3,
+        "at": "2026-09-20T12:00:00Z",
+        "manual": false,
+        "status": "filled",
+        "reason": null,
+        "reasonCode": null,
+        "usd": 5.0,
+        "amount": {
+          "raw": "2500000000000000",
+          "human": "0.0025",
+          "usd": 5.875
+        },
+        "priceUsd": 2000.0,
+        "orderId": "ord_000000000004",
+        "txHash": "0x0000000000000000000000000000000000000000000000000000000000feed04",
+        "explorerUrl": "https://basescan.org/tx/0x0000000000000000000000000000000000000000000000000000000000feed04",
+        "gasUsd": 0.02
+      },
+      {
+        "n": 2,
+        "at": "2026-09-20T11:00:00Z",
+        "manual": false,
+        "status": "filled",
+        "reason": null,
+        "reasonCode": null,
+        "usd": 10.0,
+        "amount": {
+          "raw": "5000000000000000",
+          "human": "0.005",
+          "usd": 11.75
+        },
+        "priceUsd": 2000.0,
+        "orderId": "ord_000000000003",
+        "txHash": "0x0000000000000000000000000000000000000000000000000000000000feed03",
+        "explorerUrl": "https://basescan.org/tx/0x0000000000000000000000000000000000000000000000000000000000feed03",
+        "gasUsd": 0.02
+      },
+      {
+        "n": 1,
+        "at": "2026-09-20T10:00:00Z",
+        "manual": false,
+        "status": "filled",
+        "reason": null,
+        "reasonCode": null,
+        "usd": 10.0,
+        "amount": {
+          "raw": "5000000000000000",
+          "human": "0.005",
+          "usd": 11.75
+        },
+        "priceUsd": 2000.0,
+        "orderId": "ord_000000000002",
+        "txHash": "0x0000000000000000000000000000000000000000000000000000000000feed02",
+        "explorerUrl": "https://basescan.org/tx/0x0000000000000000000000000000000000000000000000000000000000feed02",
+        "gasUsd": 0.02
+      }
+    ],
+    "initiator": "manual",
+    "sessionKey": null,
+    "createdAt": "2026-09-20T10:00:00Z",
+    "updatedAt": "2026-09-20T12:00:00Z",
+    "approvedAt": "2026-09-20T10:00:00Z",
+    "expiresAt": null
+  }
+}

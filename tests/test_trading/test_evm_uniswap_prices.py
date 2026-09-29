@@ -8,7 +8,7 @@ import pytest
 from agentos.trading import evm as evm_mod
 from agentos.trading.chains import BASE, NATIVE_ADDRESS, ROBINHOOD
 from agentos.trading.evm import EvmClient, EvmRpcError, EvmTransportError
-from agentos.trading.prices import PriceService
+from agentos.trading.prices import TOKEN_LIST_EMPTY_HOLD_S, PriceService
 from agentos.trading.uniswap import UniswapAuthError, UniswapClient, UniswapError
 from tests.test_trading.fakes import (
     AAPL,
@@ -68,6 +68,8 @@ class TestAbiHelpers:
         receipt = {"status": "0x1", "gasUsed": "0x10", "effectiveGasPrice": "0x2", "logs": []}
         assert evm_mod.receipt_succeeded(receipt)
         assert evm_mod.receipt_gas_wei(receipt) == 32
+        # OP-stack receipts add the L1 data fee on top of gasUsed × price.
+        assert evm_mod.receipt_gas_wei({**receipt, "l1Fee": "0x10"}) == 48
         assert not evm_mod.receipt_succeeded({"status": "0x0"})
         assert not evm_mod.receipt_succeeded(None)
 
@@ -205,6 +207,66 @@ class TestEvmClient:
         chain.receipt(tx_hash, status=1)
         receipt = await client.wait_for_receipt(tx_hash, timeout_s=1, interval_s=0.001)
         assert receipt is not None and evm_mod.receipt_succeeded(receipt)
+
+    async def test_sealed_receipt_replaces_a_provisional_l1_fee(
+        self, client: EvmClient, chain: FakeChain
+    ) -> None:
+        # Base's flashblock preconfirmation: the first receipt carries l1Fee A,
+        # the one in the sealed block l1Fee B.
+        tx_hash = "0x" + "ab" * 32
+        first = chain.receipt(tx_hash, gas_used=100, gas_price=2)
+        first["l1Fee"] = hex(2_957_077_405)
+        chain.sealed[tx_hash] = {**first, "l1Fee": hex(5_063_072_155)}
+        chain.head_step = 1
+        receipt = await client.wait_for_sealed_receipt(tx_hash, timeout_s=1, interval_s=0.001)
+        assert receipt is not None
+        assert evm_mod.receipt_gas_wei(receipt) == 200 + 5_063_072_155
+        # The re-read happened only once the head was past the receipt's block.
+        assert chain.block > int(first["blockNumber"], 16)
+
+    async def test_sealed_receipt_keeps_the_first_when_the_head_stalls(
+        self, client: EvmClient, chain: FakeChain
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        tx_hash = "0x" + "cd" * 32
+        first = chain.receipt(tx_hash, gas_used=100, gas_price=2)
+        first["l1Fee"] = hex(10_543_899_578)
+        chain.sealed[tx_hash] = {**first, "l1Fee": hex(5_637_609_152)}
+        with capture_logs() as logs:
+            receipt = await evm_mod.sealed_receipt(
+                client, tx_hash, first, timeout_s=0.02, interval_s=0.001
+            )
+        assert receipt is first
+        assert evm_mod.receipt_gas_wei(receipt) == 200 + 10_543_899_578
+        assert [e["event"] for e in logs] == ["trading.receipt_provisional"]
+        assert logs[0]["reason"] == "head did not advance"
+
+    async def test_sealed_receipt_skips_chains_without_an_l1_fee(
+        self, client: EvmClient, chain: FakeChain
+    ) -> None:
+        tx_hash = "0x" + "ef" * 32
+        first = chain.receipt(tx_hash)
+        before = len(chain.calls)
+        assert await evm_mod.sealed_receipt(client, tx_hash, first) is first
+        assert len(chain.calls) == before  # not even a head read
+
+    async def test_sealed_receipt_survives_a_failing_re_read(
+        self, client: EvmClient, chain: FakeChain
+    ) -> None:
+        from structlog.testing import capture_logs
+
+        tx_hash = "0x" + "12" * 32
+        first = chain.receipt(tx_hash)
+        first["l1Fee"] = "0x10"
+        chain.head_step = 1
+        chain.fail_methods.add("eth_getTransactionReceipt")
+        with capture_logs() as logs:
+            receipt = await evm_mod.sealed_receipt(
+                client, tx_hash, first, timeout_s=0.02, interval_s=0.001
+            )
+        assert receipt is first
+        assert logs and "re-read failed" in logs[-1]["reason"]
 
 
 class TestUniswapClient:
@@ -442,6 +504,55 @@ class TestPriceService:
     async def test_missing_price_is_none(self, svc: PriceService) -> None:
         assert await svc.price(BASE, OTHER) is None
 
+    async def test_an_unanswered_chunk_is_held_briefly_then_asked_again(
+        self, fake: FakePrices, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 429 was never cached, so every ``prices()`` inside the TTL re-sent the
+        same chunk: the portfolio poll plus desk turns made it a retry loop."""
+        from agentos.trading import prices as prices_mod
+
+        monkeypatch.setattr(prices_mod, "UNAVAILABLE_JITTER_S", 0.0)
+        throttled = {"on": True}
+
+        def limited(request: httpx.Request) -> httpx.Response:
+            if throttled["on"] and request.url.host == "api.dexscreener.com":
+                fake.requests.append(request)
+                return httpx.Response(429)
+            return fake.handle(request)
+
+        clock = {"now": 1_000_000.0}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(limited)) as http:
+            svc = PriceService(http=http, ttl_s=20, now=lambda: clock["now"])
+            first = (await svc.prices(BASE, [USDC]))[USDC]
+            assert first.unavailable and first.price_usd is None
+            assert first.retry_in_s == prices_mod.UNAVAILABLE_HOLD_S
+            asked = len(fake.requests)
+            # Inside the hold: the same miss, and nothing is sent.
+            clock["now"] += 1.0
+            held = (await svc.prices(BASE, [USDC]))[USDC]
+            assert held.unavailable and held.retry_in_s == pytest.approx(2.0)
+            assert len(fake.requests) == asked
+            # After it: asked again, and the answer is cached for the full TTL.
+            throttled["on"] = False
+            clock["now"] += 2.5
+            again = (await svc.prices(BASE, [USDC]))[USDC]
+            assert again.price_usd == 1.0 and not again.unavailable
+            assert len(fake.requests) == asked + 1
+            clock["now"] += 10
+            assert (await svc.prices(BASE, [USDC]))[USDC].price_usd == 1.0
+            assert len(fake.requests) == asked + 1
+
+    async def test_the_hold_is_jittered_once_per_chunk(self) -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(503))
+        ) as http:
+            got = await PriceService(http=http).prices(BASE, [USDC, WETH])
+        holds = {info.retry_in_s for info in got.values()}
+        # One hold for the chunk (its tokens come back together), within the jitter.
+        assert len(holds) == 1 and all(info.unavailable for info in got.values())
+        (hold,) = holds
+        assert 2.0 <= hold <= 4.0
+
     async def test_native_of_an_eth_chain_borrows_base_eth(
         self, svc: PriceService, fake: FakePrices
     ) -> None:
@@ -472,6 +583,23 @@ class TestPriceService:
         assert (await svc.find_by_symbol(BASE, "eth"))[0].native is True
         assert await svc.known_token(BASE, USDC) is not None
         assert await svc.known_token(BASE, OTHER) is None
+
+    async def test_failed_token_list_download_is_retried_soon(
+        self, svc: PriceService, fake: FakePrices
+    ) -> None:
+        # A gateway that booted while CoinGecko was down answered "Unknown token
+        # symbol 'BONER' on Robinhood Chain" for a whole day: the empty list had
+        # been cached for TOKEN_LIST_TTL_S. An empty download is held briefly.
+        saved = fake.lists.pop("robinhood")
+        assert await svc.token_list(ROBINHOOD) == {}
+        calls = len(fake.requests)
+        assert await svc.token_list(ROBINHOOD) == {}
+        assert len(fake.requests) == calls  # held: no hammering inside the hold
+        fake.lists["robinhood"] = saved
+        svc.clock["now"] += TOKEN_LIST_EMPTY_HOLD_S + 1  # type: ignore[attr-defined]
+        tokens = await svc.token_list(ROBINHOOD)
+        assert AAPL in tokens
+        assert len(fake.requests) == calls + 1
 
     async def test_search(self, svc: PriceService) -> None:
         rows = await svc.search(ROBINHOOD, "AAPL")

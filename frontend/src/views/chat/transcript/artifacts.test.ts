@@ -31,6 +31,8 @@ import {
   type ArtifactRendererDeps,
 } from './artifacts'
 import { CHART_ARTIFACT_MIME } from './chart'
+import { DCA_ARTIFACT_MIME } from './dca'
+import { LP_ARTIFACT_MIME } from './lp'
 
 /* ── artifactMime / artifactName (chat.js:7523-7529) ────────────────────── */
 
@@ -113,6 +115,18 @@ describe('artifactCategory (parity chat.js:7538)', () => {
     )
     expect(artifactCategory({ mime: 'application/json', name: 'x.json' } as never)).toBe('data')
   })
+  it('classifies the AgentOS LP mime as "lp" (no legacy counterpart)', () => {
+    expect(artifactCategory({ mime: LP_ARTIFACT_MIME, name: 'pepe.lp.json' } as never)).toBe('lp')
+    expect(
+      artifactCategory({ mime: `${LP_ARTIFACT_MIME}; charset=utf-8`, name: 'x.json' } as never),
+    ).toBe('lp')
+  })
+  it('classifies the AgentOS DCA mime as "dca" (no legacy counterpart)', () => {
+    expect(artifactCategory({ mime: DCA_ARTIFACT_MIME, name: 'mandate.json' } as never)).toBe('dca')
+    expect(
+      artifactCategory({ mime: `${DCA_ARTIFACT_MIME}; charset=utf-8`, name: 'x.json' } as never),
+    ).toBe('dca')
+  })
 })
 
 /* ── artifactCategoryLabel (chat.js:7551) ───────────────────────────────── */
@@ -124,6 +138,8 @@ describe('artifactCategoryLabel (parity chat.js:7551)', () => {
     expect(artifactCategoryLabel('code')).toBe('code')
     expect(artifactCategoryLabel('audio')).toBe('audio')
     expect(artifactCategoryLabel('chart')).toBe('chart')
+    expect(artifactCategoryLabel('lp')).toBe('lp')
+    expect(artifactCategoryLabel('dca')).toBe('dca')
   })
   it('defaults unknown / visual / file categories to "file"', () => {
     expect(artifactCategoryLabel('visual')).toBe('file')
@@ -326,6 +342,91 @@ describe('createArtifactRenderer chart artifacts', () => {
 
     expect(() => createArtifactRenderer(deps).appendArtifact(CHART_ARTIFACT)).not.toThrow()
     expect(body.querySelector('[data-chart-src]')).not.toBeNull()
+  })
+})
+
+/* ── LP card placeholder + mounter handoff (AgentOS-native) ─────────────── */
+
+const LP_ARTIFACT: Artifact = {
+  id: 'lp-1',
+  name: 'pepe.position.json',
+  mime: LP_ARTIFACT_MIME,
+  download_url: '/api/v1/artifacts/lp-1',
+}
+
+describe('createArtifactRenderer LP artifacts', () => {
+  it('renders a mount placeholder carrying the hooks the LP mounter looks for', () => {
+    const { deps } = chartRendererDeps()
+    const container = document.createElement('div')
+    container.innerHTML = createArtifactRenderer(deps).renderArtifacts([LP_ARTIFACT])
+
+    const host = container.querySelector<HTMLElement>('[data-lp-src]')
+    expect(host).not.toBeNull()
+    expect(host?.dataset.lpSrc).toBe(
+      '/api/v1/artifacts/lp-1?sessionKey=agent%3Amain%3Awebchat%3Atest&token=tok',
+    )
+    expect(host?.dataset.artifactCategory).toBe('lp')
+    expect(host?.querySelector('.msg-artifact-lp__body')).not.toBeNull()
+    expect(host?.querySelector('.msg-artifact-lp__status')).toHaveTextContent('Loading liquidity…')
+    // Its own group, never the file-chip row, and never a download target: the
+    // card has buttons and links of its own.
+    expect(container.querySelector('.msg-artifact-lp-group')).not.toBeNull()
+    expect(container.querySelector('.msg-artifact-files')).toBeNull()
+    expect(container.querySelector('[data-artifact-download]')).toBeNull()
+  })
+
+  it('hands a streamed LP artifact to the mounter as soon as it lands', () => {
+    const mountCharts = vi.fn()
+    const { deps, body } = chartRendererDeps({ mountCharts })
+
+    createArtifactRenderer(deps).appendArtifact(LP_ARTIFACT)
+
+    expect(mountCharts).toHaveBeenCalledWith(body)
+    expect(body.querySelector('[data-lp-src]')).not.toBeNull()
+  })
+})
+
+/* ── DCA card placeholder + mounter handoff (AgentOS-native) ────────────── */
+
+const DCA_ARTIFACT: Artifact = {
+  id: 'dca-1',
+  name: 'mandate-eth-20260928T054800Z.json',
+  mime: DCA_ARTIFACT_MIME,
+  download_url: '/api/v1/artifacts/dca-1',
+}
+
+describe('createArtifactRenderer DCA artifacts', () => {
+  it('renders a mount placeholder carrying the hooks the DCA mounter looks for', () => {
+    const { deps } = chartRendererDeps()
+    const container = document.createElement('div')
+    container.innerHTML = createArtifactRenderer(deps).renderArtifacts([DCA_ARTIFACT, LP_ARTIFACT])
+
+    const host = container.querySelector<HTMLElement>('[data-dca-src]')
+    expect(host).not.toBeNull()
+    expect(host?.classList.contains('msg-artifact-dca')).toBe(true)
+    expect(host?.dataset.dcaSrc).toBe(
+      '/api/v1/artifacts/dca-1?sessionKey=agent%3Amain%3Awebchat%3Atest&token=tok',
+    )
+    expect(host?.dataset.artifactCategory).toBe('dca')
+    expect(host?.querySelector('.msg-artifact-dca__body')).not.toBeNull()
+    expect(host?.querySelector('.msg-artifact-dca__status')).toHaveTextContent(
+      'Loading DCA mandate…',
+    )
+    // Its own group, apart from the LP group next to it; never a download target.
+    expect(container.querySelector('.msg-artifact-dca-group [data-dca-src]')).toBe(host)
+    expect(container.querySelector('.msg-artifact-dca-group [data-lp-src]')).toBeNull()
+    expect(container.querySelector('.msg-artifact-files')).toBeNull()
+    expect(container.querySelector('[data-artifact-download]')).toBeNull()
+  })
+
+  it('hands a streamed DCA artifact to the mounter as soon as it lands', () => {
+    const mountCharts = vi.fn()
+    const { deps, body } = chartRendererDeps({ mountCharts })
+
+    createArtifactRenderer(deps).appendArtifact(DCA_ARTIFACT)
+
+    expect(mountCharts).toHaveBeenCalledWith(body)
+    expect(body.querySelector('[data-dca-src]')).not.toBeNull()
   })
 })
 

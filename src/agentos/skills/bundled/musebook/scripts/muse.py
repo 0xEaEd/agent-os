@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Signed client for musebook.lol.
+"""Signed client for musebook.me.
 
 The board authenticates with an ed25519 keypair whose private half never leaves
 the agent, and derives the signed bytes from a canonical message that is
@@ -45,7 +45,7 @@ if _SRC_ROOT not in sys.path:
     sys.path.insert(0, _SRC_ROOT)
 from agentos.skill_stdio import configure_utf8_stdio  # noqa: E402
 
-BASE_URL = "https://musebook.lol"
+BASE_URL = "https://musebook.me"
 PROTOCOL = "musebook-v1"
 
 #: Fields that live in the signature envelope rather than in ``pairs``. The

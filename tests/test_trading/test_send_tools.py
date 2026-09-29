@@ -170,6 +170,19 @@ class TestDecoder:
             },
         )
         assert mined["status"] == "success" and mined["gasWei"] == str(21_000 * 2)
+        assert mined["l1FeeWei"] is None
+        # An OP-stack receipt: what the sender paid includes the L1 data fee.
+        op = tx_summary(
+            {"hash": "0xab"},
+            {
+                "status": "0x1",
+                "blockNumber": "0x10",
+                "gasUsed": "0x5208",
+                "effectiveGasPrice": "0x2",
+                "l1Fee": "0x64",
+            },
+        )
+        assert op["gasWei"] == str(21_000 * 2 + 100) and op["l1FeeWei"] == "100"
         reverted = tx_summary({}, {"status": "0x0", "blockNumber": "0x10"})
         assert reverted["status"] == "reverted"
 
@@ -351,6 +364,36 @@ class TestSend:
         base_chain.revert_calls = False
         orders = await _send(service, recipients=[{"to": OTHER, "amount": "1"}])
         assert orders[0]["status"] == "confirmed"
+
+    async def test_send_books_the_sealed_l1_fee_not_the_provisional_one(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        # Live on Base the first receipt a node serves is a flashblock
+        # preconfirmation whose l1Fee differs from the sealed block's; gas is
+        # booked from the receipt read once the head is past its block.
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_send_effects(base_chain, wallet)
+        wired = base_chain.on_send
+        assert wired is not None
+        provisional, final = 2_957_077_405, 5_063_072_155
+
+        def on_send(raw: str) -> str:
+            tx_hash = wired(raw)
+            receipt = base_chain.receipts[tx_hash.lower()]
+            receipt["l1Fee"] = hex(provisional)
+            base_chain.sealed[tx_hash.lower()] = {**receipt, "l1Fee": hex(final)}
+            base_chain.head_step = 1
+            return tx_hash
+
+        base_chain.on_send = on_send
+        orders = await _send(service, token="ETH", recipients=[{"to": OTHER, "amount": "0.01"}])
+        assert orders[0]["status"] == "confirmed", orders[0]
+        row = service.ledger.get_order(orders[0]["orderId"])
+        assert row is not None and row["gas_wei"] == str(21_000 * 10**8 + final)
+        entry = service.ledger.list_entries(wallet=wallet.lower(), kind="withdraw")[0]
+        # $2,000 ETH in the fakes: the gas figure is the sealed one.
+        assert entry["gas_usd"] == pytest.approx((21_000 * 10**8 + final) / 1e18 * 2_000)
 
     async def test_reverted_send_is_failed_with_its_gas(
         self, funded_service: TradingService, base_chain: FakeChain

@@ -37,6 +37,7 @@ KNOWN_SELECTORS: dict[str, tuple[str, list[str] | None]] = {
     "0x30f28b7a": ("permitTransferFrom", None),  # Permit2
     "0x36c78516": ("transferFrom", None),  # Permit2 batch transferFrom
     "0x0d58b1db": ("multiSend", None),  # Gnosis MultiSend
+    "0xdd46508f": ("modifyLiquidities", None),  # Uniswap V4 PositionManager
 }
 
 # Names for spenders the desk knows: a revoke list should say "Permit2", not 0x0000…ba3.
@@ -48,6 +49,9 @@ KNOWN_SPENDERS: dict[str, str] = {
     # What the AgentOS Aggregator's approvals name (0x AllowanceHolder), seen live 2026-09-20.
     "0x0000000000001ff3684f28c67538d4d072c22734": "AgentOS Aggregator (0x AllowanceHolder)",
     "0x6131b5fae19ea4f9d964eac0408e4408b66337b5": "KyberSwap MetaAggregationRouter",
+    # The V4 PositionManager LP writes approve through Permit2 (docs/lp-write.md).
+    "0x7c5f5a4bbd8fd63184577525326123b519429bdc": "Uniswap V4 PositionManager (Base)",
+    "0x58daec3116aae6d93017baaea7749052e8a04fa7": "Uniswap V4 PositionManager (Robinhood Chain)",
 }
 
 
@@ -168,6 +172,10 @@ def tx_summary(tx: dict[str, Any] | None, receipt: dict[str, Any] | None) -> dic
         status = "success" if decode_uint(str(status_hex or "0x0")) == 1 else "reverted"
     gas_used = decode_uint(str(receipt.get("gasUsed") or "0x0")) if receipt else 0
     gas_price = decode_uint(str(receipt.get("effectiveGasPrice") or tx.get("gasPrice") or "0x0"))
+    # OP-stack receipts (Base, Robinhood Chain) carry the L1 data fee on top
+    # of ``gasUsed × price``; what the sender paid is the sum of the two.
+    l1_fee = decode_uint(str(receipt.get("l1Fee") or "0x0")) if receipt else 0
+    gas_wei = gas_used * gas_price + l1_fee if gas_used and gas_price else 0
     return {
         "hash": str(tx.get("hash") or receipt.get("transactionHash") or "").lower() or None,
         "from": str(tx.get("from") or receipt.get("from") or "").lower() or None,
@@ -178,5 +186,6 @@ def tx_summary(tx: dict[str, Any] | None, receipt: dict[str, Any] | None) -> dic
         "status": status,
         "gasUsed": gas_used or None,
         "gasPriceWei": str(gas_price) if gas_price else None,
-        "gasWei": str(gas_used * gas_price) if gas_used and gas_price else None,
+        "l1FeeWei": str(l1_fee) if l1_fee else None,
+        "gasWei": str(gas_wei) if gas_wei else None,
     }

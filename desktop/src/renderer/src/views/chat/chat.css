@@ -1042,7 +1042,9 @@
 .msg-artifact-gallery,
 .msg-artifact-files,
 .msg-artifact-charts,
-.msg-artifact-cards-group {
+.msg-artifact-cards-group,
+.msg-artifact-lp-group,
+.msg-artifact-dca-group {
   display: grid;
   gap: 8px;
 }
@@ -1398,6 +1400,1848 @@
 }
 .msg-artifact-audio {
   width: 100%;
+}
+/* LP cards (Uniswap V4 read-outs). The shared renderer (frontend lp.ts) emits
+   `lp-card*` classes and `data-lp-kind` / `data-lp-status` / `data-lp-chain`
+   hooks on `.lp-card` (the `.msg-artifact-lp` host only carries
+   `data-lp-host`); the console draws them as a soft card with stat tiles. Here they are
+   desk instruments instead (desk/desk.css brief): an elevated plate with a
+   hairline and a 3 px status rail, JetBrains Mono tabular for every figure,
+   11px small-caps micro labels, facts as hairline-ruled rows rather than
+   tiles, and lime rationed to what is live — the active liquidity bar and the
+   "now" pin. Status is a stamp with its word, never colour alone. Token
+   symbols are never case-transformed: a symbol is data, and "boar" is not
+   "BOAR". */
+.msg-artifact-lp-group {
+  max-width: min(38rem, 100%);
+}
+.msg-artifact-lp {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.msg-artifact-lp__body:empty {
+  display: none;
+}
+.msg-artifact-lp__status {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.msg-artifact-lp__status[hidden] {
+  display: none;
+}
+.lp-card {
+  --lp-rail: var(--info);
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px 8px 15px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--elevated) 92%, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--hairline),
+    inset 3px 0 0 var(--lp-rail);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+}
+.lp-card[data-lp-status='in-range'] {
+  --lp-rail: var(--ok);
+}
+.lp-card[data-lp-status='above-range'],
+.lp-card[data-lp-status='below-range'] {
+  --lp-rail: var(--warn);
+}
+.lp-card[data-lp-status='closed'],
+.lp-card[data-lp-status='unknown'],
+.lp-card[data-lp-kind='positions'] {
+  --lp-rail: var(--dim);
+}
+.lp-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.lp-card__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.lp-card__pair {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.lp-card__slash {
+  color: var(--dim);
+}
+.lp-card__meta {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  color: var(--muted-foreground);
+}
+.lp-card__head-end {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+.lp-pill,
+.lp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.lp-pill {
+  --lp-tone: var(--muted-foreground);
+  color: var(--lp-tone);
+  background: color-mix(in srgb, var(--lp-tone) 12%, transparent);
+}
+.lp-pill[data-lp-status='in-range'] {
+  --lp-tone: var(--ok);
+}
+.lp-pill[data-lp-status='above-range'],
+.lp-pill[data-lp-status='below-range'] {
+  --lp-tone: var(--warn);
+}
+.lp-pill__dot {
+  font-size: 7px;
+}
+.lp-badge {
+  color: var(--warn);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+  cursor: default;
+}
+/* Facts, not tiles: label left, figure right, one hairline under each. */
+.lp-card__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0 18px;
+}
+/* The positions strip (count · out of range · value · fees): four across when
+   the strip is 700px or wider, else a 2×2 grid, never three and a lone fourth.
+   The track minimum flips from a quarter to a half of the strip at 700px. */
+.lp-card__stats.lp-totals {
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(clamp(calc(25% - 18px), calc((700px - 100%) * 999), calc(50% - 18px)), 1fr)
+  );
+}
+.lp-stat,
+.lp-card__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  min-height: 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+.lp-card__row {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  padding-bottom: 2px;
+}
+.lp-stat__label,
+.lp-card__row-label,
+.lp-card__section-title,
+.lp-hero__label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.lp-card__row-label {
+  min-width: 76px;
+}
+.lp-stat__value,
+.lp-card__row-value,
+.lp-amount,
+.lp-ranges__band,
+.lp-ranges__share,
+.lp-row__value,
+.lp-range__row {
+  font-family: var(--font-mono);
+}
+.lp-stat__value {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp-stat__value[data-lp-tone='warn'] {
+  color: var(--warn);
+}
+.lp-card [data-lp-no-price] {
+  color: var(--dim);
+  cursor: help;
+}
+.lp-amount__symbol,
+.lp-amount__usd,
+.lp-sep {
+  color: var(--muted-foreground);
+}
+.lp-safety__lock {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.lp-safety__lock::before {
+  content: '◌ ';
+}
+.lp-safety__lock[data-lp-locked='true'] {
+  color: var(--ok);
+}
+.lp-safety__lock[data-lp-locked='true']::before {
+  content: '● ';
+}
+.lp-safety__lock[data-lp-locked='false'] {
+  color: var(--danger);
+}
+.lp-safety__lock[data-lp-locked='false']::before {
+  content: '○ ';
+}
+.lp-safety__note {
+  flex-basis: 100%;
+  padding-left: 86px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--muted-foreground);
+}
+.lp-card__ranges {
+  display: grid;
+  gap: 4px;
+}
+.lp-card__section-title {
+  margin: 2px 0 0;
+}
+.lp-ranges {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lp-ranges__row {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) minmax(3rem, 1fr) 48px minmax(0, 88px);
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 11px;
+}
+.lp-ranges__meter {
+  height: 3px;
+  background: var(--hairline);
+}
+.lp-ranges__fill {
+  display: block;
+  height: 100%;
+  background: var(--info);
+}
+.lp-ranges__share {
+  text-align: right;
+}
+.lp-ranges__owner {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+}
+.lp-card__empty-line,
+.lp-card__empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.lp-card__empty {
+  padding: 10px 0;
+}
+/* A closed position: its figures are gone, so one muted line says when it was last seen. */
+.lp-card__closed-note {
+  margin: 0;
+  padding: 6px 0 2px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+/* Distribution chart. Bars are info-tinted; the one live segment is lime. */
+.lp-chart {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+.lp-chart__plot {
+  position: relative;
+  padding-top: 18px;
+}
+.lp-chart__svg {
+  display: block;
+  width: 100%;
+  height: 7rem;
+  overflow: visible;
+}
+.lp-chart__baseline {
+  stroke: var(--border);
+  vector-effect: non-scaling-stroke;
+}
+.lp-chart__hit {
+  fill: transparent;
+}
+.lp-chart__fill {
+  fill: color-mix(in srgb, var(--info) 38%, transparent);
+}
+.lp-chart__bar[data-hover='true'] .lp-chart__fill {
+  fill: color-mix(in srgb, var(--info) 70%, transparent);
+}
+.lp-chart__bar[data-active='true'] .lp-chart__fill {
+  fill: var(--primary);
+}
+.lp-chart__bar {
+  outline: none;
+}
+.lp-chart__bar:focus-visible .lp-chart__fill {
+  stroke: var(--ring);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.lp-chart__now-line {
+  stroke: var(--primary);
+  stroke-width: 1;
+  pointer-events: none;
+}
+.lp-chart__now,
+.lp-chart__tick,
+.lp-range__now {
+  position: absolute;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.lp-chart__now[data-align='start'],
+.lp-chart__tick[data-align='start'],
+.lp-range__now[data-align='start'],
+.lp-chart__tooltip[data-align='start'] {
+  transform: none;
+}
+.lp-chart__now[data-align='end'],
+.lp-chart__tick[data-align='end'],
+.lp-range__now[data-align='end'],
+.lp-chart__tooltip[data-align='end'] {
+  transform: translateX(-100%);
+}
+.lp-chart__now {
+  top: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--primary);
+}
+.lp-chart__axis {
+  position: relative;
+  height: 14px;
+}
+.lp-chart__tick {
+  top: 0;
+  font-size: 10px;
+  color: var(--dim);
+}
+/* A tick that would touch its neighbour at the measured width (visibleTicks). */
+.lp-chart__tick[data-lp-hidden] {
+  visibility: hidden;
+}
+.lp-chart__caption {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+.lp-chart__tooltip {
+  position: absolute;
+  top: 22px;
+  z-index: 2;
+  display: grid;
+  gap: 1px;
+  padding: 6px 9px;
+  border-radius: var(--radius-control);
+  background: var(--popover);
+  box-shadow:
+    0 0 0 1px var(--border),
+    0 8px 20px rgba(0, 0, 0, 0.3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.lp-chart__tooltip[hidden] {
+  display: none;
+}
+.lp-chart__tooltip-line {
+  color: var(--muted-foreground);
+}
+.lp-chart__tooltip-line[data-lp-line='range'] {
+  font-weight: 600;
+  color: var(--foreground);
+}
+/* Position: two figures, a thin range rule with the pin, the legs. */
+.lp-card__hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 22px;
+}
+.lp-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.lp-hero__value {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* Unclaimed fees: green only when there are some; "$0.00" stays muted. */
+.lp-hero[data-lp-hero='fees'] .lp-hero__value[data-lp-fees='positive'] {
+  color: var(--ok);
+}
+.lp-hero[data-lp-hero='fees'] .lp-hero__value[data-lp-fees='zero'] {
+  color: var(--muted-foreground);
+}
+.lp-range__row {
+  display: grid;
+  grid-template-columns: auto minmax(8rem, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 16px 0 18px;
+  font-size: 11px;
+}
+.lp-range__axis {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.lp-range__track {
+  position: relative;
+  height: 4px;
+  background: var(--hairline);
+}
+.lp-range__band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--lp-rail) 55%, transparent);
+}
+.lp-range__pin {
+  position: absolute;
+  top: -5px;
+  width: 2px;
+  height: 14px;
+  background: var(--primary);
+  transform: translateX(-50%);
+}
+.lp-card[data-lp-status='above-range'] .lp-range__pin,
+.lp-card[data-lp-status='below-range'] .lp-range__pin {
+  background: var(--warn);
+}
+.lp-range__pin[data-pinned] {
+  opacity: 0.5;
+}
+/* The range's bounds ride the band's own edges, above the rule. */
+.lp-range__lower,
+.lp-range__upper {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  font-size: 10.5px;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.lp-range__upper {
+  transform: translateX(-100%);
+}
+.lp-range__now {
+  top: calc(100% + 6px);
+  font-size: 10.5px;
+  color: var(--foreground);
+}
+.lp-range__now[data-outside] {
+  font-weight: 600;
+  color: var(--warn);
+}
+/* Measured by the mounter (layoutLpCard): a band too narrow for both bounds
+   lifts the upper one a line; a reading too long for the track stacks its
+   distance and side under it. Each adds the line it takes to the row. */
+.lp-range[data-lp-bounds='stacked'] .lp-range__row {
+  padding-top: 30px;
+}
+.lp-range[data-lp-bounds='stacked'] .lp-range__upper {
+  bottom: calc(100% + 19px);
+}
+.lp-range[data-lp-now-wrap] .lp-range__row {
+  padding-bottom: 32px;
+}
+.lp-range[data-lp-now-wrap] .lp-range__now-side {
+  display: block;
+}
+.lp-range__now[data-align='center'] {
+  text-align: center;
+}
+.lp-range__now[data-align='end'] {
+  text-align: right;
+}
+.lp-card__amounts {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.lp-card__amounts--fees {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+/* Positions: a book, not a list of cards — 26px lines, hairline rules. The
+   rows share the book's columns (subgrid), each sized to its widest cell, so
+   nothing that carries meaning is cut; only the owner may ellipsize. A row is
+   two lines — status · pair · value over chain · owner · fees — until the
+   mounter measures the card at 760px or wider (LP_DENSE_MIN_PX in lp.ts) and
+   stamps `.lp-card[data-lp-layout='dense']`: then one line, six columns.
+   Scoped to the card so `.msg-body :is(ul, ol)` / `li + li` cannot indent
+   the book or open gaps between its rows. */
+.lp-card .lp-rows {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  column-gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lp-card[data-lp-layout='dense'] .lp-rows {
+  grid-template-columns:
+    max-content minmax(max-content, 1fr) max-content minmax(0, max-content)
+    max-content max-content;
+}
+.lp-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  grid-template-rows: 26px 22px;
+  align-items: center;
+  min-height: 26px;
+  border-bottom: 1px solid var(--hairline);
+}
+.lp-card .lp-row + .lp-row {
+  margin-top: 0;
+}
+.lp-card[data-lp-layout='dense'] .lp-row {
+  grid-template-rows: 26px;
+}
+.lp-card[data-lp-layout='dense'] .lp-row__chain {
+  grid-area: 1 / 3;
+}
+.lp-card[data-lp-layout='dense'] .lp-row__wallet {
+  grid-area: 1 / 4;
+}
+.lp-card[data-lp-layout='dense'] .lp-row__fees {
+  grid-area: 1 / 5;
+}
+.lp-card[data-lp-layout='dense'] .lp-row__value {
+  grid-area: 1 / 6;
+}
+.lp-row .lp-pill {
+  justify-self: start;
+  height: 16px;
+  padding: 0 6px;
+  font-size: 9.5px;
+}
+.lp-row__pair {
+  grid-area: 1 / 2;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.lp-row__fee {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.lp-row__chain {
+  grid-area: 2 / 1;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.lp-row__wallet {
+  grid-area: 2 / 2;
+  justify-self: start;
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.lp-row__wallet[data-lp-external] {
+  font-style: italic;
+}
+/* Two classes beat `.msg-body a`; the arrow only where there is a link. */
+.msg-body .lp-row__wallet[data-lp-link] {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+.msg-body .lp-row__wallet[data-lp-link]:hover {
+  color: var(--foreground);
+}
+.lp-row__wallet[data-lp-link]::after {
+  content: ' ↗';
+  color: var(--dim);
+}
+.lp-row__status {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.lp-row__distance {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.lp-row__fees {
+  grid-area: 2 / 3;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.lp-row__fees[data-lp-fees='positive'] {
+  color: var(--ok);
+}
+.lp-row__value {
+  grid-area: 1 / 3;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+.lp-row__no-price {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+/* Narrow: the mounter measured the card under 440px (LP_NARROW_MAX_PX in
+   lp.ts — the desk with its Book panel open). Status, pair and value no
+   longer share a line without the pair being cut, so each row takes three:
+   status · distance | value, pair · fee tier | fees, chain | owner. Rows
+   drop the book's shared columns (each sizes its own) and the pair may wrap
+   instead of clipping; the owner is still the only thing that ellipsizes. */
+.lp-card[data-lp-layout='narrow'] .lp-rows {
+  grid-template-columns: minmax(0, 1fr);
+}
+.lp-card[data-lp-layout='narrow'] .lp-row {
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  grid-template-rows: 24px minmax(20px, auto) 20px;
+  column-gap: 10px;
+  padding-bottom: 2px;
+}
+.lp-card[data-lp-layout='narrow'] .lp-row__status {
+  grid-area: 1 / 1 / 2 / 3;
+}
+.lp-card[data-lp-layout='narrow'] .lp-row__value {
+  grid-area: 1 / 3;
+}
+.lp-card[data-lp-layout='narrow'] .lp-row__pair {
+  grid-area: 2 / 1 / 3 / 3;
+  flex-wrap: wrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.lp-card[data-lp-layout='narrow'] .lp-row__fees {
+  grid-area: 2 / 3;
+}
+.lp-card[data-lp-layout='narrow'] .lp-row__chain {
+  grid-area: 3 / 1;
+}
+.lp-card[data-lp-layout='narrow'] .lp-row__wallet {
+  grid-area: 3 / 2 / 4 / 4;
+}
+/* Facts one per line (label left, figure right): four across or 2×2 would
+   leave a figure ~150px beside its label. */
+.lp-card[data-lp-layout='narrow'] .lp-card__stats,
+.lp-card[data-lp-layout='narrow'] .lp-card__stats.lp-totals {
+  grid-template-columns: minmax(0, 1fr);
+}
+.lp-card[data-lp-layout='narrow'] .lp-stat__value {
+  font-size: 11px;
+}
+.lp-card__warnings {
+  margin: 0;
+  padding-left: 14px;
+  font-size: 11px;
+  color: var(--warn);
+}
+.lp-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.lp-card__actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-right: -4px;
+}
+/* Two classes: `.msg-body a` would otherwise underline the explorer link in
+   lime. */
+.msg-body .lp-card__action {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  background: none;
+  font: inherit;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  cursor: default;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+.msg-body .lp-card__action:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.msg-body .lp-card__action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.lp-card__copy .lp-card__action-label {
+  color: var(--dim);
+}
+.msg-body .lp-card__copy[data-lp-copied='true'] {
+  color: var(--ok);
+}
+.msg-body .lp-card__copy[data-lp-copied='failed'] {
+  color: var(--danger);
+}
+/* ↻ re-reads the card in place: the old figures stay, dimmed, until the new
+   ones land, so the card never collapses to a spinner. */
+.lp-card__refresh .lp-card__action-glyph {
+  display: inline-block;
+}
+.lp-card[data-lp-refreshing] > :not(.lp-card__foot) {
+  opacity: 0.45;
+  transition: opacity 160ms ease-out;
+}
+.lp-card[data-lp-refreshing] .lp-card__refresh .lp-card__action-glyph {
+  animation: lp-refresh-spin 900ms linear infinite;
+}
+@keyframes lp-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-card[data-lp-refreshing] .lp-card__refresh .lp-card__action-glyph {
+    animation: none;
+  }
+}
+.lp-card__refresh-error {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+/* Collect fees / Remove… on your own positions (desk only: the renderer
+   draws them only for an operator connection). Ghost buttons in the same
+   language as copy/explorer; the one that parks an order turns into an amber
+   "awaiting approval" chip until the order settles. */
+.lp-writes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.lp-card__writes {
+  padding-top: 2px;
+}
+.lp-card .lp-row__writes {
+  grid-column: 1 / -1;
+  padding: 0 0 4px;
+}
+.msg-body .lp-writes .lp-card__action {
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--foreground);
+}
+.msg-body .lp-writes .lp-card__action:disabled {
+  color: var(--dim);
+  background: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hairline) 60%, transparent);
+}
+.msg-body .lp-writes .lp-card__action[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.lp-writes__choice {
+  display: inline-flex;
+  gap: 2px;
+}
+.lp-writes__choice[hidden] {
+  display: none;
+}
+.msg-body .lp-writes .lp-card__action[data-lp-tone='warn'] {
+  color: var(--warn);
+}
+.lp-writes__state {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  max-width: 100%;
+  padding: 0 7px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.lp-writes__state[hidden] {
+  display: none;
+}
+.lp-writes[data-lp-write='awaiting'] .lp-writes__state {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.lp-writes__error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 11px;
+  color: var(--danger);
+}
+.lp-writes__error[hidden] {
+  display: none;
+}
+
+/* DCA mandate cards (docs/dca.md). The shared renderer (frontend dca.ts)
+   emits `dca-card*` classes and stamps `data-dca-kind` / `data-dca-status` /
+   `data-dca-layout` / `data-dca-busy` on `.dca-card` (the `.msg-artifact-dca`
+   host only carries `data-dca-host`). The console draws a soft card; here it
+   is a desk instrument, a sibling of the LP plate: hairline plate, a 3 px
+   rail whose colour IS the mandate's state (amber breathing while it waits
+   for you, green while it runs, grey paused, blue done, faded when it is
+   over), every figure in tabular mono, micro labels in small caps, and a
+   buys chart drawn in the rail's colour. Status is always a word too, never
+   colour alone. Token symbols are data and keep their case. */
+.msg-artifact-dca-group {
+  max-width: min(38rem, 100%);
+}
+.msg-artifact-dca {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.msg-artifact-dca__body:empty {
+  display: none;
+}
+.msg-artifact-dca__status {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.msg-artifact-dca__status[hidden] {
+  display: none;
+}
+.dca-card {
+  --dca-rail: var(--dim);
+  position: relative;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px 8px 16px;
+  border-radius: var(--radius);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--dca-rail) 7%, transparent), transparent 38%),
+    color-mix(in srgb, var(--elevated) 92%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+}
+/* The rail is its own layer so it can breathe without repainting the plate. */
+.dca-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  border-radius: var(--radius) 0 0 var(--radius);
+  background: var(--dca-rail);
+}
+.dca-card[data-dca-status='awaiting_approval'] {
+  --dca-rail: var(--warn);
+}
+.dca-card[data-dca-status='active'] {
+  --dca-rail: var(--ok);
+}
+.dca-card[data-dca-status='paused'] {
+  --dca-rail: var(--muted-foreground);
+}
+.dca-card[data-dca-status='completed'] {
+  --dca-rail: var(--info);
+}
+.dca-card[data-dca-status='stopped'],
+.dca-card[data-dca-status='rejected'],
+.dca-card[data-dca-status='expired'],
+.dca-card[data-dca-kind='mandates'] {
+  --dca-rail: var(--dim);
+}
+/* Over: the figures stay readable, but the plate steps back. */
+.dca-card[data-dca-status='stopped'] > :not(.dca-card__foot),
+.dca-card[data-dca-status='rejected'] > :not(.dca-card__foot),
+.dca-card[data-dca-status='expired'] > :not(.dca-card__foot) {
+  opacity: 0.72;
+}
+/* Waiting on you: the rail breathes, softly, until you decide. */
+.dca-card[data-dca-status='awaiting_approval']::before {
+  animation: dca-rail-breathe 2.4s ease-in-out infinite;
+}
+@keyframes dca-rail-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--warn) 45%, transparent);
+  }
+}
+.dca-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.dca-card__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.dca-card__pair,
+.dca-row__pair {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.dca-pair__arrow {
+  color: var(--dim);
+}
+.dca-pair__quote {
+  color: var(--muted-foreground);
+}
+.dca-chain,
+.dca-card__list-title,
+.dca-stat__label,
+.dca-runs__title {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.dca-card__name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.dca-card__count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.dca-pill {
+  --dca-tone: var(--muted-foreground);
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--dca-tone);
+  background: color-mix(in srgb, var(--dca-tone) 12%, transparent);
+}
+.dca-pill[data-status='awaiting_approval'] {
+  --dca-tone: var(--warn);
+}
+.dca-pill[data-status='active'] {
+  --dca-tone: var(--ok);
+}
+.dca-pill[data-status='completed'] {
+  --dca-tone: var(--info);
+}
+.dca-pill[data-status='stopped'],
+.dca-pill[data-status='rejected'],
+.dca-pill[data-status='expired'] {
+  --dca-tone: var(--dim);
+}
+.dca-pill__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+.dca-pill[data-status='active'] .dca-pill__dot,
+.dca-pill[data-status='awaiting_approval'] .dca-pill__dot {
+  animation: dca-dot-live 1.6s ease-in-out infinite;
+}
+@keyframes dca-dot-live {
+  50% {
+    opacity: 0.35;
+  }
+}
+/* The hero: the one sentence of the mandate, large, then the live countdown. */
+.dca-card__hero {
+  display: grid;
+  gap: 2px;
+}
+.dca-card__hero-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+}
+.dca-card__usd {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.dca-card__every {
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.dca-card__next,
+.dca-row__next {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--muted-foreground);
+}
+.dca-card__next[data-dca-next-at] {
+  color: var(--foreground);
+}
+.dca-card__next[data-dca-due],
+.dca-row__next[data-dca-due] {
+  color: var(--primary);
+}
+.dca-card__reason,
+.dca-card__guards {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.dca-card__reason {
+  font-style: italic;
+}
+/* Spent of cap: a thin gauge in the rail's colour, the reserved buy hatched. */
+.dca-card__progress {
+  display: grid;
+  gap: 4px;
+}
+.dca-progress {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--hairline);
+}
+.dca-progress--mini {
+  height: 3px;
+}
+.dca-progress__spent {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--dca-rail);
+  transition: width 320ms var(--desk-ease-out, ease-out);
+}
+.dca-card[data-dca-status='paused'] .dca-progress__spent {
+  background: var(--muted-foreground);
+}
+.dca-progress__reserved {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--warn) 70%, transparent) 0 2px,
+    transparent 2px 4px
+  );
+}
+.dca-progress__labels {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.dca-progress__amount {
+  color: var(--foreground);
+}
+.dca-progress__reserved-note,
+.dca-progress__extra {
+  color: var(--dim);
+}
+/* Facts, not tiles: label left, figure right, one hairline under each. Two
+   across by default, four in a row once the mounter measures the card wide. */
+.dca-card__stats,
+.dca-totals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+}
+.dca-card[data-dca-layout='wide'] .dca-card__stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.dca-card[data-dca-layout='narrow'] .dca-card__stats {
+  grid-template-columns: minmax(0, 1fr);
+}
+.dca-stat {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 8px;
+  min-width: 0;
+  min-height: 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+.dca-card[data-dca-layout='wide'] .dca-stat {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding-bottom: 4px;
+}
+.dca-stat__value,
+.dca-stat__sub,
+.dca-run,
+.dca-row__spent,
+.dca-card__foot {
+  font-family: var(--font-mono);
+}
+.dca-stat__value {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dca-stat__symbol {
+  color: var(--muted-foreground);
+}
+.dca-stat__sub {
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+}
+.dca-card [data-dca-tone='up'] {
+  color: var(--ok);
+}
+.dca-card [data-dca-tone='down'] {
+  color: var(--danger);
+}
+.dca-card [data-dca-no-price] {
+  color: var(--dim);
+  cursor: help;
+}
+/* Buys chart: columns at the buy price in the rail's colour, the average a
+   dashed hairline, now a dotted one; skips hollow, failures a small ×. The
+   renderer places the avg / now / × labels from the two plot lengths below
+   (`--dca-plot-pad`, `--dca-plot-h`), so they are set here and used for the
+   plot's own geometry, never hard-coded twice. */
+.dca-chart {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+.dca-chart--empty {
+  font-size: 11px;
+  color: var(--dim);
+}
+.dca-chart__plot {
+  --dca-plot-pad: 16px;
+  --dca-plot-h: 6.5rem;
+  position: relative;
+  padding-top: var(--dca-plot-pad);
+}
+.dca-chart__svg {
+  display: block;
+  width: 100%;
+  height: var(--dca-plot-h);
+  overflow: visible;
+}
+.dca-chart__baseline {
+  stroke: var(--border);
+  vector-effect: non-scaling-stroke;
+}
+.dca-chart__col {
+  outline: none;
+  cursor: default;
+}
+.dca-chart__hit {
+  fill: transparent;
+}
+.dca-chart__col:focus-visible .dca-chart__hit {
+  fill: color-mix(in srgb, var(--ring) 14%, transparent);
+}
+.dca-chart__bar {
+  fill: color-mix(in srgb, var(--dca-rail) 42%, transparent);
+  transition: fill 120ms ease-out;
+}
+.dca-chart__col[data-hover='true'] .dca-chart__bar {
+  fill: var(--dca-rail);
+}
+.dca-chart__skip {
+  fill: none;
+  stroke: var(--muted-foreground);
+  vector-effect: non-scaling-stroke;
+}
+.dca-chart__parked,
+.dca-chart__pending {
+  fill: none;
+  stroke: var(--warn);
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+}
+.dca-chart__pending {
+  stroke: var(--muted-foreground);
+}
+.dca-chart__void {
+  stroke: var(--dim);
+  vector-effect: non-scaling-stroke;
+}
+.dca-chart__avg-line {
+  stroke: var(--foreground);
+  stroke-opacity: 0.55;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+.dca-chart__now-line {
+  stroke: var(--primary);
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+.dca-chart__now-line[data-dca-tone='down'] {
+  stroke: var(--danger);
+}
+.dca-chart__avg,
+.dca-chart__now,
+.dca-chart__fail {
+  position: absolute;
+  font-family: var(--font-mono);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.dca-chart__avg,
+.dca-chart__now {
+  padding: 1px 4px;
+  border-radius: var(--radius-compact);
+  font-size: 10px;
+  background: color-mix(in srgb, var(--elevated) 88%, transparent);
+  transform: translateY(calc(-100% - 2px));
+}
+.dca-chart__avg {
+  left: 0;
+  color: var(--muted-foreground);
+}
+.dca-chart__avg[data-dca-flip] {
+  transform: translateY(2px);
+}
+.dca-chart__now {
+  right: 0;
+  font-weight: 600;
+  color: var(--primary);
+}
+.dca-chart__now[data-dca-tone='down'] {
+  color: var(--danger);
+}
+.dca-chart__fail {
+  bottom: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--danger);
+  transform: translateX(-50%);
+}
+.dca-chart__axis,
+.dca-chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 10px;
+}
+.dca-chart__legend {
+  justify-content: flex-start;
+}
+.dca-chart__date,
+.dca-chart__key {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dim);
+}
+.dca-chart__key::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.dca-chart__key[data-key='bar']::before {
+  height: 7px;
+  background: color-mix(in srgb, var(--dca-rail) 42%, transparent);
+}
+.dca-chart__key[data-key='avg']::before {
+  border-top: 1px dashed var(--muted-foreground);
+}
+.dca-chart__key[data-key='now']::before {
+  border-top: 2px dotted var(--primary);
+}
+.dca-chart__key[data-key='parked']::before,
+.dca-chart__key[data-key='pending']::before {
+  height: 7px;
+  border: 1px dashed var(--warn);
+}
+.dca-chart__key[data-key='skipped']::before {
+  height: 3px;
+  border: 1px solid var(--muted-foreground);
+}
+.dca-chart__key[data-key='failed']::before {
+  content: '×';
+  width: auto;
+  font-weight: 700;
+  color: var(--danger);
+}
+/* The y axis: the price range's top and bottom at the plot's left edge. The
+   renderer sets each label's `top` inline from the same plot lengths as the
+   avg / now labels; they hang just above their line, quiet and mono, on a
+   wash of the card so a column behind never makes them unreadable. */
+.dca-chart__y {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.dca-chart__ylabel {
+  position: absolute;
+  left: 0;
+  padding: 0 3px;
+  border-radius: var(--radius-compact);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--dim);
+  background: color-mix(in srgb, var(--elevated) 82%, transparent);
+}
+.dca-chart__ylabel[data-edge='bottom'] {
+  transform: translateY(calc(-100% - 1px));
+}
+/* The tooltip: the renderer places it (inline `top` / `left`, under the
+   columns since the y-axis round), so the skin only makes it legible over
+   whatever it lands on — the axis dates, the legend, the desk behind the
+   card: an opaque plate, a real border, a blur for anything that shows
+   through, and a layer above the bars and every plot label. */
+.dca-chart__tooltip {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  z-index: 5;
+  display: grid;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-compact);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+  color: var(--foreground);
+  background: var(--elevated);
+  box-shadow:
+    inset 0 0 0 1px var(--hairline),
+    0 6px 18px color-mix(in srgb, black 28%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transform: translateX(-50%);
+}
+.dca-chart__tooltip[data-dca-place='below'] {
+  bottom: auto;
+}
+.dca-chart__tooltip[data-align='start'] {
+  transform: none;
+}
+.dca-chart__tooltip[data-align='end'] {
+  transform: translateX(-100%);
+}
+.dca-chart__tooltip[hidden] {
+  display: none;
+}
+.dca-chart__tooltip-line[data-dca-line='when'] {
+  color: var(--muted-foreground);
+}
+.dca-chart__tooltip-line[data-dca-line='detail'] {
+  font-weight: 600;
+}
+.dca-chart__tooltip-line[data-dca-run-status='parked'],
+.dca-chart__tooltip-line[data-dca-run-status='pending'] {
+  color: var(--warn);
+}
+.dca-chart__tooltip-line[data-dca-run-status='failed'] {
+  color: var(--danger);
+}
+.msg-body .dca-chart__tx {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+.msg-body .dca-chart__tx:hover {
+  color: var(--foreground);
+}
+/* Recent runs: the ledger lines of the mandate, at desk density. */
+.dca-runs {
+  display: grid;
+  gap: 2px;
+}
+.dca-runs__title {
+  margin: 0;
+}
+.msg-body .dca-runs__list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dca-run {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  min-height: 22px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 11px;
+}
+.msg-body .dca-run + .dca-run {
+  margin-top: 0;
+}
+.dca-run__n {
+  min-width: 2.4em;
+  color: var(--dim);
+}
+.dca-run__ago {
+  color: var(--muted-foreground);
+}
+.dca-run__status {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.dca-run[data-dca-run-status='filled'] .dca-run__status {
+  color: var(--ok);
+}
+.dca-run[data-dca-run-status='parked'] .dca-run__status,
+.dca-run[data-dca-run-status='pending'] .dca-run__status {
+  color: var(--warn);
+}
+.dca-run[data-dca-run-status='failed'] .dca-run__status {
+  color: var(--danger);
+}
+.dca-run[data-dca-run-status='skipped'] .dca-run__status,
+.dca-run[data-dca-run-status='expired'] .dca-run__status,
+.dca-run[data-dca-run-status='rejected'] .dca-run__status {
+  color: var(--dim);
+}
+.dca-run__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dca-run__manual {
+  color: var(--primary);
+}
+.msg-body .dca-run__link {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+.msg-body .dca-run__link:hover {
+  color: var(--foreground);
+}
+/* The list: one ruled row per mandate, a status dot, a mini gauge. */
+.msg-body .dca-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dca-row {
+  --dca-rail: var(--dim);
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.msg-body .dca-row + .dca-row {
+  margin-top: 0;
+}
+.dca-row[data-dca-status='awaiting_approval'] {
+  --dca-rail: var(--warn);
+}
+.dca-row[data-dca-status='active'] {
+  --dca-rail: var(--ok);
+}
+.dca-row[data-dca-status='completed'] {
+  --dca-rail: var(--info);
+}
+.dca-row__dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--dca-rail);
+}
+.dca-row__main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.dca-row__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 10px;
+}
+/* The mandate's name leads the row, in the text face at medium weight; the
+   pair, plan and figures after it keep their mono. */
+.dca-row__name {
+  flex: 0 1 auto;
+  order: -1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.dca-row__plan {
+  color: var(--muted-foreground);
+}
+.dca-row__state {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dca-rail);
+}
+.dca-row__progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 10px;
+}
+.dca-row__spent {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.dca-card__empty {
+  margin: 0;
+  padding: 8px 0;
+  color: var(--muted-foreground);
+}
+/* Actions (desk only: the renderer draws them only when the chat hands it
+   `dcaActions`). Hairline ghost buttons like the LP writes; Approve & start
+   is the one filled control on the card. */
+.dca-actions {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.dca-actions__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.msg-body .dca-action {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--foreground);
+  cursor: default;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+.msg-body .dca-action[data-dca-compact] {
+  height: 20px;
+  padding: 0 7px;
+  font-size: 10.5px;
+}
+.msg-body .dca-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+.msg-body .dca-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.msg-body .dca-action[data-dca-tone='primary'] {
+  color: var(--primary-foreground);
+  background: var(--primary);
+  box-shadow: none;
+}
+.msg-body .dca-action[data-dca-tone='primary']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary) 86%, var(--foreground));
+}
+.msg-body .dca-action[data-dca-tone='danger'] {
+  color: var(--danger);
+}
+/* Stop, armed: the second click is spelled out in red where the button was. */
+.msg-body .dca-action[data-dca-confirm] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
+}
+/* The button whose call is in flight breathes; its siblings go still. */
+.msg-body .dca-action[data-dca-pending] {
+  animation: dca-dot-live 1.2s ease-in-out infinite;
+}
+.msg-body .dca-action:disabled {
+  color: var(--dim);
+  background: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hairline) 60%, transparent);
+}
+/* In flight: the row goes still and the card's figures dim until the new
+   payload lands (the renderer swaps it in place). */
+.dca-card[data-dca-busy] > :not(.dca-actions):not(.dca-card__foot) {
+  opacity: 0.55;
+  transition: opacity 160ms ease-out;
+}
+.dca-actions[data-dca-busy] .dca-action {
+  pointer-events: none;
+}
+.dca-actions__error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--danger);
+}
+.dca-actions__error[hidden],
+.dca-actions__error:empty {
+  display: none;
+}
+.dca-card__warnings {
+  margin: 0;
+  padding-left: 14px;
+  font-size: 11px;
+  color: var(--warn);
+}
+.dca-card__warning + .dca-card__warning {
+  margin-top: 2px;
+}
+.dca-sep,
+.dca-card__as-of {
+  color: var(--dim);
+}
+.dca-card__ago {
+  color: var(--muted-foreground);
+}
+.dca-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.dca-card__foot-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dca-card__actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-right: -4px;
+}
+/* Two classes: `.msg-body a` would otherwise underline a link in lime. */
+.msg-body .dca-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  background: none;
+  font: inherit;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  cursor: default;
+}
+.msg-body .dca-card__action:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.msg-body .dca-card__action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.msg-body .dca-card__copy[data-dca-copied='true'] {
+  color: var(--ok);
+}
+.msg-body .dca-card__copy[data-dca-copied='failed'] {
+  color: var(--danger);
+}
+/* Stale: the card could not be re-read, so the renderer keeps its controls
+   off until a refresh lands. They read as off (and cannot be pressed); the
+   footer's as-of turns amber with a dotted underline — noticed, not loud.
+   The footer's own ↻ stays live: it is the way back. */
+.dca-card[data-dca-stale] .dca-actions .dca-action,
+.msg-body .dca-card[data-dca-stale] .dca-actions .dca-action {
+  opacity: 0.45;
+  filter: grayscale(1);
+  pointer-events: none;
+  cursor: default;
+}
+/* "checking" is the quiet re-read every mount does: controls off, nothing
+   amber. Only a read that failed marks the as-of and shows the stale line. */
+.dca-card[data-dca-stale='failed'] .dca-card__as-of,
+.dca-card[data-dca-stale='failed'] .dca-card__ago {
+  color: var(--warn);
+}
+.dca-card[data-dca-stale='failed'] .dca-card__ago {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.dca-card__stale {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--warn);
+}
+.dca-card__stale-refresh {
+  padding: 0 3px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.dca-card__stale-refresh:hover,
+.dca-card__stale-refresh:focus-visible {
+  color: var(--foreground);
+}
+.dca-card[data-dca-refreshing] > :not(.dca-card__foot) {
+  opacity: 0.45;
+  transition: opacity 160ms ease-out;
+}
+.dca-card[data-dca-refreshing] .dca-card__refresh .dca-card__action-glyph {
+  display: inline-block;
+  animation: lp-refresh-spin 900ms linear infinite;
+}
+.dca-card__refresh-error {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dca-card[data-dca-status='awaiting_approval']::before,
+  .dca-pill__dot,
+  .msg-body .dca-action[data-dca-pending],
+  .dca-card[data-dca-refreshing] .dca-card__refresh .dca-card__action-glyph {
+    animation: none;
+  }
 }
 
 /* ── Ask / plan cards ────────────────────────────────────────────────────── */
@@ -2051,13 +3895,17 @@
 /* ── Jump to latest ──────────────────────────────────────────────────────────
    Tail-following pauses the moment the reader scrolls up; without an explicit
    way back, a long transcript could only be returned to the bottom by dragging.
-   The dock is zero-height and sits at the thread/composer seam, so the pill
-   hovers over the last bubble instead of taking a row from the conversation.
+   The dock is zero-height and sits at the foot of the thread — above the
+   desk's approvals region (`.trd-asks`) when there is one, so the pill never
+   lands on a card — and hovers over the last bubble instead of taking a row
+   from the conversation. It is a flex item of `.chat-stage`: `flex: none`
+   keeps it at zero height whatever the column does.
    Desktop vocabulary: a frosted control pill, one lime signal on the glyph. */
 .chat-jump-dock {
   position: relative;
   z-index: 4;
   display: flex;
+  flex: none;
   height: 0;
   justify-content: center;
   overflow: visible;
