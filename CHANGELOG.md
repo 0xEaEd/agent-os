@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.9.29.post1] - 2026-09-29
+
+### Added
+- Desktop: the App card in Settings → About gets a Latest row under
+  Version, like the Engine card's. It shows the newest version once known
+  ("Not checked yet" before the first check) and the download percent
+  beside it, so the target version stays visible for the whole download
+  instead of disappearing when the progress bar replaces the "is
+  available" notice (#3527).
+
 ### Changed
 - Desktop: in a sidebar multi-selection the open chat no longer takes a
   darker tint than the other selected rows; every selected row gets the
