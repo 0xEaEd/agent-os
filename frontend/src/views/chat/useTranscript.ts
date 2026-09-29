@@ -1202,20 +1202,28 @@ export function useTranscript(opts: {
     // FIRST, then send the go-ahead so the next turn already has its full
     // tool surface back. The card locks optimistically; an RPC failure
     // surfaces as an error message in the transcript via the send path.
+    // The Toolbar's plan toggle reads `plan.mode.get` from the query cache, so
+    // it re-reads the flag once the RPC settles, as the toggle and `/plan` do.
     approvePlanRef.current = () => {
       if (controller.isStreaming()) return false
       const key = sessionKeyRef.current
       if (!key) return false
+      const refreshPlanMode = () =>
+        void queryClient.invalidateQueries({ queryKey: ['plan.mode.get', key] })
       void rpc
         .call('plan.mode.set', { key, mode: 'off' })
-        .then(() => send(t('chat.planApprovedMessage')))
+        .then(() => {
+          refreshPlanMode()
+          send(t('chat.planApprovedMessage'))
+        })
         .catch((err: unknown) => {
+          refreshPlanMode()
           const message = err instanceof Error ? err.message : String(err)
           messageRendererRef.current?.addMessage('error', t('chat.sendFailed', { message }))
         })
       return true
     }
-  }, [controller, rpc, send])
+  }, [controller, rpc, send, queryClient])
 
   // chat.js:8439-8450 `_onStop`. Abort only while streaming; set the abort flag,
   // fire `chat.abort` with `{ sessionKey, source }` (chat.js:8444), and end the

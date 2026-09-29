@@ -57,6 +57,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   blank lines between paragraphs, list markers, tab-separated table cells and
   verbatim code blocks, without the code block's language label or its own
   Copy button.
+- Desktop: ⌘N at the trading desk went to the Chat tab's new-chat home
+  instead of starting a fresh desk session. It now takes the same path as
+  ⌘⇧O, `/new` and the pen button: missions filed to the current desk
+  session are paused first, and the desk stays put if one refuses (#3519)
+- Chat: approving a plan from the plan card turned plan mode off but left
+  the Toolbar's plan toggle showing it on until the next reload or session
+  switch. The toggle now re-reads the flag once the approval settles
+  (#3520)
 
 ## [2026.9.28] - 2026-09-28
 

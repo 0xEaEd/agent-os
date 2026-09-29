@@ -12,6 +12,7 @@ import { readLastSession } from '~/lib/last-session'
 import { useNotificationSignals } from '~/lib/use-notifications'
 import { bindGatewayEvents } from '~/stores/gateway'
 import { useSettings } from '~/stores/settings'
+import { useTradingUi } from '~/stores/trading-ui'
 import { useUi } from '~/stores/ui'
 import { bindUpdateEvents } from '~/stores/updates'
 import { bindBootstrapEvents } from '~/stores/bootstrap'
@@ -65,7 +66,7 @@ function useOpenSettingsFromMenu() {
 /** ⌘, settings · ⌘N new session · ⌘⇧S sidebar · ⌘⇧K skills · ⌘⇧J jobs.
  *  Registered with the console's registry so they show in its cheat sheet
  *  and respect open overlays. */
-function useShellShortcuts() {
+export function useShellShortcuts() {
   const navigate = useNavigate()
   const toggleSettings = useUi((s) => s.toggleSettings)
   const toggleSidebar = useUi((s) => s.toggleSidebar)
@@ -138,7 +139,12 @@ function useShellShortcuts() {
     },
     (e) => {
       e.preventDefault()
-      void navigate('/sessions')
+      // At the desk a new session is a fresh desk session, as ⌘⇧O, `/new` and
+      // the pen button make it: the keyless home is Chat mode, so going there
+      // would leave the desk.
+      const startFreshDesk = useTradingUi.getState().startFreshDesk
+      if (startFreshDesk) startFreshDesk()
+      else void navigate('/sessions')
     },
   )
   useKeyboardShortcut(

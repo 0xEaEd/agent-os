@@ -182,6 +182,15 @@ export function useDeskFrame(input: {
     })
   }, [pauseAll, mintFresh])
 
+  // The shell's ⌘N lands here while the desk is up (AppShell), so a new
+  // session from anywhere at the desk goes through the same mission pause.
+  const setStartFreshDesk = useTradingUi((s) => s.setStartFreshDesk)
+  useEffect(() => {
+    if (!active) return
+    setStartFreshDesk(startFresh)
+    return () => setStartFreshDesk(null)
+  }, [active, startFresh, setStartFreshDesk])
+
   if (!active) {
     return {
       strip: <StatusStrip mode={mode} onSwitchMode={onSwitchMode} sessionSlot={sessionSlot} />,

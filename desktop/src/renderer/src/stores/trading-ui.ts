@@ -56,12 +56,19 @@ interface TradingUiStore {
   /** The full-width desk instead of chat + BOOK. */
   deskMode: boolean
   sheet: DeskSheet
+  /**
+   * The active desk's "Start fresh" (pause the missions filed to this chat,
+   * then mint a new desk session), published while the desk is up so the
+   * shell's ⌘N can start a fresh desk session instead of leaving for Chat.
+   */
+  startFreshDesk: (() => void) | null
   setBookWidth(width: number): void
   toggleBook(): void
   setBookOpen(open: boolean): void
   setBookTab(tab: BookTab): void
   setDeskMode(on: boolean): void
   openSheet(sheet: DeskSheet): void
+  setStartFreshDesk(fn: (() => void) | null): void
 }
 
 export const useTradingUi = create<TradingUiStore>((set) => ({
@@ -70,6 +77,7 @@ export const useTradingUi = create<TradingUiStore>((set) => ({
   bookTab: 'portfolio',
   deskMode: false,
   sheet: null,
+  startFreshDesk: null,
   setBookWidth(width) {
     const clamped = Math.round(Math.min(BOOK_MAX, Math.max(BOOK_MIN, width)))
     save(WIDTH_KEY, String(clamped))
@@ -94,6 +102,9 @@ export const useTradingUi = create<TradingUiStore>((set) => ({
   },
   openSheet(sheet) {
     set({ sheet })
+  },
+  setStartFreshDesk(fn) {
+    set({ startFreshDesk: fn })
   },
 }))
 
