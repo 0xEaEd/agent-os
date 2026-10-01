@@ -7,7 +7,9 @@
   inner backtick and left the outer pair on screen.
 * Nested emphasis: the pattern claim order, not the nesting, decided which of
   two overlapping spans survived, so the enclosing one was discarded and its
-  ``**`` / ``~~`` delimiters printed.
+  ``**`` / ``~~`` delimiters printed. No set of regexes gets this right when
+  an inner span closes on the outer one's run (``**a *b***``), so delimiter
+  runs are now paired the way CommonMark pairs them.
 
 Code spans are protected before escapes are parked, so nothing inside one is
 unescaped: CommonMark does not process backslash escapes in code, and regexes
@@ -211,7 +213,6 @@ def test_italic_inside_bold_is_not_read_as_a_triple_run() -> None:
         ("a * b [x*y](https://x.test)", "a * b x*y (https://x.test)", "x*y"),
         ("~~old [x~~y](u)", "~~old x~~y (u)", "x~~y"),
         ("**note [a**b](u)", "**note a**b (u)", "a**b"),
-        ("*see [a](https://x.test/a*b)*", "*see a (https://x.test/a*b)*", "a"),
     ],
 )
 def test_emphasis_that_only_crosses_a_link_does_not_break_it(
@@ -229,8 +230,74 @@ def test_emphasis_that_only_crosses_a_link_does_not_break_it(
     assert runs[1][0].startswith("(https://") or runs[1][0] == "(u)"
 
 
-def test_emphasis_that_encloses_a_link_styles_it() -> None:
-    assert _styled_runs("*a [b](u) c*")[0] == ("a b (u) c", "italic")
+@pytest.mark.parametrize(
+    ("source", "shown"),
+    [
+        ("*a [b](u) c*", "a b (u) c"),
+        # The ``*`` in the destination is the link's; the two outside it
+        # pair, and the ``)`` before the closer is punctuation, not a gap.
+        ("*see [a](https://x.test/a*b)*", "see a (https://x.test/a*b)"),
+    ],
+)
+def test_emphasis_that_encloses_a_link_styles_it(source: str, shown: str) -> None:
+    assert _user_sees(source) == shown
+    assert _styled_runs(source)[0] == (shown, "italic")
+
+
+# ---------------------------------------------------------------------------
+# Spans that share a delimiter run (review on #3542)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "expected", "runs"),
+    [
+        (
+            "**Note: this is *important***",
+            "Note: this is important",
+            [("Note: this is important", "bold"), ("important", "italic")],
+        ),
+        ("**a *b***", "a b", [("a b", "bold"), ("b", "italic")]),
+        (
+            "*italic with **bold** inside*",
+            "italic with bold inside",
+            [("italic with bold inside", "italic"), ("bold", "bold")],
+        ),
+        (
+            "***Note:** this is important*",
+            "Note: this is important",
+            [("Note: this is important", "italic"), ("Note:", "bold")],
+        ),
+    ],
+)
+def test_an_inner_span_closing_on_the_outer_ones_run_prints_no_delimiter(
+    source: str, expected: str, runs: list[tuple[str, str]]
+) -> None:
+    """A regex per span kind cannot tell that the closing ``***`` ends both
+    spans, or that the ``**`` inside an italic is a span of its own; the
+    delimiter runs are paired the way CommonMark pairs them instead."""
+    assert _user_sees(source) == expected
+    assert _styled_runs(source) == runs
+
+
+def test_one_run_closes_the_inner_span_before_the_outer_one() -> None:
+    assert _render("**a *b***") == "[bold]a [italic]b[/][/]"
+
+
+@pytest.mark.parametrize("source", ["2 * 3 * 4", "a ~~ b ~~ c", "x ** y ** z"])
+def test_a_delimiter_with_space_on_both_sides_is_text(source: str) -> None:
+    """A run flanked by whitespace can neither open nor close: arithmetic
+    used to come out italic, with both asterisks gone."""
+    assert _user_sees(source) == source
+    assert _styled_runs(source) == []
+
+
+def test_deeply_nested_emphasis_renders() -> None:
+    """Pairing is iterative, so nesting depth is not bounded by recursion."""
+    depth = 2000
+    source = "*a " * depth + "b" + " a*" * depth
+
+    assert _user_sees(source) == "a " * depth + "b" + " a" * depth
 
 
 @pytest.mark.parametrize(
@@ -293,6 +360,23 @@ def test_a_table_cell_with_the_new_inline_rules_stays_aligned(cell: str) -> None
     lines = _display(source).plain.split("\n")
 
     assert len({cell_len(line) for line in lines}) == 1, lines
+
+
+@pytest.mark.parametrize(
+    ("cell", "shown"),
+    [("**x *y***", "x y"), ("*x **y** z*", "x y z"), ("***x:** y*", "x: y")],
+)
+@pytest.mark.parametrize("align", ["---", ":-:", "--:"])
+def test_a_cell_whose_spans_share_a_run_is_measured_as_drawn(
+    cell: str, shown: str, align: str
+) -> None:
+    """Measured with the old regexes, ``**x *y***`` came out narrower than
+    it was drawn and pushed the rest of its row out of line."""
+    source = f"| h | x |\n| {align} | --- |\n| {cell} | y |\n| longer cell here | z |"
+    lines = _display(source).plain.split("\n")
+
+    assert len({cell_len(line) for line in lines}) == 1, lines
+    assert lines[2].split("|")[1].strip() == shown, lines
 
 
 @pytest.mark.parametrize(
