@@ -103,6 +103,33 @@ def test_a_base64_password_with_a_slash_is_still_masked(url: str, password: str)
     assert secret_literal_marker(url) == "connection_string"
 
 
+# An RDS IAM auth token is ~1.4 KB of query string; an Azure AD access token
+# used as a Postgres password runs ~2 KB.
+_IAM_TOKEN = "db.host:5432/?Action=connect&DBUser=app&X-Amz-Signature=" + "a1b2c3" * 230
+_AAD_TOKEN = "eyJ0eXAiOiJKV1Qi." + "Zm9vYmFy-_" * 240 + ".sig"
+
+
+@pytest.mark.parametrize(
+    ("url", "password"),
+    [
+        (f"postgresql://app:{_IAM_TOKEN}@db:5432/x", _IAM_TOKEN),
+        (f"postgres://app@tenant:{_AAD_TOKEN}@db/app", _AAD_TOKEN),
+        (f"wss://svc:{'k9/Zp+q=' * 40}@gateway.host/ws", "k9/Zp+q=" * 40),
+    ],
+    ids=["rds-iam-token", "azure-ad-token", "long-base64"],
+)
+def test_a_password_longer_than_256_chars_is_still_masked(url: str, password: str) -> None:
+    """Main masks a database password of any length. A length cap on the
+    password would fail open on the long ones -- the pattern would not match at
+    all, so neither redaction nor the guard would see the URL."""
+    assert len(password) > 256
+    redacted = redact_sensitive_text(url, force=True)
+
+    assert password not in redacted
+    assert "***" in redacted
+    assert secret_literal_marker(url) == "connection_string"
+
+
 def test_a_reference_in_the_password_slot_is_left_alone() -> None:
     """Same rule as every other scheme already had: ``$VAR`` points at a secret."""
     text = "wss://user:$GATEWAY_PASSWORD@gateway.host/ws"
@@ -156,15 +183,18 @@ def test_ordinary_text_is_not_touched(text: str) -> None:
         pytest.param("a1" * (1 << 19) + " https://user:pw@host", id="1mib-run-then-url"),
         pytest.param("a://:" * 50_000, id="repeated-empty-userinfo"),
         pytest.param("a://b:" * 40_000, id="repeated-userinfo-no-at"),
+        pytest.param("a://" + "b:" * 200_000, id="one-scheme-many-colons"),
+        pytest.param("a://b:" + "c://" * 60_000, id="userinfo-then-many-schemes"),
     ],
 )
 def test_a_long_run_of_scheme_characters_does_not_go_quadratic(text: str) -> None:
     """Every character in ``[a-z0-9+.-]`` can start a scheme. Unanchored, each
     position in a long run began its own scan for ``://``: 80 kB took over 20 s.
-    An unbounded password class would rescan the rest of the run from every
-    ``scheme://x:`` in it, hence the repeated-userinfo cases. Anchored and
-    bounded, 1 MiB takes about a tenth of a second; the bound is loose so a
-    slow runner does not flake, and still far below the quadratic cost."""
+    A password class free to cross ``://`` would rescan the rest of the run
+    from every ``scheme://x:`` in it, hence the repeated-userinfo cases. With
+    the scheme anchored and the password stopping at the next ``://``, 1 MiB
+    takes about a tenth of a second; the limit is loose so a slow runner does
+    not flake, and still far below the quadratic cost."""
     start = time.perf_counter()
     redact_sensitive_text(text, force=True)
     secret_literal_marker(text)

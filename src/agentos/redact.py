@@ -127,12 +127,16 @@ _PREFIX_RE = re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(_PREFIX_PATTERNS) + ")
 #: a path (``(?!\d*/)``), so ``http://localhost:5173/@vite/client`` is not read
 #: as userinfo. Whitespace is excluded from both halves so a match can never
 #: span a line break.
-#: The scheme is anchored on the left and the password is bounded: unanchored,
-#: every position in a long run of scheme characters starts its own scan, and
-#: an unbounded password scans to the end of the run from every ``scheme://x:``
-#: in it -- either way the search goes quadratic.
+#: The scheme is anchored on the left, and the password, though unbounded,
+#: cannot run into the next ``://``. Unanchored, every position in a long run
+#: of scheme characters starts its own scan; a password free to cross ``://``
+#: scans to the end of the run from every ``scheme://x:`` in it -- either way
+#: the search goes quadratic. Stopping at the next scheme keeps each scan to
+#: its own URL. A length cap would do the same but fails open: an RDS IAM
+#: token or an Azure AD token used as a Postgres password runs 1-2 KB, and a
+#: password past the cap would not match at all.
 _URL_USERINFO_RE = re.compile(
-    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://[^:\s/]*:)((?!\d*/)[^@\s]{1,256})(@)",
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://[^:\s/]*:)((?!\d*/)(?:(?!://)[^@\s])+)(@)",
     re.IGNORECASE,
 )
 
