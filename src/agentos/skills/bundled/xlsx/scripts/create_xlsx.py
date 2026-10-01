@@ -18,8 +18,12 @@ inspect_xlsx. Strings and {"range": ...} objects can be mixed in the same list.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
+import shutil
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -38,10 +42,60 @@ from agentos.skill_stdio import configure_utf8_stdio  # noqa: E402
 def _coerce(value: Any) -> Any:
     if isinstance(value, str) and len(value) >= 19 and value[10] == "T":
         try:
-            return datetime.fromisoformat(value)
+            parsed = datetime.fromisoformat(value)
         except ValueError:
             return value
+        # A ``Z`` / ``+HH:MM`` suffix parses to an offset-aware datetime, which
+        # openpyxl refuses mid-``wb.save()`` ("Excel does not support
+        # timezones"). Excel has no timezone type, so the offset is dropped and
+        # the wall-clock time the string spells out is stored (#3487).
+        return parsed.replace(tzinfo=None)
     return value
+
+
+def _new_file_mode() -> int:
+    """The mode a plain ``open(path, "w")`` would give a new file here.
+
+    ``mkstemp`` creates its file ``0600`` regardless of the umask, so a brand
+    new workbook would otherwise come out private where ``wb.save`` used to
+    produce the usual umask-derived mode (typically ``0644``).
+    """
+    umask = os.umask(0o022)
+    os.umask(umask)
+    return 0o666 & ~umask
+
+
+def _save_atomic(wb: Any, out: Path) -> None:
+    """Save *wb* to *out* so that an aborted save never truncates *out*.
+
+    ``wb.save`` truncates its destination before writing, so a failure partway
+    through left a broken zip in its place -- and with ``--out`` pointing at
+    the input, that was the caller's only copy (#3487). The workbook is
+    written to a uniquely named temp file beside the destination and moved
+    over it with ``os.replace`` only once the save has succeeded.
+
+    *out* is resolved first so an in-place edit through a symlink updates the
+    file the link points at instead of replacing the link, and the existing
+    file's permission bits are carried over to the replacement.
+    """
+    target = out.resolve()
+    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    # openpyxl opens the path itself; on Windows the file could not be
+    # reopened or removed while this descriptor is still held.
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        wb.save(str(tmp))
+        if target.is_file():
+            shutil.copymode(target, tmp)
+        else:
+            os.chmod(tmp, _new_file_mode())
+        os.replace(tmp, target)
+    except BaseException:
+        # Best effort: a failure here must not mask the error that got us here.
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
 
 
 def _merge_checked(ws: Any, rng: str) -> None:
@@ -146,7 +200,7 @@ def main() -> int:
         return 2
     wb = build(spec)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(str(args.out))
+    _save_atomic(wb, args.out)
     return 0
 
 
