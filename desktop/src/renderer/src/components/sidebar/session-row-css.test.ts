@@ -77,7 +77,6 @@ describe('sidebar session row CSS', () => {
     )
     const selectors = rules.map(([s]) => s)
     expect(selectors).toContain(SELECTED_RULE)
-    expect(selectors).toContain(`${SELECTED}[aria-current='page']`)
     expect(selectors).toContain(
       ".mac-session:hover, .mac-session-item[data-menu='true'] .mac-session",
     )
@@ -87,9 +86,26 @@ describe('sidebar session row CSS', () => {
     }
   })
 
+  it('tints every selected row alike, the open chat included', () => {
+    // No stronger fill for a selected open chat: the first row of a selection
+    // must not read darker than the rest.
+    const rules = sessionRules()
+    expect(
+      rules.filter(([s]) => s.includes('data-selected') && s.includes('aria-current')),
+    ).toEqual([])
+    // The selection tint wins over the open chat's grey by source order.
+    const order = rules.map(([s]) => s)
+    expect(order.indexOf(SELECTED_RULE)).toBeGreaterThan(
+      order.indexOf(".mac-session[aria-current='page']"),
+    )
+  })
+
+  it('keeps a small gap between adjacent rows', () => {
+    expect(rule('.mac-session-item + .mac-session-item')).toMatch(/margin-top: 2px;/)
+  })
+
   it('keeps a selection apart from the open chat by its tint alone, in every palette', () => {
     const selected = tint(SELECTED_RULE)
-    const selectedOpen = tint(`${SELECTED}[aria-current='page']`)
     expect(rule(".mac-session[aria-current='page']")).toMatch(
       /background: var\(--sidebar-accent\);/,
     )
@@ -98,13 +114,9 @@ describe('sidebar session row CSS', () => {
     for (const [id, palette] of Object.entries(PALETTES)) {
       for (const mode of ['light', 'dark'] as const) {
         const tokens = palette[mode]
-        const sidebar = rgb(tokens.sidebar)
-        const primary = rgb(tokens.primary)
-        const sel = over(primary, selected, sidebar)
-        const where = `${id}/${mode}`
-        // A selected row vs the open chat's grey, and vs a selected open chat.
-        expect(deltaE(sel, rgb(tokens['sidebar-accent'])), where).toBeGreaterThan(4)
-        expect(deltaE(sel, over(primary, selectedOpen, sidebar)), where).toBeGreaterThan(4)
+        const sel = over(rgb(tokens.primary), selected, rgb(tokens.sidebar))
+        // A selected row vs the open chat's grey.
+        expect(deltaE(sel, rgb(tokens['sidebar-accent'])), `${id}/${mode}`).toBeGreaterThan(4)
       }
     }
   })

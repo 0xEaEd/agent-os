@@ -50,6 +50,7 @@ class InstallMethod(StrEnum):
     UV_TOOL = "uv-tool"
     PIPX = "pipx"
     PIP = "pip"
+    PORTABLE = "portable"
     EDITABLE = "editable"
     UNKNOWN = "unknown"
 
@@ -194,6 +195,14 @@ def _is_within(path: Path, root: Path) -> bool:
         return False
 
 
+def _is_portable_venv(exe: Path) -> bool:
+    # The portable launchers mark the pip-less venv they fill from bundled wheels.
+    try:
+        return any(exe.parent.parent.glob(".agentos-wheelhouse-*"))
+    except OSError:
+        return False
+
+
 def detect_install_method(
     *,
     executable: str | None = None,
@@ -238,6 +247,10 @@ def detect_install_method(
         parts = [p.lower() for p in candidate.parts]
         if "uv" in parts and "tools" in parts:
             return InstallMethod.UV_TOOL
+
+    # Portable zip: its venv has site-packages but no pip, so it is not a pip install.
+    if _is_portable_venv(raw_exe) or _is_portable_venv(exe):
+        return InstallMethod.PORTABLE
 
     # pipx venvs: ~/.local/share/pipx/venvs/<name>/ or $PIPX_HOME/venvs/...
     for candidate in (exe, pkg_dir):
@@ -423,6 +436,19 @@ def build_upgrade_plan(
             manual_hint=(
                 "editable / source checkout — pull and reinstall from the checkout: "
                 "git pull && bash scripts/install_source.sh"
+            ),
+        )
+
+    if resolved_method is InstallMethod.PORTABLE:
+        # Built with ``venv --without-pip``; the bundled CPython's ensurepip restores pip.
+        return UpgradePlan(
+            method=resolved_method,
+            delegated=False,
+            tool=None,
+            command=[sys.executable, "-m", "pip", "install", "--upgrade", spec],
+            manual_hint=(
+                f"{sys.executable} -m ensurepip\n    "
+                f'{sys.executable} -m pip install --upgrade "{spec}"'
             ),
         )
 

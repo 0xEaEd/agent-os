@@ -19,6 +19,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (12px) still overflows, the script now prints an `Error:` to stderr,
   exits non-zero, and writes no file, instead of silently reporting success
   with lines rendered outside the image. (#3375)
+- `gmgn-wallet-analysis` skill: a wallet whose 7-day cost basis is zero (it
+  sold from a position bought before the window, without buying anything
+  new) has an undefined 7d ROI, not a zero one — `stats_roi` already
+  returned `None` for this, and `m["form"]` already read it as "cannot
+  tell". `pnl_level` was the one place that defaulted the `None` to `0.0`,
+  which fed a confident P3-tier "style" label ("has not turned into
+  anything") into the report — contradicting the "cannot tell" gate a few
+  lines below it, even when the wallet's 7d realized profit was a large
+  positive number. `pnl_level` (and the `style_title` label it feeds) now
+  reports no style rather than a fabricated one when `roi_7d` is `None`.
+  (#3378)
+- Windows portable: `agentos upgrade` prints `python -m ensurepip`, then
+  `python -m pip install --upgrade "use-agent-os[recommended]"`, instead of a
+  pip command that fails in a venv built without pip (#3480).
+
+## [2026.9.29.post1] - 2026-09-29
+
+### Added
+- Desktop: the App card in Settings → About gets a Latest row under
+  Version, like the Engine card's. It shows the newest version once known
+  ("Not checked yet" before the first check) and the download percent
+  beside it, so the target version stays visible for the whole download
+  instead of disappearing when the progress bar replaces the "is
+  available" notice (#3527).
+
+### Changed
+- Desktop: in a sidebar multi-selection the open chat no longer takes a
+  darker tint than the other selected rows; every selected row gets the
+  same fill (the open chat keeps its filled dot). Session rows also sit 2px
+  apart, so a run of selected rows reads as separate pills instead of one
+  merged block.
 
 ## [2026.9.29] - 2026-09-29
 

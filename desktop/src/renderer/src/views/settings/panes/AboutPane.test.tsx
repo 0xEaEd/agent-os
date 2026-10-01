@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useConnection } from '@/stores/connection'
 import { IDLE_ENGINE, idleAppState } from '@shared/updates'
@@ -154,6 +154,19 @@ describe('AboutPane · engine', () => {
   })
 })
 
+/** Scoped to the App card: the Engine card has a Latest row of its own. */
+function appCard(): HTMLElement {
+  return screen.getByRole('region', { name: 'App' })
+}
+
+function appRow(label: string): HTMLElement {
+  const row = within(appCard())
+    .getByText(label, { selector: '.stg-row__label > *' })
+    .closest('.stg-row')
+  if (!row) throw new Error(`App card row ${label} not found`)
+  return row as HTMLElement
+}
+
 describe('AboutPane · app', () => {
   it('explains that a dev build cannot self-update', () => {
     useUpdates.setState({ app: { ...idleAppState('0.1.0'), phase: 'unsupported' } })
@@ -194,6 +207,71 @@ describe('AboutPane · app', () => {
     renderPane()
     expect(screen.getByText(/engine is being updated/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Restart to update' })).toBeInTheDocument()
+  })
+
+  it('shows the version being downloaded next to the current one (#3527)', () => {
+    useUpdates.setState({
+      app: { ...idleAppState('2026.9.28'), phase: 'downloading', latest: '2026.9.29', percent: 42 },
+    })
+    renderPane()
+    expect(appRow('Version')).toHaveTextContent('2026.9.28')
+    const latest = appRow('Latest')
+    expect(latest).toHaveTextContent('2026.9.29')
+    expect(latest.querySelector('.stg-value')).toHaveAttribute('data-tone', 'warn')
+    expect(screen.getByTestId('app-download-percent')).toHaveTextContent('42%')
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42')
+  })
+
+  it.each(['available', 'downloaded'] as const)(
+    'flags the pending build in the Latest row while %s',
+    (phase) => {
+      useUpdates.setState({
+        app: { ...idleAppState('2026.9.9'), phase, latest: '2026.9.12', checkedAt: 1 },
+      })
+      renderPane()
+      const latest = appRow('Latest')
+      expect(latest).toHaveTextContent('2026.9.12')
+      expect(latest.querySelector('.stg-value')).toHaveAttribute('data-tone', 'warn')
+      expect(screen.queryByTestId('app-download-percent')).not.toBeInTheDocument()
+    },
+  )
+
+  it('keeps the newer build flagged after its download failed', () => {
+    useUpdates.setState({
+      app: {
+        ...idleAppState('2026.9.28'),
+        phase: 'error',
+        latest: '2026.9.29',
+        checkedAt: 1,
+        error: 'net::ERR_CONNECTION_RESET',
+      },
+    })
+    renderPane()
+    const latest = appRow('Latest')
+    expect(latest).toHaveTextContent('2026.9.29')
+    expect(latest.querySelector('.stg-value')).toHaveAttribute('data-tone', 'warn')
+  })
+
+  it('shows the checked Latest version without a warning when up to date', () => {
+    useUpdates.setState({
+      app: { ...idleAppState('2026.9.9'), phase: 'up-to-date', latest: '2026.9.9', checkedAt: 1 },
+    })
+    renderPane()
+    const latest = appRow('Latest')
+    expect(latest).toHaveTextContent('2026.9.9')
+    expect(latest.querySelector('.stg-value')).not.toHaveAttribute('data-tone')
+  })
+
+  it('says the app has not been checked yet before the first check', () => {
+    renderPane()
+    expect(appRow('Latest')).toHaveTextContent('Not checked yet')
+  })
+
+  it('leaves out the Latest row when the build cannot self-update', () => {
+    useUpdates.setState({ app: { ...idleAppState('0.1.0'), phase: 'unsupported' } })
+    renderPane()
+    expect(appRow('Version')).toHaveTextContent('0.1.0')
+    expect(appCard().textContent).not.toContain('Latest')
   })
 
   it('offers Update all when both are outdated', () => {

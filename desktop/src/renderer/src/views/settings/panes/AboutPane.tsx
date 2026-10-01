@@ -4,7 +4,12 @@ import { useEffect, useRef, useState } from 'react'
 import { useRpc } from '@/app/providers'
 import { useConnection } from '@/stores/connection'
 import type { AppInfo } from '@shared/app'
-import { gatewaySupported, MIN_GATEWAY_VERSION, type EngineUpdateState } from '@shared/updates'
+import {
+  gatewaySupported,
+  isNewer,
+  MIN_GATEWAY_VERSION,
+  type EngineUpdateState,
+} from '@shared/updates'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
@@ -367,6 +372,9 @@ function AppCard() {
   const downloadApp = useUpdates((s) => s.downloadApp)
   const installApp = useUpdates((s) => s.installApp)
 
+  // Flag the Latest row by version, not phase, so a newer build stays flagged
+  // through a re-check or a failed download, as the Engine card's does.
+  const newer = !!app.latest && isNewer(app.latest, app.current)
   const tone: Tone | undefined =
     app.phase === 'up-to-date'
       ? 'ok'
@@ -405,6 +413,18 @@ function AppCard() {
       <Row label={t('settings.about.version')}>
         <Value>{app.current || '—'}</Value>
       </Row>
+      {app.phase === 'unsupported' ? null : (
+        <Row label={t('settings.about.app.latest')}>
+          <Value tone={newer ? 'warn' : undefined}>
+            {app.latest ?? (app.checkedAt ? '—' : t('settings.about.app.unknown'))}
+          </Value>
+          {app.phase === 'downloading' ? (
+            <span className="stg-row__help" data-testid="app-download-percent">
+              {app.percent ?? 0}%
+            </span>
+          ) : null}
+        </Row>
+      )}
       {app.phase === 'unsupported' ? (
         <Notice tone="info">{t('settings.about.app.unsupported')}</Notice>
       ) : null}

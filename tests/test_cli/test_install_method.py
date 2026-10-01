@@ -125,6 +125,21 @@ def test_editable_checkout_detected(tmp_path: Path) -> None:
     )
 
 
+def test_portable_wheelhouse_venv_detected(tmp_path: Path) -> None:
+    # start.ps1 layout: pip-less venv filled from bundled wheels, marked in its root.
+    venv = tmp_path / "AgentOS" / "venvs" / "0123456789ab"
+    exe = venv / "Scripts" / "python.exe"
+    pkg = venv / "Lib" / "site-packages" / "agentos"
+    pkg.mkdir(parents=True)
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    (venv / ".agentos-wheelhouse-abcdef012345").write_text("")
+    assert (
+        im.detect_install_method(executable=str(exe), package_dir=pkg, env={})
+        == InstallMethod.PORTABLE
+    )
+
+
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="hardened login-dir PATH semantics are POSIX-specific; "
@@ -308,6 +323,16 @@ def test_build_plan_pip_never_delegates() -> None:
     assert plan.delegated is False
     assert "pip install --upgrade" in plan.manual_hint
     assert "use-agent-os[recommended]" in plan.manual_hint
+
+
+def test_build_plan_portable_bootstraps_pip_first() -> None:
+    # Two separate lines: Windows PowerShell 5.1 has no ``&&``.
+    plan = im.build_upgrade_plan(method=InstallMethod.PORTABLE)
+    assert plan.delegated is False
+    first, second = plan.manual_hint.split("\n")
+    assert first == f"{sys.executable} -m ensurepip"
+    upgrade = f'{sys.executable} -m pip install --upgrade "use-agent-os[recommended]"'
+    assert second.strip() == upgrade
 
 
 def test_build_plan_editable_points_at_the_source_installer() -> None:

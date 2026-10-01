@@ -351,9 +351,12 @@ from a local checkout — even when the current install came from one — becaus
 only `bash scripts/install_source.sh` rebuilds the React control UI before
 installing, and a release wheel already ships a CI-built one. A checkout-backed
 install gets an informational note naming that directory and the script; it
-never blocks. For pip / editable / unknown installs it prints the exact manual
-command and exits non-zero (**exit 3**) rather than faking it; a failed,
-unverifiable or data-check-failed upgrade is **exit 1**. Flags: `--timeout`
+never blocks. For pip / editable / portable / unknown installs it prints the
+exact manual command and exits non-zero (**exit 3**) rather than faking it. A
+portable install (the Windows zip's venv, built without pip) prints `python -m
+ensurepip`, then `python -m pip install --upgrade "use-agent-os[recommended]"`,
+as two lines to run in order. A failed, unverifiable or data-check-failed
+upgrade is **exit 1**. Flags: `--timeout`
 (subprocess bound, default 600s; kills the process group on timeout),
 `--no-snapshot`, `--config`, `--json` (adds `source`, `snapshot`, `data`,
 `sourceDirectory`).
