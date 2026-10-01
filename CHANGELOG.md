@@ -43,6 +43,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   masked, while a port followed by a path
   (`http://localhost:5173/@vite/client`) is left alone (#3432, takes over
   #3437)
+- CLI: the terminal chat renderer consumes a backslash before ASCII
+  punctuation instead of printing it and applying the emphasis it escaped
+  (`\*not italic\*`), and closes a code span only on a backtick run of the
+  opener's length. Emphasis is paired the way CommonMark pairs delimiter
+  runs, so nested spans print no delimiters -- `**Note: this is
+  *important***`, `*italic with **bold** inside*`, `~~struck with *italic*
+  inside~~` -- a table cell holding them stays aligned, and `2 * 3 * 4` is
+  no longer italicised. Nothing inside a code span is unescaped, so a regex
+  or Windows path in inline code (`^\[\d+\]$`, `C:\Program Files\(x86)\`)
+  keeps every backslash, and a line, code span or table cell ending in
+  backslashes prints each one once (#3426, takes over #3436)
 - xlsx skill: `set_cell` and `create_xlsx` wrote an ISO timestamp with a `Z`
   or `+HH:MM` suffix as an offset-aware datetime, which openpyxl rejects in
   the middle of `wb.save()`. The run died with a traceback and left a
