@@ -83,7 +83,14 @@ _FENCE_RE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})")
 _LIST_RE = re.compile(r"^(\s*)([-*+]|\d+\.)\s+(.*)$")
 
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
-_BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
+# A lone ``*`` may sit inside the span, a ``**`` may not. ``[^*\n]+`` could
+# not cross the ``*`` of a nested italic, so ``**bold with *italic*
+# inside**`` never matched as bold and its delimiters were printed (#3426);
+# refusing ``**`` keeps ``**a** and **b**`` two spans rather than one.
+_BOLD_RE = re.compile(r"\*\*((?:[^*\n]|\*(?!\*))+)\*\*")
+# ``***x***`` is one run, bold and italic at once. Left to the two patterns
+# above it came out as bold over ``*x`` between stray asterisks (#3426).
+_BOLD_ITALIC_RE = re.compile(r"\*\*\*([^*\n]+)\*\*\*")
 _ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
 _STRIKE_RE = re.compile(r"~~([^~\n]+)~~")
 _LINK_RE = re.compile(r"\[([^\]\n]+)\]\(([^)\s]+)\)")
@@ -113,59 +120,233 @@ def _styled(text: str, style: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _render_inline(text: str) -> str:
+def _is_escaped(text: str, index: int) -> bool:
+    """True when the character at *index* follows an odd run of backslashes.
+
+    An escaped backtick is literal and cannot open a code span. Counting the
+    whole run keeps a double backslash before a backtick a real delimiter:
+    there the first backslash escapes the second, not the backtick.
+    """
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
+def _find_closing_backtick_run(text: str, start: int, length: int) -> int:
+    """Index of the next backtick run of *exactly* ``length`` at or after
+    ``start``, or -1 -- the same scan as ``channels/_telegram_formatting.py``
+    (#3173).
+
+    CommonMark closes a code span on a run of the opener's own length, so a
+    span opened with two backticks can quote a single one. A one-backtick
+    pattern closed it on that inner backtick instead, deleting it and
+    printing the outer pair (#3426). A run of the wrong length is content
+    and is skipped whole.
+    """
+    cursor = start
+    while cursor < len(text):
+        if text[cursor] != "`":
+            cursor += 1
+            continue
+        run_end = cursor
+        while run_end < len(text) and text[run_end] == "`":
+            run_end += 1
+        if run_end - cursor == length:
+            return cursor
+        cursor = run_end
+    return -1
+
+
+def _protect_code_spans(text: str) -> tuple[str, list[str]]:
+    """Swap each code span for a placeholder, returning the raw contents.
+
+    This runs before escapes are parked, so nothing inside a span -- the
+    ``\\.`` of a regex, the backslashes of a Windows path -- is unescaped:
+    CommonMark does not process backslash escapes in code. An escaped
+    backtick cannot *open* a span; the closer is matched raw, as in the
+    reference implementation.
+    """
+    contents: list[str] = []
+    out: list[str] = []
+    cursor = 0
+    while cursor < len(text):
+        if text[cursor] != "`" or _is_escaped(text, cursor):
+            out.append(text[cursor])
+            cursor += 1
+            continue
+        marker_end = cursor
+        while marker_end < len(text) and text[marker_end] == "`":
+            marker_end += 1
+        length = marker_end - cursor
+        closing = _find_closing_backtick_run(text, marker_end, length)
+        if closing < 0:
+            out.append(text[cursor:marker_end])
+            cursor = marker_end
+            continue
+        out.append(f"\x00CODE{len(contents)}\x00")
+        contents.append(text[marker_end:closing])
+        cursor = closing + length
+    return "".join(out), contents
+
+
+#: CommonMark's escapable set: a backslash before ASCII punctuation makes
+#: that character literal. A backslash before anything else (``\d`` in a
+#: regex, ``C:\Users``) is an ordinary backslash and stays.
+_ESCAPED_PUNCT_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
+_ESC_PLACEHOLDER_RE = re.compile(r"\x00ESC(\d+)\x00")
+_CODE_PLACEHOLDER_RE = re.compile(r"\x00CODE(\d+)\x00")
+
+
+def _park_escaped_punctuation(text: str) -> tuple[str, list[str]]:
+    """Replace ``\\<punctuation>`` with placeholders, returning the characters.
+
+    The marker has to be out of the way before the span patterns run, or
+    they match it anyway -- which is why ``\\*not italic\\*`` came back
+    italicised with its backslashes still in it (#3426).
+    """
+    parked: list[str] = []
+
+    def _park(match: re.Match[str]) -> str:
+        parked.append(match.group(1))
+        return f"\x00ESC{len(parked) - 1}\x00"
+
+    return _ESCAPED_PUNCT_RE.sub(_park, text), parked
+
+
+def _unpark(pattern: re.Pattern[str], values: list[str], text: str) -> str:
+    """Put parked *values* back in one pass. A lookalike placeholder that was
+    already in the model's text has no value and is left as it is."""
+
+    def _value(m: re.Match[str]) -> str:
+        index = int(m.group(1))
+        return values[index] if index < len(values) else m.group(0)
+
+    return pattern.sub(_value, text)
+
+
+#: A backslash directly before a ``[`` that cannot open a Rich tag.
+_BACKSLASH_BEFORE_PLAIN_BRACKET_RE = re.compile(r"\\(?=\[(?![a-z#/@][^[]*?\]))")
+
+
+def _escape_literal(text: str, *, tag_follows: bool = True) -> str:
+    """Rich-escape *text* so it renders byte-for-byte.
+
+    Rich's ``escape`` only touches a ``[`` that looks like a tag, but its
+    parser turns *every* ``\\[`` into ``[``, so a code span quoting the regex
+    ``^\\[\\d+\\]$`` lost its first backslash. Doubling the backslash in
+    front of such a bracket keeps it.
+
+    A trailing backslash run depends on what follows: before a tag Rich
+    reads ``n`` backslashes as ``n // 2`` (and an odd run escapes the tag),
+    elsewhere they are literal. ``escape`` pads only a single backslash, so
+    a code span ending in two printed one and one ending in three leaked its
+    ``[/]``. The whole run is doubled when *tag_follows*, kept otherwise.
+    """
+    body = text.rstrip("\\")
+    trailing = len(text) - len(body)
+    escaped = _rich_escape(_BACKSLASH_BEFORE_PLAIN_BRACKET_RE.sub(r"\\\\", body))
+    return escaped + "\\" * (trailing * 2 if tag_follows else trailing)
+
+
+def _render_inline(text: str, *, tag_follows: bool = True) -> str:
     """Apply inline markdown styling to a single (already block-stripped)
     line of text.
 
-    The line is tokenized into *spans* on the raw text first (links, then
-    inline code, bold, italic, strike — earlier claims win on overlap).
-    Plain segments are Rich-escaped; styled segments wrap their escaped
-    content. Building markup this way (instead of escaping the whole line
-    up front) keeps the ``\\[`` escape sequences from colliding with the
-    tag-insertion regexes, which previously produced unbalanced markup
-    for e.g. ``[text](url)`` links.
+    Code spans are protected first and backslash escapes parked second --
+    the order ``channels/_telegram_formatting.py`` uses (#3307) -- so an
+    escaped backtick cannot open a span and nothing inside one is
+    unescaped. The rest is tokenized into *spans* (links, bold, italic,
+    strike); a span enclosing another wins and renders its content
+    recursively, so neither style is lost and no delimiter is printed
+    (#3426). Plain segments are Rich-escaped; styled segments wrap their
+    escaped content. Building markup this way (instead of escaping the whole
+    line up front) keeps the ``\\[`` escape sequences from colliding with
+    the tag-insertion regexes, which previously produced unbalanced markup
+    for e.g. ``[text](url)`` links. Code spans come back last, as plain
+    segments are escaped, so a restored one is never rescanned.
+
+    *tag_follows* says whether the caller puts markup straight after the
+    result, which decides how a trailing backslash is escaped.
     """
-    spans: list[tuple[int, int, str]] = []
+    text, code_contents = _protect_code_spans(text)
+    text, escaped_chars = _park_escaped_punctuation(text)
 
-    def _claim(pattern: re.Pattern[str], make) -> None:  # type: ignore[no-untyped-def]
-        for m in pattern.finditer(text):
-            if any(s < m.end() and m.start() < e for s, e, _ in spans):
+    def _plain(segment: str, tag_follows: bool) -> str:
+        # An escape comes back as its bare character *before* Rich-escaping,
+        # because Rich's escape depends on what follows: a restored ``[`` has
+        # to be seen next to the ``bold]`` it would otherwise open as a tag.
+        # Code spans are spliced in between the escaped pieces for the same
+        # reason -- a piece ending in a restored ``\`` must see the tag.
+        segment = _unpark(_ESC_PLACEHOLDER_RE, escaped_chars, segment)
+        pieces = _CODE_PLACEHOLDER_RE.split(segment)
+        out: list[str] = []
+        text_piece = pieces[0]
+        for i in range(1, len(pieces), 2):
+            index = int(pieces[i])
+            if index >= len(code_contents):
+                text_piece += f"\x00CODE{index}\x00" + pieces[i + 1]
                 continue
-            spans.append((m.start(), m.end(), make(m)))
+            out.append(_escape_literal(text_piece))
+            out.append(f"[{_INLINE_CODE_STYLE}]{_escape_literal(code_contents[index])}[/]")
+            text_piece = pieces[i + 1]
+        out.append(_escape_literal(text_piece, tag_follows=tag_follows))
+        return "".join(out)
 
-    _claim(
-        _LINK_RE,
-        lambda m: (
-            f"[{_LINK_STYLE}]{_rich_escape(m.group(1))}[/]"
-            f" [{_LINK_URL_STYLE}]({_rich_escape(m.group(2))})[/]"
-        ),
-    )
-    _claim(
-        _INLINE_CODE_RE,
-        lambda m: f"[{_INLINE_CODE_STYLE}]{_rich_escape(m.group(1))}[/]",
-    )
-    _claim(
-        _BOLD_RE,
-        lambda m: f"[{_BOLD_STYLE}]{_rich_escape(m.group(1))}[/]",
-    )
-    _claim(
-        _ITALIC_RE,
-        lambda m: f"[{_ITALIC_STYLE}]{_rich_escape(m.group(1))}[/]",
-    )
-    _claim(
-        _STRIKE_RE,
-        lambda m: f"[{_STRIKE_STYLE}]{_rich_escape(m.group(1))}[/]",
-    )
+    def _spans(segment: str, tag_follows: bool) -> str:
+        # Collected in claim priority: link, bold+italic, bold, italic, strike.
+        candidates: list[tuple[int, int, str]] = []
 
-    spans.sort()
-    out: list[str] = []
-    pos = 0
-    for start, end, replacement in spans:
-        out.append(_rich_escape(text[pos:start]))
-        out.append(replacement)
-        pos = end
-    out.append(_rich_escape(text[pos:]))
-    return "".join(out)
+        def _collect(pattern: re.Pattern[str], make) -> None:  # type: ignore[no-untyped-def]
+            for m in pattern.finditer(segment):
+                candidates.append((m.start(), m.end(), make(m)))
+
+        _collect(
+            _LINK_RE,
+            lambda m: (
+                f"[{_LINK_STYLE}]{_plain(m.group(1), True)}[/]"
+                f" [{_LINK_URL_STYLE}]({_plain(m.group(2), False)})[/]"
+            ),
+        )
+        _collect(
+            _BOLD_ITALIC_RE,
+            lambda m: f"[{_BOLD_STYLE}][{_ITALIC_STYLE}]{_spans(m.group(1), True)}[/][/]",
+        )
+        _collect(_BOLD_RE, lambda m: f"[{_BOLD_STYLE}]{_spans(m.group(1), True)}[/]")
+        _collect(_ITALIC_RE, lambda m: f"[{_ITALIC_STYLE}]{_spans(m.group(1), True)}[/]")
+        _collect(_STRIKE_RE, lambda m: f"[{_STRIKE_STYLE}]{_spans(m.group(1), True)}[/]")
+
+        # Two spans that only partly overlap cannot both be drawn: the one
+        # claimed first keeps its place, as before -- a link is never broken
+        # by emphasis that runs into it. Spans that nest are both kept ...
+        kept: list[tuple[int, int, str]] = []
+        for start, end, replacement in candidates:
+            if not any(
+                s < end and start < e and not (s <= start and end <= e or start <= s and e <= end)
+                for s, e, _ in kept
+            ):
+                kept.append((start, end, replacement))
+        # ... and the enclosing one is drawn, rendering the inner one inside
+        # it. Claiming in pattern order let an inner span discard the one
+        # enclosing it, leaving that one's delimiters on screen.
+        kept.sort(key=lambda c: (c[0], -c[1]))
+        spans: list[tuple[int, int, str]] = []
+        for start, end, replacement in kept:
+            if not spans or start >= spans[-1][1]:
+                spans.append((start, end, replacement))
+
+        out: list[str] = []
+        pos = 0
+        for start, end, replacement in spans:
+            out.append(_plain(segment[pos:start], True))
+            out.append(replacement)
+            pos = end
+        out.append(_plain(segment[pos:], tag_follows))
+        return "".join(out)
+
+    return _spans(text, tag_follows)
 
 
 # ---------------------------------------------------------------------------
@@ -302,13 +483,20 @@ def _parse_table_alignment(line: str, ncols: int) -> list[str]:
 
 
 def _cell_plain(text: str) -> str:
-    """Strip inline markdown markers for width measurement."""
-    out = _LINK_RE.sub(lambda m: f"{m.group(1)} ({m.group(2)})", text)
-    out = _INLINE_CODE_RE.sub(lambda m: m.group(1), out)
+    """Strip inline markdown markers for width measurement.
+
+    Read in `_render_inline`'s order -- code spans, then escapes, then the
+    rest -- so a cell drawn by `_render_inline` is measured as drawn.
+    """
+    out, code_contents = _protect_code_spans(text)
+    out, escaped_chars = _park_escaped_punctuation(out)
+    out = _LINK_RE.sub(lambda m: f"{m.group(1)} ({m.group(2)})", out)
+    out = _BOLD_ITALIC_RE.sub(lambda m: m.group(1), out)
     out = _BOLD_RE.sub(lambda m: m.group(1), out)
     out = _ITALIC_RE.sub(lambda m: m.group(1), out)
     out = _STRIKE_RE.sub(lambda m: m.group(1), out)
-    return out
+    out = _unpark(_ESC_PLACEHOLDER_RE, escaped_chars, out)
+    return _unpark(_CODE_PLACEHOLDER_RE, code_contents, out)
 
 
 def _cell_width(text: str) -> int:
@@ -360,10 +548,18 @@ def _render_cell_content(text: str, width: int, align: str, *, header: bool) -> 
             if p.fullmatch(text)
         )
         assert m is not None
-        inner = lpad + _rich_escape(m.group(1)) + rpad
+        # Code is literal; an emphasis span's content may nest another span
+        # or hold an escape, so it is rendered like any other inline text.
+        # The closing tag only comes straight after when there is no padding.
+        if span_style == _INLINE_CODE_STYLE:
+            content = _escape_literal(m.group(1), tag_follows=not rpad)
+        else:
+            content = _render_inline(m.group(1), tag_follows=not rpad)
+        inner = lpad + content + rpad
         rendered = f"[{span_style}]{inner}[/]"
     else:
-        rendered = lpad + _render_inline(text) + rpad
+        # The padding, or the header's closing tag, comes straight after.
+        rendered = lpad + _render_inline(text, tag_follows=header and not rpad) + rpad
     if header:
         return f"[bold]{rendered}[/]"
     return rendered
@@ -519,16 +715,16 @@ def _render_table_line(line: str) -> str:
 def _render_list_line(line: str) -> str:
     m = _LIST_RE.match(line)
     if not m:
-        return _render_inline(line)
+        return _render_inline(line, tag_follows=False)
     indent, marker, body = m.groups()
     styled_marker = f"[{_LIST_MARKER_STYLE}]{_rich_escape(marker)}[/]"
-    return f"{_rich_escape(indent)}{styled_marker} {_render_inline(body)}"
+    return f"{_rich_escape(indent)}{styled_marker} {_render_inline(body, tag_follows=False)}"
 
 
 def _render_quote_line(line: str) -> str:
     m = _QUOTE_RE.match(line)
     if not m:
-        return _render_inline(line)
+        return _render_inline(line, tag_follows=False)
     body = m.group(1)
     return f"[{_QUOTE_STYLE}]▎ {_render_inline(body)}[/]"
 
@@ -536,7 +732,7 @@ def _render_quote_line(line: str) -> str:
 def _render_heading_line(line: str) -> str:
     m = _HEADING_RE.match(line)
     if not m:
-        return _render_inline(line)
+        return _render_inline(line, tag_follows=False)
     _hashes, body = m.groups()
     return _styled(_render_inline(body), _HEADING_STYLE)
 
@@ -775,7 +971,7 @@ class MarkdownStreamRenderer:
         self._in_quote = False
         if _LIST_RE.match(line):
             return prefix + _render_list_line(line)
-        return prefix + _render_inline(line)
+        return prefix + _render_inline(line, tag_follows=False)
 
 
 # ---------------------------------------------------------------------------
