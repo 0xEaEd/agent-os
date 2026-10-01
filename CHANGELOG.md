@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Redaction: a `.netrc` or `.pgpass` read with a Windows-native path
+  (`type C:\ProgramData\pg\.pgpass`, or the same under a user profile) had
+  its password emitted to the model verbatim, while the POSIX spelling of
+  the same read was masked.
+  `_credential_file_formats_in` tokenised the command with a bare
+  `shlex.split`, which runs in POSIX mode and reads `\` as an escape, so the
+  operand collapsed to `C:ProgramDatapg.pgpass`, no basename matched the format map
+  and the `.netrc`/`.pgpass` rule from #2620/#2721 never ran -- the one rule
+  that can see a password those formats carry positionally. It now uses
+  `_command_operands`, the helper in the same module written for exactly this
+  and already used by `reads_credential_file`, which was answering `True` for
+  the very commands the format lookup came back empty for. (#3544)
 - Sessions started from a channel (Telegram, Slack, Discord, …) are now
   named from their first message, like WebChat and desktop-app sessions,
   instead of keeping their short id in the sidebar. Channel dispatch never
