@@ -524,6 +524,53 @@ def _rebalance_open_fence(
     return _build(cut)
 
 
+def split_stream_segment(
+    text: str,
+    limit: int,
+    *,
+    measure: Callable[[str], int] | None = None,
+) -> tuple[str, int, str]:
+    """``(text to send, source characters consumed, reopener for the rest)``.
+
+    For a streaming adapter, which keeps a watermark into the accumulated
+    text and re-slices it on every flush. :func:`split_text_for_limit`
+    keeps a fenced code block balanced by closing it on the head and
+    reopening it on the tail, so the head carries characters the source does
+    not and the tail starts with a reopener. A watermark advanced by
+    ``len(head)`` therefore skips four source characters per rollover and
+    drops the reopening fence: the block loses text mid-identifier and the
+    messages after it render as prose (#3505).
+
+    The second element is what the head really consumed, counted in the
+    source; the third is the reopener the *next* message has to start with,
+    empty when there was no fence to rebalance.
+    """
+    head, tail = split_text_for_limit(text, limit, measure=measure)
+    if not tail or text.startswith(head):
+        return head, len(head), ""
+    # A rebalanced tail is the one-line reopener followed by the source the
+    # head did not consume, less the newlines at the cut. Reading it off the
+    # tail holds for either fence marker and either closer shape.
+    reopener = tail[: tail.index("\n") + 1]
+    return head, len(text) - (len(tail) - len(reopener)), reopener
+
+
+def open_fence_reopener(text: str) -> str:
+    """The line that reopens the fenced code block *text* leaves open, else ``""``.
+
+    For a streaming adapter that abandons the message it was editing and
+    posts the rest as a new one: the reopener it carried into that message
+    is stale once the block has closed, and missing when the block opened
+    in that message, so it is re-derived from what the message shows.
+    """
+    open_fence = _open_fence_before(text, len(text))
+    if open_fence is None:
+        return ""
+    marker, fence_start = open_fence
+    line_end = text.find("\n", fence_start)
+    return f"{text[fence_start:line_end]}\n" if line_end >= 0 else f"{marker}\n"
+
+
 def split_text_for_limit(
     segment: str,
     limit: int,
