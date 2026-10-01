@@ -834,5 +834,10 @@ def test_desktop_release_hands_electron_builder_a_semver_package_version() -> No
     ]
     assert len(runs) == 2
     for run in runs:
-        assert "npm pkg set version=" in run
-        assert run.index("npm pkg set version=") < run.index("npx electron-builder")
+        save = run.index('cp package.json "${RUNNER_TEMP}/package.json.calver"')
+        swap = run.index("npm pkg set version=")
+        build = run.index("npx electron-builder")
+        restore = run.index('cp "${RUNNER_TEMP}/package.json.calver" package.json')
+        # Later steps (the signed-bundle check) read the CalVer back through
+        # scripts/release-version.mjs, so the twin is only there for the build.
+        assert save < swap < build < restore
