@@ -121,14 +121,19 @@ _PREFIX_RE = re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(_PREFIX_PATTERNS) + ")
 #: rest through verbatim, so the match is structural (#3432). The same pattern
 #: backs redaction and the payload guard's ``connection_string`` case.
 #: The username is optional (``*``, not ``+``): ``redis://:password@host`` is
-#: the canonical Redis URL. The password stops at ``/``, where URL parsers end
-#: the authority, so a port before an ``@`` path
-#: (``http://localhost:5173/@vite/client``) is not read as userinfo. Whitespace
-#: is excluded from both halves so a match can never span a line break.
-#: The scheme is anchored on the left: unanchored, every position in a long run
-#: of scheme characters starts its own scan and the search goes quadratic.
+#: the canonical Redis URL. The password may contain ``/``: a base64-generated
+#: one (``openssl rand -base64``) often does, and SQLAlchemy accepts it
+#: unencoded in ``DATABASE_URL``. What must not start it is a port followed by
+#: a path (``(?!\d*/)``), so ``http://localhost:5173/@vite/client`` is not read
+#: as userinfo. Whitespace is excluded from both halves so a match can never
+#: span a line break.
+#: The scheme is anchored on the left and the password is bounded: unanchored,
+#: every position in a long run of scheme characters starts its own scan, and
+#: an unbounded password scans to the end of the run from every ``scheme://x:``
+#: in it -- either way the search goes quadratic.
 _URL_USERINFO_RE = re.compile(
-    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://[^:\s/]*:)([^@\s/]+)(@)", re.IGNORECASE
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://[^:\s/]*:)((?!\d*/)[^@\s]{1,256})(@)",
+    re.IGNORECASE,
 )
 
 _PEM_PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)

@@ -83,6 +83,26 @@ def test_the_host_and_scheme_survive_so_the_line_stays_readable() -> None:
     assert redacted == "wss://user:***@gateway.host:443/ws"
 
 
+@pytest.mark.parametrize(
+    ("url", "password"),
+    [
+        ("postgres://u:Ab3/xyz+Q==@db/app", "Ab3/xyz+Q=="),
+        ("postgresql://app:k9/Zp+q=@db:5432/x", "k9/Zp+q="),
+        ("wss://svc:Zp9/q+/=@gateway.host/ws", "Zp9/q+/="),
+    ],
+)
+def test_a_base64_password_with_a_slash_is_still_masked(url: str, password: str) -> None:
+    """``openssl rand -base64`` and most cloud consoles hand out passwords with
+    ``/`` in them, and SQLAlchemy reads them unencoded from ``DATABASE_URL``.
+    Main masked these for the database schemes; stopping the password at ``/``
+    would have handed the whole of it to the model."""
+    redacted = redact_sensitive_text(url, force=True)
+
+    assert password not in redacted
+    assert "***" in redacted
+    assert secret_literal_marker(url) == "connection_string"
+
+
 def test_a_reference_in_the_password_slot_is_left_alone() -> None:
     """Same rule as every other scheme already had: ``$VAR`` points at a secret."""
     text = "wss://user:$GATEWAY_PASSWORD@gateway.host/ws"
@@ -99,6 +119,7 @@ def test_a_reference_in_the_password_slot_is_left_alone() -> None:
         "https://example.com:8080/path",  # a port, not a credential
         "http://host/a@b",  # an @ in the path
         "http://localhost:5173/@vite/client",  # a port, then an @ path
+        "http://h:8080/p/a@b.com",  # a port, then an email in the path
         "see http://plain.host/x for docs",
         "see https://example.com/docs, bob@example.com",
         "bob@example.com,https://example.com/x",
@@ -133,12 +154,16 @@ def test_ordinary_text_is_not_touched(text: str) -> None:
         pytest.param("a" * 80_000 + " http://h", id="long-run-then-scheme"),
         pytest.param("s://" + "u" * 80_000, id="unterminated-userinfo"),
         pytest.param("a1" * (1 << 19) + " https://user:pw@host", id="1mib-run-then-url"),
+        pytest.param("a://:" * 50_000, id="repeated-empty-userinfo"),
+        pytest.param("a://b:" * 40_000, id="repeated-userinfo-no-at"),
     ],
 )
 def test_a_long_run_of_scheme_characters_does_not_go_quadratic(text: str) -> None:
     """Every character in ``[a-z0-9+.-]`` can start a scheme. Unanchored, each
     position in a long run began its own scan for ``://``: 80 kB took over 20 s.
-    Anchored, 1 MiB takes about a tenth of a second; the bound is loose so a
+    An unbounded password class would rescan the rest of the run from every
+    ``scheme://x:`` in it, hence the repeated-userinfo cases. Anchored and
+    bounded, 1 MiB takes about a tenth of a second; the bound is loose so a
     slow runner does not flake, and still far below the quadratic cost."""
     start = time.perf_counter()
     redact_sensitive_text(text, force=True)
