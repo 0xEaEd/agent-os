@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Release: the Mac app could not be packaged for a `.postN` release whose
+  day has one digit. electron-builder validates `package.json`'s own
+  version as loose semver before the workflow's version override applies,
+  and `2026.10.1.post1` does not parse. Earlier `.postN` releases got
+  through only because loose parsing misread a two-digit day as a
+  prerelease (`2026.9.29.post1` as `2026.9.2-9.post1`). The release workflow
+  now writes the semver twin (`2026.1001.1`) into the checkout's
+  `package.json` before packaging; the app still carries the CalVer.
+
 ## [2026.10.1.post1] - 2026-10-01
 
 ### Fixed
