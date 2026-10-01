@@ -37,7 +37,7 @@ Surplus Intelligence, OpenAI, Anthropic, Ollama, DeepSeek, Gemini,
 Qwen/DashScope, and 20+ other providers. You do not need to change your code or config to
 switch providers.
 
-AgentOS 2026.9.29 is the current release. The project website is
+AgentOS 2026.9.29.post1 is the current release. The project website is
 [useagentos.dev](https://useagentos.dev). Follow
 [@useAgentOS](https://x.com/useAgentOS) on X for updates.
 
@@ -275,14 +275,14 @@ agentos gateway run
 > new terminal window. Or run the PATH command from step 1 again.
 
 For an install pinned to one exact version, add `==<version>` — for
-example `uv tool install --python 3.12 "use-agent-os[recommended]==2026.9.29"` —
+example `uv tool install --python 3.12 "use-agent-os[recommended]==2026.9.29.post1"` —
 or use the GitHub release wheel link directly:
-`https://github.com/use-agent-os/agent-os/releases/download/v2026.9.29/use_agent_os-2026.9.29-py3-none-any.whl`.
+`https://github.com/use-agent-os/agent-os/releases/download/v2026.9.29.post1/use_agent_os-2026.9.29.post1-py3-none-any.whl`.
 
 > [!NOTE]
 > Release install commands use published GitHub release assets.
 > Python wheel installs use versioned wheel filenames — for example
-> `use_agent_os-2026.9.29-py3-none-any.whl` — because the installers validate the
+> `use_agent_os-2026.9.29.post1-py3-none-any.whl` — because the installers validate the
 > version segment inside the wheel filename, so there is no `latest`
 > wheel alias. Only the Windows portable zip has a version-independent
 > `releases/latest/download/` alias.
@@ -320,9 +320,10 @@ Flags:
 | `--timeout <s>` | Upgrade-subprocess timeout (default 600s). On timeout the tool's process group is killed and recovery guidance is printed — never a half-state. |
 | `--json` | Machine-readable output. |
 
-For a plain-`pip`, editable, or unclassifiable install, `agentos upgrade` will
-**not** fake it — it prints the exact manual command and exits non-zero. Run it
-yourself:
+For a plain-`pip`, Windows portable, editable, or unclassifiable install,
+`agentos upgrade` will **not** fake it — it prints the exact manual command and
+exits non-zero. Run it yourself (the portable venv has no pip, so its command
+restores it with `python -m ensurepip` first):
 
 ```sh
 # pip install

@@ -379,6 +379,9 @@ Per install method:
   with a distinct code. The editable hint points at
   `git pull && bash scripts/install_source.sh`, since an editable install serves
   the control UI straight out of the checkout.
+- **portable** (the Windows portable zip's venv, built without pip) — not faked
+  either: prints `python -m ensurepip` and then the `python -m pip install
+  --upgrade` command, as two lines to run in order.
 
 Extras are always `[recommended]` — the same profile `install_source.sh`
 installs by default. Without them the ONNX embedding models and the pilot router
