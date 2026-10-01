@@ -102,8 +102,15 @@ def test_third_party_egress_still_allows_an_ordinary_question() -> None:
 def test_a_url_with_userinfo_is_the_credential_not_a_location() -> None:
     """A vault URL is a pointer; the same URL with a token in it is not."""
     assert redact.credential_text_marker("api_key_url=https://vault.example/v1/key") is None
+    # A password in the userinfo is caught by the scheme-agnostic userinfo
+    # match before the assignment is even looked at (#3432)...
     assert (
         redact.credential_text_marker("api_key_url=https://user:realtokenvalue@vault.example")
+        == "connection_string"
+    )
+    # ...and a bare token as the username still is not a location either.
+    assert (
+        redact.credential_text_marker("api_key_url=https://realtokenvalue@vault.example")
         == "secret_assignment"
     )
 
