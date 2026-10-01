@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Windows portable: `agentos upgrade` prints `python -m ensurepip`, then
+  `python -m pip install --upgrade "use-agent-os[recommended]"`, instead of a
+  pip command that fails in a venv built without pip (#3480).
+
 ## [2026.9.29.post1] - 2026-09-29
 
 ### Added

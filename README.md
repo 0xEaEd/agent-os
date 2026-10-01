@@ -320,9 +320,10 @@ Flags:
 | `--timeout <s>` | Upgrade-subprocess timeout (default 600s). On timeout the tool's process group is killed and recovery guidance is printed — never a half-state. |
 | `--json` | Machine-readable output. |
 
-For a plain-`pip`, editable, or unclassifiable install, `agentos upgrade` will
-**not** fake it — it prints the exact manual command and exits non-zero. Run it
-yourself:
+For a plain-`pip`, Windows portable, editable, or unclassifiable install,
+`agentos upgrade` will **not** fake it — it prints the exact manual command and
+exits non-zero. Run it yourself (the portable venv has no pip, so its command
+restores it with `python -m ensurepip` first):
 
 ```sh
 # pip install
