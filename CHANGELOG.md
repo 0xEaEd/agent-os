@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Desktop: the chat composer has the web console's Run modes popover (the
+  sliders button left of the paperclip): the session's execution mode
+  (approval prompts / bypass, with the global default shown), the Pilot
+  Router switch, the plan mode switch and the session's token usage. Before,
+  the app had no session execution-mode override or usage readout at all,
+  and plan mode was reachable only by typing `/plan`. Visual effects is left
+  out on desktop, which never shows the router animation strip. (#3548)
+
 ### Fixed
 - `title-card-image` skill: `render.py`'s auto-shrink only checked the
   rendered text against the canvas *width*; the stacked headline/subtitle

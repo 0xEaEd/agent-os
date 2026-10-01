@@ -26,6 +26,9 @@ export const shell = {
   'composer.placeholder': 'Start with a goal',
   'composer.attach': 'Attach files',
   'composer.route': 'Model route',
+  'composer.runModes': 'Run modes',
+  'composer.runModesTitle': 'Run modes: execution, routing, plan mode and usage',
+  'composer.runModesClose': 'Close run modes',
   'composer.send': 'Send',
   'composer.stop': 'Stop',
 

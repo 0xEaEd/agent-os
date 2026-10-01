@@ -1,4 +1,5 @@
-import { ArrowUp, Paperclip, Square } from 'lucide-react'
+import { ArrowUp, Paperclip, SlidersHorizontal, Square, X } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
   useCallback,
   useEffect,
@@ -12,6 +13,7 @@ import { toast } from 'sonner'
 import type { ComposerHandle } from '@/views/chat/Composer'
 import { MAX_PENDING, sendButtonState } from '@/views/chat/logic'
 import { t } from '~/i18n'
+import { quick } from '~/lib/motion'
 
 export type { ComposerHandle }
 
@@ -40,6 +42,13 @@ export interface ComposerProps {
   tray?: ReactNode
   routerFxDock?: ReactNode
   routePicker?: ReactNode
+  /**
+   * Run modes body (the console's chat Toolbar: execution mode, Pilot Router,
+   * plan mode, session usage). Mounted in a popover behind a sliders button at
+   * the left of the capsule, and only while that popover is open, so every
+   * open reads fresh state. Absent: no button.
+   */
+  toolbar?: ReactNode
   pendingCount?: number
   onRecoverPending?: () => boolean
   onPopPendingTail?: () => void
@@ -78,6 +87,7 @@ export function Composer({
   tray,
   routerFxDock,
   routePicker,
+  toolbar,
   pendingCount = 0,
   onRecoverPending,
   onPopPendingTail,
@@ -93,6 +103,45 @@ export function Composer({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const historyIdxRef = useRef<number | null>(null)
   const historyDraftRef = useRef('')
+  const [runModesOpen, setRunModesOpen] = useState(false)
+  const runModesWrapRef = useRef<HTMLDivElement>(null)
+  const runModesTriggerRef = useRef<HTMLButtonElement>(null)
+  const runModesCloseRef = useRef<HTMLButtonElement>(null)
+  const reduceMotion = useReducedMotion()
+
+  const closeRunModes = useCallback(() => {
+    setRunModesOpen(false)
+    runModesTriggerRef.current?.focus({ preventScroll: true })
+  }, [])
+
+  // Outside click and Escape close the popover. The body's bypass confirm is
+  // a ModalShell portalled to <body>, outside the wrap: a press inside it must
+  // not close the popover (that would unmount the dialog before its buttons
+  // receive the click), and its own Escape belongs to the dialog.
+  useEffect(() => {
+    if (!runModesOpen) return
+    runModesCloseRef.current?.focus({ preventScroll: true })
+    const inside = (target: EventTarget | null): boolean =>
+      target instanceof Node &&
+      (Boolean(runModesWrapRef.current?.contains(target)) ||
+        (target instanceof Element && target.closest('[role="alertdialog"]') !== null))
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (!inside(e.target)) setRunModesOpen(false)
+    }
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || document.querySelector('[role="alertdialog"]')) return
+      // The open popover owns Escape before the textarea's abort/clear chain.
+      e.preventDefault()
+      e.stopPropagation()
+      closeRunModes()
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    document.addEventListener('keydown', onDocKeyDown, true)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown)
+      document.removeEventListener('keydown', onDocKeyDown, true)
+    }
+  }, [runModesOpen, closeRunModes])
 
   const autoResize = useCallback(() => {
     const ta = textareaRef.current
@@ -299,6 +348,55 @@ export function Composer({
           doSend()
         }}
       >
+        {toolbar ? (
+          <div className="composer-run-modes" ref={runModesWrapRef}>
+            <button
+              ref={runModesTriggerRef}
+              type="button"
+              className="composer-chip"
+              aria-haspopup="dialog"
+              aria-expanded={runModesOpen}
+              aria-controls={runModesOpen ? 'composer-run-modes-popover' : undefined}
+              aria-label={t('composer.runModes')}
+              title={t('composer.runModesTitle')}
+              data-open={runModesOpen || undefined}
+              onClick={() => setRunModesOpen((v) => !v)}
+            >
+              <SlidersHorizontal className="size-4" strokeWidth={1.75} aria-hidden />
+            </button>
+            <AnimatePresence initial={false}>
+              {runModesOpen ? (
+                <motion.div
+                  id="composer-run-modes-popover"
+                  className="composer-run-modes__popover"
+                  role="dialog"
+                  aria-labelledby="composer-run-modes-title"
+                  initial={reduceMotion ? false : { opacity: 0, scale: 0.98, y: 4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: 2 }}
+                  transition={reduceMotion ? { duration: 0 } : quick}
+                >
+                  <header className="composer-run-modes__header">
+                    <h2 id="composer-run-modes-title" className="composer-run-modes__title">
+                      {t('composer.runModes')}
+                    </h2>
+                    <button
+                      ref={runModesCloseRef}
+                      type="button"
+                      className="composer-run-modes__close"
+                      aria-label={t('composer.runModesClose')}
+                      title={t('composer.runModesClose')}
+                      onClick={closeRunModes}
+                    >
+                      <X className="size-3.5" strokeWidth={2} aria-hidden />
+                    </button>
+                  </header>
+                  <div className="composer-run-modes__body">{toolbar}</div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </div>
+        ) : null}
         {onAttachFiles ? (
           <>
             <input

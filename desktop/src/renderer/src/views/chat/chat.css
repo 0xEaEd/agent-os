@@ -3662,6 +3662,73 @@
   white-space: nowrap;
 }
 
+/* ── Run modes popover (composer sliders button) ────────────────────────── */
+
+/* Opens upward from the capsule's left edge, like the route menu does from
+   its right; <main> clips anything above it, hence the height cap. */
+.composer-run-modes {
+  position: relative;
+  flex-shrink: 0;
+}
+.composer-run-modes .composer-chip[data-open] {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  color: var(--foreground);
+}
+.composer-run-modes__popover {
+  position: absolute;
+  left: -2px;
+  bottom: calc(100% + 12px);
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  width: min(20rem, 80vw);
+  max-height: calc(100vh - 8rem);
+  border-radius: var(--radius-surface);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow:
+    0 0 0 1px var(--hairline),
+    0 24px 60px -20px rgba(0, 0, 0, 0.6);
+  transform-origin: bottom left;
+}
+.chat-desktop[data-docked='false'] .composer-run-modes__popover {
+  max-height: calc(50vh - 2.5rem);
+}
+.composer-run-modes__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 10px 8px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+.composer-run-modes__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.composer-run-modes__close {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-control);
+  color: var(--muted-foreground);
+}
+.composer-run-modes__close:hover {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  color: var(--foreground);
+}
+.composer-run-modes__close:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.composer-run-modes__body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 14px 12px;
+}
+
 /* ── Run-modes body (console Toolbar) ───────────────────────────────────── */
 
 .chat-toolbar {
@@ -3680,8 +3747,8 @@
   color: var(--muted-foreground);
 }
 .chat-toolbar-controls {
-  display: inline-flex;
-  gap: 4px;
+  display: grid;
+  gap: 6px;
 }
 .chat-pill {
   display: inline-flex;
@@ -3701,6 +3768,16 @@
 }
 .chat-pill--disabled {
   opacity: 0.5;
+}
+/* Execution mode: an elevated mode in force (session or global) is a hazard,
+   not a signal, so it reads in danger red rather than lime. */
+.chat-pill.tone-danger.is-active {
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  color: var(--danger);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.chat-pill.tone-danger.is-active:hover {
+  background: color-mix(in srgb, var(--danger) 24%, var(--surface));
 }
 .chat-toggle {
   position: relative;
@@ -3765,6 +3842,86 @@
 .chat-toolbar-usage-empty {
   font-size: 11.5px;
   color: var(--dim);
+}
+
+/* Bypass confirm (the Toolbar's ModalShell, portalled to <body>): an
+   NSAlert-shaped sheet like the approval prompt. The buttons are the
+   console's, so they are restyled here by their data-variant. */
+.chat-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 96px;
+  background: color-mix(in srgb, var(--background) 55%, transparent);
+  backdrop-filter: blur(2px);
+}
+.chat-modal {
+  display: flex;
+  width: min(460px, calc(100vw - 48px));
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 22px 16px;
+  border-radius: var(--radius-dialog);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow:
+    0 0 0 0.5px var(--border),
+    0 24px 60px rgba(0, 0, 0, 0.38),
+    0 2px 8px rgba(0, 0, 0, 0.18);
+  outline: none;
+}
+.chat-modal h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.chat-modal-body {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--dim);
+}
+.chat-modal-body p {
+  margin: 0;
+}
+.chat-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+.chat-modal-actions [data-slot='button'] {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-control);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--surface);
+  box-shadow:
+    0 0 0 0.5px var(--border),
+    0 1px 1px rgba(0, 0, 0, 0.12);
+}
+.chat-modal-actions [data-slot='button']:hover {
+  background: var(--elevated);
+}
+.chat-modal-actions [data-slot='button']:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.chat-modal-actions [data-variant='destructive'] {
+  color: var(--destructive-foreground);
+  background: var(--destructive);
+}
+.chat-modal-actions [data-variant='destructive']:hover {
+  background: color-mix(in srgb, var(--destructive) 88%, var(--foreground));
 }
 
 /* ── Tool output modal ───────────────────────────────────────────────────── */

@@ -49,6 +49,7 @@ export function Toolbar({
   sessionKey,
   routerFxEnabled,
   onRouterFxToggle,
+  showVisualEffects = true,
 }: {
   sessionKey: string
   // The LIVE `_routerFx.enabled` from the stream controller, used to reflect the
@@ -60,6 +61,9 @@ export function Toolbar({
   // no controller), the toggle persists locally via `routerFxSavePref`, matching
   // legacy `_routerFxSavePref` exactly.
   onRouterFxToggle?: (enabled: boolean) => void
+  // Hosts that never run the router-fx strip (the desktop app) leave the
+  // Visual effects row out: a switch with nothing behind it.
+  showVisualEffects?: boolean
 }) {
   const rpc = useRpc()
   const queryClient = useQueryClient()
@@ -320,19 +324,21 @@ export function Toolbar({
           </label>
         </div>
 
-        <div className="chat-toolbar-row">
-          <span className="chat-toolbar-row-label t-label">{t('chat.toolbarVisualEffects')}</span>
-          <label className="chat-toggle" aria-label={t('chat.toolbarVisualEffects')}>
-            <input
-              type="checkbox"
-              checked={routerFxChecked}
-              onChange={(e) => onRouterFxChange(e.target.checked)}
-            />
-            <span className="chat-toggle-track" aria-hidden="true">
-              <span className="chat-toggle-thumb" />
-            </span>
-          </label>
-        </div>
+        {showVisualEffects ? (
+          <div className="chat-toolbar-row">
+            <span className="chat-toolbar-row-label t-label">{t('chat.toolbarVisualEffects')}</span>
+            <label className="chat-toggle" aria-label={t('chat.toolbarVisualEffects')}>
+              <input
+                type="checkbox"
+                checked={routerFxChecked}
+                onChange={(e) => onRouterFxChange(e.target.checked)}
+              />
+              <span className="chat-toggle-track" aria-hidden="true">
+                <span className="chat-toggle-thumb" />
+              </span>
+            </label>
+          </div>
+        ) : null}
       </div>
 
       <div className="chat-toolbar-usage" role="group" aria-labelledby="chat-toolbar-usage-title">

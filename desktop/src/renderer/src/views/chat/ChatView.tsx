@@ -22,6 +22,7 @@ import { PendingQueue } from '@/views/chat/PendingQueue'
 import { resetSession as requestSessionReset } from '@/views/chat/resetSession'
 import { RoutePicker } from '@/views/chat/RoutePicker'
 import { SlashMenu, type SlashMenuHandle } from '@/views/chat/SlashMenu'
+import { Toolbar as RunModes } from '@/views/chat/Toolbar'
 import { useApprovalPending } from '@/views/chat/useApprovalPending'
 import { usePendingQueue, type PendingComposerBridge } from '@/views/chat/usePendingQueue'
 import { useRoutePin } from '@/views/chat/useRoutePin'
@@ -831,6 +832,7 @@ function ConnectedChat({
                 <div id="chat-routerfx-dock" className="chat-routerfx-dock" ref={routerFxDockRef} />
               }
               routePicker={<RoutePicker route={route} />}
+              toolbar={<RunModes sessionKey={sessionKey} showVisualEffects={false} />}
               seats={instruments.seats}
               placeholder={instruments.placeholder}
               onFocusChange={instruments.onFocusChange}
