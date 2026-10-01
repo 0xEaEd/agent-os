@@ -33,6 +33,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Windows portable: `agentos upgrade` prints `python -m ensurepip`, then
   `python -m pip install --upgrade "use-agent-os[recommended]"`, instead of a
   pip command that fails in a venv built without pip (#3480).
+- Security: a password in a URL's userinfo is masked whatever the scheme.
+  Redaction only knew `http(s)` and five database schemes, so
+  `wss://user:pw@gateway`, `ftp://`, `ssh://`, `smtp://`, `ldap://`,
+  `clickhouse://` and the rest reached the model verbatim; the web tool's
+  payload guard had the same gap. One anchored, scheme-agnostic pattern now
+  backs both, and stays linear on long base64/hex runs. A base64 password
+  with a `/` in it and a kilobyte-long one (an RDS IAM token) are still
+  masked, while a port followed by a path
+  (`http://localhost:5173/@vite/client`) is left alone (#3432, takes over
+  #3437)
+- xlsx skill: `set_cell` and `create_xlsx` wrote an ISO timestamp with a `Z`
+  or `+HH:MM` suffix as an offset-aware datetime, which openpyxl rejects in
+  the middle of `wb.save()`. The run died with a traceback and left a
+  truncated zip behind -- and with `--out` pointing at the input, the
+  caller's workbook was gone. The offset is now dropped (Excel has no
+  timezone type; the wall-clock time is stored), and both scripts save to a
+  temp file beside the destination and move it into place only once the save
+  has succeeded, keeping a symlink and the file's mode (#3487, takes over
+  #3492)
+- Trading: a `NaN`, infinite or negative price from the feed made the swap
+  guardrail return `allow`, so an agent swap skipped the approval threshold
+  and the daily cap, and a `NaN` price impact skipped the impact ceiling.
+  Such a price now reads as unpriced and such an impact as unknown, and both
+  wait for you, as a missing one already did (#3503, takes over #3507)
+- Trading: a vault password with leading or trailing whitespace -- a pasted
+  trailing newline, most often -- never auto-unlocked. `setup` stored it
+  verbatim and the auto-unlock read it back stripped, failing silently.
+  Auto-unlock now tries the stored password as written first, so existing
+  vaults open without being set up again (#3504, takes over #3508)
+- Discord, Telegram and MS Teams: a fenced code block streamed past the
+  message cap lost four characters and its reopening fence at every
+  rollover, so text vanished mid-identifier and the messages after it
+  rendered as prose. The consumed-offset splitter Slack got in #3304 now
+  lives in `channels/_util.py` and all four adapters share it; Telegram's
+  flood fallback also reopens (or not) the block the open message actually
+  ends in (#3505, takes over #3509)
 
 ## [2026.9.29.post1] - 2026-09-29
 
