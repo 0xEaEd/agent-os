@@ -818,3 +818,21 @@ def test_wheelhouse_asset_verify_accepts_the_desktop_jobs_assets(tmp_path: Path)
     stray = _run_with_fake_gh(tmp_path / "stray", script, [*_WINDOWS_ASSETS, "notes.txt"])
     assert stray.returncode == 1
     assert "notes.txt" in stray.stderr
+
+
+def test_desktop_release_hands_electron_builder_a_semver_package_version() -> None:
+    # electron-builder validates package.json's own version before
+    # extraMetadata applies, and a CalVer .postN with a one-digit day
+    # (2026.10.1.post1) is not even loose semver. Every packaging run has to
+    # swap the semver twin into the checkout first.
+    workflow = yaml.safe_load((WORKFLOW_DIR / "desktop-release.yml").read_text(encoding="utf-8"))
+    runs = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if "npx electron-builder" in step.get("run", "")
+    ]
+    assert len(runs) == 2
+    for run in runs:
+        assert "npm pkg set version=" in run
+        assert run.index("npm pkg set version=") < run.index("npx electron-builder")

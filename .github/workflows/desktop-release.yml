@@ -227,6 +227,12 @@ jobs:
           calver="$(node scripts/release-version.mjs --calver)"
           echo "Packaging ${calver} as ${semver}"
           npm run build
+          # electron-builder validates package.json's own version (loose
+          # semver) before extraMetadata applies. A CalVer .postN only got
+          # through when loose parsing misread a two-digit day as a
+          # prerelease (2026.9.29.post1 -> 2026.9.2-9.post1); 2026.10.1.post1
+          # does not parse at all. Give the checkout the twin as well.
+          npm pkg set version="${semver}"
           # `--publish never`: electron-builder would name the release after
           # the semver twin (v2026.922.1) and create it itself; the assets
           # belong on the CalVer tag next to the Python wheel, so the upload
@@ -308,6 +314,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
           npm run build
+          npm pkg set version="$(node scripts/release-version.mjs)"
           npx electron-builder --mac --config electron-builder.yml --publish never
 
       - name: Upload build artifacts
