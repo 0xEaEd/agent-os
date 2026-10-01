@@ -133,7 +133,10 @@ Rules:
   formula, so a value that genuinely begins with one (`'tis`) keeps it.
 - Datetimes go in as ISO 8601 strings (`"2026-05-06T09:00:00"`); the helper
   parses them back to `datetime` objects so Excel renders the cell with date
-  format. Pass `as_text: true` to keep such a string as text instead.
+  format. Pass `as_text: true` to keep such a string as text instead. Excel
+  has no timezone type, so a `Z` / `+HH:MM` suffix is dropped and the
+  wall-clock time as written is stored (`"2026-05-06T09:00:00+07:00"` lands
+  as 09:00); convert to the zone you want shown before passing it.
 - `rename_sheet` lands the sheet on exactly the name you asked for, or does
   nothing. Excel compares sheet names without regard to case, so a name another
   sheet already holds is refused and not counted in `applied` — inspect the
