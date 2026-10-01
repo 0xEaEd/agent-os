@@ -115,12 +115,21 @@ _PREFIX_PATTERNS: tuple[str, ...] = (
 #: a key — masking it corrupts the blob on a read-then-write round trip.
 _PREFIX_RE = re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(_PREFIX_PATTERNS) + ")")
 
-#: ``https://user:token@host`` — userinfo in a web URL is a credential the
-#: same way a DSN password is. Redaction-only: the payload guard keeps its
-#: narrower connection-string vocabulary.
-#: The username is optional (``*``, not ``+``): ``https://:token@host`` is a
-#: valid spelling and carries the credential in the same place.
-_URL_USERINFO_RE = re.compile(r"(https?://[^:\s/]*:)([^@\s/]+)(@)", re.IGNORECASE)
+#: ``<scheme>://[user]:password@host`` — a password in URL userinfo is a
+#: credential whatever the scheme. Two allowlists (``https?``, and five
+#: database schemes) let ``wss``, ``ftp``, ``ssh``, ``smtp``, ``ldap`` and the
+#: rest through verbatim, so the match is structural (#3432). The same pattern
+#: backs redaction and the payload guard's ``connection_string`` case.
+#: The username is optional (``*``, not ``+``): ``redis://:password@host`` is
+#: the canonical Redis URL. The password stops at ``/``, where URL parsers end
+#: the authority, so a port before an ``@`` path
+#: (``http://localhost:5173/@vite/client``) is not read as userinfo. Whitespace
+#: is excluded from both halves so a match can never span a line break.
+#: The scheme is anchored on the left: unanchored, every position in a long run
+#: of scheme characters starts its own scan and the search goes quadratic.
+_URL_USERINFO_RE = re.compile(
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://[^:\s/]*:)([^@\s/]+)(@)", re.IGNORECASE
+)
 
 _PEM_PRIVATE_KEY_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE)
 _PEM_PRIVATE_KEY_BLOCK_RE = re.compile(
@@ -131,21 +140,6 @@ _PEM_PRIVATE_KEY_BLOCK_RE = re.compile(
 _PASSWD_ENTRY_RE = re.compile(r"(?m)^(?:\d+\t)?[a-z_][a-z0-9_-]*:x?:\d+:\d+:")
 #: JWTs always start with the base64 of ``{``.
 _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{16,}(?:\.[A-Za-z0-9_=-]{8,}){1,2}")
-#: ``postgres://user:PASSWORD@host`` and friends. Whitespace is excluded from
-#: both halves so a match can never span a line break. ``rediss?``/``amqps?``
-#: carry the TLS spellings beside the plain ones the way ``mongodb(?:\+srv)?``
-#: already does -- `REDIS_TLS_URL=rediss://…` and an `amqps://` endpoint are
-#: how those two are written in deployment configs (#3373).
-#: The username is optional (``*``, not ``+``). ``redis://:password@host`` is
-#: the canonical Redis URL -- Redis had no usernames before ACLs, so the empty
-#: field is what ``REDIS_URL`` holds in practice -- and ``postgres``, ``amqp``
-#: and ``mongodb`` accept the same shape. Requiring a username meant the one
-#: spelling these schemes are usually written in was the one that went through
-#: unmasked, although every scheme here was listed deliberately.
-_DB_CONNSTR_RE = re.compile(
-    r"((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?)://[^:\s/]*:)([^@\s]+)(@)",
-    re.IGNORECASE,
-)
 
 # ── Names ───────────────────────────────────────────────────────────────────
 #
@@ -366,7 +360,7 @@ def secret_literal_marker(text: str | None) -> str | None:
     * a PEM private key,
     * an ``/etc/passwd``-shaped account line,
     * a vendor-prefixed provider key (``sk-ant-``, ``ghp_``, ``AKIA``…),
-    * a connection string with an inline password.
+    * a URL with an inline password, whatever its scheme.
 
     Everything else — including an opaque API key in an ``x-api-key`` header,
     which is simply how authenticated APIs work — is left to the caller. An
@@ -387,7 +381,7 @@ def secret_literal_marker(text: str | None) -> str | None:
         return "passwd_entry"
     if _has_known_prefix(text) and _PREFIX_RE.search(text):
         return "credential_literal"
-    if "://" in text and _DB_CONNSTR_RE.search(text):
+    if "://" in text and _URL_USERINFO_RE.search(text):
         return "connection_string"
     return None
 
@@ -555,14 +549,6 @@ def _redact_named_credentials(
     """
     if "://" in text:
         text = _URL_USERINFO_RE.sub(
-            lambda m: (
-                f"{m.group(1)}{dsn_mask}{m.group(3)}"
-                if not _is_reference_value(m.group(2))
-                else m.group(0)
-            ),
-            text,
-        )
-        text = _DB_CONNSTR_RE.sub(
             lambda m: (
                 f"{m.group(1)}{dsn_mask}{m.group(3)}"
                 if not _is_reference_value(m.group(2))
