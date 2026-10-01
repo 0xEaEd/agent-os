@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.10.1] - 2026-10-01
+
 ### Added
 - Desktop: the chat composer has the web console's Run modes popover (the
   sliders button left of the paperclip): the session's execution mode
@@ -112,6 +114,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   words, so "会议 notes and 计划 draft" produced "议计", which appears nowhere
   in it. Bigrams are now built within each unbroken CJK run, the correction
   memory search's query terms got in #3180 (#3371).
+- xAI OAuth: a caller that waited on the refresh lock reused the proactive
+  refresh window computed for the token it read before the lock, not the
+  one it found under it. When a concurrent caller had just swapped in a
+  short-lived token, the stale hour-long window called it expiring and
+  refreshed again at once, spending a second single-use refresh token. The
+  window is now recomputed from the re-read token (#3212).
+- `gmgn-market` skill: the `market signal` `--chain` parameter row and the
+  argument hint list `robinhood`, `arc` and `stable`, as the rest of the
+  skill already did (#3207).
+- `gmgn-cooking` skill: the `cooking create` `--chain` parameter table and
+  the guided launch flow list Robinhood (`trench`, `pons`), which the
+  supported-chains sections already declared (#3206).
+- `voice-conversion-studio` skill: the workflow names `voice_convert`'s
+  required `target_voice` parameter instead of a `voice` field the tool
+  does not have (#3165).
 
 ## [2026.9.29.post1] - 2026-09-29
 
