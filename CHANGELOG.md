@@ -13,8 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and `2026.10.1.post1` does not parse. Earlier `.postN` releases got
   through only because loose parsing misread a two-digit day as a
   prerelease (`2026.9.29.post1` as `2026.9.2-9.post1`). The release workflow
-  now writes the semver twin (`2026.1001.1`) into the checkout's
-  `package.json` before packaging; the app still carries the CalVer.
+  now swaps the semver twin (`2026.1001.1`) into the checkout's
+  `package.json` for the electron-builder call only and restores the
+  CalVer right after, which the signed-bundle check reads back; the app
+  still carries the CalVer.
 
 ## [2026.10.1.post1] - 2026-10-01
 
