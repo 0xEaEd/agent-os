@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Release: the Windows release job deleted the signed Mac build from the
+  GitHub release. Before uploading, it removed every asset named
+  `AgentOS-*`, which also matched the desktop job's `.dmg`, `-mac.zip` and
+  `.blockmap` files, so whenever the desktop job finished first only
+  `latest-mac.yml` was left and the app's auto-update pointed at missing
+  files (as on v2026.10.1). It now removes only its own Windows zips, wheel
+  and checksums, and its asset check accepts the desktop job's files.
+- Desktop: a bootstrap log the app could not open or write (its folder
+  removed, a full disk) raised an unhandled stream error in the main
+  process. The log is forensic only, so it is now dropped instead.
+
 ## [2026.10.1] - 2026-10-01
 
 ### Added

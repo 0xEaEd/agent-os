@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { PassThrough } from 'node:stream'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EngineDiscovery } from '@shared/bootstrap'
 import { BootstrapRunner, type RunnerSpawner } from './runner'
 
@@ -133,7 +133,10 @@ describe('BootstrapRunner', () => {
     expect([...new Set(phases)]).toEqual(['running', 'succeeded'])
     expect(state.logPath).not.toBeNull()
     expect(existsSync(state.logPath!)).toBe(true)
-    expect(readFileSync(state.logPath!, 'utf8')).toContain('uv already installed')
+    // end() flushes asynchronously; run() resolves before the bytes land.
+    await vi.waitFor(() =>
+      expect(readFileSync(state.logPath!, 'utf8')).toContain('uv already installed'),
+    )
   })
 
   it('stops at the first failed stage with its reason', async () => {
@@ -173,6 +176,31 @@ describe('BootstrapRunner', () => {
     expect(state.phase).toBe('failed')
     expect(state.error).toContain('stage list')
     expect(state.stages).toEqual([])
+  })
+
+  it('a log file that cannot be opened is dropped, not thrown', async () => {
+    const { spawn } = fakeSpawner({
+      manifest: { stdout: [MANIFEST] },
+      prerequisites: ok('prerequisites'),
+      uv: ok('uv'),
+      package: ok('package'),
+    })
+    const logDir = path.join(dir, 'logs')
+    // A directory where the log file goes: the open fails asynchronously
+    // (EISDIR), after openLog() has returned.
+    mkdirSync(path.join(logDir, 'bootstrap-1970-01-01T00-00-05-000Z.log'), { recursive: true })
+    const runner = new BootstrapRunner({
+      scriptPath: '/app/Resources/install.sh',
+      version: '2026.9.12',
+      logDir,
+      cwd: dir,
+      spawn,
+      now: () => 5_000,
+      kill: (child) => child.kill(),
+    })
+    const state = await runner.run()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(state.phase).toBe('succeeded')
   })
 
   it('cancel kills the running stage and reports cancelled', async () => {
