@@ -77,3 +77,8 @@ worst-case but the program never crashes.
   kana, and whitespace-based for space-delimited scripts (Latin, Hangul,
   Cyrillic, ...); mixed strings break at the CJK character count. Explicit
   newlines are kept and each line is wrapped on its own.
+- With `--auto-shrink yes` (default), the font shrinks to fit both the
+  canvas width and the stacked lines' total height. If the text still
+  does not fit at the smallest size (12px), the script prints an `Error:`
+  to stderr and exits non-zero without writing a file, rather than
+  silently rendering lines outside the canvas.
