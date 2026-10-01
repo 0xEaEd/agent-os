@@ -128,6 +128,42 @@ def _styled(text: str, style: str) -> str:
 _ESCAPABLE_PUNCTUATION = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
 
 
+def _park_code_spans(text: str) -> tuple[str, list[str]]:
+    """Replace code spans with placeholders, returning their rendered markup.
+
+    Code spans leave the text *before* escapes are parked, because CommonMark
+    does not process a backslash escape inside one. ``re.sub(r'\\.', '', s)``
+    in backticks is a literal backslash-dot, and unescaping it would corrupt
+    the regex -- or the Windows path -- the model is showing the user.
+
+    The scan skips a backslash-escaped character while looking for a
+    delimiter, so an escaped backtick outside a span still cannot open one.
+    This is the ordering ``_telegram_formatting`` already uses (#3307).
+    """
+    chunks: list[str] = []
+    out: list[str] = []
+    cursor = 0
+    while cursor < len(text):
+        char = text[cursor]
+        if char == "\\" and cursor + 1 < len(text) and text[cursor + 1] in _ESCAPABLE_PUNCTUATION:
+            out.append(text[cursor : cursor + 2])
+            cursor += 2
+            continue
+        if char != "`":
+            out.append(char)
+            cursor += 1
+            continue
+        match = _INLINE_CODE_RE.match(text, cursor)
+        if match is None:
+            out.append(char)
+            cursor += 1
+            continue
+        out.append(f"\x00CODE{len(chunks)}\x00")
+        chunks.append(f"[{_INLINE_CODE_STYLE}]{_rich_escape(match.group(2))}[/]")
+        cursor = match.end()
+    return "".join(out), chunks
+
+
 def _park_escaped_punctuation(text: str) -> tuple[str, list[str]]:
     """Replace ``\\<punctuation>`` with placeholders, returning the characters.
 
@@ -163,11 +199,17 @@ def _render_inline(text: str) -> str:
     tag-insertion regexes, which previously produced unbalanced markup
     for e.g. ``[text](url)`` links.
     """
+    # Order matters, and this is the whole of it: a code span's content is
+    # literal, so it leaves the text before anything else can rewrite it;
+    # escapes are parked next so no span pattern can match the marker a
+    # backslash was protecting. Both are restored after assembly, escapes
+    # first and code spans last, so a restored span is never rescanned.
+    text, code_chunks = _park_code_spans(text)
     text, escaped_chars = _park_escaped_punctuation(text)
 
     # (pattern, how to render one match). A span whose content may itself hold
-    # emphasis renders that content through `_render_inline` again; a code
-    # span and a link destination are literal, so they only get escaped.
+    # emphasis renders that content through `_render_inline` again; a link
+    # destination is literal, so it only gets escaped.
     candidates: list[tuple[int, int, str]] = []
 
     def _collect(pattern: re.Pattern[str], make) -> None:  # type: ignore[no-untyped-def]
@@ -180,10 +222,6 @@ def _render_inline(text: str) -> str:
             f"[{_LINK_STYLE}]{_rich_escape(m.group(1))}[/]"
             f" [{_LINK_URL_STYLE}]({_rich_escape(m.group(2))})[/]"
         ),
-    )
-    _collect(
-        _INLINE_CODE_RE,
-        lambda m: f"[{_INLINE_CODE_STYLE}]{_rich_escape(m.group(2))}[/]",
     )
     _collect(_BOLD_RE, lambda m: f"[{_BOLD_STYLE}]{_render_inline(m.group(1))}[/]")
     _collect(_ITALIC_RE, lambda m: f"[{_ITALIC_STYLE}]{_render_inline(m.group(1))}[/]")
@@ -212,11 +250,15 @@ def _render_inline(text: str) -> str:
         pos = end
     out.append(_rich_escape(text[pos:]))
     rendered = "".join(out)
-    # Restored last, so the character the backslash protected was never
-    # visible to a span pattern, and Rich-escaped on the way back because the
-    # pass that would have done it ran while this was still a placeholder.
+    # The character the backslash protected was never visible to a span
+    # pattern, and is Rich-escaped on the way back because the pass that would
+    # have done it ran while this was still a placeholder.
     for index, char in enumerate(escaped_chars):
         rendered = rendered.replace(f"\x00ESC{index}\x00", _rich_escape(char))
+    # Code spans come back last: their content was escaped when they were
+    # parked and must not be touched by anything above.
+    for index, chunk in enumerate(code_chunks):
+        rendered = rendered.replace(f"\x00CODE{index}\x00", chunk)
     return rendered
 
 

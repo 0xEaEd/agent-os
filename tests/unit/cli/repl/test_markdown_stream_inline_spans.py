@@ -163,3 +163,72 @@ def test_a_bare_asterisk_is_left_alone() -> None:
 def test_markup_in_model_text_cannot_inject_rich_tags() -> None:
     """The escaping contract the span assembly exists for."""
     assert "[/]" not in _user_sees("literal [bold]not a tag[/] here")
+
+
+# ---------------------------------------------------------------------------
+# Escapes are NOT processed inside a code span (review of #3436)
+# ---------------------------------------------------------------------------
+#
+# CommonMark does not unescape inside a code span, and the first revision of
+# this change did: `_park_escaped_punctuation` ran before code spans were
+# recognised, so a regex or a Windows path shown in backticks came out
+# corrupted. Code spans are now parked first and restored last.
+
+
+def _printed(source: str) -> str:
+    """What Rich actually prints for the rendered markup.
+
+    Stripping ``[...]`` with a regex is not good enough here: the payloads
+    below legitimately contain square brackets, and the regex would eat them
+    along with the markup tags.
+    """
+    import io as _io
+
+    from rich.console import Console
+
+    buffer = _io.StringIO()
+    Console(file=buffer, no_color=True, width=200, markup=True, highlight=False).print(
+        _render(source)
+    )
+    return buffer.getvalue().rstrip()
+
+
+@pytest.mark.parametrize(
+    ("source", "printed"),
+    [
+        (r"`re.sub(r'\.', '', s)`", r"re.sub(r'\.', '', s)"),
+        (r"`\*`", r"\*"),
+        (r"`C:\Program Files\(x86)\`", r"C:\Program Files\(x86)" + "\\"),
+        (r"`\d+\s*`", r"\d+\s*"),
+    ],
+)
+def test_a_backslash_inside_a_code_span_is_left_alone(source: str, printed: str) -> None:
+    """A regex or a Windows path in backticks is code the model is showing the
+    user; unescaping it corrupts what they read."""
+    assert _printed(source) == printed
+
+
+def test_a_bracketed_regex_in_a_code_span_keeps_its_backslashes_in_the_markup() -> None:
+    r"""``^\[\d+\]$`` asserted at the markup level on purpose.
+
+    The span's content is carried through intact -- which is what this change
+    is responsible for -- but Rich consumes the backslash of a literal ``\[``
+    when it prints. That happens identically on ``main`` (both produce
+    ``[bold #DDFF66]^\[\d+\]$[/]``), so it is a separate, pre-existing gap
+    in ``_rich_escape`` rather than anything this PR introduces.
+    """
+    assert r"^\[\d+\]$" in _render(r"`^\[\d+\]$`")
+
+
+def test_an_escaped_backtick_outside_a_span_still_cannot_open_one() -> None:
+    """The invariant that makes "code spans first" safe: parking them first
+    must not let an escaped delimiter start a span."""
+    rendered = _render(r"\`not code\`")
+
+    assert "#DDFF66" not in rendered
+    assert _user_sees(r"\`not code\`") == "`not code`"
+
+
+def test_a_code_span_inside_bold_survives_both_passes() -> None:
+    assert _user_sees("**bold with `code` inside**") == "bold with code inside"
+    assert "#DDFF66" in _render("**bold with `code` inside**")
