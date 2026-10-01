@@ -252,6 +252,15 @@ describe('Toolbar', () => {
     expect(toggle).toBeChecked()
   })
 
+  it('leaves the Visual effects row out when the host has no router-fx strip', async () => {
+    render(<Toolbar sessionKey={SESSION} showVisualEffects={false} />)
+    // The other switches still render; only Visual effects is gone.
+    await screen.findByRole('checkbox', { name: /pilot router/i })
+    expect(screen.getByRole('checkbox', { name: /plan mode/i })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /visual effects/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/visual effects/i)).not.toBeInTheDocument()
+  })
+
   it('toggling Visual effects OFF writes the agentos-router-fx pref shape', async () => {
     // chat.js:1425-1426/3411-3416 — write `{enabled}` under the exact key.
     render(<Toolbar sessionKey={SESSION} />)
