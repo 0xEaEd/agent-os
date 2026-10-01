@@ -39,7 +39,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `clickhouse://` and the rest reached the model verbatim; the web tool's
   payload guard had the same gap. One anchored, scheme-agnostic pattern now
   backs both, and stays linear on long base64/hex runs. A base64 password
-  with a `/` in it is still masked, while a port followed by a path
+  with a `/` in it and a kilobyte-long one (an RDS IAM token) are still
+  masked, while a port followed by a path
   (`http://localhost:5173/@vite/client`) is left alone (#3432, takes over
   #3437)
 - xlsx skill: `set_cell` and `create_xlsx` wrote an ISO timestamp with a `Z`
