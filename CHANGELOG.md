@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.10.1.post1] - 2026-10-01
+
 ### Fixed
 - Release: the Windows release job deleted the signed Mac build from the
   GitHub release. Before uploading, it removed every asset named
