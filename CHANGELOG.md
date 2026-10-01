@@ -38,9 +38,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `wss://user:pw@gateway`, `ftp://`, `ssh://`, `smtp://`, `ldap://`,
   `clickhouse://` and the rest reached the model verbatim; the web tool's
   payload guard had the same gap. One anchored, scheme-agnostic pattern now
-  backs both, and stays linear on long base64/hex runs. A password stops at
-  `/`, where URL parsers end the authority, so `http://host:5173/@vite/...`
-  is left alone (#3432, takes over #3437)
+  backs both, and stays linear on long base64/hex runs. A base64 password
+  with a `/` in it is still masked, while a port followed by a path
+  (`http://localhost:5173/@vite/client`) is left alone (#3432, takes over
+  #3437)
 - xlsx skill: `set_cell` and `create_xlsx` wrote an ISO timestamp with a `Z`
   or `+HH:MM` suffix as an offset-aware datetime, which openpyxl rejects in
   the middle of `wb.save()`. The run died with a traceback and left a
