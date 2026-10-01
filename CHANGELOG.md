@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `title-card-image` skill: `render.py`'s auto-shrink refused to write an
+  off-canvas image when the text was too *tall* at the minimum font size
+  (#3375) but silently wrote a clipped one when it was too *wide* -- exit 0,
+  nothing on stderr, and a PNG whose headline has its first and last
+  characters sliced off at the canvas edge, which the caller then feeds
+  straight to video-still-animator. `_fit_font` stopped at the floor whether
+  or not it got there and the result was drawn on trust; it now reports
+  whether it fitted and the write is refused the same way the height path
+  refuses, with the same wording. Reaching the floor takes a token the
+  wrapper will not break -- a URL, a hashtag, a long compound -- at an
+  ordinary card size: a 104-character URL clips at any `--width` of 570 or
+  below. Two smaller things in the same code: the width loop's `while size >
+  12` could leave the size at 11, under the floor its own message quotes and
+  under what `fit_stack_to_height` assumes, so both now use one
+  `SHRINK_FLOOR` constant; and an unloadable `--font` warned once per shrink
+  step rather than once. (#3546)
 - Sessions started from a channel (Telegram, Slack, Discord, …) are now
   named from their first message, like WebChat and desktop-app sessions,
   instead of keeping their short id in the sidebar. Channel dispatch never
