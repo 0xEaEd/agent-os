@@ -80,6 +80,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   lives in `channels/_util.py` and all four adapters share it; Telegram's
   flood fallback also reopens (or not) the block the open message actually
   ends in (#3505, takes over #3509)
+- `video-merger` skill: fade transitions no longer break on short clips or
+  when turned off. The transition is capped at half the clip (or chunk)
+  duration, so a clip shorter than the transition no longer gets a negative
+  fade-out start (`st=-0.1`), and `transition_duration <= 0` drops the
+  `fade`/`afade` filters instead of emitting `d=0.0` fades (#3259).
+- Migration: `agentos migrate openclaw` now maps `google/gemini-*` models to
+  the `gemini` provider and `zhipu/*` models to `zhipu`, and strips the
+  prefix, instead of falling back to OpenRouter and ignoring the user's
+  Gemini or Zhipu API key. `google/gemma-*` and other `google/` ids still go
+  to OpenRouter (#3314).
+- Memory: the curated store refuses an entry that the next read would split.
+  An entry holding a line that is just `§` (the entry delimiter) was
+  reported as one entry but read back as two, and one ending in `\n§` broke
+  its neighbour instead; either way `remove` could no longer match it by the
+  text that created it. `add`, `replace` and the add/replace operations of a
+  batch (the memory tool's `operations` array, `memory.curated.batch`) now
+  refuse both shapes, and a refused batch writes nothing. A `§` inside a
+  line, an indented `§` or a bare `§` entry still store unchanged (#3363).
+- Memory: with `memory.mmr_enabled` on, MMR diversity could drop a relevant
+  CJK memory. Its similarity built CJK bigrams across the text between two
+  words, so "会议 notes and 计划 draft" produced "议计", which appears nowhere
+  in it. Bigrams are now built within each unbroken CJK run, the correction
+  memory search's query terms got in #3180 (#3371).
 
 ## [2026.9.29.post1] - 2026-09-29
 
