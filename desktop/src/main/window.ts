@@ -86,7 +86,7 @@ const TRANSPARENT = '#00000000'
  * off, the opaque colour follows the OS appearance so a theme switch never
  * leaves the wrong ground behind the renderer.
  */
-function pageBackground(reduceTransparency: boolean): string {
+export function pageBackground(reduceTransparency: boolean): string {
   if (!reduceTransparency) return TRANSPARENT
   return nativeTheme.shouldUseDarkColors ? BACKGROUND.dark : BACKGROUND.light
 }
@@ -111,13 +111,7 @@ export function createMainWindow(
     // Native traffic lights sit inside the sidebar's top padding (Sidebar.tsx).
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 18, y: 18 },
-    webPreferences: {
-      // .cjs on purpose: see the preload section of electron.vite.config.ts.
-      preload: path.join(__dirname, '../preload/index.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+    webPreferences: rendererWebPreferences(),
   })
 
   win.once('ready-to-show', () => win.show())
@@ -127,6 +121,27 @@ export function createMainWindow(
     win.webContents.setZoomFactor((opts.uiScale ?? 100) / 100)
   })
 
+  loadRenderer(win)
+  return win
+}
+
+/** The sandboxed, context-isolated renderer every app window runs. */
+export function rendererWebPreferences(): Electron.WebPreferences {
+  return {
+    // .cjs on purpose: see the preload section of electron.vite.config.ts.
+    preload: path.join(__dirname, '../preload/index.cjs'),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+  }
+}
+
+/**
+ * Guard a window's navigation, then load the renderer into it, optionally at
+ * a hash route (`/quick-ask`). Every app window goes through here so none of
+ * them can leave the app's origin or open a window of its own.
+ */
+export function loadRenderer(win: BrowserWindow, hash?: string): void {
   // External links open in the default browser, never inside the shell —
   // and only web and mail links go out at all; anything else is dropped.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -145,11 +160,26 @@ export function createMainWindow(
   })
 
   if (rendererUrl) {
-    void win.loadURL(rendererUrl)
+    void win.loadURL(hash ? `${rendererUrl}#${hash}` : rendererUrl)
   } else {
-    void win.loadFile(path.join(rendererDir, 'index.html'))
+    void win.loadFile(path.join(rendererDir, 'index.html'), hash ? { hash } : undefined)
   }
-  return win
+}
+
+/**
+ * Windows that are not the main window (the Quick Ask panel). They float,
+ * carry their own vibrancy material, and are never the target of "bring the
+ * app forward" or "open Settings".
+ */
+const panels = new WeakSet<BrowserWindow>()
+
+export function markPanelWindow(win: BrowserWindow): void {
+  panels.add(win)
+}
+
+/** The app's main window, if one is open: never a panel. */
+export function findMainWindow(): BrowserWindow | null {
+  return BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && !panels.has(w)) ?? null
 }
 
 /** Settings > Appearance > UI scale, as Chromium's zoom factor on every window. */
@@ -163,7 +193,7 @@ export function applyUiScale(percent: number): void {
 export function applyVibrancy(reduceTransparency: boolean): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue
-    win.setVibrancy(reduceTransparency ? null : 'sidebar')
+    win.setVibrancy(reduceTransparency ? null : panels.has(win) ? 'hud' : 'sidebar')
   }
   applyPageBackground(reduceTransparency)
 }

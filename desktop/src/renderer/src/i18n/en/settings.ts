@@ -50,7 +50,7 @@ export const settings = {
   'settings.section.appearance': 'Appearance',
   'settings.section.appearance.blurb': 'Theme, palette, scale.',
   'settings.section.behaviour': 'Behaviour',
-  'settings.section.behaviour.blurb': 'Launch, quit, and the composer.',
+  'settings.section.behaviour.blurb': 'Launch, quit, Quick Ask and the composer.',
   'settings.section.shortcuts': 'Shortcuts',
   'settings.section.shortcuts.blurb': 'The keys the app answers to.',
   'settings.section.advanced': 'Advanced',

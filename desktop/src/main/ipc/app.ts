@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type { AppInfo, ChooseFileOptions } from '@shared/app'
 import { IPC } from '@shared/ipc'
 import { appCalver } from '../app-version'
+import { findMainWindow } from '../window'
 import type { SettingsStore } from '../settings/store'
 
 /**
@@ -72,9 +73,9 @@ export function registerAppIpc(settings: SettingsStore): void {
   ipcMain.handle(IPC.app.loginItem, () => app.getLoginItemSettings().openAtLogin)
 }
 
-/** Push "open settings" to the focused window (or the first one). */
+/** Push "open settings" to the main window (never the Quick Ask panel). */
 export function requestOpenSettings(): void {
-  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  const win = findMainWindow()
   if (win && !win.isDestroyed()) {
     if (win.isMinimized()) win.restore()
     win.focus()

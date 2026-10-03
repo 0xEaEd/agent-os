@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Desktop: Quick Ask. A global shortcut, ⌥ Space by default, opens a small
+  Spotlight-style prompt over whatever app is in front. Return sends the
+  question to a new chat and ⌥ Return to the chat the window was on; AgentOS
+  comes forward on that session with the reply streaming. Escape or clicking
+  away closes it without sending and keeps the text. Settings › Behaviour
+  turns it off or moves it to ⌃ Space or ⌘⇧ Space, and says so when another
+  app already holds the key; Settings › Shortcuts lists it. The prompt has no
+  gateway connection of its own: the text goes to the main window over IPC,
+  and a question asked while the gateway is down is sent once it is back.
 - Skills: an operator install policy. `[skills.install_policy]` runs a command
   of your choosing against every hub skill while it is still in quarantine,
   on install and on update, and the command answers allow, warn or block. It

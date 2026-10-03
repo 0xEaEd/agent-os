@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_NOTIFICATION_SETTINGS, mergeSettings, normalizeSettings } from './settings'
+import {
+  DEFAULT_NOTIFICATION_SETTINGS,
+  DEFAULT_QUICK_ASK_SETTINGS,
+  mergeSettings,
+  normalizeSettings,
+} from './settings'
 
 describe('notification settings', () => {
   it('reads a legacy file with only the three old keys', () => {
@@ -66,5 +71,39 @@ describe('notification settings', () => {
     expect(
       mergeSettings(next, { notifications: { muteUntil: null } }).notifications.muteUntil,
     ).toBe(null)
+  })
+})
+
+describe('quick ask settings', () => {
+  it('defaults to on, on ⌥ Space, for a file written before the section existed', () => {
+    const s = normalizeSettings({ general: { enterToSend: false } })
+    expect(s.quickAsk).toEqual(DEFAULT_QUICK_ASK_SETTINGS)
+    expect(s.quickAsk).toEqual({ enabled: true, shortcut: 'Alt+Space' })
+  })
+
+  it('keeps a valid choice from the fixed list', () => {
+    const s = normalizeSettings({
+      quickAsk: { enabled: false, shortcut: 'CommandOrControl+Shift+Space' },
+    })
+    expect(s.quickAsk).toEqual({ enabled: false, shortcut: 'CommandOrControl+Shift+Space' })
+  })
+
+  it('refuses a free-form accelerator or a non-boolean switch', () => {
+    const s = normalizeSettings({
+      quickAsk: { enabled: 'yes', shortcut: 'Command+Q', extra: 1 },
+    })
+    expect(s.quickAsk).toEqual(DEFAULT_QUICK_ASK_SETTINGS)
+    expect(normalizeSettings({ quickAsk: 'Alt+Space' }).quickAsk).toEqual(
+      DEFAULT_QUICK_ASK_SETTINGS,
+    )
+  })
+
+  it('merges a one-key patch without touching the rest of the section', () => {
+    const base = normalizeSettings({ quickAsk: { enabled: true, shortcut: 'Control+Space' } })
+    const next = mergeSettings(base, { quickAsk: { enabled: false } })
+    expect(next.quickAsk).toEqual({ enabled: false, shortcut: 'Control+Space' })
+    expect(
+      mergeSettings(next, { quickAsk: { shortcut: 'Bogus' as never } }).quickAsk.shortcut,
+    ).toBe('Alt+Space')
   })
 })

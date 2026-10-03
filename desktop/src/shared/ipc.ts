@@ -2,6 +2,7 @@ import type { AppInfo, ChooseFileOptions } from './app'
 import type { GatewayStatus } from './gateway'
 import type { NotifyRequest, NotifyResult, NotifyTarget, SystemSound } from './notify'
 import type { InstalledPet, PetManifestEntry } from './pet'
+import type { QuickAskStatus, QuickAskSubmission } from './quick-ask'
 import type { DesktopSettings, SettingsPatch } from './settings'
 import type { ResolvedTheme, ThemeSettings } from './theme'
 import type { AppUpdateState, EngineUpdateState } from './updates'
@@ -88,6 +89,26 @@ export const IPC = {
     openLog: 'bootstrap:openLog',
     /** Main -> renderer: install progress. */
     changed: 'bootstrap:changed',
+  },
+  quickAsk: {
+    /** Panel -> main: send this text to the main window. */
+    submit: 'quickAsk:submit',
+    /** Panel -> main: Escape; close without sending. */
+    hide: 'quickAsk:hide',
+    /** Panel -> main: the view has mounted; the panel may be shown. */
+    ready: 'quickAsk:ready',
+    /** Panel -> main: the content's height changed; size the panel to it. */
+    resize: 'quickAsk:resize',
+    /** Main -> panel: the panel is on screen (focus the field, re-read theme). */
+    shown: 'quickAsk:shown',
+    /** Main -> main window: a submission is waiting; collect it with `take`. */
+    deliver: 'quickAsk:deliver',
+    /** Main window -> main: every submission not yet collected, oldest first. */
+    take: 'quickAsk:take',
+    /** Where the hotkey stands (registered, refused, off). */
+    status: 'quickAsk:status',
+    /** Main -> renderer: the hotkey's status changed. */
+    statusChanged: 'quickAsk:statusChanged',
   },
 } as const
 
@@ -199,5 +220,22 @@ export interface DesktopApi {
     /** Reveal the per-run log in Finder. */
     openLog(): Promise<void>
     onChanged(listener: (state: BootstrapState) => void): () => void
+  }
+  /**
+   * Quick Ask. The panel half (submit, hide, ready, resize, onShown) is used
+   * by the floating prompt; the main window collects what it sent (take,
+   * onDeliver). Text crosses IPC only; the panel has no gateway connection.
+   */
+  quickAsk: {
+    /** Resolves false when main refused the payload (empty, too long, malformed). */
+    submit(submission: QuickAskSubmission): Promise<boolean>
+    hide(): Promise<void>
+    ready(): Promise<void>
+    resize(height: number): Promise<void>
+    onShown(listener: () => void): () => void
+    take(): Promise<QuickAskSubmission[]>
+    onDeliver(listener: () => void): () => void
+    status(): Promise<QuickAskStatus>
+    onStatusChanged(listener: (status: QuickAskStatus) => void): () => void
   }
 }

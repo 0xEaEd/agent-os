@@ -40,6 +40,7 @@ desktop/
     │   ├── ipc.ts            #   channel names + DesktopApi shape
     │   ├── theme.ts          #   ThemePreference / PaletteId / resolveTheme
     │   ├── settings.ts       #   DesktopSettings + normalizer
+    │   ├── quick-ask.ts      #   Quick Ask shortcuts, submission payload + validation
     │   └── gateway.ts        #   GatewayStatus
     ├── main/                 # Electron main process (Node)
     │   ├── index.ts          #   lifecycle, single instance, quit hook
@@ -50,6 +51,7 @@ desktop/
     │   ├── settings/store.ts #   atomic JSON settings in userData/
     │   ├── gateway/          #   cli-locator + process supervisor (spawn, adopt, health)
     │   ├── bootstrap/        #   first-run engine install: discovery, install.sh runner, controller
+    │   ├── quick-ask/        #   global hotkey, the floating panel window, hand-off inbox
     │   └── updates/          #   engine updater (agentos upgrade) + electron-updater controller
     ├── preload/index.ts      # contextBridge -> window.agentos (typed DesktopApi)
     └── renderer/             # React app (browser, no Node access)
@@ -63,6 +65,7 @@ desktop/
             │                 #   sheet with the natural schedule builder
             ├── views/projects/ # Project page (`/projects/:id`): renamable title,
             │                 #   self-saving brief, the chats filed there
+            ├── views/quick-ask/ # The Quick Ask panel (its own window, `#/quick-ask`)
             ├── views/settings/ # Settings sheet: SettingsPanel (rail + section), one pane
             │                 #   per section (providers, router, gateway, appearance,
             │                 #   behaviour, shortcuts, advanced, about), parts.tsx, logic.ts
@@ -130,14 +133,14 @@ revision on every write so a stale form cannot overwrite a newer file.
 | Gateway       | Live status with Start/Stop/Restart, endpoint copy + open console; an editable draft of mode/host/port/token/CLI path with validation, Save/Revert, and a "restart to apply" notice when the running endpoint differs.                                                                                                                                                                                                                                                                                                             |
 | Appearance    | Theme + palette (`ThemeRows`), text size (`data-text-size` on `<html>`), reduce transparency (`data-transparency` + `win.setVibrancy`).                                                                                                                                                                                                                                                                                                                                                                                            |
 | Notifications | Master switch; what happens while the window is in front (nothing / in-app banner / system notification); Do not disturb (30 min, 1 h, 3 h, until tomorrow 9:00); show details; per-event switches (reply finished with a minimum length, reply failed, approval needed, scheduled job runs off/failures/all, gateway stopped on its own); sound on/off and which (the app chime or a macOS alert sound); Dock badge and bounce; a test button and a door to System Settings › Notifications. See [Notifications](#notifications). |
-| Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, Return vs ⌘Return to send, sidebar width reset.                                                                                                                                                                                                                                                                                                                                                            |
-| Shortcuts     | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …); static, nothing is rebindable.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, Quick Ask (on/off, which global shortcut, a note when macOS refused the key), Return vs ⌘Return to send, sidebar width reset. See [Quick Ask](#quick-ask).                                                                                                                                                                                                                                                 |
+| Shortcuts     | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …, and the Quick Ask key chosen under Behaviour); static, nothing is rebindable.                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Advanced      | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all app settings behind an alertdialog.                                                                                                                                                                                                                                                                                                                                                                      |
 | About         | App/Electron/Chromium versions, gateway version + uptime, `updates.check`, links.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
-Main mirrors three settings onto the window/OS on every write
-(`mirrorSettingsToOs` in `main/index.ts`): the login item, window vibrancy and
-the zoom factor. `nativeTheme` follows the theme section the same way, so a
+Main mirrors four settings onto the window/OS on every write
+(`mirrorSettingsToOs` in `main/index.ts`): the login item, window vibrancy,
+the zoom factor and the Quick Ask global shortcut. `nativeTheme` follows the theme section the same way, so a
 reset repaints correctly.
 
 ## Notifications
@@ -246,6 +249,55 @@ wave → waiting → run → review → idle).
   before anyone reaches petdex.dev — and with no network at all. The slugs
   it seeded are recorded in `userData/pets/.bundled.json`, so a built-in pet
   you remove stays removed.
+
+## Quick Ask
+
+A system-wide shortcut, **⌥ Space** by default, opens a small floating prompt
+over whatever app is in front, the Spotlight posture. **Return** sends the text
+to a **new chat**; **⌥ Return** sends it to the **current** one (the session the
+main window is on, or the last one opened). Either way AgentOS comes forward on
+that session with the reply streaming. **Escape** or clicking away closes the
+prompt without sending, and keeps the text for next time; a send clears it.
+Shift-Return adds a line. Empty text does nothing, and more than 20 kB is
+refused in place.
+
+Settings › Behaviour › Quick Ask turns it off (the key is released at once) or
+moves it to ⌃ Space or ⌘⇧ Space: a fixed list, not free rebinding. When macOS
+refuses the key because another app holds it, the pane says "Unavailable"
+instead of failing silently. Settings › Shortcuts lists the chosen key.
+
+How it is built:
+
+- **Main** (`main/quick-ask/`). `hotkey.ts` keeps `globalShortcut` in step with
+  the settings (`mirrorSettingsToOs` calls it at boot and on change; the key is
+  released on `will-quit`). `panel.ts` owns the prompt's window: frameless,
+  `type: 'panel'` so it floats over full-screen apps and takes the keyboard
+  without making AgentOS the active app, `hud` vibrancy (opaque with Reduce
+  transparency), centred on the display under the cursor, sized to its
+  content, hidden on blur. It is created once while Quick Ask is on and only
+  shown and hidden after that, so the key is instant; it is never shown before
+  its view has mounted (`quickAsk:ready`). `controller.ts` ties them together.
+- **Renderer** (`views/quick-ask/`). The panel loads the same bundle at
+  `#/quick-ask`. `App` renders it without the router, `AppShell` or
+  `GatewayProviders`: the panel never connects to the gateway. It reads the
+  theme and appearance over `window.agentos` again each time it is shown, so
+  it matches the main window.
+- **Hand-off.** The text crosses IPC only. The panel calls `quickAsk:submit`
+  (validated in main: a string, not blank, at most 20 kB, target `new` or
+  `current`); main hides the panel, restores and focuses the main window (or
+  creates one when it was closed), puts the submission in an inbox and pings
+  the window with `quickAsk:deliver`. The window collects with `quickAsk:take`,
+  on the ping and once when it mounts, so a window that was just created or is
+  reloading cannot miss one and none is delivered twice. In the renderer,
+  `stores/quick-ask.ts` holds the queue; the shell (`useQuickAskRouting`)
+  closes any sheet and navigates to the destination, and the chat there
+  (`useQuickAskSend` in `ChatView`) **sends** it, unlike Skills' "Use in chat",
+  which only fills the composer. It waits for the transcript to settle
+  (`data-history-ready`) so the first draw of the session's history cannot wipe
+  the new message, with a 4-second fallback. While a reply streams it queues
+  behind it; the user's draft and attachments in the composer are left alone.
+  With the gateway down the chat says the text is waiting and sends it once
+  the gateway is back.
 
 ## First run: the app installs the engine
 

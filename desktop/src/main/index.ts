@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, globalShortcut } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -9,6 +9,8 @@ import { registerIpc } from './ipc'
 import { installLoopbackCors } from './loopback-cors'
 import { installAppMenu } from './menu'
 import { registerPetScheme, servePets } from './pets/protocol'
+import { QuickAskController } from './quick-ask/controller'
+import { QuickAskPanel } from './quick-ask/panel'
 import { bundledPetsDir, PetStore } from './pets/store'
 import { BootstrapController } from './bootstrap/controller'
 import { BootstrapRunner, bundledInstallScript } from './bootstrap/runner'
@@ -17,7 +19,13 @@ import { appCalver } from './app-version'
 import { AppUpdateController, type UpdaterLike } from './updates/app-updater'
 import { startAutoCheck } from './updates/auto-check'
 import { defaultMarkerPath, EngineUpdater } from './updates/engine-updater'
-import { applyUiScale, applyVibrancy, createMainWindow, rendererAppOrigin } from './window'
+import {
+  applyUiScale,
+  applyVibrancy,
+  createMainWindow,
+  findMainWindow,
+  rendererAppOrigin,
+} from './window'
 
 // Single instance: a second launch focuses the existing window.
 if (!app.requestSingleInstanceLock()) {
@@ -78,7 +86,7 @@ if (!app.requestSingleInstanceLock()) {
   registerPetScheme()
 
   app.on('second-instance', () => {
-    const [win] = BrowserWindow.getAllWindows()
+    const win = findMainWindow()
     if (win) {
       if (win.isMinimized()) win.restore()
       win.focus()
@@ -106,6 +114,24 @@ if (!app.requestSingleInstanceLock()) {
     // offer before anyone reaches petdex.dev. Seeded once each; never fatal.
     const bundledPets = bundledPetsDir(process.resourcesPath, path.resolve(__dirname, '../..'))
     if (bundledPets) void pets.seedBundled(bundledPets).catch(() => {})
+    const quickAsk = new QuickAskController({
+      registry: globalShortcut,
+      panel: new QuickAskPanel({
+        reduceTransparency: () => settings.get().appearance.reduceTransparency,
+      }),
+      findMainWindow,
+      openMainWindow: () => createMainWindow(windowOptions(settings.get())),
+      focusApp: () => app.focus({ steal: true }),
+      broadcast: (channel, payload) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send(channel, payload)
+        }
+      },
+    })
+    app.once('will-quit', () => {
+      quickAsk.dispose()
+      globalShortcut.unregisterAll()
+    })
     registerIpc({
       settings,
       gateway,
@@ -114,10 +140,11 @@ if (!app.requestSingleInstanceLock()) {
       appUpdater,
       bootstrapRunner,
       bootstrap,
+      quickAsk,
     })
     installAppMenu(settings)
     createMainWindow(windowOptions(settings.get()))
-    mirrorSettingsToOs(settings)
+    mirrorSettingsToOs(settings, quickAsk)
     // The shell is only useful with a gateway behind it. The controller
     // finds the engine and starts the gateway, or offers to install the
     // engine first when this Mac has none (or an older one).
@@ -137,9 +164,9 @@ if (!app.requestSingleInstanceLock()) {
     })
     app.once('will-quit', stopAutoCheck)
 
+    // The Quick Ask panel is a window too, so "no windows" means no main window.
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0)
-        createMainWindow(windowOptions(settings.get()))
+      if (!findMainWindow()) createMainWindow(windowOptions(settings.get()))
     })
   })
 
@@ -181,11 +208,11 @@ function windowOptions(s: DesktopSettings): { reduceTransparency: boolean; uiSca
 }
 
 /**
- * Three settings are really window/OS state: the login item, window
- * vibrancy and the zoom factor. Apply them at boot and again on every change
- * so the file and what is on screen agree.
+ * Four settings are really window/OS state: the login item, window
+ * vibrancy, the zoom factor and the Quick Ask global shortcut. Apply them at
+ * boot and again on every change so the file and what is on screen agree.
  */
-function mirrorSettingsToOs(settings: SettingsStore): void {
+function mirrorSettingsToOs(settings: SettingsStore, quickAsk: QuickAskController): void {
   let last: DesktopSettings | null = null
   const apply = (next: DesktopSettings) => {
     if (next.general.openAtLogin !== last?.general.openAtLogin) {
@@ -202,6 +229,12 @@ function mirrorSettingsToOs(settings: SettingsStore): void {
     }
     if (next.appearance.uiScale !== last?.appearance.uiScale) {
       applyUiScale(next.appearance.uiScale)
+    }
+    if (
+      next.quickAsk.enabled !== last?.quickAsk.enabled ||
+      next.quickAsk.shortcut !== last?.quickAsk.shortcut
+    ) {
+      quickAsk.apply(next.quickAsk)
     }
     last = next
   }
