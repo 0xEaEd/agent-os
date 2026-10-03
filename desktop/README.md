@@ -45,7 +45,8 @@ desktop/
     │   ├── index.ts          #   lifecycle, single instance, quit hook
     │   ├── loopback-cors.ts  #   Origin presented to the gateway + CORS answer translated back
     │   ├── window.ts         #   BrowserWindow (vibrancy, hiddenInset, sandbox)
-    │   ├── menu.ts           #   macOS menu bar
+    │   ├── menu.ts           #   macOS application menu
+    │   ├── tray/             #   menu bar status item: pure menu builder, summary validation, Tray
     │   ├── ipc/              #   one file per IPC domain, registered in index.ts
     │   ├── settings/store.ts #   atomic JSON settings in userData/
     │   ├── gateway/          #   cli-locator + process supervisor (spawn, adopt, health)
@@ -130,15 +131,76 @@ revision on every write so a stale form cannot overwrite a newer file.
 | Gateway       | Live status with Start/Stop/Restart, endpoint copy + open console; an editable draft of mode/host/port/token/CLI path with validation, Save/Revert, and a "restart to apply" notice when the running endpoint differs.                                                                                                                                                                                                                                                                                                             |
 | Appearance    | Theme + palette (`ThemeRows`), text size (`data-text-size` on `<html>`), reduce transparency (`data-transparency` + `win.setVibrancy`).                                                                                                                                                                                                                                                                                                                                                                                            |
 | Notifications | Master switch; what happens while the window is in front (nothing / in-app banner / system notification); Do not disturb (30 min, 1 h, 3 h, until tomorrow 9:00); show details; per-event switches (reply finished with a minimum length, reply failed, approval needed, scheduled job runs off/failures/all, gateway stopped on its own); sound on/off and which (the app chime or a macOS alert sound); Dock badge and bounce; a test button and a door to System Settings › Notifications. See [Notifications](#notifications). |
-| Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, Return vs ⌘Return to send, sidebar width reset.                                                                                                                                                                                                                                                                                                                                                            |
+| Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, show in menu bar (see [Menu bar](#menu-bar)), Return vs ⌘Return to send, sidebar width reset.                                                                                                                                                                                                                                                                                                              |
 | Shortcuts     | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …); static, nothing is rebindable.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Advanced      | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all app settings behind an alertdialog.                                                                                                                                                                                                                                                                                                                                                                      |
 | About         | App/Electron/Chromium versions, gateway version + uptime, `updates.check`, links.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
-Main mirrors three settings onto the window/OS on every write
-(`mirrorSettingsToOs` in `main/index.ts`): the login item, window vibrancy and
-the zoom factor. `nativeTheme` follows the theme section the same way, so a
+Main mirrors four settings onto the window/OS on every write
+(`mirrorSettingsToOs` in `main/index.ts`): the login item, window vibrancy,
+the zoom factor and the menu bar item. `nativeTheme` follows the theme section the same way, so a
 reset repaints correctly.
+
+## Menu bar
+
+The app keeps the gateway (and with it DCA mandates and scheduled jobs)
+running after the last window closes, so it also keeps a status item in the
+macOS menu bar, the way Docker or Tailscale do. Clicking it drops a native
+menu:
+
+```
+●  Gateway running · 127.0.0.1:18791
+───────────────────────────────
+2 approvals waiting                 → opens the desk (or the window, for a tool approval)
+Next DCA buy · ETH → USDC in 14 min → opens the desk
+1 reply in progress                 → opens the window
+───────────────────────────────
+Open AgentOS
+New Chat
+───────────────────────────────
+Stop Gateway                        (Start / Stop / Restart by state; managed mode only)
+Settings…
+Quit AgentOS
+```
+
+While approvals wait, their count sits beside the icon (`tray.setTitle`), so
+a trade waiting on you shows from any app. Settings › Behaviour › "Show in
+menu bar" (`general.showInMenuBar`, on by default) removes and restores it.
+
+- `main/tray/menu.ts`: `buildTrayMenu(summary, status, settings, actions)`,
+  a pure function (unit-tested in the node environment) with the clicks
+  injected as a small `actions` object. Rows appear only when there is
+  something to say; an external gateway gets no lifecycle row, but the status
+  line still names its endpoint; an error carries its first line, cut short,
+  and offers Restart.
+- `main/tray/tray.ts` (`MenuBar`): owns the `Tray` and redraws on every
+  input — a summary push, `gateway:changed` (the supervisor's subscription),
+  a settings write (`mirrorSettingsToOs` calls `sync`), and every 30 s while a
+  DCA countdown is shown. The icon is a template pair,
+  `resources/trayTemplate.png` + `@2x` (`scripts/make-tray-icon.py`), so
+  macOS tints it for a light or dark bar; it ships through `extraResources`.
+- Main never talks to the gateway: the renderer pushes `tray:summary`
+  (`{ liveTurns, approvalsPending, tradeApprovals, nextMandate }`) from
+  `lib/use-tray-summary.ts`, bound once from `AppShell`, at most once a
+  second. `main/tray/summary.ts` validates it (counts clamped to whole
+  numbers, the label cut to one short line, the time a real instant). Its
+  sources: `useLive` (live turns), the console's `useApprovals` (tool
+  approvals), and the desk's orders awaiting approval plus live DCA mandates
+  (`trading.orders.list` / `trading.dca.list`, the desk's own query keys).
+  Asking for those starts the engine's trading loop, which an ordinary chat
+  must not do, so they only run once trading is in use on this Mac (a desk
+  session exists, or a trading event arrived) and are event-driven with a
+  60 s backstop rather than polled.
+- With no window there is no renderer to ask: closing the last window clears
+  the summary, and the menu says only what main knows (the gateway).
+- Clicks: Open focuses, restores or creates the main window (as `activate`
+  does). New Chat, the approvals row and the DCA row push `tray:navigate`
+  with a `NotifyTarget` (`newChat`, `trading`, `approvals`) that the
+  notifications' activation handler (`use-notifications.ts`) routes, so
+  there is one navigation router. A window that was just created, or is
+  reloading, gets the target once its first summary arrives. Settings… goes
+  through `requestOpenSettings`; Quit is `app.quit()`, so `before-quit`
+  stops a managed gateway exactly as ⌘Q does.
 
 ## Notifications
 

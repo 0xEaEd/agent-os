@@ -32,6 +32,8 @@ export interface GeneralSettings {
   launchView: 'home' | 'last'
   /** Enter sends and Shift+Enter breaks the line; off swaps them (⌘Enter sends). */
   enterToSend: boolean
+  /** The status item in the macOS menu bar (main/tray). Off removes it. */
+  showInMenuBar: boolean
 }
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
@@ -39,6 +41,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   stopGatewayOnQuit: true,
   launchView: 'home',
   enterToSend: true,
+  showInMenuBar: true,
 }
 
 /** Whole-app zoom, percent. Applied by main as the window's zoom factor. */
@@ -214,6 +217,7 @@ function normalizeGeneral(raw: unknown): GeneralSettings {
     stopGatewayOnQuit: bool(obj.stopGatewayOnQuit, d.stopGatewayOnQuit),
     launchView: obj.launchView === 'last' ? 'last' : 'home',
     enterToSend: bool(obj.enterToSend, d.enterToSend),
+    showInMenuBar: bool(obj.showInMenuBar, d.showInMenuBar),
   }
 }
 

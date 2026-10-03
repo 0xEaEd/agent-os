@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Desktop: a status item in the macOS menu bar, so the app reads as the
+  always-on thing it is (the gateway, DCA mandates and scheduled jobs keep
+  running after the last window closes). The menu shows the gateway's state
+  and endpoint (or its error), approvals waiting, the next DCA buy with a
+  countdown and replies in progress, and offers Open AgentOS, New Chat,
+  Start / Stop / Restart Gateway (managed mode), Settings and Quit, all of
+  which work with the window closed. While approvals wait, their count sits
+  beside the icon. The icon is a monochrome template that follows a light or
+  dark menu bar; Settings › Behaviour › "Show in menu bar" turns it off.
 - Skills: an operator install policy. `[skills.install_policy]` runs a command
   of your choosing against every hub skill while it is still in quarantine,
   on install and on update, and the command answers allow, warn or block. It
