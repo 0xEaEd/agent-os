@@ -140,7 +140,7 @@ revision on every write so a stale form cannot overwrite a newer file.
 | Advanced      | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all app settings behind an alertdialog.                                                                                                                                                                                                                                                                                                                                                                      |
 | About         | App/Electron/Chromium versions, gateway version + uptime, `updates.check`, links.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
-Main mirrors four settings onto the window/OS on every write
+Main mirrors a few settings onto the window/OS on every write
 (`mirrorSettingsToOs` in `main/index.ts`): the login item, window vibrancy,
 the zoom factor, the menu bar item and the Quick Ask global shortcut. `nativeTheme` follows the theme section the same way, so a
 reset repaints correctly.

@@ -6,6 +6,7 @@ import { EMPTY_TRAY_SUMMARY, type TraySummary } from '@shared/tray'
 import type { GatewaySupervisor } from '../gateway/supervisor'
 import { requestOpenSettings } from '../ipc/app'
 import type { SettingsStore } from '../settings/store'
+import { findMainWindow } from '../window'
 import { buildTrayMenu, trayTitle, type TrayActions } from './menu'
 import { sanitizeTraySummary } from './summary'
 
@@ -148,7 +149,8 @@ export class MenuBar {
 
   /** Focus, restore or create the main window, and bring the app in front. */
   private showWindow(): BrowserWindow {
-    const open = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
+    // The main window, never the Quick Ask panel (a hidden panel is still a window).
+    const open = findMainWindow()
     const win = open ?? this.deps.createWindow()
     if (open) {
       if (open.isMinimized()) open.restore()

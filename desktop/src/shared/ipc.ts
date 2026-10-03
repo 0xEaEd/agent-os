@@ -247,7 +247,7 @@ export interface DesktopApi {
     setSummary(summary: TraySummary): void
     /** A menu bar row (New chat, approvals, next DCA buy) points somewhere. */
     onNavigate(listener: (target: NotifyTarget) => void): () => void
-  },
+  }
   /**
    * Quick Ask. The panel half (submit, hide, ready, resize, onShown) is used
    * by the floating prompt; the main window collects what it sent (take,
