@@ -192,7 +192,7 @@ agentos trade lp add     <token|poolId> --chain base|robinhood (--usd X | --amou
   (remove), *you deposit* (add: base + quote + USD), *minimum* / *maximum*
   (slippage bounds), *approvals needed* (add), *gas*, *order*, *expires*;
   risk stamps: `remove 100%` → "burns the position NFT", `add` one-sided →
-  "one-sided: all <token> until price enters the range", `add` with a hook
+  "one-sided: all `<token>` until price enters the range", `add` with a hook
   address → "pool has a hook".
 - **Desk ledger** labels: "Collect fees · #id", "Remove liquidity · #id · 100%",
   "Add liquidity · PEPE/WETH · $50", outcomes as for send.

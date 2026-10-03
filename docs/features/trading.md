@@ -118,10 +118,11 @@ address the token search marks `verified: true`.
 
 The provider is read from `trading.provider` on **every** call, so switching
 takes effect immediately, no gateway restart. There is one canonical way to
-change it: write the config key. The desktop does `config.patch
-{trading: {provider: "uniswap"}}`; the CLI does `agentos trade provider
-uniswap` (`config.set trading.provider`); `trading.setProvider {provider}`
-is a thin RPC wrapper over the same `config.set` path.
+change it: write the config key. The desktop does
+`config.patch {trading: {provider: "uniswap"}}`; the CLI does
+`agentos trade provider uniswap` (`config.set trading.provider`);
+`trading.setProvider {provider}` is a thin RPC wrapper over the same
+`config.set` path.
 
 Prices, balances and history never depend on the provider (DexScreener /
 CoinGecko / your RPC node); only quoting and calldata do.
