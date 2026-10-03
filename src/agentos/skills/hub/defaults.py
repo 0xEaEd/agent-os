@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
+
+import structlog
 
 from agentos.skills.hub.aeon import AeonSource
 from agentos.skills.hub.bankr import BankrSource
 from agentos.skills.hub.capminal import CapminalSource
 from agentos.skills.hub.clawhub import ClawHubSource
 from agentos.skills.hub.github import GitHubSource
+from agentos.skills.hub.install_policy import InstallPolicy
 from agentos.skills.hub.installer import SkillInstaller
 from agentos.skills.hub.lockfile import Lockfile, default_lockfile_path
 from agentos.skills.hub.router import SourceRouter
 from agentos.skills.hub.source import SkillSource
+
+log = structlog.get_logger(__name__)
 
 _default_router: SourceRouter | None = None
 
@@ -38,10 +44,45 @@ def get_default_skill_router() -> SourceRouter:
     return _default_router
 
 
+def resolve_install_policy() -> InstallPolicy:
+    """Read ``[skills.install_policy]`` for whichever process is installing.
+
+    The gateway already holds its config; the CLI's no-gateway path and anything
+    else that installs in-process load it from disk. A config that cannot be
+    read resolves to an enabled policy with no command, which refuses every
+    install: an operator who turned the policy on must not lose it to a typo
+    elsewhere in the file.
+    """
+    try:
+        from agentos.tools.builtin import control
+
+        config: Any = control._gateway_config
+        if config is None:
+            from agentos.gateway.config import GatewayConfig
+
+            config = GatewayConfig.load(os.environ.get("AGENTOS_GATEWAY_CONFIG_PATH"))
+        section = config.skills.install_policy
+        return InstallPolicy(
+            enabled=bool(section.enabled),
+            command=str(section.command),
+            args=tuple(section.args),
+            pass_env=tuple(section.pass_env),
+            timeout_seconds=float(section.timeout_seconds),
+            max_output_bytes=int(section.max_output_bytes),
+        )
+    except Exception:
+        log.warning("skills.install_policy_unreadable", exc_info=True)
+        return InstallPolicy(enabled=True)
+
+
 def build_default_skill_installer(*, managed_dir: Path | None = None) -> SkillInstaller:
     """Build a default installer, optionally aligned to the active loader layer."""
 
-    return SkillInstaller(router=get_default_skill_router(), managed_dir=managed_dir)
+    return SkillInstaller(
+        router=get_default_skill_router(),
+        managed_dir=managed_dir,
+        install_policy=resolve_install_policy(),
+    )
 
 
 def installed_skill_names() -> set[str]:

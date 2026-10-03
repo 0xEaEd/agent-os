@@ -118,6 +118,16 @@ class LockEntry:
     scan_verdict: str = ""
     scan_strategy: str = ""
     scan_findings: list[dict[str, str | int]] = field(default_factory=list)
+    #: The registry's review of this skill at install time (``clean`` |
+    #: ``suspicious`` | ``malicious`` | ``""``), and the third-party scanner
+    #: statuses it relayed.
+    registry_verdict: str = ""
+    registry_summary: str = ""
+    upstream_scanners: dict[str, str] = field(default_factory=dict)
+    #: What ``[skills.install_policy]`` answered — ``allow`` | ``warn`` | ``""``
+    #: when no policy ran. A ``block`` never reaches the lockfile.
+    policy_decision: str = ""
+    policy_reason: str = ""
 
 
 @dataclass
@@ -151,6 +161,11 @@ class Lockfile:
                 "scan_verdict",
                 "scan_strategy",
                 "scan_findings",
+                "registry_verdict",
+                "registry_summary",
+                "upstream_scanners",
+                "policy_decision",
+                "policy_reason",
             }
             for name, entry_data in data.get("installed", {}).items():
                 filtered = {k: v for k, v in entry_data.items() if k in known_fields}
