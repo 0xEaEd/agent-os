@@ -232,7 +232,7 @@ Main `agentos.toml` sections (full commented reference:
 | `[browser]` | Browser automation via `agent-browser`: `enabled`, `headless`, `cdp_port` (0=managed; >0 attaches to your Chrome, localhost only) + `attach_confirmed`, `allowed_domains`, `persist_profile`, `dialog_policy`, `restrict_evaluate`. The `browser` tool is hidden until the binary is installed (`npm install -g agent-browser && agent-browser install`). See docs/features/browser.md |
 | `[llm]` | `provider`, `model`, `api_key`, `base_url`, `proxy`, `[llm.provider_routing]` |
 | `[agentos_router]` | router on/off, `strategy` (`pilot-v1` \| `llm_judge` \| `jev`), tier settings under `[agentos_router.tiers.c0..c3]`; `jev` (experimental) reads its key from `TYPESAFE_API_KEY` and is tuned under `[agentos_router.jev]` |
-| `[skills]` | skill filtering/injection: `filter_strategy`, `filter_top_k`, `injection_mode`, `max_skills_prompt_chars` (default 28000), `max_skill_view_chars` (default 10000, 0 disables) |
+| `[skills]` | skill filtering/injection: `filter_strategy`, `filter_top_k`, `injection_mode`, `max_skills_prompt_chars` (default 28000), `max_skill_view_chars` (default 10000, 0 disables); `[skills.install_policy]` (`enabled`, `command`, `args`, `pass_env`, `timeout_seconds`) runs an operator's scanner on every hub install |
 | `[tools]` | model-visible tools and policy; `enabled = false` runs providers in plain-text mode; `profile` (`full` \| `coding` \| `messaging` \| `memory_only` \| `minimal`) sets the base allowlist — `agentos context` prices each one |
 | `[memory]` | memory source and embedding model, `[memory.nudge]` (periodic memory review) |
 | `[sandbox]` | `sandbox`, `default_level` (DISABLED/STANDARD/STRICT/LOCKED), `backend`, network/mounts |
@@ -431,6 +431,16 @@ refuses this and says so; only pass `force` after the operator has confirmed
 they want the hub version instead of the shipped one. `skill_search_community`
 answers with an `installed_match` block when the query names a skill this
 machine already has, for the same reason.
+
+**An install can be refused for security, and `force` is not a retry.** Three
+checks run on a hub skill: the registry's own verdict, the built-in scan, and
+the operator's `[skills.install_policy]` command when one is configured. A
+refusal whose result carries `overridable: true` (registry `suspicious`, scan
+`dangerous`, policy `warn`) may be forced, but only after you have shown the
+operator the reason and they have said to go ahead. A registry `malicious`
+verdict and a policy `block` cannot be forced; report them and stop. A policy
+that is enabled but broken refuses every install — that is the operator's
+setting working, so fix the `command`, do not turn the policy off.
 
 Three separate facts describe a skill; do not use one to answer another.
 

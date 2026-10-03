@@ -6,7 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Skills: an operator install policy. `[skills.install_policy]` runs a command
+  of your choosing against every hub skill while it is still in quarantine,
+  on install and on update, and the command answers allow, warn or block. It
+  speaks OpenClaw's `security.installPolicy` protocol v1, so
+  `clawscan openclaw-install-policy` (SkillSpector, Tencent AIG, Cisco, Snyk)
+  plugs in unchanged. It fails closed: a missing command, a nonzero exit, a
+  timeout or malformed output blocks the install, and `--force` answers a
+  `warn` but never a `block`. Off by default.
+- Skills: the registry's security verdict is honoured. ClawHub scans what it
+  hosts and publishes the result; AgentOS dropped it and relied on its own
+  pattern scan alone. An install now refuses a skill ClawHub marks
+  `suspicious` unless forced, refuses one marked `malicious` outright, and
+  records the verdict in the lockfile. Search results and `skills.list` carry
+  `registry_verdict`, and search results carry the third-party scanner
+  statuses ClawHub relays as `upstream_scanners`.
+
 ### Fixed
+- Skills: installs from ClawHub recorded no version, author or licence. The
+  detail endpoint nests the row under `skill` beside `latestVersion` and
+  `owner`, and the parser read the top level.
 - Sessions started from a channel (Telegram, Slack, Discord, …) are now
   named from their first message, like WebChat and desktop-app sessions,
   instead of keeping their short id in the sidebar. Channel dispatch never
