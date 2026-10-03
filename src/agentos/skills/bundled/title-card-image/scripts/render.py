@@ -41,13 +41,26 @@ _CJK_FONT_CANDIDATES = (
 )
 
 
+#: The smallest font auto-shrink will go to, on either axis. One constant so
+#: the width loop, ``fit_stack_to_height``'s ``shrink_floor`` and the error
+#: messages that quote it cannot drift: the width loop's ``while size > 12``
+#: used to leave ``size`` at 11, below the floor the other two assume.
+SHRINK_FLOOR = 12
+
+#: ``--font`` is resolved once per shrink step, so an unloadable path warned
+#: once per step -- a dozen identical lines on stderr for one bad argument.
+_FONT_WARNINGS_EMITTED: set[str] = set()
+
+
 def _pick_font(size: int, explicit: str | None = None):
     from PIL import ImageFont  # type: ignore
     if explicit:
         try:
             return ImageFont.truetype(explicit, size)
         except OSError:
-            print(f"Warning: --font {explicit!r} not loadable; falling back.", file=sys.stderr)
+            if explicit not in _FONT_WARNINGS_EMITTED:
+                _FONT_WARNINGS_EMITTED.add(explicit)
+                print(f"Warning: --font {explicit!r} not loadable; falling back.", file=sys.stderr)
     for candidate in _CJK_FONT_CANDIDATES:
         if os.path.isfile(candidate):
             try:
@@ -160,7 +173,7 @@ def fit_stack_to_height(
     sub_lines: list[str],
     canvas_height: int,
     *,
-    shrink_floor: int = 12,
+    shrink_floor: int = SHRINK_FLOOR,
 ) -> tuple[int, int, bool]:
     """Shrink ``title_size``/``sub_size`` in lockstep until the stacked lines fit
     ``canvas_height``, or until neither can shrink further.
@@ -243,19 +256,47 @@ def main() -> int:
             widest = max(widest, bbox[2] - bbox[0])
         return widest
 
-    def _fit_font(size: int, lines: list[str]) -> tuple[int, object]:
+    def _fit_font(size: int, lines: list[str]) -> tuple[int, object, bool]:
+        """``(size, font, fits)`` -- ``fits`` is False only when the widest
+        line still overruns the safe width at ``SHRINK_FLOOR``.
+
+        The third element is the whole point: the loop below has always
+        stopped at the floor whether or not it got there, and the caller
+        used to take the result on trust and draw with it. That is the same
+        "no font size makes this fit" the height fit reports through its own
+        ``fits``, and it has to end the same way (#3546).
+        """
         max_safe = int(args.width * 0.88)
         font = _pick_font(size, args.font)
         if args.auto_shrink == "no" or not lines:
-            return size, font
+            return size, font, True
         # Shrink until rendered max line fits.
-        while size > 12 and _max_text_width(lines, font) > max_safe:
-            size = int(size * 0.92)
+        while size > SHRINK_FLOOR and _max_text_width(lines, font) > max_safe:
+            size = max(SHRINK_FLOOR, int(size * 0.92))
             font = _pick_font(size, args.font)
-        return size, font
+        return size, font, _max_text_width(lines, font) <= max_safe
 
-    title_size, font_title = _fit_font(args.font_size, title_lines)
-    sub_size, font_sub = _fit_font(args.subtitle_size, sub_lines) if sub_lines else (args.subtitle_size, None)
+    title_size, font_title, title_fits = _fit_font(args.font_size, title_lines)
+    if sub_lines:
+        sub_size, font_sub, sub_fits = _fit_font(args.subtitle_size, sub_lines)
+    else:
+        sub_size, font_sub, sub_fits = args.subtitle_size, None, True
+
+    # The same refusal the height fit makes below, for the other axis. An
+    # unbreakable token -- a URL, a hashtag, a long compound -- is one line
+    # whatever ``--max-chars-per-line`` says (``test_overlong_word_stays_whole``
+    # pins that, on the grounds that "auto-shrink fits it"), so when the
+    # shrink reaches the floor still too wide there is nothing left to try.
+    # Writing the clipped image and exiting 0 handed the caller a card with
+    # its first and last characters sliced off and nothing saying so.
+    if not (title_fits and sub_fits):
+        print(
+            f"Error: text still exceeds the {args.width}px canvas width "
+            f"at the minimum font size ({SHRINK_FLOOR}px); refusing to write an image "
+            "with lines rendered outside the canvas.",
+            file=sys.stderr,
+        )
+        return 1
 
     # The width-based shrink above can still leave the *stacked* lines taller
     # than the canvas -- it only ever looked at how wide a line renders, never
@@ -278,7 +319,7 @@ def main() -> int:
         if not fits:
             print(
                 f"Error: text still exceeds the {args.height}px canvas height "
-                "at the minimum font size (12px); refusing to write an image "
+                f"at the minimum font size ({SHRINK_FLOOR}px); refusing to write an image "
                 "with lines rendered outside the canvas.",
                 file=sys.stderr,
             )

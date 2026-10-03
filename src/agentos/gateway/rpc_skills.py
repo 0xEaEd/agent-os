@@ -23,6 +23,7 @@ from agentos.skills.hub.defaults import (
     installed_skill_names,
 )
 from agentos.skills.hub.deps import install_deps
+from agentos.skills.hub.installer import install_security_fields
 from agentos.skills.hub.lockfile import LockEntry, Lockfile, default_lockfile_path
 from agentos.skills.inventory import (
     SkillRow,
@@ -481,6 +482,8 @@ def _synthesized_installed_rows(
                 "setup": [],
                 "demo": {},
                 "homepage": entry.upstream_url,
+                "registry_verdict": entry.registry_verdict,
+                "upstream_scanners": entry.upstream_scanners,
                 "installed": True,
             }
         )
@@ -538,6 +541,8 @@ async def _handle_skills_search(params: dict | None, ctx: RpcContext) -> dict[st
             "setup": r.setup,
             "demo": r.demo,
             "homepage": r.homepage,
+            "registry_verdict": r.registry_verdict,
+            "upstream_scanners": r.upstream_scanners,
             "installed": (bool(r.identifier) and r.identifier in installed_identifiers)
             or r.name in installed_names,
         }
@@ -593,9 +598,7 @@ async def _handle_skills_install(params: dict | None, ctx: RpcContext) -> dict[s
     }
     if result.path:
         resp["path"] = result.path
-    if result.scan:
-        resp["scan_verdict"] = result.scan.verdict
-        resp["scan_findings"] = [finding.__dict__ for finding in result.scan.findings]
+    resp.update(install_security_fields(result))
     return resp
 
 
@@ -631,9 +634,7 @@ async def _handle_skills_update(params: dict | None, ctx: RpcContext) -> dict[st
             "name": r.name,
             "message": r.message,
         }
-        if r.scan:
-            item["scan_verdict"] = r.scan.verdict
-            item["scan_findings"] = [finding.__dict__ for finding in r.scan.findings]
+        item.update(install_security_fields(r))
         result_list.append(item)
     return {"results": result_list}
 

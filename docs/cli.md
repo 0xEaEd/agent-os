@@ -752,7 +752,7 @@ same skill instead of a separate, thinner answer:
 | Key | What it says |
 | --- | --- |
 | `layer` | where the files are — `bundled`, `managed`, `personal`, `project`, `workspace`, `extra` |
-| `acquisition` | how the skill got there: `kind` is `shipped`, `hub`, or `local`, plus `source_id`, `author`, `identifier`, `version`, `installed_at`, `source_trust`, `scan_verdict`, and the `removable` / `updatable` booleans |
+| `acquisition` | how the skill got there: `kind` is `shipped`, `hub`, or `local`, plus `source_id`, `author`, `identifier`, `version`, `installed_at`, `source_trust`, `scan_verdict`, `registry_verdict`, `policy_decision`, and the `removable` / `updatable` booleans |
 | `publisher` | `{id, name, url, logo}`, all empty strings when the skill is unbranded. Only publishers on an allowlist inside AgentOS resolve to a name; a skill cannot brand itself by writing one into its manifest |
 | `provenance` | unchanged, and independent of `publisher` — where the text came from and under what licence |
 | `status` | `ready`, `needs_setup`, or `not_declared`, alongside a `disabled` boolean and a `status_detail` line |

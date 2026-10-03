@@ -96,7 +96,8 @@ _ALLOWED_UPDATES = (
     "callback_query",
 )
 #: Hard ceiling Telegram enforces on ``sendMessage``/``editMessageText`` text.
-#: Measured on the *rendered* HTML, which is longer than the markdown it came from.
+#: Measured on the *rendered* HTML, which is longer than the markdown it came
+#: from, and in UTF-16 code units, which is how Telegram counts (:func:`_utf16_length`).
 _MESSAGE_TEXT_LIMIT = 4096
 #: Hard ceiling Telegram enforces on media/document captions (``sendDocument``).
 _CAPTION_TEXT_LIMIT = 1024
@@ -193,6 +194,26 @@ def _text_mentions_username(text: str, username: str) -> bool:
     """
     pattern = r"(?<!\w)@" + re.escape(username.lstrip("@").casefold()) + r"(?!\w)"
     return re.search(pattern, text.casefold()) is not None
+
+
+def _utf16_length(text: str) -> int:
+    """Length of *text* in UTF-16 code units, which is how Telegram counts.
+
+    The same grid :func:`_slice_utf16` indexes on, applied to the 4096-unit
+    cap on a message's text: ``len`` counts code points, so every non-BMP
+    character (emoji, math letters, CJK extensions) is one there and two on
+    the wire. Measuring the cut with ``len`` let an emoji-heavy reply go out
+    as a single message of up to twice the cap, which Telegram refuses with
+    ``message is too long`` -- an error no send path retries, so the reply was
+    dropped rather than split (#3547). The MS Teams adapter measures its own
+    cap the same way, for the same reason (``_measure_activity_text``, #2433).
+    """
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _measure_telegram_text(text: str) -> int:
+    """Size of the markdown *text* once rendered, as Telegram counts it."""
+    return _utf16_length(render_telegram_html(text))
 
 
 def _slice_utf16(text: str, offset: int, length: int) -> str:
@@ -1316,7 +1337,9 @@ class TelegramChannel:
         already relies on — rather than a second splitter with its own,
         possibly-diverging notion of where a message can safely be cut.
         """
-        measure = None if auto_rendered else len
+        # Raw text goes to Telegram verbatim, so it is measured directly --
+        # but still on the UTF-16 grid Telegram counts on, not by code point.
+        measure = None if auto_rendered else _utf16_length
         segments: list[str] = []
         remaining = content
         while True:
@@ -1336,14 +1359,16 @@ class TelegramChannel:
         """Split *segment* into the largest prefix that fits one message, plus the rest.
 
         The 4096 budget applies to the *rendered* HTML by default, which is
-        longer than the markdown it came from. ``measure`` overrides what's
-        measured against the budget — callers that send raw text verbatim
-        (an explicit ``parse_mode``, where there is no HTML render step)
-        pass ``len`` directly so the cut reflects what Telegram will
-        actually receive. See :func:`split_text_for_limit` for the shared
-        cut-point and fenced-code-block logic.
+        longer than the markdown it came from, and is counted in UTF-16 code
+        units, which is what Telegram counts (:func:`_utf16_length`).
+        ``measure`` overrides what's measured against the budget — callers
+        that send raw text verbatim (an explicit ``parse_mode``, where there
+        is no HTML render step) pass ``_utf16_length`` directly so the cut
+        reflects what Telegram will actually receive. See
+        :func:`split_text_for_limit` for the shared cut-point and
+        fenced-code-block logic.
         """
-        length = measure if measure is not None else (lambda text: len(render_telegram_html(text)))
+        length = measure if measure is not None else _measure_telegram_text
         return split_text_for_limit(segment, limit, measure=length)
 
     @staticmethod
@@ -1360,7 +1385,7 @@ class TelegramChannel:
         of the source and the tail carries a reopener the next message has to
         start with. See :func:`split_stream_segment` (#3505).
         """
-        length = measure if measure is not None else (lambda text: len(render_telegram_html(text)))
+        length = measure if measure is not None else _measure_telegram_text
         return split_stream_segment(segment, limit, measure=length)
 
     async def _stream_send(
