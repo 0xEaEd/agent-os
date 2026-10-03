@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextlib
+import glob
 import hashlib
 import json
 import os
@@ -152,8 +153,60 @@ def reset_browser_runtime() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _version_key(path: str) -> tuple[int, ...]:
+    """Sort key for a ``.../v24.16.0/<leaf>`` directory, so newest sorts first."""
+    parts: list[int] = []
+    for piece in os.path.basename(os.path.dirname(path)).lstrip("v").split("."):
+        if not piece.isdigit():
+            break
+        parts.append(int(piece))
+    return tuple(parts)
+
+
+def _newest_first(pattern: str) -> list[str]:
+    return sorted(glob.glob(pattern), key=_version_key, reverse=True)
+
+
+def _fallback_bin_dirs() -> list[str]:
+    """Where npm and the Node version managers put global binaries.
+
+    A gateway started by the desktop app, launchd or systemd inherits a bare
+    PATH (``/usr/bin:/bin:/usr/sbin:/sbin`` on macOS), not the login shell's.
+    ``npm install -g agent-browser`` under nvm, fnm, Volta or Homebrew then
+    lands in a directory :func:`shutil.which` never looks at, and the tool
+    stays unavailable on a machine where the operator just installed it.
+    """
+    home = os.path.expanduser("~")
+    env = {
+        name: os.environ.get(name, "").strip()
+        for name in ("NVM_BIN", "NVM_DIR", "PNPM_HOME", "APPDATA")
+    }
+    dirs = [env["NVM_BIN"], env["PNPM_HOME"]]
+    nvm_dir = env["NVM_DIR"] or os.path.join(home, ".nvm")
+    dirs += _newest_first(os.path.join(nvm_dir, "versions", "node", "*", "bin"))
+    for fnm_root in (
+        os.path.join(home, ".local", "share", "fnm"),
+        os.path.join(home, "Library", "Application Support", "fnm"),
+    ):
+        dirs += _newest_first(os.path.join(fnm_root, "node-versions", "*", "installation", "bin"))
+    dirs += [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        os.path.join(home, ".npm-global", "bin"),
+        os.path.join(home, ".volta", "bin"),
+        os.path.join(home, ".bun", "bin"),
+        os.path.join(home, "Library", "pnpm"),
+        os.path.join(home, ".local", "share", "pnpm"),
+        os.path.join(home, ".local", "bin"),
+    ]
+    if env["APPDATA"]:
+        dirs.append(os.path.join(env["APPDATA"], "npm"))
+    return list(dict.fromkeys(d for d in dirs if d))
+
+
 def resolve_binary() -> str | None:
-    """Return the ``agent-browser`` path, honoring config override then PATH.
+    """Return the ``agent-browser`` path: the config override, then PATH, then
+    the usual npm global install directories (:func:`_fallback_bin_dirs`).
 
     Only a *successful* resolution is cached. Caching the miss too would make
     the install flow the doctor prints a dead end: after
@@ -170,6 +223,10 @@ def resolve_binary() -> str | None:
             candidate = expanded
     if candidate is None:
         candidate = shutil.which("agent-browser")
+    if candidate is None:
+        candidate = shutil.which("agent-browser", path=os.pathsep.join(_fallback_bin_dirs()))
+        if candidate is not None:
+            log.info("browser.binary_found_outside_path", path=candidate)
     _resolved_binary = candidate
     _binary_resolved = candidate is not None
     return candidate
