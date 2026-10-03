@@ -24,6 +24,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   statuses ClawHub relays as `upstream_scanners`.
 
 ### Fixed
+- Artifacts and attachment downloads: a filename longer than 160 characters
+  lost its extension. Both sanitisers cut with `name[:160]`, and the
+  extension is the last thing in the string, so it was the first thing gone
+  -- a 161-character `.pdf` came back `.pd`, 163 came back `.`, and 171 came
+  back with no suffix at all. `_safe_download_name` is handed straight to
+  `FileResponse(filename=...)`, so that is the `Content-Disposition`
+  filename: the browser saved a file the OS could not open by
+  double-click, with the bytes intact. Both now trim the stem and keep the
+  suffix, through one `attachment_refs.truncate_filename` helper. A "suffix"
+  over 16 characters or containing a space is a name with a dot in it rather
+  than an extension and gets no protection, so a pathological tail cannot
+  eat the budget. (#3569)
 - Decision log: `build_intent_summary` wrote a password embedded in a URL to
   the log verbatim. It ran four patterns of its own and none reached one --
   `_URL_RE` only matches `http(s)`, `_SECRET_ASSIGN_RE` needs a `name=value`,
