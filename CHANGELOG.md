@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Browser: a gateway started by the desktop app, launchd or systemd now finds
+  an `agent-browser` installed with `npm install -g` under nvm, fnm, Volta,
+  pnpm, Bun or Homebrew. Those launchers pass a bare `PATH`, so the binary was
+  invisible and the tool reported "The browser engine is not available" on a
+  machine where it was installed. `browser.binary_path` still wins when set.
+- Browser: the tool is now hidden from the model when the engine is missing
+  or `browser.enabled = false`. The turn runner dropped the browser capability
+  when it built the tool surface, so the model was offered `browser` anyway and
+  spent a call on the "not available" error before falling back.
+
 ## [2026.10.3] - 2026-10-03
 
 ### Added

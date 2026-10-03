@@ -747,7 +747,7 @@ restrict_evaluate = false
 | --- | --- | --- |
 | `browser.enabled` | `true` | Off hides the tool even when the binary is installed. |
 | `browser.headless` | `true` | Managed mode; `false` opens a visible window. |
-| `browser.binary_path` | `""` | Optional explicit path to `agent-browser`; otherwise found on `PATH`. |
+| `browser.binary_path` | `""` | Optional explicit path to `agent-browser`; otherwise found on `PATH`, then in the usual npm global directories (nvm, fnm, Volta, pnpm, Bun, Homebrew, `~/.npm-global`). |
 | `browser.cdp_port` | `0` | `0` = managed. `>0` = attach to your Chrome's debug port. Localhost only; a URL is never accepted. |
 | `browser.attach_confirmed` | `false` | Must be `true` for attach mode to run — it can drive signed-in sessions. |
 | `browser.allowed_domains` | `[]` | `[]` = open web (SSRF still blocks private ranges). A non-empty list bounds navigation in AgentOS and in the engine. Entries are hostnames and cover subdomains — `["example.com"]` allows `example.com` and `www.example.com`, but not `evil-example.com`. A leading `.` or `*.`, a scheme, a port, userinfo and a path are accepted and reduced to the hostname, so `https://example.com/x` and `*.example.com` mean the same as `example.com`. An entry that cannot be reduced to a hostname is refused at config time, naming the accepted format. |
