@@ -976,4 +976,21 @@ export const trading = {
   'trading.dca.error.runs': 'Buys must be a whole number',
   'trading.dca.error.maxPrice': 'The ceiling must be a positive number',
   'trading.orders.dca': 'DCA',
+
+  // Touch ID (Settings › Security). The reasons complete macOS's own
+  // sentence in the sheet, "AgentOS is trying to …", so they start lowercase.
+  'trading.touchId.reason.order': 'approve {what} on {chain}',
+  'trading.touchId.reason.orderId': 'approve order {id}',
+  'trading.touchId.reason.mandate': 'approve the DCA {name}, up to {cap}, on {chain}',
+  'trading.touchId.reason.mandateId': 'approve the DCA {id}',
+  'trading.touchId.reason.export': 'export the private key of {wallet}',
+  'trading.touchId.reason.exportKeystore': 'export the keystore of {wallet}',
+  'trading.touchId.reason.remove': 'remove the wallet {wallet}',
+  'trading.touchId.reason.test': 'test Touch ID',
+  'trading.touchId.prompting': 'Touch ID…',
+  'trading.touchId.cancelled': 'Approval cancelled — Touch ID was dismissed',
+  'trading.touchId.cancelled.vault': 'Cancelled — Touch ID was dismissed',
+  'trading.touchId.unavailable':
+    'Touch ID is unavailable right now (closed lid?). Open the lid, or turn this off in Settings › Security',
+  'trading.touchId.failed': 'Touch ID did not confirm it is you. Nothing was sent.',
 } as const

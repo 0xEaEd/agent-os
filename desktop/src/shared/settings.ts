@@ -147,6 +147,27 @@ export const DEFAULT_PET_SETTINGS: PetSettings = {
   scale: PET_DEFAULT_SCALE,
 }
 
+/** When the desk asks for a fingerprint (Settings › Security). */
+export type TouchIdMode = 'off' | 'high' | 'all'
+export const TOUCH_ID_MODES: readonly TouchIdMode[] = ['off', 'high', 'all']
+
+export interface SecuritySettings {
+  /**
+   * `off`: never. `high`: a high-risk approval, a private-key export and a
+   * wallet removal. `all`: every approval as well. Off by default: a Mac
+   * without a sensor must not be locked out of anything.
+   */
+  touchId: TouchIdMode
+}
+
+export const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
+  touchId: 'off',
+}
+
+export function isTouchIdMode(value: unknown): value is TouchIdMode {
+  return typeof value === 'string' && (TOUCH_ID_MODES as readonly string[]).includes(value)
+}
+
 export interface DesktopSettings {
   theme: ThemeSettings
   gateway: GatewaySettings
@@ -154,6 +175,7 @@ export interface DesktopSettings {
   appearance: AppearanceSettings
   notifications: NotificationSettings
   pet: PetSettings
+  security: SecuritySettings
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -163,6 +185,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   appearance: DEFAULT_APPEARANCE_SETTINGS,
   notifications: DEFAULT_NOTIFICATION_SETTINGS,
   pet: DEFAULT_PET_SETTINGS,
+  security: DEFAULT_SECURITY_SETTINGS,
 }
 
 export const SETTINGS_SECTIONS = [
@@ -172,6 +195,7 @@ export const SETTINGS_SECTIONS = [
   'appearance',
   'notifications',
   'pet',
+  'security',
 ] as const satisfies readonly (keyof DesktopSettings)[]
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -269,6 +293,13 @@ function normalizePet(raw: unknown): PetSettings {
   }
 }
 
+function normalizeSecurity(raw: unknown): SecuritySettings {
+  const obj = asRecord(raw)
+  return {
+    touchId: isTouchIdMode(obj.touchId) ? obj.touchId : DEFAULT_SECURITY_SETTINGS.touchId,
+  }
+}
+
 /** Validate a settings blob read from disk. Unknown keys are dropped. */
 export function normalizeSettings(raw: unknown): DesktopSettings {
   const obj = asRecord(raw)
@@ -279,6 +310,7 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
     appearance: normalizeAppearance(obj.appearance),
     notifications: normalizeNotifications(obj.notifications),
     pet: normalizePet(obj.pet),
+    security: normalizeSecurity(obj.security),
   }
 }
 

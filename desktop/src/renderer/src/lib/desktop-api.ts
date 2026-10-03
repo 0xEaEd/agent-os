@@ -76,6 +76,9 @@ function createFallbackApi(): DesktopApi {
       openPath: async () => 'Only available inside the desktop app.',
       chooseFile: async () => null,
       loginItem: async () => settings.general.openAtLogin,
+      // No sensor reaches a browser tab: Touch ID is never available here.
+      biometrics: async () => ({ available: false }),
+      authenticate: async () => ({ ok: false, reason: 'unavailable' }),
     },
     settings: {
       get: async () => structuredClone(settings),

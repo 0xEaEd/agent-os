@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { isTouchIdDeclined } from '~/lib/biometric-gate'
 import { toastOrder, toastOrderRejected, toastOrderSending } from '~/lib/order-toasts'
 import { useNow } from '~/lib/use-now'
 import { useGateway } from '~/stores/gateway'
@@ -287,18 +288,18 @@ function Desk({
   )
   const pending = orders.orders.filter(isAwaitingApproval).length
 
-  function onDecide(order: Order, approve: boolean) {
-    decide.mutate(
-      { orderId: order.orderId, approve },
-      {
-        onSuccess: () =>
-          approve
-            ? toastOrderSending(order.orderId, t('trading.approvals.approved'))
-            : toastOrderRejected(order.orderId, t('trading.approvals.rejected')),
-        onError: (err) =>
-          toastOrder('error', order.orderId, `${t('trading.approvals.failed')}: ${errorText(err)}`),
-      },
-    )
+  // Touch ID, when it is on, is asked for inside the decision itself
+  // (`useOrderDecision`); a declined prompt has toasted and sent nothing.
+  async function onDecide(order: Order, approve: boolean): Promise<void> {
+    try {
+      await decide.mutateAsync({ orderId: order.orderId, approve, order })
+    } catch (err) {
+      if (isTouchIdDeclined(err)) return
+      toastOrder('error', order.orderId, `${t('trading.approvals.failed')}: ${errorText(err)}`)
+      return
+    }
+    if (approve) toastOrderSending(order.orderId, t('trading.approvals.approved'))
+    else toastOrderRejected(order.orderId, t('trading.approvals.rejected'))
   }
 
   function onWalletAction(action: WalletAction) {

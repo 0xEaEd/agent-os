@@ -16,6 +16,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   which work with the window closed. While approvals wait, their count sits
   beside the icon. The icon is a monochrome template that follows a light or
   dark menu bar; Settings › Behaviour › "Show in menu bar" turns it off.
+- Desktop: Touch ID before money or keys move. Settings › Security ›
+  Confirm with Touch ID: Off (default), High-risk approvals, or Every
+  approval. When on, approving an order (swaps, sends, multisends, revokes,
+  LP writes) or a DCA mandate asks for a fingerprint first, from the desk's
+  card, the BOOK, the Trading tab or a chat DCA card, and Export private key
+  and Remove wallet always ask. A cancelled or failed prompt sends nothing
+  and leaves the card live; the setting stays editable without the sensor,
+  so a closed lid never locks anyone out (#3596).
 - Skills: an operator install policy. `[skills.install_policy]` runs a command
   of your choosing against every hub skill while it is still in quarantine,
   on install and on update, and the command answers allow, warn or block. It

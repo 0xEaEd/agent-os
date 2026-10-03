@@ -89,3 +89,32 @@ describe('general settings', () => {
     )
   })
 })
+
+describe('security settings', () => {
+  it('defaults Touch ID to off, for a missing section and an old file alike', () => {
+    expect(normalizeSettings({}).security).toEqual({ touchId: 'off' })
+    expect(normalizeSettings({ security: null }).security).toEqual({ touchId: 'off' })
+    expect(normalizeSettings({ notifications: { sound: false } }).security.touchId).toBe('off')
+  })
+
+  it('keeps each valid mode and drops anything else', () => {
+    for (const mode of ['off', 'high', 'all'] as const) {
+      expect(normalizeSettings({ security: { touchId: mode } }).security.touchId).toBe(mode)
+    }
+    for (const bad of ['always', 'HIGH', true, 1, null, '']) {
+      expect(normalizeSettings({ security: { touchId: bad } }).security.touchId).toBe('off')
+    }
+    // Unknown keys in the section are not carried along.
+    expect(normalizeSettings({ security: { touchId: 'high', pin: '1234' } }).security).toEqual({
+      touchId: 'high',
+    })
+  })
+
+  it('patches the mode without touching another section', () => {
+    const base = normalizeSettings({ notifications: { sound: false } })
+    const next = mergeSettings(base, { security: { touchId: 'all' } })
+    expect(next.security.touchId).toBe('all')
+    expect(next.notifications.sound).toBe(false)
+    expect(mergeSettings(next, { security: { touchId: 'off' } }).security.touchId).toBe('off')
+  })
+})

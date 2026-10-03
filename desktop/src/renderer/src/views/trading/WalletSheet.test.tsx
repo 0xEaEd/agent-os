@@ -1,5 +1,10 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AuthResult } from '@shared/app'
+import { DEFAULT_SETTINGS } from '@shared/settings'
+import { resetBiometricGateForTests } from '~/lib/biometric-gate'
+import { desktopApi } from '~/lib/desktop-api'
+import { useSettings } from '~/stores/settings'
 import { renderDesk, WALLET } from './test-utils'
 import { CLIPBOARD_CLEAR_MS, clearClipboardIf, WalletSheet } from './WalletSheet'
 
@@ -177,6 +182,66 @@ describe('WalletSheet', () => {
       }),
     )
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+})
+
+describe('WalletSheet · Touch ID', () => {
+  beforeEach(() => {
+    resetBiometricGateForTests()
+    useSettings.setState({
+      loaded: true,
+      settings: { ...structuredClone(DEFAULT_SETTINGS), security: { touchId: 'high' } },
+    })
+    return () => {
+      useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) })
+    }
+  })
+
+  it('asks before the export, says so on the button, and a cancel sends nothing', async () => {
+    let answer: (r: AuthResult) => void = () => {}
+    const authenticate = vi.spyOn(desktopApi().app, 'authenticate').mockImplementation(
+      () =>
+        new Promise<AuthResult>((resolve) => {
+          answer = resolve
+        }),
+    )
+    renderDesk(<WalletSheet mode={{ kind: 'export', wallet: WALLET }} onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('radio', { name: 'Raw private key' }))
+    const input = screen.getByLabelText('Vault password')
+    fireEvent.change(input, { target: { value: 'correct horse' } })
+    const reveal = screen.getByTestId('export-reveal')
+    fireEvent.click(reveal)
+    await waitFor(() => expect(reveal).toHaveTextContent('Touch ID…'))
+    expect(authenticate).toHaveBeenCalledWith(
+      `export the private key of ${WALLET.label} (0x1111…1111)`,
+    )
+    // Return in the password field while the sheet is up is nothing.
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(authenticate).toHaveBeenCalledTimes(1)
+    await act(async () => answer({ ok: false, reason: 'cancelled' }))
+    await waitFor(() => expect(reveal).not.toHaveTextContent('Touch ID…'))
+    expect(rpcCall).not.toHaveBeenCalledWith('wallet.export', expect.anything())
+    expect(screen.queryByTestId('export-secret')).toBeNull()
+    authenticate.mockRestore()
+  })
+
+  it('asks before a removal and sends it once the fingerprint matched', async () => {
+    const authenticate = vi
+      .spyOn(desktopApi().app, 'authenticate')
+      .mockResolvedValue({ ok: true } satisfies AuthResult)
+    const onClose = vi.fn()
+    renderDesk(<WalletSheet mode={{ kind: 'remove', wallet: WALLET }} onClose={onClose} />)
+    fireEvent.change(screen.getByLabelText('Vault password'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByTestId('remove-submit'))
+    await waitFor(() =>
+      expect(rpcCall).toHaveBeenCalledWith('wallet.remove', {
+        address: WALLET.address,
+        password: 'pw',
+      }),
+    )
+    expect(authenticate).toHaveBeenCalledWith(expect.stringMatching(/^remove the wallet /))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    authenticate.mockRestore()
   })
 })
 

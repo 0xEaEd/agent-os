@@ -46,6 +46,7 @@ import { useConfigSnapshot } from '~/views/settings/use-snapshot'
 import { ProjectChip } from './ProjectChip'
 import { useDeskInstruments, type DeskProps } from '~/views/trading/desk/useDeskInstruments'
 import { useTradeLedger } from '~/views/trading/desk/useTradeLedger'
+import { requireMandateTouchId } from '~/views/trading/touch-id'
 
 const NEW_CHAT_COMBO = 'mod+shift+o'
 const DEFAULT_AGENT_KEY = webchatSessionKey('main')
@@ -259,7 +260,16 @@ function ConnectedChat({
     () =>
       atDesk
         ? {
-            call: (method, params) => rpc.call(method, params),
+            // A DCA card's "Approve & start" is an approval like the desk's:
+            // Touch ID first when Settings › Security says so.
+            call: async (method, params) => {
+              if (method === 'trading.dca.approve')
+                await requireMandateTouchId(
+                  (m, p) => rpc.call(m, p),
+                  String(params.mandateId ?? ''),
+                )
+              return rpc.call(method, params)
+            },
             onOrder: (orderId) => {
               setOwnOrderIds((prev) => new Set(prev).add(orderId))
               setFocusOrderId(orderId)

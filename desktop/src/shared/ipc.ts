@@ -1,4 +1,4 @@
-import type { AppInfo, ChooseFileOptions } from './app'
+import type { AppInfo, AuthResult, BiometricsInfo, ChooseFileOptions } from './app'
 import type { GatewayStatus } from './gateway'
 import type { NotifyRequest, NotifyResult, NotifyTarget, SystemSound } from './notify'
 import type { InstalledPet, PetManifestEntry } from './pet'
@@ -55,6 +55,8 @@ export const IPC = {
     openPath: 'app:openPath',
     chooseFile: 'app:chooseFile',
     loginItem: 'app:loginItem',
+    biometrics: 'app:biometrics',
+    authenticate: 'app:authenticate',
   },
   notify: {
     supported: 'notify:supported',
@@ -116,6 +118,13 @@ export interface DesktopApi {
     chooseFile(options?: ChooseFileOptions): Promise<string | null>
     /** What macOS reports for the login item, not what settings say. */
     loginItem(): Promise<boolean>
+    /** Whether Touch ID can be asked for right now (sensor present, enrolled, lid open). */
+    biometrics(): Promise<BiometricsInfo>
+    /**
+     * Ask for a fingerprint through the macOS Touch ID sheet, which shows
+     * `reason` (≤ 120 characters). Biometrics only: never a password fallback.
+     */
+    authenticate(reason: string): Promise<AuthResult>
   }
   settings: {
     get(): Promise<DesktopSettings>
