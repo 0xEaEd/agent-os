@@ -24,6 +24,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   statuses ClawHub relays as `upstream_scanners`.
 
 ### Fixed
+- Decision log: `build_intent_summary` wrote a password embedded in a URL to
+  the log verbatim. It ran four patterns of its own and none reached one --
+  `_URL_RE` only matches `http(s)`, `_SECRET_ASSIGN_RE` needs a `name=value`,
+  and `_LONG_SECRET_RE` needs a long bare run that a real password is not --
+  so `postgres://user:pw@10.0.0.7:5432/app`, `redis://:pw@host`,
+  `amqps://svc:pw@rabbit` and `wss://bot:pw@gw` all went to disk unmasked.
+  What hid it is that a DSN whose host is shaped like a mail domain was
+  swallowed by `_EMAIL_RE` and came out `[email]`: accidental coverage that
+  held only for that spelling, not for an IP, a bare service name or a port.
+  The summary now uses the structural `<scheme>://[user]:password@host` match
+  `redact.py` settled in #3432, exposed as `redact.mask_url_userinfo` so there
+  is one definition rather than a fifth private regex here, with the log's own
+  `[secret]` marker. A reference rather than a literal (`${PGPASSWORD}`) is
+  still left alone. (#3568)
 - Trading: a wallet token whose DexScreener pair priced it but carried no
   liquidity figure -- `liquidity.usd` absent, or non-finite and read as
   `None` since #3503 -- was auto-hidden as junk, because `TokenCurator` read
