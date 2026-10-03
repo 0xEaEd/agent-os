@@ -13,9 +13,9 @@ from pathlib import Path
 import structlog
 
 from agentos.identity.workspace import BOOTSTRAP_FILENAMES
+from agentos.lines import split_lines_keepends
 from agentos.redact import redact_file_output
 from agentos.sandbox.integration import sandboxed
-from agentos.tools.builtin._lines import split_lines_keepends
 from agentos.tools.path_aliases import resolve_workspace_alias
 from agentos.tools.path_policy import reject_foreign_host_path
 from agentos.tools.registry import tool
