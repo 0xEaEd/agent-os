@@ -110,6 +110,21 @@ as the Web UI and `agentos cron`, with a natural-language schedule builder.
 See [Scheduling](scheduling.md). **Skills** (⌘⇧K) browses and installs
 skills; see [Skills](features/skills.md).
 
+## Quick Ask
+
+Press **⌥ Space** in any app to open a small prompt over it, the way
+Spotlight works. Type a question and press **Return** to ask it in a new
+chat, or **⌥ Return** to add it to the chat the window was on (or the last
+one you opened). AgentOS comes forward on that chat with the reply
+streaming. **Escape** or a click elsewhere closes the prompt without
+sending; what you typed is still there next time.
+
+Settings › Behaviour › Quick Ask turns the shortcut off or moves it to
+⌃ Space or ⌘⇧ Space. If another app already uses the key, the pane says
+"Unavailable"; choose another one. The prompt works while the app is
+running, even with its window closed. A question asked while the gateway is
+stopped waits in the chat and is sent once the gateway is running again.
+
 ## Notifications
 
 The app notifies you when a reply finishes or fails, when an approval is
@@ -135,7 +150,8 @@ Providers and Pilot Router edit the gateway's own configuration through the
 same guided setup the Web UI uses. Appearance holds the theme
 (system/light/dark), the colour palette, text size, reduced transparency and
 the optional pet mascot. Behaviour holds open at login, what to open at
-launch, stopping the gateway on quit, and Return vs ⌘Return to send.
+launch, stopping the gateway on quit, the Quick Ask shortcut, and Return vs
+⌘Return to send.
 
 ## Updates
 
@@ -160,6 +176,7 @@ The full list is in Settings › Shortcuts.
 
 | Keys | Action |
 | --- | --- |
+| ⌥ Space (from any app) | Quick Ask (Settings › Behaviour) |
 | ⌘N | New session |
 | ⌘⇧O | New chat in this agent |
 | ⌘, | Open settings |

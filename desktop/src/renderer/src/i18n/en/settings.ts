@@ -52,7 +52,7 @@ export const settings = {
   'settings.section.security': 'Security',
   'settings.section.security.blurb': 'What the app asks for before money or keys move.',
   'settings.section.behaviour': 'Behaviour',
-  'settings.section.behaviour.blurb': 'Launch, quit, and the composer.',
+  'settings.section.behaviour.blurb': 'Launch, quit, Quick Ask and the composer.',
   'settings.section.shortcuts': 'Shortcuts',
   'settings.section.shortcuts.blurb': 'The keys the app answers to.',
   'settings.section.advanced': 'Advanced',

@@ -6,6 +6,7 @@ import { EMPTY_TRAY_SUMMARY, type TraySummary } from '@shared/tray'
 import type { GatewaySupervisor } from '../gateway/supervisor'
 import { requestOpenSettings } from '../ipc/app'
 import type { SettingsStore } from '../settings/store'
+import { findMainWindow } from '../window'
 import { buildTrayMenu, trayTitle, type TrayActions } from './menu'
 import { sanitizeTraySummary } from './summary'
 
@@ -19,6 +20,8 @@ export interface MenuBarDeps {
   iconPath: string
   /** Open the main window when none exists (what `activate` does). */
   createWindow: () => BrowserWindow
+  /** Open the Quick Ask panel (the "Quick Ask…" row). */
+  showQuickAsk?: () => void
 }
 
 /**
@@ -46,6 +49,7 @@ export class MenuBar {
     openApp: () => void this.showWindow(),
     navigate: (target) => this.deliver((contents) => sendTarget(contents, target)),
     openSettings: () => this.deliver(() => requestOpenSettings()),
+    showQuickAsk: () => this.deps.showQuickAsk?.(),
     startGateway: () => void this.deps.gateway.start().catch(() => {}),
     stopGateway: () => void this.deps.gateway.stop().catch(() => {}),
     restartGateway: () => void this.deps.gateway.restart().catch(() => {}),
@@ -148,7 +152,8 @@ export class MenuBar {
 
   /** Focus, restore or create the main window, and bring the app in front. */
   private showWindow(): BrowserWindow {
-    const open = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
+    // The main window, never the Quick Ask panel (a hidden panel is still a window).
+    const open = findMainWindow()
     const win = open ?? this.deps.createWindow()
     if (open) {
       if (open.isMinimized()) open.restore()

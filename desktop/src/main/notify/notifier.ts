@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification, shell } from 'electron'
+import { app, Notification, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { IPC } from '@shared/ipc'
 import {
@@ -8,6 +8,7 @@ import {
   type NotifyTarget,
   type SystemSound,
 } from '@shared/notify'
+import { findMainWindow } from '../window'
 
 /**
  * The native half of notifications. Main posts through Electron's
@@ -46,7 +47,7 @@ export function showNotification(request: NotifyRequest): NotifyResult {
 
 /** Bring the window forward and tell the renderer where the click points. */
 function activate(target: NotifyTarget): void {
-  const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
+  const win = findMainWindow()
   if (!win) {
     app.emit('activate')
     return

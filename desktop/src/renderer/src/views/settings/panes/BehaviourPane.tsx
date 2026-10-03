@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
+import { QUICK_ASK_KEYCAPS, QUICK_ASK_SHORTCUTS, type QuickAskStatus } from '@shared/quick-ask'
 import { Button } from '~/components/ui/button'
 import { Switch } from '~/components/ui/switch'
 import { t } from '~/i18n'
 import { desktopApi, isDesktop } from '~/lib/desktop-api'
 import { useSettings } from '~/stores/settings'
 import { SIDEBAR_DEFAULT, useUi } from '~/stores/ui'
-import { Card, Head, Row, Segmented, Value } from '../parts'
+import { Card, Head, Notice, Row, Segmented, Value } from '../parts'
 
 export function BehaviourPane() {
   const general = useSettings((s) => s.settings.general)
@@ -84,6 +85,8 @@ export function BehaviourPane() {
         </Row>
       </Card>
 
+      <QuickAskCard />
+
       <Card title={t('settings.behaviour.composer')}>
         <Row
           label={t('settings.behaviour.enterToSend')}
@@ -119,4 +122,70 @@ export function BehaviourPane() {
       </Card>
     </>
   )
+}
+
+/**
+ * Quick Ask: the switch, the key (a fixed list) and, when macOS refused the
+ * key, a note saying so. The registration state is main's, read back after
+ * every change, not inferred from the settings file.
+ */
+function QuickAskCard() {
+  const quickAsk = useSettings((s) => s.settings.quickAsk)
+  const update = useSettings((s) => s.update)
+  const status = useQuickAskStatus()
+  const unavailable =
+    quickAsk.enabled && status?.state === 'unavailable' && status.shortcut === quickAsk.shortcut
+
+  return (
+    <Card title={t('settings.behaviour.quickAsk')} blurb={t('settings.behaviour.quickAsk.blurb')}>
+      <Row
+        label={t('settings.behaviour.quickAsk.enabled')}
+        help={t('settings.behaviour.quickAsk.enabled.help')}
+      >
+        <Switch
+          checked={quickAsk.enabled}
+          aria-label={t('settings.behaviour.quickAsk.enabled')}
+          onCheckedChange={(enabled) => void update({ quickAsk: { enabled } })}
+        />
+      </Row>
+      <Row
+        label={t('settings.behaviour.quickAsk.shortcut')}
+        help={t('settings.behaviour.quickAsk.shortcut.help')}
+      >
+        <Segmented
+          label={t('settings.behaviour.quickAsk.shortcut')}
+          value={quickAsk.shortcut}
+          disabled={!quickAsk.enabled}
+          options={QUICK_ASK_SHORTCUTS.map((shortcut) => ({
+            value: shortcut,
+            label: QUICK_ASK_KEYCAPS[shortcut].join(' '),
+          }))}
+          onChange={(shortcut) => void update({ quickAsk: { shortcut } })}
+        />
+      </Row>
+      {unavailable ? (
+        <Notice tone="warn">{t('settings.behaviour.quickAsk.unavailable')}</Notice>
+      ) : null}
+    </Card>
+  )
+}
+
+/** Main's word on the hotkey, kept current by its push and by a read on each settings change. */
+function useQuickAskStatus(): QuickAskStatus | null {
+  const quickAsk = useSettings((s) => s.settings.quickAsk)
+  const [status, setStatus] = useState<QuickAskStatus | null>(null)
+  useEffect(() => desktopApi().quickAsk.onStatusChanged(setStatus), [])
+  useEffect(() => {
+    let cancelled = false
+    void desktopApi()
+      .quickAsk.status()
+      .then((next) => {
+        if (!cancelled) setStatus(next)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [quickAsk.enabled, quickAsk.shortcut])
+  return status
 }

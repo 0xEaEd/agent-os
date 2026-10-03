@@ -11,7 +11,9 @@ import { desktopApi } from '~/lib/desktop-api'
 import { readLastSession } from '~/lib/last-session'
 import { useNotificationSignals } from '~/lib/use-notifications'
 import { useTraySummary } from '~/lib/use-tray-summary'
+import { useQuickAskRouting } from '~/lib/use-quick-ask'
 import { bindGatewayEvents } from '~/stores/gateway'
+import { useQuickAsk } from '~/stores/quick-ask'
 import { useSettings } from '~/stores/settings'
 import { useTradingUi } from '~/stores/trading-ui'
 import { useUi } from '~/stores/ui'
@@ -33,6 +35,7 @@ export function AppShell() {
   useLaunchView()
   useNotificationSignals()
   useTraySummary()
+  useQuickAskRouting()
 
   return (
     <div className="flex h-full">
@@ -175,7 +178,7 @@ export function useShellShortcuts() {
  * only while still on the keyless home route, so a deep link or a click that
  * beat the settings read is never overridden.
  */
-function useLaunchView() {
+export function useLaunchView() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const loaded = useSettings((s) => s.loaded)
@@ -185,6 +188,8 @@ function useLaunchView() {
     if (done.current || !loaded) return
     done.current = true
     if (launchView !== 'last') return
+    // A window opened for a Quick Ask already has somewhere to be.
+    if (useQuickAsk.getState().queue.length > 0) return
     const last = readLastSession()
     if (last && (pathname === '/sessions' || pathname === '/')) {
       void navigate(sessionPath(last), { replace: true })

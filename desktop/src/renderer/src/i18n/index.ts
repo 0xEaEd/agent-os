@@ -1,6 +1,7 @@
 import { jobs } from './en/jobs'
 import { notifications } from './en/notifications'
 import { projects } from './en/projects'
+import { quickAsk } from './en/quick-ask'
 import { sessions } from './en/sessions'
 import { settings } from './en/settings'
 import { setup } from './en/setup'
@@ -20,6 +21,7 @@ const en = {
   ...setup,
   ...notifications,
   ...trading,
+  ...quickAsk,
 } as const
 
 export type MessageKey = keyof typeof en
