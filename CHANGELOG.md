@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.10.3] - 2026-10-03
+
 ### Added
 - Desktop: a status item in the macOS menu bar, so the app reads as the
   always-on thing it is (the gateway, DCA mandates and scheduled jobs keep
