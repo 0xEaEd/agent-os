@@ -645,6 +645,26 @@ describe('SkillsPage', () => {
     expect(within(card).getByText('Installed')).toHaveClass('sk-chip--card-action')
   })
 
+  it('an overridable refusal arms a force install even when the scan was clean', async () => {
+    // A registry `suspicious` verdict or an install-policy `warn` carries no
+    // dangerous scan verdict; `overridable` is what says force can answer it.
+    wireRpc({
+      installResponse: {
+        success: false,
+        scan_verdict: 'safe',
+        policy_decision: 'warn',
+        overridable: true,
+        name: 'Uniswap',
+      },
+    })
+    renderPage()
+    await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('tab', { name: /^Community$/i }))
+    const card = await screen.findByLabelText('Catalog skill Uniswap')
+    fireEvent.click(within(card).getByRole('button', { name: /^Install$/i }))
+    expect(await within(card).findByRole('button', { name: /Force install/i })).toBeInTheDocument()
+  })
+
   it('a dangerous scan verdict arms a force install instead of erroring', async () => {
     wireRpc({
       installResponse: {

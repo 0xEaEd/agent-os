@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Skills: an operator install policy. `[skills.install_policy]` runs a command
+  of your choosing against every hub skill while it is still in quarantine,
+  on install and on update, and the command answers allow, warn or block. It
+  speaks OpenClaw's `security.installPolicy` protocol v1, so
+  `clawscan openclaw-install-policy` (SkillSpector, Tencent AIG, Cisco, Snyk)
+  plugs in unchanged. It fails closed: a missing command, a nonzero exit, a
+  timeout or malformed output blocks the install, and `--force` answers a
+  `warn` but never a `block`. Off by default.
+- Skills: the registry's security verdict is honoured. ClawHub scans what it
+  hosts and publishes the result; AgentOS dropped it and relied on its own
+  pattern scan alone. An install now refuses a skill ClawHub marks
+  `suspicious` unless forced, refuses one marked `malicious` outright, and
+  records the verdict in the lockfile. Search results and `skills.list` carry
+  `registry_verdict`, and search results carry the third-party scanner
+  statuses ClawHub relays as `upstream_scanners`.
+
 ### Fixed
 - Telegram: a reply containing non-BMP characters -- emoji, mathematical
   letters, CJK extensions -- was sent as one over-long message and rejected.
@@ -21,6 +38,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (explicit `parse_mode`) measures now count UTF-16 code units, the way the
   MS Teams adapter's `_measure_activity_text` already does for its own cap
   (#2433). Pure-BMP text splits exactly where it did before. (#3547)
+- Redaction: a `.netrc` or `.pgpass` read with a Windows-native path
+  (`type C:\ProgramData\pg\.pgpass`, or the same under a user profile) had
+  its password emitted to the model verbatim, while the POSIX spelling of
+  the same read was masked.
+  `_credential_file_formats_in` tokenised the command with a bare
+  `shlex.split`, which runs in POSIX mode and reads `\` as an escape, so the
+  operand collapsed to `C:ProgramDatapg.pgpass`, no basename matched the format map
+  and the `.netrc`/`.pgpass` rule from #2620/#2721 never ran -- the one rule
+  that can see a password those formats carry positionally. It now uses
+  `_command_operands`, the helper in the same module written for exactly this
+  and already used by `reads_credential_file`, which was answering `True` for
+  the very commands the format lookup came back empty for. (#3544)
+- Skills: installs from ClawHub recorded no version, author or licence. The
+  detail endpoint nests the row under `skill` beside `latestVersion` and
+  `owner`, and the parser read the top level.
 - Sessions started from a channel (Telegram, Slack, Discord, …) are now
   named from their first message, like WebChat and desktop-app sessions,
   instead of keeping their short id in the sidebar. Channel dispatch never
