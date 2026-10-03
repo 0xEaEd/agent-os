@@ -24,6 +24,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   statuses ClawHub relays as `upstream_scanners`.
 
 ### Fixed
+- Trading: a wallet token whose DexScreener pair priced it but carried no
+  liquidity figure -- `liquidity.usd` absent, or non-finite and read as
+  `None` since #3503 -- was auto-hidden as junk, because `TokenCurator` read
+  the missing figure as zero, and the daily re-check kept it hidden. A
+  missing figure is now no verdict, the same as an unreachable price source:
+  the token is left as it is and asked about again, as
+  `TradingService._visible_price` already reads the field. A token with no
+  pair at all is still hidden, and a reported figure below the floor still
+  hides it. (#3561)
 - `title-card-image` skill: `render.py`'s auto-shrink refused to write an
   off-canvas image when the text was too *tall* at the minimum font size
   (#3375) but silently wrote a clipped one when it was too *wide* -- exit 0,
