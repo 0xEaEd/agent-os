@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Redaction: a credential in a URL query string -- `?api_key=…`,
+  `&access_token=…`, `&password=…` -- was never masked, although the
+  *userinfo* of the same URL is (#3432). The name-driven pass recognises all
+  three names; what it could not do is reach them. `_ASSIGNMENT_RE` matches a
+  URL's own `scheme:` first, with the rest of the URL as its "value", and
+  since `https` is not a credential name the span is returned unchanged --
+  and consumed, so the query parameters inside are never examined. A pass of
+  its own now masks a credential-named query parameter before the assignment
+  pass runs, stopping its value at the next `&` so one parameter cannot
+  swallow the next. It is under the same gate as the assignment pass, so it
+  inherits that policy rather than widening it: off for source files and for
+  an arbitrary command's output. (#3607)
 - Browser: a gateway started by the desktop app, launchd or systemd now finds
   an `agent-browser` installed with `npm install -g` under nvm, fnm, Volta,
   pnpm, Bun or Homebrew. Those launchers pass a bare `PATH`, so the binary was
