@@ -24,6 +24,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   statuses ClawHub relays as `upstream_scanners`.
 
 ### Fixed
+- Telegram: a reply containing non-BMP characters -- emoji, mathematical
+  letters, CJK extensions -- was sent as one over-long message and rejected.
+  Telegram counts a message's 4096-character cap in UTF-16 code units, the
+  same grid its entity offsets use and that `_slice_utf16` already indexes
+  on, but the splitter measured the cut with Python `len`, which counts code
+  points. Every non-BMP character was one there and two on the wire, so a
+  2500-emoji reply measured 2500 against the cap and arrived as 5000 units;
+  Telegram answered `message is too long`, and no send path retries that --
+  the `parse entities` fallback does not cover it, and `edit()` and the
+  `sendDocument` caption path have no retry at all -- so the reply was
+  dropped rather than split. Both the rendered-HTML and the raw-text
+  (explicit `parse_mode`) measures now count UTF-16 code units, the way the
+  MS Teams adapter's `_measure_activity_text` already does for its own cap
+  (#2433). Pure-BMP text splits exactly where it did before. (#3547)
 - Redaction: a `.netrc` or `.pgpass` read with a Windows-native path
   (`type C:\ProgramData\pg\.pgpass`, or the same under a user profile) had
   its password emitted to the model verbatim, while the POSIX spelling of
