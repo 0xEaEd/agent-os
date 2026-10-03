@@ -207,7 +207,7 @@ agentos trade lp positions [--wallet ADDR]… [--chain base|robinhood]… [--bud
   x-axis in market cap (fallback price), a marker for the current value,
   hover shows the segment's range, liquidity share and both amounts.
 - Empty `positions` → an empty-state card: "No Uniswap V4 positions in
-  <wallets> on <chains>".
+  `<wallets>` on `<chains>`".
 - The renderer lives in the shared frontend; the desktop restyles it through
   `desktop/src/renderer/src/views/chat/chat.css` using `data-lp-*` hooks so the
   desktop card looks distinct from the web one.
