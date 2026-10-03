@@ -65,7 +65,7 @@ desktop/
             │                 #   self-saving brief, the chats filed there
             ├── views/settings/ # Settings sheet: SettingsPanel (rail + section), one pane
             │                 #   per section (providers, router, gateway, appearance,
-            │                 #   behaviour, shortcuts, advanced, about), parts.tsx, logic.ts
+            │                 #   security, behaviour, shortcuts, advanced, about), parts.tsx, logic.ts
             ├── components/   #   Sidebar (+ resizer, project folders, session list with
             │                 #   its row menu and view menu), Toolbar, menu/ (PopMenu,
             │                 #   Menu, items, submenus), pet/, composer/
@@ -130,6 +130,7 @@ revision on every write so a stale form cannot overwrite a newer file.
 | Gateway       | Live status with Start/Stop/Restart, endpoint copy + open console; an editable draft of mode/host/port/token/CLI path with validation, Save/Revert, and a "restart to apply" notice when the running endpoint differs.                                                                                                                                                                                                                                                                                                             |
 | Appearance    | Theme + palette (`ThemeRows`), text size (`data-text-size` on `<html>`), reduce transparency (`data-transparency` + `win.setVibrancy`).                                                                                                                                                                                                                                                                                                                                                                                            |
 | Notifications | Master switch; what happens while the window is in front (nothing / in-app banner / system notification); Do not disturb (30 min, 1 h, 3 h, until tomorrow 9:00); show details; per-event switches (reply finished with a minimum length, reply failed, approval needed, scheduled job runs off/failures/all, gateway stopped on its own); sound on/off and which (the app chime or a macOS alert sound); Dock badge and bounce; a test button and a door to System Settings › Notifications. See [Notifications](#notifications). |
+| Security      | Confirm with Touch ID: Off (default) / High-risk approvals / Every approval. Disabled with an explanation when the Mac cannot prompt (no sensor, none enrolled, lid closed) unless it is already on, so it can always be turned off; a Test button runs the prompt and reports the outcome. See [Touch ID](#touch-id).                                                                                                                                                                                                             |
 | Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, Return vs ⌘Return to send, sidebar width reset.                                                                                                                                                                                                                                                                                                                                                            |
 | Shortcuts     | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …); static, nothing is rebindable.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Advanced      | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all app settings behind an alertdialog.                                                                                                                                                                                                                                                                                                                                                                      |
@@ -246,6 +247,32 @@ wave → waiting → run → review → idle).
   before anyone reaches petdex.dev — and with no network at all. The slugs
   it seeded are recorded in `userData/pets/.bundled.json`, so a built-in pet
   you remove stays removed.
+
+## Touch ID
+
+Settings › Security › **Confirm with Touch ID** puts a fingerprint in front
+of the operator's money-moving clicks. `Off` (the default: a Mac without a
+sensor must never be locked out) asks for nothing. `High-risk approvals` asks
+before an approval the card stamps high-risk (the same `askRisk` the card
+uses; a DCA mandate whose cap reaches the same line), and before **Export
+private key** and **Remove wallet**. `Every approval` asks before every
+approval as well, DCA mandates included.
+
+The prompt is `systemPreferences.promptTouchID()` in main (`main/security.ts`,
+behind `app.biometrics` / `app.authenticate`): biometrics only, never a
+password fallback, and never attempted when `canPromptTouchID()` says no
+(with the lid closed a raw prompt hangs). LocalAuthentication's error message
+is mapped to `cancelled`, `unavailable` or `failed`. In the renderer one gate,
+`lib/biometric-gate.ts`, reads the setting at call time and sits in front of
+the RPC rather than in the buttons: inside `useOrderDecision` (every
+`trading.orders.approve`: the desk's cards, the BOOK, the Trading tab),
+`useMandateActions().approve` and the chat DCA card's `trading.dca.approve`,
+and `useWalletMutation` for `wallet.export` / `wallet.remove` (before the
+password leaves the renderer). A cancelled, unavailable or failed prompt
+toasts and sends nothing; the card stays live. While the sheet is up the
+button that asked reads "Touch ID…" and a second click is ignored. The setting
+itself never needs Touch ID to change. Tool approvals are not gated: they are
+file and command gates, not money.
 
 ## First run: the app installs the engine
 

@@ -1,7 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import type { AppInfo, ChooseFileOptions } from '@shared/app'
+import type { AppInfo, BiometricsInfo, ChooseFileOptions } from '@shared/app'
 import { IPC } from '@shared/ipc'
 import { appCalver } from '../app-version'
+import { authenticate, biometricsAvailable } from '../security'
 import type { SettingsStore } from '../settings/store'
 
 /**
@@ -70,6 +71,11 @@ export function registerAppIpc(settings: SettingsStore): void {
   )
 
   ipcMain.handle(IPC.app.loginItem, () => app.getLoginItemSettings().openAtLogin)
+
+  // Touch ID (Settings › Security). `authenticate` validates the reason itself:
+  // anything but a short non-blank string is a failure, never a prompt.
+  ipcMain.handle(IPC.app.biometrics, (): BiometricsInfo => ({ available: biometricsAvailable() }))
+  ipcMain.handle(IPC.app.authenticate, (_e, reason: unknown) => authenticate(reason))
 }
 
 /** Push "open settings" to the focused window (or the first one). */

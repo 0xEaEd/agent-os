@@ -14,6 +14,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { isTouchIdDeclined } from '~/lib/biometric-gate'
 import { toastOrder, toastOrderRejected, toastOrderSending } from '~/lib/order-toasts'
 import { useNow } from '~/lib/use-now'
 import { useTradingUi, type BookTab } from '~/stores/trading-ui'
@@ -185,21 +186,21 @@ export function Book({
     }
   }, [])
 
-  function onDecide(order: Order, approve: boolean) {
+  // Touch ID, when it is on, is asked for inside the decision itself
+  // (`useOrderDecision`); a declined prompt has toasted and sent nothing.
+  async function onDecide(order: Order, approve: boolean): Promise<void> {
     // A rejection of this desk's own order goes the chat's way, so the
     // agent hears about it where it asked instead of finding a status flip.
     if (!approve && onReject?.(order)) return
-    decide.mutate(
-      { orderId: order.orderId, approve },
-      {
-        onSuccess: () =>
-          approve
-            ? toastOrderSending(order.orderId, t('trading.approvals.approved'))
-            : toastOrderRejected(order.orderId, t('trading.approvals.rejected')),
-        onError: (err) =>
-          toastOrder('error', order.orderId, `${t('trading.approvals.failed')}: ${errorText(err)}`),
-      },
-    )
+    try {
+      await decide.mutateAsync({ orderId: order.orderId, approve, order })
+    } catch (err) {
+      if (isTouchIdDeclined(err)) return
+      toastOrder('error', order.orderId, `${t('trading.approvals.failed')}: ${errorText(err)}`)
+      return
+    }
+    if (approve) toastOrderSending(order.orderId, t('trading.approvals.approved'))
+    else toastOrderRejected(order.orderId, t('trading.approvals.rejected'))
   }
 
   if (collapsed) {

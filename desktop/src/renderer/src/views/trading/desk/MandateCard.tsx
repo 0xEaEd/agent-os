@@ -2,6 +2,7 @@ import { CalendarClock } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { useTouchIdPrompt } from '~/lib/biometric-gate'
 import { initiatorKey, sameAddress, shortAddress, walletLabel } from '../logic'
 import { Sym } from '../parts'
 import type { Mandate, Wallet } from '../types'
@@ -58,6 +59,8 @@ export function MandateCard({
 }) {
   const rejectRef = useRef<HTMLButtonElement>(null)
   const focused = useRef(false)
+  // Touch ID (Settings › Security) is up for this mandate's approval.
+  const prompting = useTouchIdPrompt((s) => s.key === `mandate:${m.id}`)
   useEffect(() => {
     if (focusOnMount && !focused.current) {
       focused.current = true
@@ -193,11 +196,13 @@ export function MandateCard({
         </Button>
         <Button
           variant="primary"
-          disabled={deciding}
+          disabled={deciding || prompting}
           onClick={() => onApprove(m)}
+          data-touch-id={prompting || undefined}
+          aria-busy={prompting || undefined}
           data-testid="mandate-approve"
         >
-          {t('trading.dca.card.approve')}
+          {prompting ? t('trading.touchId.prompting') : t('trading.dca.card.approve')}
         </Button>
       </div>
     </article>

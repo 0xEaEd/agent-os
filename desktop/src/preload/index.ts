@@ -23,6 +23,8 @@ const api: DesktopApi = {
     openPath: (path: string) => ipcRenderer.invoke(IPC.app.openPath, path),
     chooseFile: (options?: ChooseFileOptions) => ipcRenderer.invoke(IPC.app.chooseFile, options),
     loginItem: () => ipcRenderer.invoke(IPC.app.loginItem),
+    biometrics: () => ipcRenderer.invoke(IPC.app.biometrics),
+    authenticate: (reason: string) => ipcRenderer.invoke(IPC.app.authenticate, reason),
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settings.get),

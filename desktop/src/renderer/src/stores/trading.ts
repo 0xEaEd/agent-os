@@ -10,7 +10,9 @@ import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import { useConnection } from '@/stores/connection'
 import { t, type MessageKey } from '~/i18n'
+import { biometricGate, requireBiometric } from '~/lib/biometric-gate'
 import { errorText, QUOTE_REFRESH_MS } from '~/views/trading/logic'
+import { mandateTouchId, orderTouchId, vaultReason } from '~/views/trading/touch-id'
 import { CHAINS } from '~/views/trading/types'
 import type {
   AllowanceList,
@@ -562,16 +564,46 @@ export function useDecode() {
   })
 }
 
+/** One decision on an order. `order` (and a batch's `legs`) name an approval in the Touch ID sheet. */
+export interface OrderDecision {
+  orderId: string
+  approve: boolean
+  order?: Order
+  legs?: readonly Order[]
+}
+
+/**
+ * The one door every order decision goes through (the desk's cards, the
+ * BOOK, the Trading tab), so an approval cannot skip Touch ID: with the
+ * setting on, the prompt comes first and a cancelled or failed one throws
+ * `TouchIdDeclined` (already toasted) without sending anything. A batch leg
+ * decided without its legs reads them from the cache, as the card does.
+ */
 export function useOrderDecision() {
   const rpc = useRpc()
   const queryClient = useQueryClient()
   return useMutation({
     // A reject carries no reason here: the engine records the bare "user"
     // itself, and a placeholder reason was stored as "user: user".
-    mutationFn: ({ orderId, approve }: { orderId: string; approve: boolean }) =>
-      rpc.call<{ order: Order }>(approve ? 'trading.orders.approve' : 'trading.orders.reject', {
-        orderId,
-      }),
+    mutationFn: async ({ orderId, approve, order, legs }: OrderDecision) => {
+      if (approve) {
+        const batchId = order?.batchId
+        const cached = batchId
+          ? queryClient.getQueryData<BatchResult>(['trading', 'batch', batchId])?.orders
+          : undefined
+        const ask = order
+          ? orderTouchId(order, legs?.length ? legs : cached)
+          : {
+              kind: 'approve-high' as const,
+              reason: t('trading.touchId.reason.orderId').replace('{id}', orderId),
+            }
+        await requireBiometric(ask.kind, ask.reason, orderId)
+      }
+      return rpc.call<{ order: Order }>(
+        approve ? 'trading.orders.approve' : 'trading.orders.reject',
+        { orderId },
+      )
+    },
     onSettled: () => invalidateTrading(queryClient),
   })
 }
@@ -611,13 +643,48 @@ export function useSync() {
   })
 }
 
-/** One mutation for every vault/wallet write; the sheet picks the method. */
+/**
+ * One mutation for every vault/wallet write; the sheet picks the method.
+ * A private-key export and a wallet removal ask for Touch ID
+ * first whenever Settings › Security is not Off, whatever the risk: the
+ * prompt runs before the password leaves the renderer, and a declined one
+ * throws `TouchIdDeclined` (already toasted) with nothing sent.
+ */
 export function useWalletMutation<T = unknown>() {
   const rpc = useRpc()
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ method, params }: { method: string; params: Record<string, unknown> }) =>
-      rpc.call<T>(method, params),
+    mutationFn: async ({
+      method,
+      params,
+      label,
+    }: {
+      method: string
+      params: Record<string, unknown>
+      /** The wallet's name, for the Touch ID sheet; never sent. */
+      label?: string
+    }) => {
+      if (method === 'wallet.export' || method === 'wallet.remove') {
+        const address = typeof params.address === 'string' ? params.address : ''
+        const known =
+          label ??
+          queryClient
+            .getQueryData<WalletList>(TRADING_KEYS.wallets)
+            ?.wallets?.find((w) => w.address.toLowerCase() === address.toLowerCase())?.label
+        const action =
+          method === 'wallet.remove'
+            ? 'remove'
+            : params.format === 'privateKey'
+              ? 'export'
+              : 'exportKeystore'
+        await requireBiometric(
+          'vault',
+          vaultReason(action, { address, label: known }),
+          `wallet:${address.toLowerCase()}`,
+        )
+      }
+      return rpc.call<T>(method, params)
+    },
     onSettled: () => invalidateTrading(queryClient),
   })
 }
@@ -738,6 +805,7 @@ export interface MandateActions {
   /** Resolves null when the engine refused (already toasted). */
   create: (params: Record<string, unknown>) => Promise<MandatePayload | null>
   update: (mandate: Mandate, patch: Record<string, unknown>) => Promise<MandatePayload | null>
+  /** Asks for Touch ID first when Settings › Security says so; null when declined. */
   approve: (mandate: Mandate) => Promise<MandatePayload | null>
   reject: (mandate: Mandate, reason?: string) => Promise<MandatePayload | null>
   pause: (mandate: Mandate) => Promise<MandatePayload | null>
@@ -868,7 +936,13 @@ export function useMandateActions(): MandateActions {
           id: `dca-${mandate.id}`,
         }),
       ),
-    approve: (mandate) => act('approve', mandate),
+    // A mandate is a standing permission to spend: with Touch ID on, the
+    // fingerprint comes first, and a declined prompt (already toasted) sends nothing.
+    approve: async (mandate) => {
+      const ask = mandateTouchId(mandate)
+      if (!(await biometricGate(ask.kind, ask.reason, `mandate:${mandate.id}`))) return null
+      return act('approve', mandate)
+    },
     reject: (mandate, reason) => act('reject', mandate, reason ? { reason } : {}),
     pause: (mandate) => act('pause', mandate),
     resume: (mandate) => act('resume', mandate),

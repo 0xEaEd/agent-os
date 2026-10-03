@@ -49,6 +49,8 @@ export const settings = {
   'settings.section.gateway.blurb': 'The local process the app talks to.',
   'settings.section.appearance': 'Appearance',
   'settings.section.appearance.blurb': 'Theme, palette, scale.',
+  'settings.section.security': 'Security',
+  'settings.section.security.blurb': 'What the app asks for before money or keys move.',
   'settings.section.behaviour': 'Behaviour',
   'settings.section.behaviour.blurb': 'Launch, quit, and the composer.',
   'settings.section.shortcuts': 'Shortcuts',
@@ -250,6 +252,32 @@ export const settings = {
   'settings.pet.size.help': 'Applies instantly.',
   'settings.pet.current': 'Active pet',
   'settings.pet.remove': 'Remove',
+
+  // Security
+  'settings.security.touchId': 'Touch ID',
+  'settings.security.touchId.blurb':
+    'A fingerprint before the desk sends an approval. Cancel the prompt and nothing is sent.',
+  'settings.security.mode': 'Confirm with Touch ID',
+  'settings.security.mode.off': 'Off',
+  'settings.security.mode.high': 'High-risk approvals',
+  'settings.security.mode.all': 'Every approval',
+  'settings.security.mode.help.off':
+    'Approve, Export private key and Remove wallet act on the click.',
+  'settings.security.mode.help.high':
+    'High-risk approvals (the card’s “High risk” stamp), DCA mandates over the same line, Export private key and Remove wallet.',
+  'settings.security.mode.help.all':
+    'Every approval, including each DCA mandate, plus Export private key and Remove wallet.',
+  'settings.security.unavailable': 'This Mac has no Touch ID sensor (or the lid is closed).',
+  'settings.security.unavailable.on':
+    'Touch ID is unavailable right now (closed lid?), so these actions will be refused until it is back. Turn this off to act without it.',
+  'settings.security.checking': 'Checking for Touch ID…',
+  'settings.security.test': 'Test',
+  'settings.security.test.label': 'Try the prompt',
+  'settings.security.test.help': 'Shows the Touch ID sheet and reports what came back.',
+  'settings.security.test.ok': 'Touch ID confirmed it is you.',
+  'settings.security.test.cancelled': 'The prompt was dismissed.',
+  'settings.security.test.unavailable': 'Touch ID is unavailable right now.',
+  'settings.security.test.failed': 'Touch ID did not recognise the fingerprint.',
 
   // Behaviour
   'settings.behaviour.launch': 'Launch and quit',

@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 import { qrDataUrl } from '@/lib/qr'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { isTouchIdDeclined, useTouchIdPrompt } from '~/lib/biometric-gate'
 import { desktopApi } from '~/lib/desktop-api'
 import {
   usePortfolio,
@@ -830,16 +831,30 @@ function ExportSheet({ wallet, onClose }: { wallet: Wallet; onClose: () => void 
   const [secret, setSecret] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const m = useWalletMutation<{ keystoreJson?: string; privateKey?: string }>()
+  // Touch ID (Settings › Security) runs inside the mutation, before the
+  // password is sent; the button says so while the sheet is up.
+  const prompting = useTouchIdPrompt((s) => s.key === `wallet:${wallet.address.toLowerCase()}`)
   function reveal() {
+    // Return in the password field must not start a second export (or a
+    // second Touch ID prompt) while the first is in flight.
+    if (m.isPending) return
     m.mutate(
-      { method: 'wallet.export', params: { address: wallet.address, password: pw, format } },
+      {
+        method: 'wallet.export',
+        params: { address: wallet.address, password: pw, format },
+        label: wallet.label,
+      },
       {
         onSuccess: (res) => {
           const value = res?.privateKey ?? res?.keystoreJson ?? null
           setSecret(value)
           setPw('')
         },
-        onError: (err) => toast.error(`${t('trading.sheet.error')}: ${errorText(err)}`),
+        onError: (err) => {
+          // Declined: the gate has said why, and nothing was sent.
+          if (isTouchIdDeclined(err)) return
+          toast.error(`${t('trading.sheet.error')}: ${errorText(err)}`)
+        },
       },
     )
   }
@@ -902,9 +917,14 @@ function ExportSheet({ wallet, onClose }: { wallet: Wallet; onClose: () => void 
               variant="danger"
               disabled={!pw || m.isPending}
               onClick={reveal}
+              aria-busy={prompting || undefined}
               data-testid="export-reveal"
             >
-              {m.isPending ? t('trading.sheet.working') : t('trading.sheet.export.cta')}
+              {prompting
+                ? t('trading.touchId.prompting')
+                : m.isPending
+                  ? t('trading.sheet.working')
+                  : t('trading.sheet.export.cta')}
             </Button>
           </>
         )
@@ -984,6 +1004,8 @@ function RemoveSheet({ wallet, onClose }: { wallet: Wallet; onClose: () => void 
   const id = useId()
   const [pw, setPw] = useState('')
   const m = useWalletMutation()
+  // Touch ID (Settings › Security) runs inside the mutation, before the password is sent.
+  const prompting = useTouchIdPrompt((s) => s.key === `wallet:${wallet.address.toLowerCase()}`)
   // What the key still controls: the one fact that should give pause.
   const portfolio = usePortfolio(wallet.address, true)
   const worth = portfolio.data?.totals?.valueUsd ?? null
@@ -1004,18 +1026,31 @@ function RemoveSheet({ wallet, onClose }: { wallet: Wallet; onClose: () => void 
             data-testid="remove-submit"
             onClick={() =>
               m.mutate(
-                { method: 'wallet.remove', params: { address: wallet.address, password: pw } },
+                {
+                  method: 'wallet.remove',
+                  params: { address: wallet.address, password: pw },
+                  label: wallet.label,
+                },
                 {
                   onSuccess: () => {
                     toast.success(t('trading.sheet.remove.done'))
                     onClose()
                   },
-                  onError: (err) => toast.error(`${t('trading.sheet.error')}: ${errorText(err)}`),
+                  onError: (err) => {
+                    // Declined: the gate has said why, and nothing was sent.
+                    if (isTouchIdDeclined(err)) return
+                    toast.error(`${t('trading.sheet.error')}: ${errorText(err)}`)
+                  },
                 },
               )
             }
+            aria-busy={prompting || undefined}
           >
-            {m.isPending ? t('trading.sheet.working') : t('trading.sheet.remove.cta')}
+            {prompting
+              ? t('trading.touchId.prompting')
+              : m.isPending
+                ? t('trading.sheet.working')
+                : t('trading.sheet.remove.cta')}
           </Button>
         </>
       }

@@ -34,7 +34,8 @@ export function ApprovalsRegion({
   settled: Order[]
   wallets: readonly Wallet[]
   deciding: string | null
-  onApprove: (order: Order) => void
+  /** The card's lead order and its legs; may return the decision's promise. */
+  onApprove: (order: Order, legs?: readonly Order[]) => void | Promise<unknown>
   onReject: (order: Order, reason: string) => void
   /** From a notification: scroll this order's card into view. */
   focusOrderId: string | null

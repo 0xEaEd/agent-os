@@ -6,6 +6,7 @@ import type { RawJob } from '@/views/cron/logic'
 import { Button } from '~/components/ui/button'
 import { sessionPath } from '~/components/sidebar/SessionRow'
 import { t } from '~/i18n'
+import { isTouchIdDeclined } from '~/lib/biometric-gate'
 import { toastOrder, toastOrderRejected, toastOrderSending } from '~/lib/order-toasts'
 import { useNow } from '~/lib/use-now'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -258,25 +259,35 @@ export function useDeskInstruments(
     },
     [legsOf],
   )
+  // Touch ID, when it is on, is asked for inside the decision itself
+  // (`useOrderDecision`): a cancelled prompt rejects with `TouchIdDeclined`,
+  // already toasted, and nothing was sent. The promise lets the card ignore
+  // a second click until this decision has settled.
+  const { mutateAsync: decideAsync } = decide
   const onApprove = useCallback(
-    (order: Order) =>
-      decide.mutate(
-        { orderId: order.orderId, approve: true },
-        {
-          onSuccess: () => toastOrderSending(order.orderId, decisionToast(order, 'approved')),
-          onError: (err) => {
-            // A second decision on an order already decided (two clicks, a
-            // decision from the BOOK, the agent's own) is not a failure.
-            const text = errorText(err)
-            if (alreadyDecided(text)) {
-              toastOrder('info', order.orderId, t('trading.approvals.alreadyDecided'))
-              return
-            }
-            toastOrder('error', order.orderId, `${t('trading.approvals.failed')}: ${text}`)
-          },
-        },
-      ),
-    [decide, decisionToast],
+    async (order: Order, legs?: readonly Order[]): Promise<void> => {
+      try {
+        await decideAsync({
+          orderId: order.orderId,
+          approve: true,
+          order,
+          legs: legs?.length ? legs : legsOf(order),
+        })
+      } catch (err) {
+        if (isTouchIdDeclined(err)) return
+        // A second decision on an order already decided (two clicks, a
+        // decision from the BOOK, the agent's own) is not a failure.
+        const text = errorText(err)
+        if (alreadyDecided(text)) {
+          toastOrder('info', order.orderId, t('trading.approvals.alreadyDecided'))
+          return
+        }
+        toastOrder('error', order.orderId, `${t('trading.approvals.failed')}: ${text}`)
+        return
+      }
+      toastOrderSending(order.orderId, decisionToast(order, 'approved'))
+    },
+    [decideAsync, decisionToast, legsOf],
   )
   // A mutation, not a bare call: `isPending` locks the card, so a second
   // Enter on the reason cannot reject twice and post two chat messages. The

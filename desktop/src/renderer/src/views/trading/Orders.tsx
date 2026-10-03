@@ -21,6 +21,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { useTouchIdPrompt } from '~/lib/biometric-gate'
 import { desktopApi } from '~/lib/desktop-api'
 import { shortAge } from '~/lib/relative-time'
 import { useNow } from '~/lib/use-now'
@@ -125,7 +126,8 @@ export function Orders({
   orders: Order[]
   approvalsOnly: boolean
   deciding: string | null
-  onDecide: (order: Order, approve: boolean) => void
+  /** May return the decision's promise: Approve is ignored until it settles. */
+  onDecide: (order: Order, approve: boolean) => void | Promise<unknown>
   showWallet: boolean
   /** An order id to scroll to (from a notification). */
   highlight: string | null
@@ -284,7 +286,8 @@ function OrderRow({
   order: Order
   now: number
   deciding: boolean
-  onDecide: (order: Order, approve: boolean) => void
+  /** May return the decision's promise: Approve is ignored until it settles. */
+  onDecide: (order: Order, approve: boolean) => void | Promise<unknown>
   showWallet: boolean
   highlighted: boolean
   onHighlighted?: () => void
@@ -309,13 +312,29 @@ function OrderRow({
     const id = window.setTimeout(() => setArmed(false), ARM_RESET_MS)
     return () => window.clearTimeout(id)
   }, [armed])
+  // The Touch ID sheet (Settings › Security) is modal at the OS level: a
+  // second click while it is up, or while the decision is in flight, is nothing.
+  const inFlight = useRef(false)
+  const prompting = useTouchIdPrompt((s) => s.key !== null && s.key === order.orderId)
   function approve() {
+    if (inFlight.current || deciding) return
     if (highRisk && !armed) {
       setArmed(true)
       return
     }
     setArmed(false)
-    onDecide(order, true)
+    inFlight.current = true
+    const release = () => {
+      inFlight.current = false
+    }
+    try {
+      const pending = onDecide(order, true)
+      if (pending instanceof Promise) void pending.then(release, release)
+      else release()
+    } catch (err) {
+      release()
+      throw err
+    }
   }
   const by = initiatorKey(order.initiator)
   const tone = orderTone(order.status)
@@ -460,9 +479,15 @@ function OrderRow({
               disabled={deciding}
               onClick={approve}
               data-armed={armed || undefined}
+              data-touch-id={prompting || undefined}
+              aria-busy={prompting || undefined}
               data-testid="order-approve"
             >
-              {armed ? t('trading.card.approveAgain') : t('trading.approvals.approve')}
+              {prompting
+                ? t('trading.touchId.prompting')
+                : armed
+                  ? t('trading.card.approveAgain')
+                  : t('trading.approvals.approve')}
             </Button>
           </div>
         </div>
