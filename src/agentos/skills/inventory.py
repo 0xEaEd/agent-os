@@ -240,6 +240,8 @@ def acquisition_payload(acquisition: SkillAcquisition | None) -> dict[str, Any]:
         "installed_at": a.installed_at,
         "source_trust": a.source_trust,
         "scan_verdict": a.scan_verdict,
+        "registry_verdict": a.registry_verdict,
+        "policy_decision": a.policy_decision,
         "removable": a.removable,
         "updatable": a.updatable,
     }
@@ -327,6 +329,8 @@ def _derive_acquisition(
         installed_at=entry.installed_at,
         source_trust=entry.source_trust,
         scan_verdict=entry.scan_verdict,
+        registry_verdict=entry.registry_verdict,
+        policy_decision=entry.policy_decision,
         removable=removable,
         # An update re-fetches by identifier and writes into the *current*
         # managed dir, so it still works when the recorded path has diverged.

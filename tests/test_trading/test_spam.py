@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -8,6 +10,9 @@ from agentos.trading.ledger import Ledger
 from agentos.trading.prices import PriceService
 from agentos.trading.spam import TokenCurator
 from tests.test_trading.fakes import USDC, WALLET, FakePrices
+
+#: Sentinel for "the pair object has no ``liquidity`` key at all".
+_OMIT = object()
 
 JUNK = "0x9999000000000000000000000000000000000009"
 NEW = "0x9999000000000000000000000000000000000010"
@@ -138,3 +143,72 @@ class TestTokenCurator:
         ledger.set_token_hidden(8453, JUNK, True, by="auto", classified_at=state["now"])
         row = ledger.get_token(8453, JUNK)
         assert row and row["hidden"] == 0 and row["hidden_by"] == "user"
+
+
+class TestUnreportedLiquidity:
+    """A pair that prices a token but carries no liquidity figure is no verdict.
+
+    ``PriceInfo.liquidity_usd`` is ``None`` when the pair object has no
+    ``liquidity.usd`` and when the feed sent a non-finite one (``_f`` reports
+    both as None, #3503). Reading that as 0.0 hid a token whose pool was never
+    measured -- not one that has no pool, which is what this module hides.
+    ``TradingService._visible_price`` reads the same field the careful way.
+    """
+
+    @pytest.fixture
+    async def stack(self, ledger: Ledger, prices_fake: FakePrices):
+        """Like the module stack, with the pair's ``liquidity`` under test control.
+
+        ``JUNK`` is given a spot price, so DexScreener answers with a real pair
+        for it: the question here is only what its ``liquidity`` field says.
+        """
+        prices_fake.spot[("base", JUNK)] = 0.5
+        state: dict[str, object] = {"now": 1_000_000.0, "liquidity": _OMIT}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            response = prices_fake.handle(request)
+            if request.url.host != "api.dexscreener.com":
+                return response
+            payload = json.loads(response.content)
+            pairs = payload if isinstance(payload, list) else payload.get("pairs", [])
+            for pair in pairs:
+                if state["liquidity"] is _OMIT:
+                    pair.pop("liquidity", None)
+                else:
+                    pair["liquidity"] = state["liquidity"]
+            return httpx.Response(200, json=payload)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            prices = PriceService(http=http, ttl_s=0, now=lambda: state["now"])
+            yield TokenCurator(ledger, prices, now=lambda: state["now"]), state
+
+    @pytest.mark.parametrize(
+        "liquidity",
+        [_OMIT, {}, {"usd": None}, {"usd": ""}, {"usd": "NaN"}],
+        ids=["no-liquidity-key", "no-usd-key", "usd-null", "usd-empty", "usd-nan"],
+    )
+    async def test_a_missing_figure_is_not_a_verdict(
+        self, ledger: Ledger, stack, liquidity: object
+    ) -> None:
+        curator, state = stack
+        state["liquidity"] = liquidity
+        _add(ledger, JUNK)
+        # The token is priced -- only the liquidity figure is missing.
+        assert await curator.review(BASE, JUNK) is False
+        row = ledger.get_token(8453, JUNK)
+        assert row and row["hidden"] == 0
+        assert row["classified_at"] is None, "no verdict was recorded, so it is asked again"
+
+    async def test_a_reported_figure_below_the_floor_still_hides(
+        self, ledger: Ledger, stack
+    ) -> None:
+        curator, state = stack
+        state["liquidity"] = {"usd": 5}
+        _add(ledger, JUNK)
+        assert await curator.review(BASE, JUNK) is True
+
+    async def test_a_reported_deep_pool_still_shows(self, ledger: Ledger, stack) -> None:
+        curator, state = stack
+        state["liquidity"] = {"usd": 1_000_000}
+        _add(ledger, JUNK)
+        assert await curator.review(BASE, JUNK) is False

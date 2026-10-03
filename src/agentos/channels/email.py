@@ -146,9 +146,36 @@ _QUOTE_MARKERS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^\s*On .+ wrote:\s*$", re.I),
 )
 
-_HTML_BREAK_RE = re.compile(r"(?i)<\s*(?:br\s*/?|/p|/div|/tr|/li)\s*>")
+#: A table cell ends beside its neighbour, not under it, so it separates with
+#: a tab and lets ``</tr>`` supply the line break. Without this ``</td>`` was
+#: simply deleted and a row's cells fused: ``<td>Name</td><td>Alice</td>``
+#: reached the model as ``NameAlice`` (#3545). HTML mail is mostly tables.
+_HTML_CELL_RE = re.compile(r"(?i)<\s*/\s*(?:td|th)\s*>")
+#: Every block-level element ends a line. Listing only ``p``/``div``/``tr``/
+#: ``li`` left the rest to be deleted by ``_HTML_TAG_RE`` with nothing in
+#: their place, so a heading ran into its own first paragraph
+#: (``Quarterly ReportRevenue is up.``) -- one token where the reader sees
+#: two (#3545).
+_HTML_BREAK_RE = re.compile(
+    r"(?i)<\s*(?:br\s*/?|hr\s*/?|/\s*(?:p|div|tr|li|h[1-6]|table|thead|tbody|tfoot"
+    r"|blockquote|ul|ol|dl|dt|dd|pre|section|article|header|footer|main|aside"
+    r"|figure|figcaption|form|fieldset|address))\s*>"
+)
+#: ``script``/``style`` hold text that is not markup, so they go before the
+#: comment strip below: a ``<!--`` inside a script must not start a comment.
 _HTML_DROP_RE = re.compile(r"(?is)<\s*(script|style)\b.*?<\s*/\s*\1\s*>")
+#: A comment's body is not markup either, and ``_HTML_TAG_RE`` stops at the
+#: first ``>`` -- which inside ``<!-- a > b -->`` ends nothing, so the tail of
+#: the comment survived as body text (#3545).
+_HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
+#: ``<head>`` is not shown to the reader. ``<title>`` was being treated as
+#: visible text and prepended to the body, so the agent read a newsletter's
+#: title as the first words of the message (#3545). ``\b`` keeps ``head`` off
+#: ``<header>``, which is a block element handled above.
+_HTML_METADATA_RE = re.compile(r"(?is)<\s*(head|title)\b.*?<\s*/\s*\1\s*>")
 _HTML_TAG_RE = re.compile(r"(?s)<[^>]+>")
+#: A cell separator left at the end of a row, before the row's own break.
+_HTML_TRAILING_SEPARATOR_RE = re.compile(r"[ \t]+(?=\n)")
 _HEADER_COMMENT_RE = re.compile(r"\([^()]*\)")
 #: One msg-id: either a ``<...>`` span, or -- for clients that drop the angle
 #: brackets -- a bare run with the id separators excluded so a stray ``,`` or
@@ -272,12 +299,30 @@ def decode_header_value(value: str | None) -> str:
 
 
 def html_to_text(payload: str) -> str:
-    """Flatten an HTML mail part into readable plain text."""
+    """Flatten an HTML mail part into readable plain text.
+
+    This is what the agent reads as the sender's message, so two things have
+    to hold: words the reader sees apart must stay apart, and markup the
+    reader never sees must not appear at all. Both failed before (#3545) --
+    a heading fused with the paragraph under it, a table row's cells fused
+    with each other, the tail of a comment containing ``>`` survived, and
+    ``<title>`` was delivered as the first words of the body.
+
+    The passes run in the order an HTML parser would respect them: the two
+    elements whose content is not markup (``script``, ``style``), then
+    comments, then the non-rendered ``head``, then the structural
+    substitutions, and only then the tag strip. Entities are unescaped last,
+    so a ``&lt;b&gt;`` in the mail cannot turn into a tag that gets stripped.
+    """
 
     without_blocks = _HTML_DROP_RE.sub(" ", payload)
-    with_breaks = _HTML_BREAK_RE.sub("\n", without_blocks)
+    without_comments = _HTML_COMMENT_RE.sub(" ", without_blocks)
+    without_metadata = _HTML_METADATA_RE.sub(" ", without_comments)
+    with_cells = _HTML_CELL_RE.sub("\t", without_metadata)
+    with_breaks = _HTML_BREAK_RE.sub("\n", with_cells)
     stripped = _HTML_TAG_RE.sub("", with_breaks)
     text = html.unescape(stripped)
+    text = _HTML_TRAILING_SEPARATOR_RE.sub("", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
