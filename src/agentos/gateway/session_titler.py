@@ -12,7 +12,8 @@ Rules that keep it out of the operator's way:
   ``WebChat`` or the short session id). A name a person typed, or one the
   agent set with ``session_rename``, is never overwritten.
 * It runs once per session, keyed on the first send, and never on internal
-  run kinds (cron, heartbeat, subagent).
+  run kinds (cron, heartbeat, subagent). Channel turns (Telegram, Slack, …)
+  count as a person's own turn, same as WebChat and the desktop app.
 * The title is normalized through :func:`normalize_session_name` like every
   other rename, and broadcast as ``sessions.changed`` so open clients update
   their lists without polling.
@@ -197,26 +198,42 @@ class SessionTitler:
         self._pending: set[asyncio.Task[None]] = set()
 
     def maybe_schedule(
-        self, session_key: str, message: str, *, run_kind: str | None = None
+        self,
+        session_key: str,
+        message: str,
+        *,
+        run_kind: str | None = None,
+        broadcast: Broadcast | None = None,
     ) -> bool:
-        """Kick off titling if this session still needs a name. Never awaits the model."""
+        """Kick off titling if this session still needs a name. Never awaits the model.
+
+        ``broadcast`` overrides the titler's own for this job: the titler is
+        shared per session manager, and WebChat and channel dispatch each
+        reach subscribers their own way.
+        """
         if not self._enabled or not (message or "").strip():
             return False
         # Only a person's own turn names a session; cron, heartbeat and
         # subagent runs keep whatever name the session already has.
-        if run_kind and run_kind not in ("session_turn", "chat", "interactive", "user"):
+        if run_kind and run_kind not in (
+            "session_turn",
+            "chat",
+            "interactive",
+            "user",
+            "channel_turn",
+        ):
             return False
         if session_key in self._inflight:
             return False
         self._inflight.add(session_key)
-        task = asyncio.create_task(self._run(session_key, message))
+        task = asyncio.create_task(self._run(session_key, message, broadcast or self._broadcast))
         # Keep a strong reference: the loop only weakly holds tasks, and a
         # GC'd task is cancelled silently mid-flight.
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
         return True
 
-    async def _run(self, session_key: str, message: str) -> None:
+    async def _run(self, session_key: str, message: str, broadcast: Broadcast | None) -> None:
         try:
             if not await self._needs_title(session_key):
                 return
@@ -230,8 +247,8 @@ class SessionTitler:
                 return
             await self._mgr.update(session_key, display_name=title)
             log.info("session_title.applied", session_key=session_key, title=title)
-            if self._broadcast is not None:
-                await self._broadcast(session_key, {"display_name": title, "displayName": title})
+            if broadcast is not None:
+                await broadcast(session_key, {"display_name": title, "displayName": title})
         except Exception:
             log.exception("session_title.apply_failed", session_key=session_key)
         finally:

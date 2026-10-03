@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Sessions started from a channel (Telegram, Slack, Discord, …) are now
+  named from their first message, like WebChat and desktop-app sessions,
+  instead of keeping their short id in the sidebar. Channel dispatch never
+  called the session titler, which only ran on `chat.send`. The same rules
+  apply: a name a person chose is never overwritten, and
+  `[sessions] auto_title = false` turns it off.
 - Release: the Mac app could not be packaged for a `.postN` release whose
   day has one digit. electron-builder validates `package.json`'s own
   version as loose semver before the workflow's version override applies,
