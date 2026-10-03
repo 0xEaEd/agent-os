@@ -16,9 +16,11 @@ root release README with task-oriented guides.
    memory, and permission configuration.
 5. [`cli.md`](cli.md) - command groups and common CLI workflows.
 6. [`web-ui.md`](web-ui.md) - local control console and chat UI.
-7. [`sessions.md`](sessions.md) - session continuity, export, resume, abort,
+7. [`desktop-app.md`](desktop-app.md) - the macOS app: install, Chat and
+   Trade, run modes, sidebar multi-select, notifications, and updates.
+8. [`sessions.md`](sessions.md) - session continuity, export, resume, abort,
    cleanup, and projects (session groups with shared knowledge).
-8. [`glossary.md`](glossary.md) - user-facing terminology.
+9. [`glossary.md`](glossary.md) - user-facing terminology.
 
 ## Feature Guides
 

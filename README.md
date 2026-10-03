@@ -71,7 +71,8 @@ published on every release.
 Each release page lists the app builds next to the Windows portable zip and
 the Python wheel: `AgentOS-<version>-arm64.dmg` for Apple silicon and
 `AgentOS-<version>.dmg` for Intel. See
-[AgentOS for Mac](#agentos-for-mac) for install steps and
+[AgentOS for Mac](#agentos-for-mac) for install steps,
+[`docs/desktop-app.md`](docs/desktop-app.md) for a tour of the app, and
 [`desktop/README.md`](desktop/README.md) for how the app is built.
 
 ---
