@@ -2,6 +2,7 @@ import type { BootstrapController } from '../bootstrap/controller'
 import type { BootstrapRunner } from '../bootstrap/runner'
 import type { GatewaySupervisor } from '../gateway/supervisor'
 import type { PetStore } from '../pets/store'
+import type { QuickAskController } from '../quick-ask/controller'
 import type { SettingsStore } from '../settings/store'
 import type { MenuBar } from '../tray/tray'
 import type { AppUpdateController } from '../updates/app-updater'
@@ -11,6 +12,7 @@ import { registerBootstrapIpc } from './bootstrap'
 import { registerGatewayIpc } from './gateway'
 import { registerNotifyIpc } from './notify'
 import { registerPetsIpc } from './pets'
+import { registerQuickAskIpc } from './quick-ask'
 import { registerSettingsIpc } from './settings'
 import { registerThemeIpc } from './theme'
 import { registerTrayIpc } from './tray'
@@ -25,6 +27,7 @@ export interface MainServices {
   bootstrapRunner: BootstrapRunner
   bootstrap: BootstrapController
   menuBar: MenuBar
+  quickAsk: QuickAskController
 }
 
 /** Register every IPC handler exactly once, before the first window opens. */
@@ -38,4 +41,5 @@ export function registerIpc(services: MainServices): void {
   registerUpdatesIpc(services.engineUpdater, services.appUpdater)
   registerBootstrapIpc(services.bootstrapRunner, services.bootstrap)
   registerTrayIpc(services.menuBar)
+  registerQuickAskIpc(services.quickAsk)
 }

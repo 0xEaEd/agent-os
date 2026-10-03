@@ -1,5 +1,6 @@
 import { isNotifySound, type NotifySound } from './notify'
 import { clampPetScale, isPetSlug, PET_DEFAULT_SCALE } from './pet'
+import { DEFAULT_QUICK_ASK_SHORTCUT, isQuickAskShortcut, type QuickAskShortcut } from './quick-ask'
 import { DEFAULT_THEME_SETTINGS, normalizeThemeSettings, type ThemeSettings } from './theme'
 
 /** Where the desktop shell finds (or launches) the AgentOS gateway. */
@@ -168,6 +169,19 @@ export function isTouchIdMode(value: unknown): value is TouchIdMode {
   return typeof value === 'string' && (TOUCH_ID_MODES as readonly string[]).includes(value)
 }
 
+/** Quick Ask: the global hotkey and its floating prompt (Settings › Behaviour). */
+export interface QuickAskSettings {
+  /** Register the hotkey. Off: the key is released at once. */
+  enabled: boolean
+  /** One of a fixed list; mirrored by main as a global shortcut. */
+  shortcut: QuickAskShortcut
+}
+
+export const DEFAULT_QUICK_ASK_SETTINGS: QuickAskSettings = {
+  enabled: true,
+  shortcut: DEFAULT_QUICK_ASK_SHORTCUT,
+}
+
 export interface DesktopSettings {
   theme: ThemeSettings
   gateway: GatewaySettings
@@ -176,6 +190,7 @@ export interface DesktopSettings {
   notifications: NotificationSettings
   pet: PetSettings
   security: SecuritySettings
+  quickAsk: QuickAskSettings
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -186,6 +201,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   notifications: DEFAULT_NOTIFICATION_SETTINGS,
   pet: DEFAULT_PET_SETTINGS,
   security: DEFAULT_SECURITY_SETTINGS,
+  quickAsk: DEFAULT_QUICK_ASK_SETTINGS,
 }
 
 export const SETTINGS_SECTIONS = [
@@ -196,6 +212,7 @@ export const SETTINGS_SECTIONS = [
   'notifications',
   'pet',
   'security',
+  'quickAsk',
 ] as const satisfies readonly (keyof DesktopSettings)[]
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -300,6 +317,15 @@ function normalizeSecurity(raw: unknown): SecuritySettings {
   }
 }
 
+function normalizeQuickAsk(raw: unknown): QuickAskSettings {
+  const obj = asRecord(raw)
+  const d = DEFAULT_QUICK_ASK_SETTINGS
+  return {
+    enabled: bool(obj.enabled, d.enabled),
+    shortcut: isQuickAskShortcut(obj.shortcut) ? obj.shortcut : d.shortcut,
+  }
+}
+
 /** Validate a settings blob read from disk. Unknown keys are dropped. */
 export function normalizeSettings(raw: unknown): DesktopSettings {
   const obj = asRecord(raw)
@@ -311,6 +337,7 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
     notifications: normalizeNotifications(obj.notifications),
     pet: normalizePet(obj.pet),
     security: normalizeSecurity(obj.security),
+    quickAsk: normalizeQuickAsk(obj.quickAsk),
   }
 }
 

@@ -17,6 +17,9 @@ import { AppShell } from './AppShell'
 //
 // A project is a page (`projects/:id`), reached from its folder in the
 // sidebar: its brief and the chats filed in it.
+//
+// `#/quick-ask` is not here: it is the Quick Ask panel's own window, which
+// App renders without the router, the shell or a gateway connection.
 export const router = createHashRouter([
   {
     path: '/',
