@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Browser tool: the newest-Node sort added with the PATH fallback (#3604) was
+  a no-op for fnm, so an older Node's `agent-browser` could win. `_version_key`
+  read the version from the directory above the leaf, which is right for nvm
+  (`.../versions/node/v24.16.0/bin`) and wrong for fnm
+  (`.../node-versions/v24.16.0/installation/bin`), where the parent of `bin`
+  is `installation` -- every fnm candidate keyed to `()`, so the sort had
+  nothing to order by and `glob` order decided. The version is now taken from
+  whichever path component parses as one, searched from the right, so both
+  layouts order newest first. (#3606)
 - Browser: a gateway started by the desktop app, launchd or systemd now finds
   an `agent-browser` installed with `npm install -g` under nvm, fnm, Volta,
   pnpm, Bun or Homebrew. Those launchers pass a bare `PATH`, so the binary was
