@@ -17,6 +17,8 @@ export interface TrayActions {
   /** Open the window and hand the renderer a target (the notifications' router). */
   navigate(target: NotifyTarget): void
   openSettings(): void
+  /** Open the Quick Ask panel; absent when the shell has no Quick Ask. */
+  showQuickAsk?(): void
   startGateway(): void
   stopGateway(): void
   restartGateway(): void
@@ -163,8 +165,14 @@ export function buildTrayMenu(
   items.push(
     { id: 'open', label: 'Open AgentOS', click: () => actions.openApp() },
     { id: 'new-chat', label: 'New Chat', click: () => actions.navigate({ type: 'newChat' }) },
-    sep,
   )
+  // Only while Quick Ask is on: the row opens the same panel the key does,
+  // so a refused key still leaves a way in.
+  const showQuickAsk = actions.showQuickAsk
+  if (settings.quickAsk.enabled && showQuickAsk) {
+    items.push({ id: 'quick-ask', label: 'Quick Ask…', click: () => showQuickAsk() })
+  }
+  items.push(sep)
 
   const lifecycle = settings.gateway.mode === 'managed' ? gatewayAction(status, actions) : null
   if (lifecycle) items.push(lifecycle)

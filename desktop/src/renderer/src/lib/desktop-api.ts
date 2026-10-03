@@ -2,6 +2,7 @@ import type { AppInfo } from '@shared/app'
 import type { DesktopApi } from '@shared/ipc'
 import { STOPPED_GATEWAY, type GatewayStatus } from '@shared/gateway'
 import type { NotifyTarget } from '@shared/notify'
+import { parseQuickAskSubmission, type QuickAskSubmission } from '@shared/quick-ask'
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -33,6 +34,8 @@ const BROWSER_INFO: AppInfo = {
 function createFallbackApi(): DesktopApi {
   let settings: DesktopSettings = load()
   const themeListeners = new Set<(r: ResolvedTheme) => void>()
+  const quickAskInbox: QuickAskSubmission[] = []
+  const deliverListeners = new Set<() => void>()
 
   function load(): DesktopSettings {
     try {
@@ -76,6 +79,9 @@ function createFallbackApi(): DesktopApi {
       openPath: async () => 'Only available inside the desktop app.',
       chooseFile: async () => null,
       loginItem: async () => settings.general.openAtLogin,
+      // No sensor reaches a browser tab: Touch ID is never available here.
+      biometrics: async () => ({ available: false }),
+      authenticate: async () => ({ ok: false, reason: 'unavailable' }),
     },
     settings: {
       get: async () => structuredClone(settings),
@@ -194,6 +200,32 @@ function createFallbackApi(): DesktopApi {
     tray: {
       setSummary: () => {},
       onNavigate: () => () => {},
+    },
+    // No global hotkey in a browser tab. A submission is still validated and
+    // delivered to this same page, so the chat's receiving end can be driven
+    // from a test or the console.
+    quickAsk: {
+      submit: async (submission) => {
+        const parsed = parseQuickAskSubmission(submission)
+        if (!parsed) return false
+        quickAskInbox.push(parsed)
+        for (const fn of deliverListeners) fn()
+        return true
+      },
+      hide: async () => {},
+      ready: async () => {},
+      resize: async () => {},
+      onShown: () => () => {},
+      take: async () => quickAskInbox.splice(0),
+      onDeliver: (listener) => {
+        deliverListeners.add(listener)
+        return () => deliverListeners.delete(listener)
+      },
+      status: async () => ({
+        state: settings.quickAsk.enabled ? 'unavailable' : 'off',
+        shortcut: settings.quickAsk.shortcut,
+      }),
+      onStatusChanged: () => () => {},
     },
   }
 }

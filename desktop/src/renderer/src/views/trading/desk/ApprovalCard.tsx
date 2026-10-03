@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { copyLpText } from '@/views/chat/transcript/lp'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { useTouchIdPrompt } from '~/lib/biometric-gate'
 import { formatAmount, initiatorKey, isAwaitingApproval, shortAddress, shortHash } from '../logic'
 import { StatusPill, Sym } from '../parts'
 import { isLpKind, type Order, type Wallet } from '../types'
@@ -95,6 +96,12 @@ function askOf(order: Order, legs: readonly Order[] | undefined): Ask {
  * A multisend is one card: `legs` carries every order of the batch, the
  * legs are listed one per line, and the one Approve covers them all — that
  * is what the engine does, so the card may not pretend otherwise.
+ *
+ * With Touch ID on (Settings › Security), the decision path behind
+ * `onApprove` asks for a fingerprint before anything is sent; the card only
+ * says "Touch ID…" while the sheet is up, and takes no second click until
+ * the decision it started has settled. A cancelled prompt sends nothing and
+ * leaves the card live.
  */
 export function ApprovalCard({
   order,
@@ -111,7 +118,8 @@ export function ApprovalCard({
   legs?: readonly Order[]
   wallets: readonly Wallet[]
   deciding: boolean
-  onApprove: (order: Order) => void
+  /** May return the decision's promise: the card ignores Approve until it settles. */
+  onApprove: (order: Order, legs?: readonly Order[]) => void | Promise<unknown>
   onReject: (order: Order, reason: string) => void
   focusOnMount: boolean
   /** Settled cards only: close this one now instead of waiting it out. */
@@ -128,6 +136,10 @@ export function ApprovalCard({
   const rejectRef = useRef<HTMLButtonElement>(null)
   const reasonRef = useRef<HTMLInputElement>(null)
   const focused = useRef(false)
+  // One approval at a time: the Touch ID sheet is modal at the OS level, and
+  // a second click while it is up (or the decision is in flight) is nothing.
+  const inFlight = useRef(false)
+  const prompting = useTouchIdPrompt((s) => s.key !== null && s.key === order.orderId)
 
   useEffect(() => {
     if (focusOnMount && !focused.current) {
@@ -147,12 +159,24 @@ export function ApprovalCard({
   }, [rejecting])
 
   function approve() {
+    if (inFlight.current || deciding) return
     if (risk === 'high' && !armed) {
       setArmed(true)
       return
     }
     setArmed(false)
-    onApprove(order)
+    inFlight.current = true
+    const release = () => {
+      inFlight.current = false
+    }
+    try {
+      const pending = onApprove(order, legs)
+      if (pending instanceof Promise) void pending.then(release, release)
+      else release()
+    } catch (err) {
+      release()
+      throw err
+    }
   }
 
   function reject() {
@@ -324,9 +348,15 @@ export function ApprovalCard({
             disabled={deciding}
             onClick={approve}
             data-armed={armed || undefined}
+            data-touch-id={prompting || undefined}
+            aria-busy={prompting || undefined}
             data-testid="card-approve"
           >
-            {armed ? t('trading.card.approveAgain') : t('trading.approvals.approve')}
+            {prompting
+              ? t('trading.touchId.prompting')
+              : armed
+                ? t('trading.card.approveAgain')
+                : t('trading.approvals.approve')}
           </Button>
         </div>
       ) : order.txHash && !ask.batch ? (

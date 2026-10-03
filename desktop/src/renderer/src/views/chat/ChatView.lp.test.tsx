@@ -5,7 +5,11 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LpActions } from '@/views/chat/transcript/lp'
 import { useConnection } from '@/stores/connection'
+import { DEFAULT_SETTINGS } from '@shared/settings'
+import { resetBiometricGateForTests, TouchIdDeclined } from '~/lib/biometric-gate'
+import { desktopApi } from '~/lib/desktop-api'
 import { useGateway } from '~/stores/gateway'
+import { useSettings } from '~/stores/settings'
 import type { DeskProps } from '~/views/trading/desk/useDeskInstruments'
 import { ChatView } from './ChatView'
 
@@ -135,6 +139,34 @@ describe('ChatView · DCA card actions', () => {
     act(() => actions!.onOrder?.('ord_7c2e91'))
     expect([...seen.own]).toEqual(['ord_7c2e91'])
     expect(seen.focus).toBe('ord_7c2e91')
+  })
+
+  it('asks for Touch ID before "Approve & start" when it is on; a cancel sends nothing', async () => {
+    resetBiometricGateForTests()
+    useSettings.setState({
+      loaded: true,
+      settings: { ...structuredClone(DEFAULT_SETTINGS), security: { touchId: 'all' } },
+    })
+    const authenticate = vi
+      .spyOn(desktopApi().app, 'authenticate')
+      .mockResolvedValue({ ok: false, reason: 'cancelled' })
+    try {
+      mount({ entering: false, onFirstSend: vi.fn() } as unknown as DeskProps)
+      rpc.call.mockClear()
+      await expect(
+        seen.dcaActions!.call('trading.dca.approve', { mandateId: 'dca_1a2b3c4d' }),
+      ).rejects.toBeInstanceOf(TouchIdDeclined)
+      // The mandate is read so the sheet can name it; the approval never goes out.
+      expect(rpc.call).toHaveBeenCalledWith('trading.dca.get', { mandateId: 'dca_1a2b3c4d' })
+      expect(rpc.call).not.toHaveBeenCalledWith('trading.dca.approve', expect.anything())
+      expect(authenticate).toHaveBeenCalledTimes(1)
+      // Other controls on the card are not gated.
+      await seen.dcaActions!.call('trading.dca.pause', { mandateId: 'dca_1a2b3c4d' })
+      expect(authenticate).toHaveBeenCalledTimes(1)
+    } finally {
+      authenticate.mockRestore()
+      useSettings.setState({ settings: structuredClone(DEFAULT_SETTINGS) })
+    }
   })
 })
 

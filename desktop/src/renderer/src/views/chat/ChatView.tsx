@@ -14,6 +14,7 @@ import {
   canonicalSessionKey,
   exportMarkdownDocument,
   hasPendingAttachmentWork,
+  normalizeOutgoingComposerPayload,
   webchatSessionKey,
   type ExportMessage,
   type PendingAttachment,
@@ -36,9 +37,11 @@ import { Button } from '~/components/ui/button'
 import { sessionPath } from '~/components/sidebar/SessionList'
 import { t } from '~/i18n'
 import { rememberLastSession } from '~/lib/last-session'
+import { useQuickAskSend } from '~/lib/use-quick-ask'
 import { ease, spring } from '~/lib/motion'
 import { useGateway } from '~/stores/gateway'
 import { useLive } from '~/stores/live'
+import { useQuickAsk } from '~/stores/quick-ask'
 import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
 import { configuredProvider } from '@/views/setup/logic'
@@ -46,6 +49,7 @@ import { useConfigSnapshot } from '~/views/settings/use-snapshot'
 import { ProjectChip } from './ProjectChip'
 import { useDeskInstruments, type DeskProps } from '~/views/trading/desk/useDeskInstruments'
 import { useTradeLedger } from '~/views/trading/desk/useTradeLedger'
+import { requireMandateTouchId } from '~/views/trading/touch-id'
 
 const NEW_CHAT_COMBO = 'mod+shift+o'
 const DEFAULT_AGENT_KEY = webchatSessionKey('main')
@@ -82,6 +86,12 @@ function collectExportMessages(thread: HTMLElement | null): ExportMessage[] {
   return out
 }
 
+/** One line of a longer text, for a quiet mention of it. */
+function excerptLine(text: string, max = 80): string {
+  const line = text.replace(/\s+/g, ' ').trim()
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line
+}
+
 function runTone(status: string): 'ok' | 'warn' | 'danger' | 'dim' {
   if (status === 'running' || status === 'queued') return 'ok'
   if (status === 'approval_pending' || status === 'interrupted') return 'warn'
@@ -111,6 +121,9 @@ export function ChatView({
   actionsSlot?: HTMLElement | null
 } = {}) {
   const gatewayState = useGateway((s) => s.status.state)
+  // A Quick Ask that arrived while the gateway is down waits here, and is
+  // sent by the chat once the gateway is back. Say so; never drop it silently.
+  const quickAskWaiting = useQuickAsk((s) => s.queue[0]?.text ?? null)
   if (gatewayState !== 'running') {
     return (
       <div className="chat-desktop-offline">
@@ -120,6 +133,11 @@ export function ChatView({
             : t(`gateway.state.${gatewayState}`)}
         </p>
         <p className="max-w-sm">{t('chat.gatewayDown')}</p>
+        {quickAskWaiting ? (
+          <p className="max-w-sm" data-testid="quick-ask-waiting">
+            {t('quickAsk.waiting')} <q>{excerptLine(quickAskWaiting)}</q>
+          </p>
+        ) : null}
       </div>
     )
   }
@@ -259,7 +277,16 @@ function ConnectedChat({
     () =>
       atDesk
         ? {
-            call: (method, params) => rpc.call(method, params),
+            // A DCA card's "Approve & start" is an approval like the desk's:
+            // Touch ID first when Settings › Security says so.
+            call: async (method, params) => {
+              if (method === 'trading.dca.approve')
+                await requireMandateTouchId(
+                  (m, p) => rpc.call(m, p),
+                  String(params.mandateId ?? ''),
+                )
+              return rpc.call(method, params)
+            },
             onOrder: (orderId) => {
               setOwnOrderIds((prev) => new Set(prev).add(orderId))
               setFocusOrderId(orderId)
@@ -514,6 +541,65 @@ function ConnectedChat({
       send(text, atts, intent)
     }
   }, [send])
+
+  // Quick Ask (the global hotkey's panel) sends here, not just prefills. Its
+  // text is the composer's input without the composer: the user's draft and
+  // its attachments stay put, a slash command runs, a long paste becomes an
+  // attachment, and while a reply streams it queues behind it.
+  const sendQuickAsk = useCallback(
+    async (rawText: string) => {
+      let text = rawText
+      let isLiteralSlash = false
+      if (text.startsWith('//')) {
+        isLiteralSlash = true
+        text = text.slice(1)
+      }
+      const isSlashCommand = !isLiteralSlash && text.startsWith('/')
+      if (busy || isCompactInFlightForCurrentSession()) {
+        const draft = composerHandleRef.current?.getValue() ?? ''
+        const atts = attachments.attachments
+        const intent = pendingIntentRef.current
+        if (pending.enqueue({ text, attachments: [], intent: null })) {
+          composerHandleRef.current?.setValue(draft)
+          setComposerValue(draft)
+          attachments.setAll(atts)
+          pendingIntentRef.current = intent
+        }
+        return
+      }
+      if (isSlashCommand && (await executeSlash(text))) return
+      const normalized = await normalizeOutgoingComposerPayload(text, [], {
+        allowSlashCommand: isSlashCommand,
+        onToast: (message, level) => {
+          if (level === 'warn') toast.warning(message)
+          else toast.info(message)
+        },
+      })
+      if (!normalized) return
+      send(normalized.text, normalized.attachments, null)
+      if (!docked) {
+        setStartedKey(sessionKey)
+        void navigate(sessionPath(sessionKey), { replace: true })
+      }
+      useUi.getState().requestComposerFocus()
+    },
+    [
+      attachments,
+      busy,
+      docked,
+      executeSlash,
+      isCompactInFlightForCurrentSession,
+      navigate,
+      pending,
+      send,
+      sessionKey,
+    ],
+  )
+  useQuickAskSend({
+    paramKey,
+    threadRef: containerRef,
+    send: (text) => void sendQuickAsk(text),
+  })
 
   // The desk's own way in: a rejection reason, a mission prompt. The first
   // send from the desk files its session into the "Trading desk" project.

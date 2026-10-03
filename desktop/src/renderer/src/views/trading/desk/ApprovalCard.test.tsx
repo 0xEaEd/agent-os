@@ -1,18 +1,44 @@
 import { readFileSync } from 'node:fs'
-import { act, fireEvent, screen } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AuthResult } from '@shared/app'
+import { DEFAULT_SETTINGS, type TouchIdMode } from '@shared/settings'
+import { resetBiometricGateForTests, useTouchIdPrompt } from '~/lib/biometric-gate'
+import { useSettings } from '~/stores/settings'
+import { useOrderDecision } from '~/stores/trading'
 import { order, renderDesk, USDC, WALLET } from '../test-utils'
+import type { Order } from '../types'
 import { ApprovalCard } from './ApprovalCard'
 import { ApprovalsRegion } from './ApprovalsRegion'
 
 const openExternal = vi.fn(async () => {})
+const authenticate = vi.fn<(reason: string) => Promise<AuthResult>>()
 vi.mock('~/lib/desktop-api', () => ({
-  desktopApi: () => ({ app: { openExternal } }),
+  desktopApi: () => ({ app: { openExternal, authenticate } }),
   isDesktop: () => true,
 }))
+const rpcCall = vi.fn()
+vi.mock('@/app/providers', () => ({
+  useRpc: () => ({ call: rpcCall, waitForConnection: async () => {}, on: () => () => {} }),
+}))
+vi.mock('sonner', () => ({
+  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn(), dismiss: vi.fn() },
+}))
+
+function setTouchId(touchId: TouchIdMode): void {
+  useSettings.setState({
+    loaded: true,
+    settings: { ...structuredClone(DEFAULT_SETTINGS), security: { touchId } },
+  })
+}
 
 beforeEach(() => {
   openExternal.mockClear()
+  authenticate.mockReset()
+  rpcCall.mockReset()
+  rpcCall.mockResolvedValue({ order: {} })
+  resetBiometricGateForTests()
+  setTouchId('off')
 })
 
 describe('ApprovalCard', () => {
@@ -637,5 +663,135 @@ describe('ApprovalsRegion keeps the foot of the transcript in view', () => {
     height = 100
     rerender(stage([order({ orderId: 'p2' })]))
     expect(top).toBe(950)
+  })
+})
+
+/** The card wired to the real decision path, the way the desk wires it. */
+function GatedCard({ o }: { o: Order }) {
+  const decide = useOrderDecision()
+  return (
+    <ApprovalCard
+      order={o}
+      wallets={[WALLET]}
+      deciding={decide.isPending}
+      onApprove={(lead, legs) =>
+        decide
+          .mutateAsync({ orderId: lead.orderId, approve: true, order: lead, legs })
+          .catch(() => {})
+      }
+      onReject={vi.fn()}
+      focusOnMount={false}
+    />
+  )
+}
+
+describe('ApprovalCard · Touch ID', () => {
+  it('says "Touch ID…" while the sheet is up for this card, and only this card', () => {
+    renderDesk(
+      <ApprovalCard
+        order={order({ valueUsd: 50 })}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    const approve = screen.getByTestId('card-approve')
+    act(() => useTouchIdPrompt.setState({ key: 'another-order' }))
+    expect(approve).toHaveTextContent('Approve')
+    act(() => useTouchIdPrompt.setState({ key: 'o1' }))
+    expect(approve).toHaveTextContent('Touch ID…')
+    expect(approve).toHaveAttribute('aria-busy', 'true')
+    act(() => useTouchIdPrompt.setState({ key: null }))
+    expect(approve).toHaveTextContent('Approve')
+  })
+
+  it('ignores a second click until the decision it started has settled', async () => {
+    let settle: () => void = () => {}
+    const onApprove = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          settle = resolve
+        }),
+    )
+    renderDesk(
+      <ApprovalCard
+        order={order({ valueUsd: 50 })}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={onApprove}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    const approve = screen.getByTestId('card-approve')
+    fireEvent.click(approve)
+    fireEvent.click(approve)
+    fireEvent.click(approve)
+    expect(onApprove).toHaveBeenCalledTimes(1)
+    await act(async () => settle())
+    fireEvent.click(approve)
+    expect(onApprove).toHaveBeenCalledTimes(2)
+  })
+
+  it('High-risk: arms, then prompts; a cancel sends nothing and leaves the card live', async () => {
+    setTouchId('high')
+    let answer: (r: AuthResult) => void = () => {}
+    authenticate.mockImplementation(
+      () =>
+        new Promise<AuthResult>((resolve) => {
+          answer = resolve
+        }),
+    )
+    renderDesk(<GatedCard o={order({ amountIn: '0.4', valueUsd: 900 })} />)
+    const approve = screen.getByTestId('card-approve')
+    fireEvent.click(approve)
+    expect(authenticate).not.toHaveBeenCalled()
+    expect(approve).toHaveTextContent('Click again to approve and execute')
+    fireEvent.click(approve)
+    await waitFor(() => expect(approve).toHaveTextContent('Touch ID…'))
+    expect(authenticate).toHaveBeenCalledWith('approve 0.4 ETH → USDC on Base')
+    expect(approve).toBeDisabled()
+    // The sheet is up: another click is nothing.
+    fireEvent.click(approve)
+    expect(authenticate).toHaveBeenCalledTimes(1)
+
+    await act(async () => answer({ ok: false, reason: 'cancelled' }))
+    await waitFor(() => expect(approve).toHaveTextContent('Approve'))
+    expect(approve).not.toBeDisabled()
+    expect(screen.getByTestId('card-reject')).not.toBeDisabled()
+    expect(rpcCall).not.toHaveBeenCalledWith('trading.orders.approve', expect.anything())
+
+    // Try again and pass: the decision goes out exactly once.
+    authenticate.mockResolvedValue({ ok: true })
+    fireEvent.click(approve)
+    fireEvent.click(approve)
+    await waitFor(() =>
+      expect(rpcCall).toHaveBeenCalledWith('trading.orders.approve', { orderId: 'o1' }),
+    )
+    expect(rpcCall.mock.calls.filter(([m]) => m === 'trading.orders.approve')).toHaveLength(1)
+    expect(authenticate).toHaveBeenCalledTimes(2)
+  })
+
+  it('High-risk: a low-risk approval goes out on one click with no prompt', async () => {
+    setTouchId('high')
+    renderDesk(<GatedCard o={order({ valueUsd: 50 })} />)
+    fireEvent.click(screen.getByTestId('card-approve'))
+    await waitFor(() =>
+      expect(rpcCall).toHaveBeenCalledWith('trading.orders.approve', { orderId: 'o1' }),
+    )
+    expect(authenticate).not.toHaveBeenCalled()
+  })
+
+  it('Every approval: a low-risk one prompts too, and a failed prompt sends nothing', async () => {
+    setTouchId('all')
+    authenticate.mockResolvedValue({ ok: false, reason: 'failed' })
+    renderDesk(<GatedCard o={order({ valueUsd: 50 })} />)
+    const approve = screen.getByTestId('card-approve')
+    fireEvent.click(approve)
+    await waitFor(() => expect(authenticate).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(approve).not.toBeDisabled())
+    expect(rpcCall).not.toHaveBeenCalledWith('trading.orders.approve', expect.anything())
   })
 })

@@ -16,6 +16,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   which work with the window closed. While approvals wait, their count sits
   beside the icon. The icon is a monochrome template that follows a light or
   dark menu bar; Settings › Behaviour › "Show in menu bar" turns it off.
+- Desktop: Touch ID before money or keys move. Settings › Security ›
+  Confirm with Touch ID: Off (default), High-risk approvals, or Every
+  approval. When on, approving an order (swaps, sends, multisends, revokes,
+  LP writes) or a DCA mandate asks for a fingerprint first, from the desk's
+  card, the BOOK, the Trading tab or a chat DCA card, and Export private key
+  and Remove wallet always ask. A cancelled or failed prompt sends nothing
+  and leaves the card live; the setting stays editable without the sensor,
+  so a closed lid never locks anyone out (#3596).
+- Desktop: Quick Ask. A global shortcut, ⌥ Space by default, opens a small
+  Spotlight-style prompt over whatever app is in front. Return sends the
+  question to a new chat and ⌥ Return to the chat the window was on; AgentOS
+  comes forward on that session with the reply streaming. Escape or clicking
+  away closes it without sending and keeps the text. Settings › Behaviour
+  turns it off or moves it to ⌃ Space or ⌘⇧ Space, and says so when another
+  app already holds the key; Settings › Shortcuts lists it. The prompt has no
+  gateway connection of its own: the text goes to the main window over IPC,
+  and a question asked while the gateway is down is sent once it is back.
 - Skills: an operator install policy. `[skills.install_policy]` runs a command
   of your choosing against every hub skill while it is still in quarantine,
   on install and on update, and the command answers allow, warn or block. It

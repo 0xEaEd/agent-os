@@ -1,0 +1,88 @@
+/* Quick Ask: a Spotlight-style HUD. The window is a frameless macOS panel
+   with `hud` vibrancy, so the page stays transparent and the blur shows
+   through; with Reduce transparency the window is opaque and the panel
+   paints the popover ground itself. The window's corners are the system's;
+   nothing here draws a frame. */
+
+html[data-window='quick-ask'],
+html[data-window='quick-ask'] body {
+  background: transparent;
+}
+
+.qa-root {
+  height: 100%;
+}
+html[data-transparency='reduced'] .qa-root {
+  background: var(--popover);
+}
+
+.qa-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 20px 11px 18px;
+}
+
+.qa-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.qa-glyph {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-top: 3px;
+  color: var(--primary);
+}
+
+.qa-field {
+  flex: 1;
+  min-width: 0;
+  /* One line, growing with the text to five, then it scrolls. */
+  field-sizing: content;
+  min-height: 32px;
+  max-height: 160px;
+  overflow-y: auto;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  padding: 1px 0;
+  color: var(--foreground);
+  caret-color: var(--primary);
+  font: 400 22px/32px var(--font-sans);
+  letter-spacing: -0.012em;
+  user-select: text;
+}
+.qa-field::placeholder {
+  color: color-mix(in srgb, var(--foreground) 36%, transparent);
+}
+
+/* The quiet line under the field: which key does what. */
+.qa-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 18px;
+  padding-left: 38px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.qa-hint kbd {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-compact);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: var(--muted-foreground);
+}
+.qa-hint__sep {
+  padding: 0 3px;
+  opacity: 0.55;
+}
+.qa-hint[data-tone='warn'] {
+  color: var(--warn);
+}

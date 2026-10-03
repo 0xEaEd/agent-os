@@ -1,3 +1,4 @@
+import { QUICK_ASK_KEYCAPS } from '@shared/quick-ask'
 import { t, type MessageKey } from '~/i18n'
 import { useSettings } from '~/stores/settings'
 import { Card, Head } from '../parts'
@@ -29,6 +30,12 @@ const CHAT: readonly Shortcut[] = [
 /** The keys the app answers to. Static on purpose: nothing here is rebindable. */
 export function ShortcutsPane() {
   const enterToSend = useSettings((s) => s.settings.general.enterToSend)
+  const quickAsk = useSettings((s) => s.settings.quickAsk)
+  // The Quick Ask key is the one chosen in Settings › Behaviour, listed first
+  // since it is the one key that works from any app.
+  const app: readonly Shortcut[] = quickAsk.enabled
+    ? [{ keys: QUICK_ASK_KEYCAPS[quickAsk.shortcut], label: 'settings.shortcuts.quickAsk' }, ...APP]
+    : APP
   const composer: readonly Shortcut[] = [
     enterToSend
       ? { keys: ['↩'], label: 'settings.shortcuts.send' }
@@ -43,7 +50,7 @@ export function ShortcutsPane() {
   return (
     <>
       <Head title={t('settings.section.shortcuts')} blurb={t('settings.section.shortcuts.blurb')} />
-      <KeyGroup title={t('settings.shortcuts.app')} rows={APP} />
+      <KeyGroup title={t('settings.shortcuts.app')} rows={app} />
       <KeyGroup title={t('settings.shortcuts.chat')} rows={CHAT} />
       <KeyGroup title={t('settings.shortcuts.composer')} rows={composer} />
     </>

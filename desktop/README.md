@@ -40,6 +40,7 @@ desktop/
     │   ├── ipc.ts            #   channel names + DesktopApi shape
     │   ├── theme.ts          #   ThemePreference / PaletteId / resolveTheme
     │   ├── settings.ts       #   DesktopSettings + normalizer
+    │   ├── quick-ask.ts      #   Quick Ask shortcuts, submission payload + validation
     │   └── gateway.ts        #   GatewayStatus
     ├── main/                 # Electron main process (Node)
     │   ├── index.ts          #   lifecycle, single instance, quit hook
@@ -51,6 +52,7 @@ desktop/
     │   ├── settings/store.ts #   atomic JSON settings in userData/
     │   ├── gateway/          #   cli-locator + process supervisor (spawn, adopt, health)
     │   ├── bootstrap/        #   first-run engine install: discovery, install.sh runner, controller
+    │   ├── quick-ask/        #   global hotkey, the floating panel window, hand-off inbox
     │   └── updates/          #   engine updater (agentos upgrade) + electron-updater controller
     ├── preload/index.ts      # contextBridge -> window.agentos (typed DesktopApi)
     └── renderer/             # React app (browser, no Node access)
@@ -64,9 +66,10 @@ desktop/
             │                 #   sheet with the natural schedule builder
             ├── views/projects/ # Project page (`/projects/:id`): renamable title,
             │                 #   self-saving brief, the chats filed there
+            ├── views/quick-ask/ # The Quick Ask panel (its own window, `#/quick-ask`)
             ├── views/settings/ # Settings sheet: SettingsPanel (rail + section), one pane
             │                 #   per section (providers, router, gateway, appearance,
-            │                 #   behaviour, shortcuts, advanced, about), parts.tsx, logic.ts
+            │                 #   security, behaviour, shortcuts, advanced, about), parts.tsx, logic.ts
             ├── components/   #   Sidebar (+ resizer, project folders, session list with
             │                 #   its row menu and view menu), Toolbar, menu/ (PopMenu,
             │                 #   Menu, items, submenus), pet/, composer/
@@ -131,14 +134,15 @@ revision on every write so a stale form cannot overwrite a newer file.
 | Gateway       | Live status with Start/Stop/Restart, endpoint copy + open console; an editable draft of mode/host/port/token/CLI path with validation, Save/Revert, and a "restart to apply" notice when the running endpoint differs.                                                                                                                                                                                                                                                                                                             |
 | Appearance    | Theme + palette (`ThemeRows`), text size (`data-text-size` on `<html>`), reduce transparency (`data-transparency` + `win.setVibrancy`).                                                                                                                                                                                                                                                                                                                                                                                            |
 | Notifications | Master switch; what happens while the window is in front (nothing / in-app banner / system notification); Do not disturb (30 min, 1 h, 3 h, until tomorrow 9:00); show details; per-event switches (reply finished with a minimum length, reply failed, approval needed, scheduled job runs off/failures/all, gateway stopped on its own); sound on/off and which (the app chime or a macOS alert sound); Dock badge and bounce; a test button and a door to System Settings › Notifications. See [Notifications](#notifications). |
-| Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, show in menu bar (see [Menu bar](#menu-bar)), Return vs ⌘Return to send, sidebar width reset.                                                                                                                                                                                                                                                                                                              |
-| Shortcuts     | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …); static, nothing is rebindable.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Security      | Confirm with Touch ID: Off (default) / High-risk approvals / Every approval. Disabled with an explanation when the Mac cannot prompt (no sensor, none enrolled, lid closed) unless it is already on, so it can always be turned off; a Test button runs the prompt and reports the outcome. See [Touch ID](#touch-id).                                                                                                                                                                                                             |
+| Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, show in menu bar (see [Menu bar](#menu-bar)), Quick Ask (on/off, which global shortcut, a note when macOS refused the key; see [Quick Ask](#quick-ask)), Return vs ⌘Return to send, sidebar width reset.                                                                                                                                                                                                   |
+| Shortcuts     | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …, and the Quick Ask key chosen under Behaviour); static, nothing is rebindable.                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Advanced      | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all app settings behind an alertdialog.                                                                                                                                                                                                                                                                                                                                                                      |
 | About         | App/Electron/Chromium versions, gateway version + uptime, `updates.check`, links.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
-Main mirrors four settings onto the window/OS on every write
+Main mirrors a few settings onto the window/OS on every write
 (`mirrorSettingsToOs` in `main/index.ts`): the login item, window vibrancy,
-the zoom factor and the menu bar item. `nativeTheme` follows the theme section the same way, so a
+the zoom factor, the menu bar item and the Quick Ask global shortcut. `nativeTheme` follows the theme section the same way, so a
 reset repaints correctly.
 
 ## Menu bar
@@ -157,6 +161,7 @@ Next DCA buy · ETH → USDC in 14 min → opens the desk
 ───────────────────────────────
 Open AgentOS
 New Chat
+Quick Ask…                          (while Quick Ask is on)
 ───────────────────────────────
 Stop Gateway                        (Start / Stop / Restart by state; managed mode only)
 Settings…
@@ -309,9 +314,88 @@ wave → waiting → run → review → idle).
   it seeded are recorded in `userData/pets/.bundled.json`, so a built-in pet
   you remove stays removed.
 
+## Touch ID
+
+Settings › Security › **Confirm with Touch ID** puts a fingerprint in front
+of the operator's money-moving clicks. `Off` (the default: a Mac without a
+sensor must never be locked out) asks for nothing. `High-risk approvals` asks
+before an approval the card stamps high-risk (the same `askRisk` the card
+uses; a DCA mandate whose cap reaches the same line), and before **Export
+private key** and **Remove wallet**. `Every approval` asks before every
+approval as well, DCA mandates included.
+
+The prompt is `systemPreferences.promptTouchID()` in main (`main/security.ts`,
+behind `app.biometrics` / `app.authenticate`): biometrics only, never a
+password fallback, and never attempted when `canPromptTouchID()` says no
+(with the lid closed a raw prompt hangs). LocalAuthentication's error message
+is mapped to `cancelled`, `unavailable` or `failed`. In the renderer one gate,
+`lib/biometric-gate.ts`, reads the setting at call time and sits in front of
+the RPC rather than in the buttons: inside `useOrderDecision` (every
+`trading.orders.approve`: the desk's cards, the BOOK, the Trading tab),
+`useMandateActions().approve` and the chat DCA card's `trading.dca.approve`,
+and `useWalletMutation` for `wallet.export` / `wallet.remove` (before the
+password leaves the renderer). A cancelled, unavailable or failed prompt
+toasts and sends nothing; the card stays live. While the sheet is up the
+button that asked reads "Touch ID…" and a second click is ignored. The setting
+itself never needs Touch ID to change. Tool approvals are not gated: they are
+file and command gates, not money.
+
+## Quick Ask
+
+A system-wide shortcut, **⌥ Space** by default, opens a small floating prompt
+over whatever app is in front, the Spotlight posture. **Return** sends the text
+to a **new chat**; **⌥ Return** sends it to the **current** one (the session the
+main window is on, or the last one opened). Either way AgentOS comes forward on
+that session with the reply streaming. **Escape** or clicking away closes the
+prompt without sending, and keeps the text for next time; a send clears it.
+Shift-Return adds a line. Empty text does nothing, and more than 20 kB is
+refused in place.
+
+Settings › Behaviour › Quick Ask turns it off (the key is released at once) or
+moves it to ⌃ Space or ⌘⇧ Space: a fixed list, not free rebinding. When macOS
+refuses the key because another app holds it, the pane says "Unavailable"
+instead of failing silently, and the key is tried again on the next settings
+write. Settings › Shortcuts lists the chosen key. One limit of
+`globalShortcut`: a key macOS itself reserves (⌃ Space is the input-source
+switch on many Macs) can register and still never arrive; the menu bar's
+"Quick Ask…" row opens the same panel when a key does not.
+
+How it is built:
+
+- **Main** (`main/quick-ask/`). `hotkey.ts` keeps `globalShortcut` in step with
+  the settings (`mirrorSettingsToOs` calls it at boot and on change; the key is
+  released on `will-quit`). `panel.ts` owns the prompt's window: frameless,
+  `type: 'panel'` so it floats over full-screen apps and takes the keyboard
+  without making AgentOS the active app, `hud` vibrancy (opaque with Reduce
+  transparency), centred on the display under the cursor, sized to its
+  content, hidden on blur. It is created once while Quick Ask is on and only
+  shown and hidden after that, so the key is instant; it is never shown before
+  its view has mounted (`quickAsk:ready`). `controller.ts` ties them together.
+- **Renderer** (`views/quick-ask/`). The panel loads the same bundle at
+  `#/quick-ask`. `App` renders it without the router, `AppShell` or
+  `GatewayProviders`: the panel never connects to the gateway. It reads the
+  theme and appearance over `window.agentos` again each time it is shown, so
+  it matches the main window.
+- **Hand-off.** The text crosses IPC only. The panel calls `quickAsk:submit`
+  (validated in main: a string, not blank, at most 20 kB, target `new` or
+  `current`); main hides the panel, restores and focuses the main window (or
+  creates one when it was closed), puts the submission in an inbox and pings
+  the window with `quickAsk:deliver`. The window collects with `quickAsk:take`,
+  on the ping and once when it mounts, so a window that was just created or is
+  reloading cannot miss one and none is delivered twice. In the renderer,
+  `stores/quick-ask.ts` holds the queue; the shell (`useQuickAskRouting`)
+  closes any sheet and navigates to the destination, and the chat there
+  (`useQuickAskSend` in `ChatView`) **sends** it, unlike Skills' "Use in chat",
+  which only fills the composer. It waits for the transcript to settle
+  (`data-history-ready`) so the first draw of the session's history cannot wipe
+  the new message, with a 4-second fallback. While a reply streams it queues
+  behind it; the user's draft and attachments in the composer are left alone.
+  With the gateway down the chat says the text is waiting and sends it once
+  the gateway is back.
+
 ## First run: the app installs the engine
 
-The DMG is the whole install. On launch, main runs *discovery*
+The DMG is the whole install. On launch, main runs _discovery_
 (`main/bootstrap/discovery.ts`): `gateway.cliPath` from settings wins as-is;
 otherwise the CLI found on PATH or in the usual dirs is smoke-tested with
 `agentos --version` and compared with the app's version. Same or newer → the
@@ -363,9 +447,9 @@ placeholder list) render as "New session".
 Two things go out of date, and Settings › About updates both:
 
 - **Engine** — the `use-agent-os` package the app runs as `agentos gateway
-  run`. `main/updates/engine-updater.ts` runs the installed CLI's own
+run`. `main/updates/engine-updater.ts` runs the installed CLI's own
   `agentos upgrade --check --json` and `agentos upgrade --json --no-restart`
-  (streaming its output into the pane), then restarts the gateway *it*
+  (streaming its output into the pane), then restarts the gateway _it_
   spawned through the supervisor; `--no-restart` keeps the CLI's restart out
   of the supervisor's way. The CLI snapshots config and the state databases
   first. The renderer then confirms the gateway reports the new version
@@ -386,7 +470,7 @@ Two things go out of date, and Settings › About updates both:
 
 One release tag covers both, so the shell shows **one notice** for the
 release rather than one per part. `main/updates/auto-check.ts` runs a
-*silent* check of both updaters — 15 s after launch, when a window regains
+_silent_ check of both updaters — 15 s after launch, when a window regains
 focus (at most once a minute) and every 5 minutes: the app through
 electron-updater, the engine through `agentos upgrade --check --json`
 (`EngineUpdater.check({ silent: true })` shows no phase and reports no
@@ -412,11 +496,11 @@ the single next step, and two surfaces read it:
 
 A miss or a failure shows nothing, and a late result never rewinds a
 download or install the user started meanwhile.
-  `electron-builder.yml` publishes to the GitHub release of the same
-  `v<CalVer>` tag as the Python wheel, so `package.json`'s version must equal
-  `pyproject.toml`'s: `tests/test_release_consistency.py` asserts it and the
-  `pump-version` skill bumps both. A dev build or an unpublished local
-  package reports `unsupported`.
+`electron-builder.yml` publishes to the GitHub release of the same
+`v<CalVer>` tag as the Python wheel, so `package.json`'s version must equal
+`pyproject.toml`'s: `tests/test_release_consistency.py` asserts it and the
+`pump-version` skill bumps both. A dev build or an unpublished local
+package reports `unsupported`.
 
 `shared/updates.ts` also carries `MIN_GATEWAY_VERSION`: the oldest engine
 this renderer speaks to. Bump it whenever the desktop starts depending on a
@@ -432,7 +516,7 @@ the `owner/name` whose release receives the assets; the default is
 repository secrets: `MAC_CSC_LINK` (base64 `.p12` of the "Developer ID
 Application" certificate), `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`,
 `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, plus `DESKTOP_RELEASE_TOKEN`
-(a fine-grained PAT with *Contents: write* on the target) whenever the target
+(a fine-grained PAT with _Contents: write_ on the target) whenever the target
 is another repository. The publish target is also written into the bundled
 `app-update.yml`, so a build looks for its updates exactly where it was
 uploaded. The run refuses to publish until the bundle passes `codesign
@@ -442,7 +526,7 @@ ad-hoc signed app and keeps it as a workflow artifact only.
 
 The packaged app is versioned by a **semver twin** of the CalVer, because
 electron-builder and electron-updater only speak semver and `2026.9.22.post1`
-is not one (left alone it becomes `2026.9.2-2.post1`, which sorts *before*
+is not one (left alone it becomes `2026.9.2-2.post1`, which sorts _before_
 2026.9.2, so a `.post` release would never be offered). `calverToSemver` in
 `shared/updates.ts` folds month and day into the minor number and keeps the
 post number as the patch: `2026.9.22` → `2026.922.0`, `2026.9.22.post1` →

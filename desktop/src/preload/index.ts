@@ -3,6 +3,7 @@ import type { ChooseFileOptions } from '@shared/app'
 import { IPC, type DesktopApi, type SettingsPatch } from '@shared/ipc'
 import type { GatewayStatus } from '@shared/gateway'
 import type { NotifyRequest, NotifyTarget, SystemSound } from '@shared/notify'
+import type { QuickAskStatus, QuickAskSubmission } from '@shared/quick-ask'
 import type { ResolvedTheme, ThemeSettings } from '@shared/theme'
 import type { AppUpdateState, EngineUpdateState } from '@shared/updates'
 import type { BootstrapState } from '@shared/bootstrap'
@@ -24,6 +25,8 @@ const api: DesktopApi = {
     openPath: (path: string) => ipcRenderer.invoke(IPC.app.openPath, path),
     chooseFile: (options?: ChooseFileOptions) => ipcRenderer.invoke(IPC.app.chooseFile, options),
     loginItem: () => ipcRenderer.invoke(IPC.app.loginItem),
+    biometrics: () => ipcRenderer.invoke(IPC.app.biometrics),
+    authenticate: (reason: string) => ipcRenderer.invoke(IPC.app.authenticate, reason),
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settings.get),
@@ -89,6 +92,17 @@ const api: DesktopApi = {
   tray: {
     setSummary: (summary: TraySummary) => ipcRenderer.send(IPC.tray.summary, summary),
     onNavigate: (listener) => listen<NotifyTarget>(IPC.tray.navigate, listener),
+  },
+  quickAsk: {
+    submit: (submission: QuickAskSubmission) => ipcRenderer.invoke(IPC.quickAsk.submit, submission),
+    hide: () => ipcRenderer.invoke(IPC.quickAsk.hide),
+    ready: () => ipcRenderer.invoke(IPC.quickAsk.ready),
+    resize: (height: number) => ipcRenderer.invoke(IPC.quickAsk.resize, height),
+    onShown: (listener) => listen<void>(IPC.quickAsk.shown, () => listener()),
+    take: () => ipcRenderer.invoke(IPC.quickAsk.take),
+    onDeliver: (listener) => listen<void>(IPC.quickAsk.deliver, () => listener()),
+    status: () => ipcRenderer.invoke(IPC.quickAsk.status),
+    onStatusChanged: (listener) => listen<QuickAskStatus>(IPC.quickAsk.statusChanged, listener),
   },
 }
 
