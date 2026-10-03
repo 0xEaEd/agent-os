@@ -23,6 +23,8 @@ export type NotifyTarget =
   | { type: 'approvals' }
   | { type: 'trading'; orderId?: string }
   | { type: 'settings' }
+  /** A fresh chat with the composer focused (the menu bar's "New chat"). */
+  | { type: 'newChat' }
   | { type: 'none' }
 
 /** What main needs to show one native notification. */

@@ -13,6 +13,7 @@ import { bundledPetsDir, PetStore } from './pets/store'
 import { BootstrapController } from './bootstrap/controller'
 import { BootstrapRunner, bundledInstallScript } from './bootstrap/runner'
 import { SettingsStore } from './settings/store'
+import { MenuBar } from './tray/tray'
 import { appCalver } from './app-version'
 import { AppUpdateController, type UpdaterLike } from './updates/app-updater'
 import { startAutoCheck } from './updates/auto-check'
@@ -106,6 +107,13 @@ if (!app.requestSingleInstanceLock()) {
     // offer before anyone reaches petdex.dev. Seeded once each; never fatal.
     const bundledPets = bundledPetsDir(process.resourcesPath, path.resolve(__dirname, '../..'))
     if (bundledPets) void pets.seedBundled(bundledPets).catch(() => {})
+    // The menu bar item; `mirrorSettingsToOs` creates it (or not) from the setting.
+    const menuBar = new MenuBar({
+      settings,
+      gateway,
+      iconPath: trayIconPath(),
+      createWindow: () => createMainWindow(windowOptions(settings.get())),
+    })
     registerIpc({
       settings,
       gateway,
@@ -114,10 +122,11 @@ if (!app.requestSingleInstanceLock()) {
       appUpdater,
       bootstrapRunner,
       bootstrap,
+      menuBar,
     })
     installAppMenu(settings)
     createMainWindow(windowOptions(settings.get()))
-    mirrorSettingsToOs(settings)
+    mirrorSettingsToOs(settings, menuBar)
     // The shell is only useful with a gateway behind it. The controller
     // finds the engine and starts the gateway, or offers to install the
     // engine first when this Mac has none (or an older one).
@@ -176,16 +185,28 @@ function loadAutoUpdater(): UpdaterLike | null {
   }
 }
 
+/**
+ * The menu bar icon: a monochrome template (`trayTemplate.png` + `@2x`) that
+ * macOS tints for a light or dark bar. Packaged, electron-builder copies the
+ * pair next to the asar (`extraResources`); in development it is read from
+ * the repo, as the Dock icon is.
+ */
+function trayIconPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'trayTemplate.png')
+    : path.resolve(__dirname, '../../resources/trayTemplate.png')
+}
+
 function windowOptions(s: DesktopSettings): { reduceTransparency: boolean; uiScale: number } {
   return { reduceTransparency: s.appearance.reduceTransparency, uiScale: s.appearance.uiScale }
 }
 
 /**
- * Three settings are really window/OS state: the login item, window
- * vibrancy and the zoom factor. Apply them at boot and again on every change
- * so the file and what is on screen agree.
+ * Some settings are really window/OS state: the login item, window
+ * vibrancy, the zoom factor and the menu bar item. Apply them at boot and
+ * again on every change so the file and what is on screen agree.
  */
-function mirrorSettingsToOs(settings: SettingsStore): void {
+function mirrorSettingsToOs(settings: SettingsStore, menuBar: MenuBar): void {
   let last: DesktopSettings | null = null
   const apply = (next: DesktopSettings) => {
     if (next.general.openAtLogin !== last?.general.openAtLogin) {
@@ -203,6 +224,8 @@ function mirrorSettingsToOs(settings: SettingsStore): void {
     if (next.appearance.uiScale !== last?.appearance.uiScale) {
       applyUiScale(next.appearance.uiScale)
     }
+    // Every write: the menu shows the gateway mode and endpoint, not just the toggle.
+    menuBar.sync(next)
     last = next
   }
   apply(settings.get())

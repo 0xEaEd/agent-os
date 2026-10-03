@@ -190,6 +190,11 @@ function createFallbackApi(): DesktopApi {
       openLog: async () => {},
       onChanged: () => () => {},
     },
+    // No menu bar in a browser tab: nothing to tell, nothing to click.
+    tray: {
+      setSummary: () => {},
+      onNavigate: () => () => {},
+    },
   }
 }
 

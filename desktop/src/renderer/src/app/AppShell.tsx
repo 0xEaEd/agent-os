@@ -10,6 +10,7 @@ import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import { readLastSession } from '~/lib/last-session'
 import { useNotificationSignals } from '~/lib/use-notifications'
+import { useTraySummary } from '~/lib/use-tray-summary'
 import { bindGatewayEvents } from '~/stores/gateway'
 import { useSettings } from '~/stores/settings'
 import { useTradingUi } from '~/stores/trading-ui'
@@ -31,6 +32,7 @@ export function AppShell() {
   useShellShortcuts()
   useLaunchView()
   useNotificationSignals()
+  useTraySummary()
 
   return (
     <div className="flex h-full">

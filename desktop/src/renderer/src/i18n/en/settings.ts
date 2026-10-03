@@ -264,6 +264,9 @@ export const settings = {
   'settings.behaviour.stopGatewayOnQuit': 'Stop the gateway on quit',
   'settings.behaviour.stopGatewayOnQuit.help':
     'Off keeps a managed gateway running after the app closes.',
+  'settings.behaviour.showInMenuBar': 'Show in menu bar',
+  'settings.behaviour.showInMenuBar.help':
+    'The gateway, approvals waiting and the next DCA buy, a click away from any app.',
   'settings.behaviour.composer': 'Composer',
   'settings.behaviour.enterToSend': 'Send with',
   'settings.behaviour.enterToSend.help.enter': 'Return sends; Shift-Return adds a line.',

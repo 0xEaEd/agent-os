@@ -290,7 +290,7 @@ function useBadgeSync(): void {
   }, [badge, enabled, unseen, approvals])
 }
 
-/** A click on a notification (native or banner) lands somewhere in the app. */
+/** A click on a notification (native or banner) or a menu bar row lands somewhere in the app. */
 function useActivation(): void {
   const navigate = useNavigate()
   const openJobs = useUi((s) => s.openJobs)
@@ -316,6 +316,15 @@ function useActivation(): void {
             target.orderId ? `/trading?order=${encodeURIComponent(target.orderId)}` : '/trading',
           )
           break
+        case 'newChat':
+          // The menu bar's "New chat": a fresh chat even from the desk, unlike
+          // ⌘N there, with the composer asking for focus as ⌘N does (#3524).
+          useUi.getState().closeSettings()
+          useUi.getState().closeJobs()
+          useUi.getState().closeSkills()
+          void navigate('/sessions')
+          useUi.getState().requestComposerFocus()
+          break
         case 'approvals':
         case 'none':
           // The approval prompt is a modal that shows itself while one is pending.
@@ -324,9 +333,12 @@ function useActivation(): void {
     }
     const unbind = bindActivation(go)
     const off = desktopApi().notify.onActivated(go)
+    // The menu bar item's rows land here too: one router for every click.
+    const offTray = desktopApi().tray.onNavigate(go)
     return () => {
       unbind()
       off()
+      offTray()
     }
   }, [navigate, openJobs, openSettings])
 }

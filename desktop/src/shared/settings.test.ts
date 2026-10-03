@@ -68,3 +68,24 @@ describe('notification settings', () => {
     ).toBe(null)
   })
 })
+
+describe('general settings', () => {
+  it('shows the menu bar item unless the file says otherwise', () => {
+    expect(normalizeSettings({}).general.showInMenuBar).toBe(true)
+    // A file from before the setting existed keeps the item.
+    expect(normalizeSettings({ general: { enterToSend: false } }).general.showInMenuBar).toBe(true)
+    expect(normalizeSettings({ general: { showInMenuBar: 'no' } }).general.showInMenuBar).toBe(true)
+    expect(normalizeSettings({ general: { showInMenuBar: false } }).general.showInMenuBar).toBe(
+      false,
+    )
+  })
+
+  it('turns the menu bar item off and on through a patch', () => {
+    const off = mergeSettings(normalizeSettings({}), { general: { showInMenuBar: false } })
+    expect(off.general.showInMenuBar).toBe(false)
+    expect(off.general.stopGatewayOnQuit).toBe(true)
+    expect(mergeSettings(off, { general: { showInMenuBar: true } }).general.showInMenuBar).toBe(
+      true,
+    )
+  })
+})

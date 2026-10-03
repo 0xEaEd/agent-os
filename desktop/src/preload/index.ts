@@ -6,6 +6,7 @@ import type { NotifyRequest, NotifyTarget, SystemSound } from '@shared/notify'
 import type { ResolvedTheme, ThemeSettings } from '@shared/theme'
 import type { AppUpdateState, EngineUpdateState } from '@shared/updates'
 import type { BootstrapState } from '@shared/bootstrap'
+import type { TraySummary } from '@shared/tray'
 
 /** Subscribe to a main -> renderer push channel and return an unsubscribe. */
 function listen<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -84,6 +85,10 @@ const api: DesktopApi = {
     uninstallEngine: () => ipcRenderer.invoke(IPC.bootstrap.uninstallEngine),
     openLog: () => ipcRenderer.invoke(IPC.bootstrap.openLog),
     onChanged: (listener) => listen<BootstrapState>(IPC.bootstrap.changed, listener),
+  },
+  tray: {
+    setSummary: (summary: TraySummary) => ipcRenderer.send(IPC.tray.summary, summary),
+    onNavigate: (listener) => listen<NotifyTarget>(IPC.tray.navigate, listener),
   },
 }
 

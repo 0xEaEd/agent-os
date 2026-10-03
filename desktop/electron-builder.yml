@@ -16,6 +16,12 @@ extraResources:
   # PetStore.seedBundled copies them into the pets directory on first launch.
   - from: resources/pets
     to: pets
+  # The menu bar icon (main/tray): a template pair nativeImage loads by name,
+  # the @2x picked up beside the 1x. Read from Contents/Resources.
+  - from: resources/trayTemplate.png
+    to: trayTemplate.png
+  - from: resources/trayTemplate@2x.png
+    to: trayTemplate@2x.png
 asar: true
 mac:
   category: public.app-category.developer-tools

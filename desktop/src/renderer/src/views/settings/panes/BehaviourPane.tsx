@@ -72,6 +72,16 @@ export function BehaviourPane() {
             onCheckedChange={(stopGatewayOnQuit) => void update({ general: { stopGatewayOnQuit } })}
           />
         </Row>
+        <Row
+          label={t('settings.behaviour.showInMenuBar')}
+          help={t('settings.behaviour.showInMenuBar.help')}
+        >
+          <Switch
+            checked={general.showInMenuBar}
+            aria-label={t('settings.behaviour.showInMenuBar')}
+            onCheckedChange={(showInMenuBar) => void update({ general: { showInMenuBar } })}
+          />
+        </Row>
       </Card>
 
       <Card title={t('settings.behaviour.composer')}>

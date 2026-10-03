@@ -6,6 +6,7 @@ import type { DesktopSettings, SettingsPatch } from './settings'
 import type { ResolvedTheme, ThemeSettings } from './theme'
 import type { AppUpdateState, EngineUpdateState } from './updates'
 import type { BootstrapState } from './bootstrap'
+import type { TraySummary } from './tray'
 
 export type { SettingsPatch } from './settings'
 
@@ -88,6 +89,12 @@ export const IPC = {
     openLog: 'bootstrap:openLog',
     /** Main -> renderer: install progress. */
     changed: 'bootstrap:changed',
+  },
+  tray: {
+    /** Renderer -> main (send, no reply): what the menu bar item says. Debounced. */
+    summary: 'tray:summary',
+    /** Main -> renderer: a menu bar row asked to open something; carries a NotifyTarget. */
+    navigate: 'tray:navigate',
   },
 } as const
 
@@ -199,5 +206,16 @@ export interface DesktopApi {
     /** Reveal the per-run log in Finder. */
     openLog(): Promise<void>
     onChanged(listener: (state: BootstrapState) => void): () => void
+  }
+  /** The macOS menu bar item (main/tray). */
+  tray: {
+    /**
+     * Tell main what the menu should say about the gateway's work. Fire and
+     * forget; main validates and clamps it. The first push also tells main
+     * this window is ready for `onNavigate`.
+     */
+    setSummary(summary: TraySummary): void
+    /** A menu bar row (New chat, approvals, next DCA buy) points somewhere. */
+    onNavigate(listener: (target: NotifyTarget) => void): () => void
   }
 }
