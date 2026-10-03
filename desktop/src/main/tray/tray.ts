@@ -20,6 +20,8 @@ export interface MenuBarDeps {
   iconPath: string
   /** Open the main window when none exists (what `activate` does). */
   createWindow: () => BrowserWindow
+  /** Open the Quick Ask panel (the "Quick Ask…" row). */
+  showQuickAsk?: () => void
 }
 
 /**
@@ -47,6 +49,7 @@ export class MenuBar {
     openApp: () => void this.showWindow(),
     navigate: (target) => this.deliver((contents) => sendTarget(contents, target)),
     openSettings: () => this.deliver(() => requestOpenSettings()),
+    showQuickAsk: () => this.deps.showQuickAsk?.(),
     startGateway: () => void this.deps.gateway.start().catch(() => {}),
     stopGateway: () => void this.deps.gateway.stop().catch(() => {}),
     restartGateway: () => void this.deps.gateway.restart().catch(() => {}),

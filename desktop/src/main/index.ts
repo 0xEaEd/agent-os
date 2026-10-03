@@ -115,13 +115,6 @@ if (!app.requestSingleInstanceLock()) {
     // offer before anyone reaches petdex.dev. Seeded once each; never fatal.
     const bundledPets = bundledPetsDir(process.resourcesPath, path.resolve(__dirname, '../..'))
     if (bundledPets) void pets.seedBundled(bundledPets).catch(() => {})
-    // The menu bar item; `mirrorSettingsToOs` creates it (or not) from the setting.
-    const menuBar = new MenuBar({
-      settings,
-      gateway,
-      iconPath: trayIconPath(),
-      createWindow: () => createMainWindow(windowOptions(settings.get())),
-    })
     const quickAsk = new QuickAskController({
       registry: globalShortcut,
       panel: new QuickAskPanel({
@@ -139,6 +132,14 @@ if (!app.requestSingleInstanceLock()) {
     app.once('will-quit', () => {
       quickAsk.dispose()
       globalShortcut.unregisterAll()
+    })
+    // The menu bar item; `mirrorSettingsToOs` creates it (or not) from the setting.
+    const menuBar = new MenuBar({
+      settings,
+      gateway,
+      iconPath: trayIconPath(),
+      createWindow: () => createMainWindow(windowOptions(settings.get())),
+      showQuickAsk: () => quickAsk.show(),
     })
     registerIpc({
       settings,
@@ -258,12 +259,9 @@ function mirrorSettingsToOs(
     }
     // Every write: the menu shows the gateway mode and endpoint, not just the toggle.
     menuBar.sync(next)
-    if (
-      next.quickAsk.enabled !== last?.quickAsk.enabled ||
-      next.quickAsk.shortcut !== last?.quickAsk.shortcut
-    ) {
-      quickAsk.apply(next.quickAsk)
-    }
+    // Every write too: `apply` is a no-op while the wanted key is held, and
+    // a key macOS refused is retried, since the app holding it may have let go.
+    quickAsk.apply(next.quickAsk)
     last = next
   }
   apply(settings.get())

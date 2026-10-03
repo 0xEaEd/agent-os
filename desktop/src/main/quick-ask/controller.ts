@@ -12,6 +12,7 @@ import { QuickAskInbox } from './inbox'
 export interface PanelLike {
   ensure(): unknown
   toggle(): void
+  show(): void
   hide(): void
   destroy(): void
   owns(sender: unknown): boolean
@@ -71,6 +72,15 @@ export class QuickAskController {
 
   status(): QuickAskStatus {
     return this.hotkey.status()
+  }
+
+  /**
+   * Open the panel from somewhere other than the key (the menu bar). Only
+   * while Quick Ask is on; the panel is then the one `apply` keeps.
+   */
+  show(): void {
+    if (this.hotkey.status().state === 'off') return
+    this.deps.panel.show()
   }
 
   /**

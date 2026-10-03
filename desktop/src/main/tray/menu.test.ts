@@ -57,6 +57,21 @@ function click(entry: MenuItemConstructorOptions): void {
 }
 
 describe('buildTrayMenu', () => {
+  it('offers Quick Ask only while it is on and the shell can open it', () => {
+    const a = { ...actions(), showQuickAsk: vi.fn() }
+    const menu = buildTrayMenu(summary(), RUNNING, DEFAULT_SETTINGS, a, NOW)
+    expect(ids(menu)).toContain('quick-ask')
+    click(item(menu, 'quick-ask'))
+    expect(a.showQuickAsk).toHaveBeenCalledTimes(1)
+    // Settings › Behaviour › Quick Ask off: no row.
+    const off = mergeSettings(DEFAULT_SETTINGS, { quickAsk: { enabled: false } })
+    expect(ids(buildTrayMenu(summary(), RUNNING, off, a, NOW))).not.toContain('quick-ask')
+    // A shell without Quick Ask: no row either.
+    expect(ids(buildTrayMenu(summary(), RUNNING, DEFAULT_SETTINGS, actions(), NOW))).not.toContain(
+      'quick-ask',
+    )
+  })
+
   it('is the bare menu when nothing is going on', () => {
     const menu = buildTrayMenu(summary(), RUNNING, DEFAULT_SETTINGS, actions(), NOW)
     expect(ids(menu)).toEqual([

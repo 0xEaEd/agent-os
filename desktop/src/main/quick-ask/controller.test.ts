@@ -11,6 +11,7 @@ function fakePanel(): PanelLike & Record<string, ReturnType<typeof vi.fn>> {
   return {
     ensure: vi.fn(),
     toggle: vi.fn(),
+    show: vi.fn(),
     hide: vi.fn(),
     destroy: vi.fn(),
     owns: vi.fn((sender: unknown) => sender === PANEL),

@@ -135,7 +135,7 @@ revision on every write so a stale form cannot overwrite a newer file.
 | Appearance    | Theme + palette (`ThemeRows`), text size (`data-text-size` on `<html>`), reduce transparency (`data-transparency` + `win.setVibrancy`).                                                                                                                                                                                                                                                                                                                                                                                            |
 | Notifications | Master switch; what happens while the window is in front (nothing / in-app banner / system notification); Do not disturb (30 min, 1 h, 3 h, until tomorrow 9:00); show details; per-event switches (reply finished with a minimum length, reply failed, approval needed, scheduled job runs off/failures/all, gateway stopped on its own); sound on/off and which (the app chime or a macOS alert sound); Dock badge and bounce; a test button and a door to System Settings › Notifications. See [Notifications](#notifications). |
 | Security      | Confirm with Touch ID: Off (default) / High-risk approvals / Every approval. Disabled with an explanation when the Mac cannot prompt (no sensor, none enrolled, lid closed) unless it is already on, so it can always be turned off; a Test button runs the prompt and reports the outcome. See [Touch ID](#touch-id).                                                                                                                                                                                                             |
-| Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, show in menu bar (see [Menu bar](#menu-bar)), Quick Ask (on/off, which global shortcut, a note when macOS refused the key; see [Quick Ask](#quick-ask)), Return vs ⌘Return to send, sidebar width reset. |
+| Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, show in menu bar (see [Menu bar](#menu-bar)), Quick Ask (on/off, which global shortcut, a note when macOS refused the key; see [Quick Ask](#quick-ask)), Return vs ⌘Return to send, sidebar width reset.                                                                                                                                                                                                   |
 | Shortcuts     | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …, and the Quick Ask key chosen under Behaviour); static, nothing is rebindable.                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Advanced      | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all app settings behind an alertdialog.                                                                                                                                                                                                                                                                                                                                                                      |
 | About         | App/Electron/Chromium versions, gateway version + uptime, `updates.check`, links.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -161,6 +161,7 @@ Next DCA buy · ETH → USDC in 14 min → opens the desk
 ───────────────────────────────
 Open AgentOS
 New Chat
+Quick Ask…                          (while Quick Ask is on)
 ───────────────────────────────
 Stop Gateway                        (Start / Stop / Restart by state; managed mode only)
 Settings…
@@ -353,7 +354,11 @@ refused in place.
 Settings › Behaviour › Quick Ask turns it off (the key is released at once) or
 moves it to ⌃ Space or ⌘⇧ Space: a fixed list, not free rebinding. When macOS
 refuses the key because another app holds it, the pane says "Unavailable"
-instead of failing silently. Settings › Shortcuts lists the chosen key.
+instead of failing silently, and the key is tried again on the next settings
+write. Settings › Shortcuts lists the chosen key. One limit of
+`globalShortcut`: a key macOS itself reserves (⌃ Space is the input-source
+switch on many Macs) can register and still never arrive; the menu bar's
+"Quick Ask…" row opens the same panel when a key does not.
 
 How it is built:
 
@@ -390,7 +395,7 @@ How it is built:
 
 ## First run: the app installs the engine
 
-The DMG is the whole install. On launch, main runs *discovery*
+The DMG is the whole install. On launch, main runs _discovery_
 (`main/bootstrap/discovery.ts`): `gateway.cliPath` from settings wins as-is;
 otherwise the CLI found on PATH or in the usual dirs is smoke-tested with
 `agentos --version` and compared with the app's version. Same or newer → the
@@ -442,9 +447,9 @@ placeholder list) render as "New session".
 Two things go out of date, and Settings › About updates both:
 
 - **Engine** — the `use-agent-os` package the app runs as `agentos gateway
-  run`. `main/updates/engine-updater.ts` runs the installed CLI's own
+run`. `main/updates/engine-updater.ts` runs the installed CLI's own
   `agentos upgrade --check --json` and `agentos upgrade --json --no-restart`
-  (streaming its output into the pane), then restarts the gateway *it*
+  (streaming its output into the pane), then restarts the gateway _it_
   spawned through the supervisor; `--no-restart` keeps the CLI's restart out
   of the supervisor's way. The CLI snapshots config and the state databases
   first. The renderer then confirms the gateway reports the new version
@@ -465,7 +470,7 @@ Two things go out of date, and Settings › About updates both:
 
 One release tag covers both, so the shell shows **one notice** for the
 release rather than one per part. `main/updates/auto-check.ts` runs a
-*silent* check of both updaters — 15 s after launch, when a window regains
+_silent_ check of both updaters — 15 s after launch, when a window regains
 focus (at most once a minute) and every 5 minutes: the app through
 electron-updater, the engine through `agentos upgrade --check --json`
 (`EngineUpdater.check({ silent: true })` shows no phase and reports no
@@ -491,11 +496,11 @@ the single next step, and two surfaces read it:
 
 A miss or a failure shows nothing, and a late result never rewinds a
 download or install the user started meanwhile.
-  `electron-builder.yml` publishes to the GitHub release of the same
-  `v<CalVer>` tag as the Python wheel, so `package.json`'s version must equal
-  `pyproject.toml`'s: `tests/test_release_consistency.py` asserts it and the
-  `pump-version` skill bumps both. A dev build or an unpublished local
-  package reports `unsupported`.
+`electron-builder.yml` publishes to the GitHub release of the same
+`v<CalVer>` tag as the Python wheel, so `package.json`'s version must equal
+`pyproject.toml`'s: `tests/test_release_consistency.py` asserts it and the
+`pump-version` skill bumps both. A dev build or an unpublished local
+package reports `unsupported`.
 
 `shared/updates.ts` also carries `MIN_GATEWAY_VERSION`: the oldest engine
 this renderer speaks to. Bump it whenever the desktop starts depending on a
@@ -511,7 +516,7 @@ the `owner/name` whose release receives the assets; the default is
 repository secrets: `MAC_CSC_LINK` (base64 `.p12` of the "Developer ID
 Application" certificate), `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`,
 `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, plus `DESKTOP_RELEASE_TOKEN`
-(a fine-grained PAT with *Contents: write* on the target) whenever the target
+(a fine-grained PAT with _Contents: write_ on the target) whenever the target
 is another repository. The publish target is also written into the bundled
 `app-update.yml`, so a build looks for its updates exactly where it was
 uploaded. The run refuses to publish until the bundle passes `codesign
@@ -521,7 +526,7 @@ ad-hoc signed app and keeps it as a workflow artifact only.
 
 The packaged app is versioned by a **semver twin** of the CalVer, because
 electron-builder and electron-updater only speak semver and `2026.9.22.post1`
-is not one (left alone it becomes `2026.9.2-2.post1`, which sorts *before*
+is not one (left alone it becomes `2026.9.2-2.post1`, which sorts _before_
 2026.9.2, so a `.post` release would never be offered). `calverToSemver` in
 `shared/updates.ts` folds month and day into the minor number and keeps the
 post number as the patch: `2026.9.22` → `2026.922.0`, `2026.9.22.post1` →
