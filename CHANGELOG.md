@@ -50,6 +50,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   statuses ClawHub relays as `upstream_scanners`.
 
 ### Fixed
+- Desktop: clicking a trade notification now opens the desk on that order; the
+  main process dropped the `trading` target (and folded the trade kinds into
+  `test`) when validating the renderer's request (#3600).
 - Memory and skills: two line counters outside `agentos.tools` still used
   `str.splitlines()`, which breaks on eleven characters where the rest of the
   toolchain breaks only on a newline (#3176). `memory.embedding.chunk_text`
