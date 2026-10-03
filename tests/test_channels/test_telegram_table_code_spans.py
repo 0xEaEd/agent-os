@@ -24,7 +24,6 @@ import pytest
 
 from agentos.channels._telegram_formatting import _plain_inline, render_telegram_html
 
-
 # ── the issue's reproduction ───────────────────────────────────────────────
 
 
