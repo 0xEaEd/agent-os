@@ -964,13 +964,20 @@ def _credential_file_format(path: str | os.PathLike[str] | None) -> str | None:
 
 
 def _credential_file_formats_in(command: str) -> set[str]:
-    """The formats of every credential file *command* names as an operand."""
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
+    """The formats of every credential file *command* names as an operand.
+
+    Tokenised with :func:`_command_operands`, not bare ``shlex.split``: POSIX
+    ``shlex`` reads ``\\`` as an escape, so ``type C:\\Users\\me\\_netrc`` came
+    out as the single token ``C:Usersme_netrc``, no basename matched the
+    format map, and the format rule never ran -- while
+    :func:`reads_credential_file`, which already uses ``_command_operands``,
+    answered ``True`` for the very same command. The password a ``.pgpass`` or
+    ``.netrc`` carries positionally is exactly the one the assignment pass
+    cannot name (#2721), so skipping the format rule leaked it verbatim on the
+    spelling a Windows host uses (#3544).
+    """
     formats: set[str] = set()
-    for token in tokens:
+    for token in _command_operands(command):
         if token.startswith("-"):
             continue
         file_format = _credential_file_format(token)

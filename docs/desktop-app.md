@@ -1,0 +1,192 @@
+# Desktop App (macOS)
+
+AgentOS App is the native desktop app for macOS 13 or newer, on Apple silicon
+and Intel. It installs the engine for you, starts and supervises the local
+gateway, and gives you chat and the Trading Desk in one window. It talks to
+the same gateway as the [Web UI](web-ui.md) and the [CLI](cli.md), so
+sessions, projects, approvals and scheduled jobs are shared between all
+three.
+
+## Install
+
+1. Download the dmg for your Mac from the
+   [latest release](https://github.com/use-agent-os/agent-os/releases/latest):
+   `AgentOS-<version>-arm64.dmg` for Apple silicon, `AgentOS-<version>.dmg`
+   for Intel. The app is signed with a Developer ID and notarized, so it
+   opens without any Gatekeeper workaround.
+2. Drag AgentOS into Applications and open it.
+3. On first launch the app looks for an installed `agentos` CLI. If none is
+   found (or it is older than the app), the setup screen offers **Install**:
+   it installs the `use-agent-os` engine — the same package the terminal
+   install uses — with no terminal, Python or `uv` needed. If a gateway is
+   already running on the configured endpoint, the app connects to it
+   instead; **Connect to an existing gateway instead** does the same for a
+   gateway on another host.
+4. Pick a provider. OpenCAP is listed first as **Recommended**; any provider
+   in the catalog works. **Test key** checks the key against the provider
+   before you save, and the last step tries it for real. **Skip for now**
+   leaves a "Choose a provider" card on Home until one is configured.
+
+The managed gateway's output goes to `~/Library/Logs/AgentOS/gateway.log`
+(Settings › Advanced › App logs). Settings › Advanced also has **Reinstall
+engine** and **Remove engine**; removing the engine keeps `~/.agentos`.
+
+## Chat and Trade
+
+The mode pill at the top of the window reads **Chat | Trade** (⌘⇧T switches).
+
+- **Chat** is the conversation surface: streaming replies, tool activity,
+  approvals, plan cards, `ask_user` question cards and artifacts — the same
+  transcript the Web UI shows, in the desktop's own styling.
+- **Trade** opens the Trading Desk: wallets, swaps, holdings, orders,
+  history and allowances. See [Trading](features/trading.md).
+
+The strip next to the pill shows **AWAITING** while a decision is waiting
+for you and **RUNNING** while a mission is in flight.
+
+### Run modes
+
+The sliders button left of the paperclip in the composer opens **Run modes**
+for the open session:
+
+| Control | What it does |
+| --- | --- |
+| Execution | Approval prompts or bypass for this session. The global default is shown next to it. |
+| Pilot Router | Turns [model routing](features/agentos-router.md) on or off for this session. |
+| Plan mode | Research-only until you approve a plan (same as typing `/plan`; see [Plan mode](web-ui.md#plan-mode)). |
+| Usage | The session's token usage so far. |
+
+### Files and cards in the chat
+
+A file the agent generates shows as a **file card**: a tile drawn by kind
+(spreadsheet, document, PDF, presentation, archive, data, code, web page),
+the file name, a subtitle such as "Spreadsheet · XLSX · 5 KB", and a
+**Download** button. Images and audio play inline.
+
+Trading commands run with `--json` publish cards the chat renders live:
+
+- **DCA mandates** show a countdown to the next buy, spent-of-cap progress,
+  average buy price vs now and a buys chart, with **Approve & start**,
+  **Pause**, **Buy now** and **Stop** on the card. See [DCA](dca.md).
+- **Uniswap V4 liquidity** cards show a pool, its range distribution or a
+  position. See [LP cards](lp-cards.md) and [LP writes](lp-write.md).
+
+## Sidebar
+
+The sidebar lists your sessions, grouped by Today, Yesterday and This week,
+with project folders above them.
+
+- **Projects** are folders. Drag a session onto a folder to file it there
+  (onto the "Sessions" header to unfile it). The `+` just left of a folder's
+  chat count starts a new chat in that project with its agent; it appears on
+  hover or keyboard focus. Click a folder to open its page, where the title
+  renames on click and the shared brief saves itself (⌘S saves now). See
+  [Projects](sessions.md#projects-group-sessions-and-share-knowledge).
+- **Session names** come from the first message, whether the chat started
+  here, in the Web UI or in a channel such as Telegram. A name you set is
+  never overwritten. See [Session titles](configuration.md#session-titles).
+- **Right-click a session** to rename, pin, mark as unread, export as
+  Markdown, move it to a project, archive or delete it.
+
+### Selecting several sessions
+
+| Action | Effect |
+| --- | --- |
+| ⌘-click | Add or remove one row from the selection. |
+| ⇧-click | Select the range from the last row clicked, in the order shown (chats inside open project folders included). |
+| ⌘A | Select every row shown. |
+| Escape | Clear the selection. |
+
+Right-click inside the selection for one menu that acts on all of it:
+**Pin**, **Mark as unread**, **Archive** and **Delete N sessions…** (asked
+once). Rows the gateway could not delete stay selected and a toast gives
+the count. A plain click still opens a chat and clears the selection.
+
+## Scheduled jobs and skills
+
+**Scheduled jobs** (⌘⇧J) opens as a panel over the current view, so checking
+a schedule never leaves the conversation. Jobs use the same `cron.*` model
+as the Web UI and `agentos cron`, with a natural-language schedule builder.
+See [Scheduling](scheduling.md). **Skills** (⌘⇧K) browses and installs
+skills; see [Skills](features/skills.md).
+
+## Notifications
+
+The app notifies you when a reply finishes or fails, when an approval is
+needed, when a scheduled job runs, and when the gateway stops on its own.
+While you are watching the session in question it only plays the sound. The
+toolbar bell keeps recent notifications, a Do not disturb switch (30 min,
+1 h, 3 h, until tomorrow 9:00) and a sound toggle. Settings › Notifications
+holds the per-event switches, the minimum reply length, the sound, and the
+Dock badge and bounce. If nothing shows, check that AgentOS is allowed in
+System Settings › Notifications and that no Focus mode is on.
+
+## Settings
+
+Open Settings with ⌘, or the toolbar gear. Escape or **Done** closes it.
+
+| Group | Sections |
+| --- | --- |
+| Agent | Providers, Pilot Router, Skills, Trading |
+| App | Gateway, Appearance, Notifications, Behaviour, Shortcuts |
+| More | Advanced, About |
+
+Providers and Pilot Router edit the gateway's own configuration through the
+same guided setup the Web UI uses. Appearance holds the theme
+(system/light/dark), the colour palette, text size, reduced transparency and
+the optional pet mascot. Behaviour holds open at login, what to open at
+launch, stopping the gateway on quit, and Return vs ⌘Return to send.
+
+## Updates
+
+The app and the engine update together from one release.
+
+- New releases show up as an **Update** pill in the toolbar and a single
+  notice. Nothing downloads or installs until you click: **Update** updates
+  the engine in place, then downloads the app; **Restart** installs it. The
+  pill stays until the release is fully applied.
+- Settings › About has an **Engine** card and an **App** card. Each shows
+  the running version and a **Latest** row with the newest version ("Not
+  checked yet" before the first check) and, while the app downloads, the
+  download percent beside it.
+- If an update would interrupt a live reply, the app sends you to
+  Settings › About first, where **Update anyway** lives.
+- After `agentos upgrade` in a terminal, the app offers **Restart gateway**
+  so the running gateway picks up the new engine.
+
+## Keyboard Shortcuts
+
+The full list is in Settings › Shortcuts.
+
+| Keys | Action |
+| --- | --- |
+| ⌘N | New session |
+| ⌘⇧O | New chat in this agent |
+| ⌘, | Open settings |
+| ⌘⇧K | Open skills |
+| ⌘⇧J | Open scheduled jobs |
+| ⌘⇧T | Switch Chat / Trade |
+| ⌘⇧S | Show or hide the sidebar |
+| ⌘+ / ⌘− / ⌘0 | Larger UI / smaller UI / actual size |
+| Escape | Stop the current reply, or close a sheet |
+| Return (or ⌘Return) | Send; the other key adds a new line (Settings › Behaviour) |
+| ↑ / ↓ | Previous or next message you sent |
+| / | Slash commands |
+| ⌘S | Save a project brief now |
+
+## Troubleshooting
+
+- **"The gateway is not running."** Start it from the sidebar, or open
+  Settings › Gateway for Start, Stop and Restart and the endpoint. See
+  [Gateway](gateway.md).
+- **Install failed.** The failure screen offers Retry, Copy output and Show
+  log in Finder; the log is in `~/.agentos/logs/bootstrap-<timestamp>.log`.
+- **Copy diagnostics** in Settings › Advanced copies a report with the
+  gateway token redacted, for a bug report.
+
+For building the app from source, see
+[`desktop/README.md`](https://github.com/use-agent-os/agent-os/blob/main/desktop/README.md).
+
+---
+
+[Docs index](README.md) · [Product guide](../README.product.md) · [Improve this page](contributing-docs.md) · [Report a docs issue](https://github.com/use-agent-os/agent-os/issues/new?template=docs_report.yml)

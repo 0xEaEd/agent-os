@@ -66,6 +66,40 @@ def _read_capped(zf: zipfile.ZipFile, info: zipfile.ZipInfo, limit: int) -> byte
     return b"".join(chunks)
 
 
+_REGISTRY_VERDICTS = ("clean", "suspicious", "malicious")
+
+
+def _as_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _registry_verdict(*, verdict: object, suspicious: object, malware: object) -> str:
+    """Fold ClawHub's moderation signals into one verdict, worst one winning.
+
+    The flags and the verdict word are set by different stages of ClawHub's
+    review, so a row can carry ``isSuspicious`` next to a stale or absent
+    verdict. An unknown verdict word is dropped rather than passed through: the
+    installer gates on this value.
+    """
+    if isinstance(verdict, dict):
+        verdict = verdict.get("verdict") or verdict.get("status")
+    word = verdict.strip().lower() if isinstance(verdict, str) else ""
+    if malware is True or word == "malicious":
+        return "malicious"
+    if suspicious is True or word == "suspicious":
+        return "suspicious"
+    return word if word in _REGISTRY_VERDICTS else ""
+
+
+def _upstream_scanners(value: object) -> dict[str, str]:
+    scanners: dict[str, str] = {}
+    for name, entry in _as_dict(value).items():
+        status = entry.get("status") if isinstance(entry, dict) else entry
+        if isinstance(name, str) and isinstance(status, str) and status:
+            scanners[name] = status
+    return scanners
+
+
 class ClawHubSource(SkillSource):
     """Skill source backed by the ClawHub community registry."""
 
@@ -109,6 +143,8 @@ class ClawHubSource(SkillSource):
 
         results = []
         for item in data if isinstance(data, list) else data.get("results", data.get("skills", [])):
+            trust = _as_dict(item.get("trust"))
+            native_skill = _as_dict(_as_dict(item.get("native")).get("skill"))
             results.append(
                 SkillMeta(
                     name=item.get("displayName", item.get("name", item.get("slug", ""))),
@@ -124,6 +160,12 @@ class ClawHubSource(SkillSource):
                     homepage=item.get("homepage", ""),
                     license=item.get("license", ""),
                     tags=item.get("tags", []),
+                    registry_verdict=_registry_verdict(
+                        verdict=trust.get("clawHubVerdict"),
+                        suspicious=native_skill.get("isSuspicious"),
+                        malware=None,
+                    ),
+                    upstream_scanners=_upstream_scanners(trust.get("upstreamScanners")),
                 )
             )
         return results[:limit]
@@ -256,20 +298,37 @@ class ClawHubSource(SkillSource):
             async with httpx.AsyncClient(timeout=10, trust_env=_trust_env()) as client:
                 resp = await client.get(url, headers=self._headers())
                 resp.raise_for_status()
-                item = resp.json()
+                payload = resp.json()
         except Exception as exc:
             log.warning("clawhub.inspect_failed", identifier=identifier, error=str(exc))
             return None
+        if not isinstance(payload, dict):
+            return None
 
+        # The detail endpoint nests the row under ``skill`` beside
+        # ``latestVersion``, ``owner`` and ``moderation``; older responses were
+        # the flat row itself.
+        item = _as_dict(payload.get("skill")) or payload
+        latest = _as_dict(payload.get("latestVersion"))
+        owner = _as_dict(payload.get("owner"))
+        moderation = _as_dict(payload.get("moderation"))
+        tags = item.get("tags", [])
         return SkillMeta(
             name=item.get("name", item.get("slug", identifier)),
-            description=item.get("description") or "",
-            version=item.get("version", ""),
-            author=item.get("author", ""),
+            description=item.get("summary") or item.get("description") or "",
+            version=latest.get("version") or item.get("version") or "",
+            author=owner.get("handle") or item.get("author") or "",
             source_id=self.source_id,
             trust_level=self.trust_level,
             identifier=identifier,
             homepage=item.get("homepage", ""),
-            license=item.get("license", ""),
-            tags=item.get("tags", []),
+            license=latest.get("license") or item.get("license") or "",
+            # The nested shape sends ``tags`` as a ``{dist-tag: version}`` map.
+            tags=tags if isinstance(tags, list) else [],
+            registry_verdict=_registry_verdict(
+                verdict=moderation.get("verdict"),
+                suspicious=moderation.get("isSuspicious"),
+                malware=moderation.get("isMalwareBlocked"),
+            ),
+            registry_summary=str(moderation.get("summary") or "")[:500],
         )

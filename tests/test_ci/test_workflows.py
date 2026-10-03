@@ -5,9 +5,12 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 import yaml
 
 WORKFLOW_DIR = Path(".github/workflows")
@@ -735,3 +738,106 @@ def test_ci_lists_changed_files_through_the_shared_script() -> None:
 
     assert LISTER in text
     assert "git diff --name-only" not in text
+
+
+# A release both tag workflows upload to. The desktop job can finish first.
+_MAC_ASSETS = [
+    "AgentOS-2026.1001.0-arm64.dmg",
+    "AgentOS-2026.1001.0-arm64.dmg.blockmap",
+    "AgentOS-2026.1001.0-arm64-mac.zip",
+    "AgentOS-2026.1001.0-arm64-mac.zip.blockmap",
+    "AgentOS-2026.1001.0.dmg",
+    "AgentOS-2026.1001.0.dmg.blockmap",
+    "AgentOS-2026.1001.0-mac.zip",
+    "AgentOS-2026.1001.0-mac.zip.blockmap",
+    "latest-mac.yml",
+]
+_WINDOWS_ASSETS = [
+    "AgentOS-2026.10.1-windows-x64-py312-recommended-portable.zip",
+    "AgentOS-windows-x64-portable.zip",
+    "SHA256SUMS",
+    "use_agent_os-2026.10.1-py3-none-any.whl",
+]
+
+
+def _wheelhouse_step_python(step_name: str) -> str:
+    workflow = yaml.safe_load((WORKFLOW_DIR / "wheelhouse-release.yml").read_text(encoding="utf-8"))
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            if step.get("name") == step_name:
+                blocks = re.findall(r"python - <<'PY'\n(.*?)\n\s*PY\n", step["run"], re.S)
+                return textwrap.dedent(blocks[-1])
+    raise AssertionError(f"no step named {step_name!r}")
+
+
+def _run_with_fake_gh(
+    tmp_path: Path, script: str, assets: list[str]
+) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "gh-calls"
+    fake = bin_dir / "gh"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        f"open({str(calls)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "if sys.argv[1:3] == ['release', 'view']:\n"
+        f"    print(json.dumps({{'assets': [{{'name': n}} for n in {assets!r}]}}))\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "TAG": "v2026.10.1"}
+    result = subprocess.run(
+        [sys.executable, "-c", script], env=env, capture_output=True, text=True, check=False
+    )
+    result.stdout = calls.read_text(encoding="utf-8") if calls.exists() else ""
+    return result
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shebang script")
+def test_wheelhouse_upload_cleanup_keeps_the_desktop_jobs_assets(tmp_path: Path) -> None:
+    script = _wheelhouse_step_python("Upload to GitHub Release")
+    result = _run_with_fake_gh(tmp_path, script, _MAC_ASSETS + _WINDOWS_ASSETS)
+    assert result.returncode == 0, result.stderr
+    deleted = {
+        line.split()[3]
+        for line in result.stdout.splitlines()
+        if line.startswith("release delete-asset")
+    }
+    assert deleted == set(_WINDOWS_ASSETS)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake gh is a shebang script")
+def test_wheelhouse_asset_verify_accepts_the_desktop_jobs_assets(tmp_path: Path) -> None:
+    script = _wheelhouse_step_python("Verify GitHub Release assets")
+    (tmp_path / "ok").mkdir()
+    ok = _run_with_fake_gh(tmp_path / "ok", script, _MAC_ASSETS + _WINDOWS_ASSETS)
+    assert ok.returncode == 0, ok.stderr
+
+    (tmp_path / "stray").mkdir()
+    stray = _run_with_fake_gh(tmp_path / "stray", script, [*_WINDOWS_ASSETS, "notes.txt"])
+    assert stray.returncode == 1
+    assert "notes.txt" in stray.stderr
+
+
+def test_desktop_release_hands_electron_builder_a_semver_package_version() -> None:
+    # electron-builder validates package.json's own version before
+    # extraMetadata applies, and a CalVer .postN with a one-digit day
+    # (2026.10.1.post1) is not even loose semver. Every packaging run has to
+    # swap the semver twin into the checkout first.
+    workflow = yaml.safe_load((WORKFLOW_DIR / "desktop-release.yml").read_text(encoding="utf-8"))
+    runs = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if "npx electron-builder" in step.get("run", "")
+    ]
+    assert len(runs) == 2
+    for run in runs:
+        save = run.index('cp package.json "${RUNNER_TEMP}/package.json.calver"')
+        swap = run.index("npm pkg set version=")
+        build = run.index("npx electron-builder")
+        restore = run.index('cp "${RUNNER_TEMP}/package.json.calver" package.json')
+        # Later steps (the signed-bundle check) read the CalVer back through
+        # scripts/release-version.mjs, so the twin is only there for the build.
+        assert save < swap < build < restore

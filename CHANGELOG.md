@@ -6,6 +6,122 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Skills: an operator install policy. `[skills.install_policy]` runs a command
+  of your choosing against every hub skill while it is still in quarantine,
+  on install and on update, and the command answers allow, warn or block. It
+  speaks OpenClaw's `security.installPolicy` protocol v1, so
+  `clawscan openclaw-install-policy` (SkillSpector, Tencent AIG, Cisco, Snyk)
+  plugs in unchanged. It fails closed: a missing command, a nonzero exit, a
+  timeout or malformed output blocks the install, and `--force` answers a
+  `warn` but never a `block`. Off by default.
+- Skills: the registry's security verdict is honoured. ClawHub scans what it
+  hosts and publishes the result; AgentOS dropped it and relied on its own
+  pattern scan alone. An install now refuses a skill ClawHub marks
+  `suspicious` unless forced, refuses one marked `malicious` outright, and
+  records the verdict in the lockfile. Search results and `skills.list` carry
+  `registry_verdict`, and search results carry the third-party scanner
+  statuses ClawHub relays as `upstream_scanners`.
+
+### Fixed
+- Trading: a wallet token whose DexScreener pair priced it but carried no
+  liquidity figure -- `liquidity.usd` absent, or non-finite and read as
+  `None` since #3503 -- was auto-hidden as junk, because `TokenCurator` read
+  the missing figure as zero, and the daily re-check kept it hidden. A
+  missing figure is now no verdict, the same as an unreachable price source:
+  the token is left as it is and asked about again, as
+  `TradingService._visible_price` already reads the field. A token with no
+  pair at all is still hidden, and a reported figure below the floor still
+  hides it. (#3561)
+- `title-card-image` skill: `render.py`'s auto-shrink refused to write an
+  off-canvas image when the text was too *tall* at the minimum font size
+  (#3375) but silently wrote a clipped one when it was too *wide* -- exit 0,
+  nothing on stderr, and a PNG whose headline has its first and last
+  characters sliced off at the canvas edge, which the caller then feeds
+  straight to video-still-animator. `_fit_font` stopped at the floor whether
+  or not it got there and the result was drawn on trust; it now reports
+  whether it fitted and the write is refused the same way the height path
+  refuses, with the same wording. Reaching the floor takes a token the
+  wrapper will not break -- a URL, a hashtag, a long compound -- at an
+  ordinary card size: a 104-character URL clips at any `--width` of 570 or
+  below. Two smaller things in the same code: the width loop's `while size >
+  12` could leave the size at 11, under the floor its own message quotes and
+  under what `fit_stack_to_height` assumes, so both now use one
+  `SHRINK_FLOOR` constant; and an unloadable `--font` warned once per shrink
+  step rather than once. (#3546)
+- Email: `html_to_text` mangled an HTML-only mail part before the agent read
+  it as the sender's message. Only `br`/`p`/`div`/`tr`/`li` ended a line, so
+  every other block element was deleted with nothing in its place -- a
+  heading fused with the paragraph under it (`Quarterly ReportRevenue is
+  up.`) and a table row's `<td>` cells fused with each other (`NameAlice`)
+  while `</tr>` broke the rows correctly, which is the common case because
+  HTML mail is mostly tables. `_HTML_TAG_RE` also stops at the first `>`,
+  which inside a comment ends nothing, so the tail of `<!-- a > b -->`
+  survived as body text; and only `script`/`style` were dropped, so
+  `<title>` was delivered as the first words of the body. Block-level
+  closers now end a line, `</td>`/`</th>` separate with a tab so a row stays
+  on one line, comments are stripped before tags, and `head`/`title` are
+  dropped with `script`/`style`. (#3545)
+- Telegram: a reply containing non-BMP characters -- emoji, mathematical
+  letters, CJK extensions -- was sent as one over-long message and rejected.
+  Telegram counts a message's 4096-character cap in UTF-16 code units, the
+  same grid its entity offsets use and that `_slice_utf16` already indexes
+  on, but the splitter measured the cut with Python `len`, which counts code
+  points. Every non-BMP character was one there and two on the wire, so a
+  2500-emoji reply measured 2500 against the cap and arrived as 5000 units;
+  Telegram answered `message is too long`, and no send path retries that --
+  the `parse entities` fallback does not cover it, and `edit()` and the
+  `sendDocument` caption path have no retry at all -- so the reply was
+  dropped rather than split. Both the rendered-HTML and the raw-text
+  (explicit `parse_mode`) measures now count UTF-16 code units, the way the
+  MS Teams adapter's `_measure_activity_text` already does for its own cap
+  (#2433). Pure-BMP text splits exactly where it did before. (#3547)
+- Redaction: a `.netrc` or `.pgpass` read with a Windows-native path
+  (`type C:\ProgramData\pg\.pgpass`, or the same under a user profile) had
+  its password emitted to the model verbatim, while the POSIX spelling of
+  the same read was masked.
+  `_credential_file_formats_in` tokenised the command with a bare
+  `shlex.split`, which runs in POSIX mode and reads `\` as an escape, so the
+  operand collapsed to `C:ProgramDatapg.pgpass`, no basename matched the format map
+  and the `.netrc`/`.pgpass` rule from #2620/#2721 never ran -- the one rule
+  that can see a password those formats carry positionally. It now uses
+  `_command_operands`, the helper in the same module written for exactly this
+  and already used by `reads_credential_file`, which was answering `True` for
+  the very commands the format lookup came back empty for. (#3544)
+- Skills: installs from ClawHub recorded no version, author or licence. The
+  detail endpoint nests the row under `skill` beside `latestVersion` and
+  `owner`, and the parser read the top level.
+- Sessions started from a channel (Telegram, Slack, Discord, …) are now
+  named from their first message, like WebChat and desktop-app sessions,
+  instead of keeping their short id in the sidebar. Channel dispatch never
+  called the session titler, which only ran on `chat.send`. The same rules
+  apply: a name a person chose is never overwritten, and
+  `[sessions] auto_title = false` turns it off.
+- Release: the Mac app could not be packaged for a `.postN` release whose
+  day has one digit. electron-builder validates `package.json`'s own
+  version as loose semver before the workflow's version override applies,
+  and `2026.10.1.post1` does not parse. Earlier `.postN` releases got
+  through only because loose parsing misread a two-digit day as a
+  prerelease (`2026.9.29.post1` as `2026.9.2-9.post1`). The release workflow
+  now swaps the semver twin (`2026.1001.1`) into the checkout's
+  `package.json` for the electron-builder call only and restores the
+  CalVer right after, which the signed-bundle check reads back; the app
+  still carries the CalVer.
+
+## [2026.10.1.post1] - 2026-10-01
+
+### Fixed
+- Release: the Windows release job deleted the signed Mac build from the
+  GitHub release. Before uploading, it removed every asset named
+  `AgentOS-*`, which also matched the desktop job's `.dmg`, `-mac.zip` and
+  `.blockmap` files, so whenever the desktop job finished first only
+  `latest-mac.yml` was left and the app's auto-update pointed at missing
+  files (as on v2026.10.1). It now removes only its own Windows zips, wheel
+  and checksums, and its asset check accepts the desktop job's files.
+- Desktop: a bootstrap log the app could not open or write (its folder
+  removed, a full disk) raised an unhandled stream error in the main
+  process. The log is forensic only, so it is now dropped instead.
+
 ## [2026.10.1] - 2026-10-01
 
 ### Added

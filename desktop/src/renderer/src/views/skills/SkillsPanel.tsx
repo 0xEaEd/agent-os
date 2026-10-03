@@ -77,6 +77,7 @@ interface InstallResponse {
   message?: string
   scan_verdict?: string
   scan_findings?: unknown[]
+  overridable?: boolean
 }
 interface MutationResponse {
   success?: boolean
@@ -319,8 +320,8 @@ function ConnectedSkills({ titleId, onClose }: { titleId: string; onClose: () =>
         void invalidateRegistry()
         return
       }
-      // A dangerous scan verdict is not an error: it arms an explicit override.
-      const blocked = res?.scan_verdict === 'dangerous'
+      // A refusal `force` can answer is not an error: it arms an explicit override.
+      const blocked = res?.scan_verdict === 'dangerous' || res?.overridable === true
       const n = (res?.scan_findings || []).length
       if (blocked && !vars.force) {
         armForce(vars.identifier, true)

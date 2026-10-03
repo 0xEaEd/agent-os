@@ -301,7 +301,14 @@ export class BootstrapRunner {
       mkdirSync(this.deps.logDir, { recursive: true })
       const stamp = new Date(this.now()).toISOString().replace(/[:.]/g, '-')
       const file = path.join(this.deps.logDir, `bootstrap-${stamp}.log`)
-      this.logFile = createWriteStream(file, { flags: 'a' })
+      const stream = createWriteStream(file, { flags: 'a' })
+      // The open and every write fail asynchronously (log dir removed, disk
+      // full), past the try. An 'error' with no listener crashes the main
+      // process, so a failing log is dropped instead: it is forensic only.
+      stream.on('error', () => {
+        if (this.logFile === stream) this.logFile = null
+      })
+      this.logFile = stream
       this.state = { ...this.state, logPath: file }
     } catch {
       this.logFile = null

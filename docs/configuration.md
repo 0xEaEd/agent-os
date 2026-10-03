@@ -257,6 +257,23 @@ With `filter_enabled = false` the list is identical on every turn, so it is
 injected as part of the cacheable system prompt. With filtering on it is re-picked
 per message and is kept out of the cached prefix instead.
 
+## Skill Install Policy
+
+`[skills.install_policy]` runs an operator-owned command against every hub
+skill before it is installed or updated:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Turn the policy on. Enabled with no usable `command`, every install is refused. |
+| `command` | `""` | Absolute path to the executable. Not resolved through `PATH`. |
+| `args` | `[]` | Arguments, e.g. `["openclaw-install-policy"]` for ClawScan. |
+| `pass_env` | `["PATH"]` | The only environment variables the command inherits. |
+| `timeout_seconds` | `300` | The install is blocked when the command runs longer. |
+| `max_output_bytes` | `1048576` | The install is blocked when the command prints more. |
+
+The request and response format, and what `--force` can and cannot override,
+are in [Install Security](features/skills.md#install-security).
+
 ## Skill Read Ceiling
 
 `[skills].max_skill_view_chars` caps one `skill_view` result:
@@ -879,7 +896,8 @@ agent spent answering from what the runtime spent on its own.
 
 ### Session titles
 
-A new chat session is named from its first message: the `session_title` task
+A new chat session is named from its first message — whether it started in the
+web console, the desktop app or a channel such as Telegram: the `session_title` task
 asks the auxiliary model for a 3–6 word title in the user's language, and the
 result lands in the session's `display_name`. With no task override it prefers
 the router's cheapest text tier (`c0`, else `c1`) so titling never waits on a

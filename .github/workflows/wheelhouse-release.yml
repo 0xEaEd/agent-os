@@ -393,9 +393,12 @@ jobs:
           data = json.loads(raw)
           for asset in data.get("assets", []):
               name = asset["name"]
+              # Only this job's own assets. The desktop job uploads
+              # AgentOS-*.dmg/-mac.zip/.blockmap to the same release and may
+              # finish first; a bare "AgentOS-" prefix deleted its build.
               managed = (
                   name == "SHA256SUMS"
-                  or name.startswith("AgentOS-")
+                  or (name.startswith("AgentOS-") and "-windows-" in name)
                   or name.startswith("use_agent_os-")
                   or name.endswith(".sha256")
               )
@@ -444,7 +447,18 @@ jobs:
               if name.startswith("use_agent_os-")
               and name.endswith("-py3-none-any.whl")
           ]
-          allowed = expected | set(versioned_zip) | set(versioned_wheel)
+          # The desktop job's assets share the release and may land first.
+          desktop = [
+              name for name in names
+              if name == "latest-mac.yml"
+              or (
+                  name.startswith("AgentOS-")
+                  and name.endswith((".dmg", "-mac.zip", ".blockmap"))
+              )
+          ]
+          allowed = (
+              expected | set(versioned_zip) | set(versioned_wheel) | set(desktop)
+          )
           unexpected = sorted(names - allowed)
           if (
               missing
