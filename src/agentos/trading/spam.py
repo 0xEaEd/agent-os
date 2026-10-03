@@ -113,4 +113,17 @@ class TokenCurator:
         info = (await self.prices.prices(chain, [key])).get(key)
         if info is None or info.unavailable:
             return None
-        return (info.liquidity_usd or 0.0) < self.min_liquidity_usd
+        liquidity = info.liquidity_usd
+        if liquidity is None:
+            if info.price_usd is None:
+                # Answered and found no pair at all: nobody trades it, which is
+                # the junk this module hides.
+                return True
+            # A pair prices the token but reports no depth: ``liquidity.usd``
+            # can be absent, and ``_f`` reports a non-finite one as None too
+            # (#3503). That is a pool nobody measured, not a token with no
+            # pool, so it is no more a verdict than an unreachable source is --
+            # the token stays as it is and is asked about again tomorrow.
+            # ``TradingService._visible_price`` reads the field the same way.
+            return None
+        return liquidity < self.min_liquidity_usd

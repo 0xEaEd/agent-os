@@ -11,7 +11,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from agentos.attachment_refs import _atomic_write_bytes, _validate_sha256
+from agentos.attachment_refs import (
+    _atomic_write_bytes,
+    _validate_sha256,
+    truncate_filename,
+)
 
 ARTIFACT_REF_KIND = "artifact_ref"
 ARTIFACT_STORE = "artifacts"
@@ -21,6 +25,9 @@ DEFAULT_ARTIFACT_MAX_BYTES = 30 * 1024 * 1024
 DEFAULT_ARTIFACT_DISK_BUDGET_BYTES = 512 * 1024 * 1024
 
 _UNSAFE_FILENAME_RE = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]+')
+#: Bound on a stored artifact's display name. Trimmed from the stem so the
+#: extension survives -- see ``attachment_refs.truncate_filename``.
+_MAX_ARTIFACT_FILENAME = 160
 _SAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _SAFE_MIME_RE = re.compile(r"^[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+$")
 #: ``[generated artifact omitted: <name> (<mime>)]`` -- see artifact_marker.
@@ -387,7 +394,7 @@ def _safe_filename(name: str) -> str:
     cleaned = _UNSAFE_FILENAME_RE.sub("_", cleaned).strip()
     if cleaned in (".", "..") or not cleaned.strip("."):
         return "artifact"
-    return cleaned[:160] or "artifact"
+    return truncate_filename(cleaned, _MAX_ARTIFACT_FILENAME) or "artifact"
 
 
 def _safe_mime(value: Any) -> str:

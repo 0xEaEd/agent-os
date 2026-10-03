@@ -180,6 +180,24 @@ class ControlUiConfig(BaseSettings):
         return base_path
 
 
+class SkillInstallPolicyConfig(BaseModel):
+    """An operator-owned command that approves or blocks hub skill installs.
+
+    It receives the quarantined bundle as an OpenClaw ``security.installPolicy``
+    protocol v1 request on stdin and answers allow / warn / block on stdout.
+    Enabled without a usable ``command``, every install is refused.
+    """
+
+    enabled: bool = False
+    # Absolute path to the executable; never resolved through PATH.
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    # The only environment variables the command inherits.
+    pass_env: list[str] = Field(default_factory=lambda: ["PATH"])
+    timeout_seconds: float = Field(default=300.0, gt=0)
+    max_output_bytes: int = Field(default=1024 * 1024, gt=0)
+
+
 class SkillsConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AGENTOS_SKILLS_")
 
@@ -216,6 +234,8 @@ class SkillsConfig(BaseSettings):
     # anyone might install. Credentials do NOT go here: they belong in
     # ~/.agentos/.env, where they can be masked, gated, and audited.
     config: dict[str, Any] = Field(default_factory=dict)
+
+    install_policy: SkillInstallPolicyConfig = Field(default_factory=SkillInstallPolicyConfig)
 
 
 class ToolsConfig(BaseModel):

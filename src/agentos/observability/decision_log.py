@@ -25,6 +25,7 @@ import structlog
 
 from agentos.bootstrap_types import BootstrapFileReport
 from agentos.paths import default_agentos_home
+from agentos.redact import mask_url_userinfo
 
 log = structlog.get_logger(__name__)
 
@@ -201,6 +202,14 @@ def build_intent_summary(message: str, max_chars: int = _INTENT_SUMMARY_MAX_CHAR
     if not text:
         return ""
     text = _URL_RE.sub("[url]", text)
+    # Before _EMAIL_RE, and shared with redact.py rather than spelled again
+    # here: a password in URL userinfo is a credential whatever the scheme,
+    # and none of the four patterns in this function reached one. A DSN went
+    # into the log verbatim unless its host was shaped like a mail domain, in
+    # which case _EMAIL_RE swallowed `user:password@host` as an address --
+    # coverage that held only by accident and not at all for an IP, a bare
+    # service name or a port, which is what a container setup produces.
+    text = mask_url_userinfo(text, mask="[secret]")
     text = _EMAIL_RE.sub("[email]", text)
     text = _SECRET_ASSIGN_RE.sub(lambda m: f"{m.group(1)}=[secret]", text)
     # Path redaction runs before the generic long-secret catch-all: a
