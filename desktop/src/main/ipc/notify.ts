@@ -11,14 +11,24 @@ import {
   showNotification,
 } from '../notify/notifier'
 
-const KINDS = new Set(['reply', 'replyFailed', 'approval', 'job', 'jobFailed', 'gateway', 'test'])
+const KINDS = new Set([
+  'reply',
+  'replyFailed',
+  'approval',
+  'job',
+  'jobFailed',
+  'trade',
+  'tradeFailed',
+  'gateway',
+  'test',
+])
 
 function text(value: unknown, max: number): string {
   return typeof value === 'string' ? value.slice(0, max) : ''
 }
 
 /** Only the shapes the renderer is allowed to point a click at. */
-function sanitizeTarget(raw: unknown): NotifyTarget {
+export function sanitizeTarget(raw: unknown): NotifyTarget {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   switch (obj.type) {
     case 'session': {
@@ -31,6 +41,11 @@ function sanitizeTarget(raw: unknown): NotifyTarget {
     }
     case 'approvals':
       return { type: 'approvals' }
+    case 'trading': {
+      // A swap settled or an order waiting: the desk, on that order when named.
+      const orderId = text(obj.orderId, 128)
+      return orderId ? { type: 'trading', orderId } : { type: 'trading' }
+    }
     case 'settings':
       return { type: 'settings' }
     default:
@@ -38,7 +53,7 @@ function sanitizeTarget(raw: unknown): NotifyTarget {
   }
 }
 
-function sanitizeRequest(raw: unknown): NotifyRequest | null {
+export function sanitizeRequest(raw: unknown): NotifyRequest | null {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null
   if (!obj) return null
   const title = text(obj.title, 200).trim()
