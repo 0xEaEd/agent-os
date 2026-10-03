@@ -24,6 +24,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   statuses ClawHub relays as `upstream_scanners`.
 
 ### Fixed
+- `apply_patch`: a patch adding a line whose content carries a form feed, a
+  vertical tab, a lone `
+`, NEL or U+2028/9 was rejected outright with
+  `Invalid line in '*** Add File: ...' block (expected a '+' prefix)`, naming
+  a line the caller had in fact prefixed. `_parse_patch` split the patch text
+  with `str.splitlines()`, which breaks on eleven characters, so a `+` line
+  was cut in two and its tail read as a stray directive. #3176 settled the
+  newline-only rule for this toolchain and gave `_updated_text` the
+  `split_lines_keepends` helper for the file being patched; the patch text
+  itself was not converted. A form feed is the conventional page break in a
+  Python source and a lone `
+` arrives in captured output, so this made
+  that content undeliverable through `apply_patch`, with an error that
+  pointed nowhere because the character is invisible. (#3570)
 - Artifacts and attachment downloads: a filename longer than 160 characters
   lost its extension. Both sanitisers cut with `name[:160]`, and the
   extension is the last thing in the string, so it was the first thing gone
