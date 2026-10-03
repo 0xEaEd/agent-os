@@ -22,6 +22,7 @@ from agentos.skills.hub.defaults import (
     installed_skill_identifiers,
     installed_skill_names,
 )
+from agentos.skills.hub.installer import install_security_fields
 from agentos.skills.install_kinds import (
     MANUAL_INSTALL_KINDS,
     InstallSpecError,
@@ -164,7 +165,7 @@ def _community_result_to_dict(
     identifier = getattr(row, "identifier", "") or getattr(row, "name", "")
     name = getattr(row, "name", "")
     identifiers = installed_identifiers if installed_identifiers is not None else installed
-    return {
+    result = {
         "name": name,
         "description": getattr(row, "description", ""),
         "version": getattr(row, "version", ""),
@@ -177,6 +178,13 @@ def _community_result_to_dict(
         "homepage": getattr(row, "homepage", ""),
         "installed": identifier in identifiers or name in installed,
     }
+    # Only when the registry said something: most rows carry no verdict, and
+    # two empty keys on each of them is prompt the model pays for.
+    for key in ("registry_verdict", "upstream_scanners"):
+        value = getattr(row, key, None)
+        if value:
+            result[key] = value
+    return result
 
 
 def _local_match(loader: SkillLoader, query: str) -> dict[str, Any] | None:
@@ -972,8 +980,10 @@ def create_skill_tools(loader: SkillLoader) -> None:
             "force": {
                 "type": "boolean",
                 "description": (
-                    "Override a dangerous security scan, or a refusal to shadow a bundled "
-                    "skill, only after the user explicitly asks."
+                    "Override a dangerous security scan, a registry 'suspicious' verdict, "
+                    "an install-policy warning, or a refusal to shadow a bundled skill, "
+                    "only after the user explicitly asks. Never overrides a registry "
+                    "'malicious' verdict or an install-policy block."
                 ),
                 "default": False,
             },
@@ -1008,9 +1018,7 @@ def create_skill_tools(loader: SkillLoader) -> None:
         }
         if result.path:
             payload["path"] = result.path
-        if result.scan:
-            payload["scan_verdict"] = result.scan.verdict
-            payload["scan_findings"] = [finding.__dict__ for finding in result.scan.findings]
+        payload.update(install_security_fields(result))
         return json.dumps(payload)
 
     @tool(

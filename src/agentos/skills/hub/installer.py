@@ -1,4 +1,4 @@
-"""Skill installer — fetch → quarantine → scan → install → lockfile."""
+"""Skill installer — fetch → quarantine → scan → policy → install → lockfile."""
 
 from __future__ import annotations
 
@@ -7,10 +7,17 @@ import shutil
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import structlog
 
 from agentos.paths import default_agentos_home
+from agentos.skills.hub.install_policy import (
+    InstallPolicy,
+    PolicyDecision,
+    build_policy_request,
+    evaluate_install_policy,
+)
 from agentos.skills.hub.lockfile import (
     LockEntry,
     Lockfile,
@@ -94,6 +101,30 @@ class InstallResult:
     scan: ScanResult | None = None
     path: str = ""
     sha256: str = ""
+    #: The registry's own review of the skill, ``""`` when it published none.
+    registry_verdict: str = ""
+    #: The ``[skills.install_policy]`` answer, ``None`` when no policy ran.
+    policy: PolicyDecision | None = None
+    #: A refusal that ``force`` would have let through. False for the ones
+    #: nothing overrides: a registry ``malicious`` verdict, a policy ``block``.
+    overridable: bool = False
+
+
+def install_security_fields(result: InstallResult) -> dict[str, Any]:
+    """The security half of an install result, as RPC, CLI and tool report it."""
+    fields: dict[str, Any] = {}
+    if result.scan:
+        fields["scan_verdict"] = result.scan.verdict
+        fields["scan_findings"] = [asdict(finding) for finding in result.scan.findings]
+    if result.registry_verdict:
+        fields["registry_verdict"] = result.registry_verdict
+    if result.policy is not None:
+        fields["policy_decision"] = result.policy.decision
+        fields["policy_reason"] = result.policy.reason
+        fields["policy_findings"] = result.policy.findings
+    if result.overridable:
+        fields["overridable"] = True
+    return fields
 
 
 class SkillInstaller:
@@ -105,8 +136,10 @@ class SkillInstaller:
         managed_dir: Path | None = None,
         quarantine_dir: Path | None = None,
         lockfile_path: Path | None = None,
+        install_policy: InstallPolicy | None = None,
     ) -> None:
         self._router = router
+        self._install_policy = install_policy
         self._managed_dir = managed_dir if managed_dir is not None else _default_managed_dir()
         self._quarantine_dir = (
             quarantine_dir if quarantine_dir is not None else _default_quarantine_dir()
@@ -118,6 +151,8 @@ class SkillInstaller:
         identifier: str,
         source_id: str,
         force: bool = False,
+        *,
+        mode: str = "install",
     ) -> InstallResult:
         """Full install lifecycle: fetch → quarantine → scan → install → lockfile."""
         # 1. Fetch
@@ -168,6 +203,32 @@ class SkillInstaller:
                 except Exception:  # pragma: no cover - source adapters are best-effort here
                     bundle_meta = None
 
+        # The registry has already reviewed this skill; its answer costs
+        # nothing to honour and is better informed than the regex scan below.
+        # ``malicious`` is the registry saying it found malware, so no flag
+        # overrides it — ``force`` is one argument away for a model holding
+        # ``skill_install_community``.
+        registry_verdict = bundle_meta.registry_verdict if bundle_meta else ""
+        if registry_verdict == "malicious" or (registry_verdict == "suspicious" and not force):
+            summary = bundle_meta.registry_summary if bundle_meta else ""
+            detail = f" ({summary})" if summary else ""
+            overridable = registry_verdict == "suspicious"
+            return InstallResult(
+                success=False,
+                name=name,
+                message=(
+                    f"{source_id} flags '{name}' as {registry_verdict}{detail}. "
+                    + (
+                        "Re-run with force only after the user has reviewed the skill "
+                        "and confirmed."
+                        if overridable
+                        else "This cannot be overridden."
+                    )
+                ),
+                registry_verdict=registry_verdict,
+                overridable=overridable,
+            )
+
         # 2. Quarantine — write to temp dir with Zip Slip protection
         q_dir = self._quarantine_dir / name
         if q_dir.exists():
@@ -198,7 +259,52 @@ class SkillInstaller:
                     "Use force=True to override."
                 ),
                 scan=scan_result,
+                registry_verdict=registry_verdict,
+                overridable=True,
             )
+
+        # 3b. Operator install policy — an external command reviews the staged
+        # bundle. Runs under ``force`` too: ``force`` answers a ``warn``, and
+        # nothing answers a ``block``.
+        policy_decision: PolicyDecision | None = None
+        if self._install_policy is not None and self._install_policy.enabled:
+            policy_decision = await evaluate_install_policy(
+                self._install_policy,
+                build_policy_request(
+                    name=name,
+                    source_path=str(q_dir_resolved),
+                    source_id=source_id,
+                    identifier=identifier,
+                    version=bundle_meta.version if bundle_meta else "",
+                    mode=mode,
+                ),
+            )
+            blocked = policy_decision.decision == "block"
+            if blocked or (policy_decision.decision == "warn" and not force):
+                shutil.rmtree(q_dir, ignore_errors=True)
+                log.warning(
+                    "skill.install_policy_refused",
+                    name=name,
+                    source=source_id,
+                    decision=policy_decision.decision,
+                )
+                return InstallResult(
+                    success=False,
+                    name=name,
+                    message=(
+                        f"Install policy: {policy_decision.decision} — "
+                        f"{policy_decision.reason.rstrip('.')}. "
+                        + (
+                            "This cannot be overridden."
+                            if blocked
+                            else "Re-run with force only after the user has confirmed."
+                        )
+                    ),
+                    scan=scan_result,
+                    registry_verdict=registry_verdict,
+                    policy=policy_decision,
+                    overridable=not blocked,
+                )
 
         # 4. Install — move from quarantine to managed dir
         install_dir = self._managed_dir / name
@@ -241,6 +347,11 @@ class SkillInstaller:
             scan_verdict=scan_result.verdict,
             scan_strategy=scan_result.strategy,
             scan_findings=[asdict(finding) for finding in scan_result.findings],
+            registry_verdict=registry_verdict,
+            registry_summary=bundle_meta.registry_summary if bundle_meta else "",
+            upstream_scanners=dict(bundle_meta.upstream_scanners) if bundle_meta else {},
+            policy_decision=policy_decision.decision if policy_decision else "",
+            policy_reason=policy_decision.reason if policy_decision else "",
         )
         Lockfile.update(self._lockfile_path, lambda lockfile: lockfile.add(name, new_entry))
 
@@ -252,6 +363,8 @@ class SkillInstaller:
             scan=scan_result,
             path=str(install_dir),
             sha256=sha,
+            registry_verdict=registry_verdict,
+            policy=policy_decision,
         )
 
     async def uninstall(self, name: str) -> InstallResult:
@@ -292,7 +405,7 @@ class SkillInstaller:
                 )
                 continue
             old_sha = entry.sha256
-            result = await self.install(entry.identifier, entry.source, force=False)
+            result = await self.install(entry.identifier, entry.source, force=False, mode="update")
             if result.success:
                 if old_sha and result.sha256 == old_sha:
                     result.message = f"'{result.name}' is already up to date"
