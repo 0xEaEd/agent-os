@@ -265,6 +265,66 @@ Remove a managed skill:
 agentos skills uninstall <skill-name>
 ```
 
+## Install Security
+
+A hub skill is someone else's instructions and scripts, so an install passes
+three checks before anything reaches the managed layer. The bundle is staged in
+`~/.agentos/quarantine` while they run and deleted if any of them refuses.
+
+| Check | Refuses when | `--force` |
+| --- | --- | --- |
+| Registry verdict | ClawHub's own review marks the skill `suspicious` | overrides |
+| Registry verdict | ClawHub marks it `malicious` | never overrides |
+| Built-in scan | the pattern scan finds prompt injection, exfiltration or hidden Unicode (`dangerous`) | overrides |
+| Install policy | your policy command answers `warn` | overrides |
+| Install policy | your policy command answers `block`, or fails to answer | never overrides |
+
+**Registry verdict.** ClawHub scans what it hosts with ClawScan and publishes
+the result. AgentOS reads it on install, refuses on `suspicious` or `malicious`,
+and records it in the lockfile as `registry_verdict`. Search results carry it
+too, along with `upstream_scanners` — third-party scanner statuses the registry
+relays (Snyk, Socket and others). Those are shown but never refused on: they
+are another party's opinion of another party's copy. Other sources publish no
+verdict, so the field is empty for them.
+
+**Install policy.** For a real review, point AgentOS at a scanner of your own.
+It is off by default:
+
+```toml
+[skills.install_policy]
+enabled = true
+command = "/absolute/path/to/clawscan"
+args = ["openclaw-install-policy"]
+pass_env = ["PATH", "DOCKER_HOST"]
+timeout_seconds = 300
+```
+
+The command is run once per install and per update, after the built-in scan
+and before the move. It reads one JSON request on stdin — the quarantined
+directory as `sourcePath`, the skill name, the source and the requested
+identifier — and writes one JSON response on stdout:
+
+```json
+{"protocolVersion": 1, "decision": "block", "reason": "reads ~/.ssh/id_rsa"}
+```
+
+`decision` is `allow`, `warn` or `block`; `reason` and a `findings` list are
+optional. This is the OpenClaw `security.installPolicy` protocol, version 1, so
+`clawscan openclaw-install-policy` works unchanged and can front SkillSpector,
+Tencent AIG, Cisco's scanner or Snyk. Any executable that speaks the protocol
+will do.
+
+The policy fails closed. A command that is missing, is not an absolute path,
+exits nonzero, times out, or prints anything other than a valid response blocks
+the install, and so does `enabled = true` with no `command`. The command
+inherits only the variables named in `pass_env`, not the gateway's environment,
+and it runs outside the tool sandbox as a trusted local process — point it at a
+binary you control.
+
+The policy covers `agentos skills install` and `agentos skills update`, the
+Skills page, and the agent's `skill_install_community` tool. It does not cover
+skills you write yourself or copy into a skill directory by hand.
+
 ## Manage Skill Sources
 
 Custom source repositories are called taps:
