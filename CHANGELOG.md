@@ -24,6 +24,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   statuses ClawHub relays as `upstream_scanners`.
 
 ### Fixed
+- Email: `html_to_text` mangled an HTML-only mail part before the agent read
+  it as the sender's message. Only `br`/`p`/`div`/`tr`/`li` ended a line, so
+  every other block element was deleted with nothing in its place -- a
+  heading fused with the paragraph under it (`Quarterly ReportRevenue is
+  up.`) and a table row's `<td>` cells fused with each other (`NameAlice`)
+  while `</tr>` broke the rows correctly, which is the common case because
+  HTML mail is mostly tables. `_HTML_TAG_RE` also stops at the first `>`,
+  which inside a comment ends nothing, so the tail of `<!-- a > b -->`
+  survived as body text; and only `script`/`style` were dropped, so
+  `<title>` was delivered as the first words of the body. Block-level
+  closers now end a line, `</td>`/`</th>` separate with a tab so a row stays
+  on one line, comments are stripped before tags, and `head`/`title` are
+  dropped with `script`/`style`. (#3545)
 - Telegram: a reply containing non-BMP characters -- emoji, mathematical
   letters, CJK extensions -- was sent as one over-long message and rejected.
   Telegram counts a message's 4096-character cap in UTF-16 code units, the
