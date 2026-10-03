@@ -85,6 +85,14 @@ class SkillMeta:
     category: str = ""  # coarse grouping for browse filters (e.g. "defi")
     setup: list[str] = field(default_factory=list)  # ordered setup steps, if any
     demo: dict[str, Any] = field(default_factory=dict)  # {title, language, code}
+    #: The registry's own security review of this skill, when it publishes one:
+    #: ``clean`` | ``suspicious`` | ``malicious`` | ``""`` (no verdict). Unlike
+    #: ``trust_level``, which names the source, this is about the one skill.
+    registry_verdict: str = ""
+    registry_summary: str = ""
+    #: Third-party scanner results the registry relays, ``{scanner: status}``
+    #: (e.g. ``{"snyk": "warn"}``). Reported, never gated on.
+    upstream_scanners: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

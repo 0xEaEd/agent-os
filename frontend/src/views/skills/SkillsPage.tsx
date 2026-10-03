@@ -258,6 +258,7 @@ interface InstallResponse {
   message?: string
   scan_verdict?: string
   scan_findings?: unknown[]
+  overridable?: boolean
 }
 interface MutationResponse {
   success?: boolean
@@ -908,7 +909,7 @@ export function SkillsPage() {
         void invalidateRegistry()
         return
       }
-      const blocked = res?.scan_verdict === 'dangerous'
+      const blocked = res?.scan_verdict === 'dangerous' || res?.overridable === true
       const n = (res?.scan_findings || []).length
       if (blocked && !vars.force) {
         armForce(vars.identifier, true)

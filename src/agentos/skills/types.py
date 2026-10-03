@@ -292,6 +292,11 @@ class SkillAcquisition:
     installed_at: str = ""
     source_trust: str = ""
     scan_verdict: str = ""
+    #: The registry's review at install time: ``clean`` | ``suspicious`` | ``""``.
+    registry_verdict: str = ""
+    #: The ``[skills.install_policy]`` answer at install time: ``allow`` |
+    #: ``warn`` | ``""`` when no policy ran.
+    policy_decision: str = ""
     #: ``skills.uninstall`` can act on it.
     removable: bool = False
     #: ``skills.update`` can act on it.
