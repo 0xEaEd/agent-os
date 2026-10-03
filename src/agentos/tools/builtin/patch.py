@@ -13,7 +13,7 @@ from pathlib import Path
 import structlog
 
 from agentos.identity.workspace import BOOTSTRAP_FILENAMES
-from agentos.lines import split_lines_keepends
+from agentos.lines import split_lines, split_lines_keepends
 from agentos.redact import redact_file_output
 from agentos.sandbox.integration import sandboxed
 from agentos.tools.path_aliases import resolve_workspace_alias
@@ -177,8 +177,21 @@ def _dedent_body(body: list[str]) -> list[str]:
 
 
 def _parse_patch(patch_text: str) -> list[PatchOp]:
-    """Parse patch text into a list of PatchOp objects."""
-    lines = patch_text.splitlines()
+    """Parse patch text into a list of PatchOp objects.
+
+    Newlines only, the same rule ``_updated_text`` applies to the file being
+    patched. ``str.splitlines()`` also breaks on a form feed, a vertical tab,
+    a lone ``\r``, NEL and U+2028/9, and a ``+`` line whose *content* carries
+    one of those was cut in two here: the tail did not start with ``+``, so
+    the block was rejected with "expected a '+' prefix" quoting a line the
+    caller had in fact prefixed. The characters are invisible, so the error
+    pointed nowhere and the same patch would be retried (#3570).
+
+    A form feed is the conventional page break in a Python source, and a lone
+    ``\r`` arrives in captured progress output and CSV exports -- content an
+    agent writes through ``apply_patch`` routinely.
+    """
+    lines = split_lines(patch_text)
 
     # Trim to content between markers
     start_idx, end_idx = _marker_span(lines)

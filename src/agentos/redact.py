@@ -46,6 +46,7 @@ from collections.abc import Callable, Iterable, Mapping
 __all__ = [
     "is_env_dump_command",
     "mask_secret",
+    "mask_url_userinfo",
     "reads_credential_file",
     "redact_file_output",
     "redact_sensitive_text",
@@ -543,6 +544,32 @@ def _redact_value_shapes(text: str, *, mask: Callable[[str], str], line_safe: bo
     return text
 
 
+def mask_url_userinfo(text: str, *, mask: str = _MASK) -> str:
+    """Mask the password in every ``<scheme>://[user]:password@host`` in *text*.
+
+    The one definition of what a URL-embedded credential is. Exposed because
+    :mod:`agentos.observability.decision_log` needs the same structural match
+    with its own marker and without the rest of this module's pipeline: it
+    was carrying four narrower patterns of its own, none of which reached a
+    DSN, so a password went into the decision log verbatim unless the host
+    happened to be shaped like a mail domain and ``_EMAIL_RE`` ate it by
+    accident (#3568).
+
+    A reference rather than a literal -- ``${PGPASSWORD}``, ``<password>`` --
+    is left alone, as it is everywhere else here.
+    """
+    if "://" not in text:
+        return text
+    return _URL_USERINFO_RE.sub(
+        lambda m: (
+            f"{m.group(1)}{mask}{m.group(3)}"
+            if not _is_reference_value(m.group(2))
+            else m.group(0)
+        ),
+        text,
+    )
+
+
 def _redact_named_credentials(
     text: str,
     *,
@@ -556,15 +583,7 @@ def _redact_named_credentials(
     so it cannot tell ``apiKey: NotRequired[str]`` from ``apiKey: <secret>``.
     Callers holding source code keep it off.
     """
-    if "://" in text:
-        text = _URL_USERINFO_RE.sub(
-            lambda m: (
-                f"{m.group(1)}{dsn_mask}{m.group(3)}"
-                if not _is_reference_value(m.group(2))
-                else m.group(0)
-            ),
-            text,
-        )
+    text = mask_url_userinfo(text, mask=dsn_mask)
     if ":" in text:
         text = _AUTH_HEADER_RE.sub(
             lambda m: (
@@ -964,13 +983,20 @@ def _credential_file_format(path: str | os.PathLike[str] | None) -> str | None:
 
 
 def _credential_file_formats_in(command: str) -> set[str]:
-    """The formats of every credential file *command* names as an operand."""
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = command.split()
+    """The formats of every credential file *command* names as an operand.
+
+    Tokenised with :func:`_command_operands`, not bare ``shlex.split``: POSIX
+    ``shlex`` reads ``\\`` as an escape, so ``type C:\\Users\\me\\_netrc`` came
+    out as the single token ``C:Usersme_netrc``, no basename matched the
+    format map, and the format rule never ran -- while
+    :func:`reads_credential_file`, which already uses ``_command_operands``,
+    answered ``True`` for the very same command. The password a ``.pgpass`` or
+    ``.netrc`` carries positionally is exactly the one the assignment pass
+    cannot name (#2721), so skipping the format rule leaked it verbatim on the
+    spelling a Windows host uses (#3544).
+    """
     formats: set[str] = set()
-    for token in tokens:
+    for token in _command_operands(command):
         if token.startswith("-"):
             continue
         file_format = _credential_file_format(token)

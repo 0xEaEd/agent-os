@@ -16,6 +16,39 @@ class AttachmentMaterialBudgetError(ValueError):
     """Raised when material bytes cannot be written within the configured budget."""
 
 
+#: How much of a suffix is still a suffix. Past this the dot is part of the
+#: name, not an extension, and keeping it would spend the whole budget on it.
+MAX_FILENAME_SUFFIX = 16
+
+
+def truncate_filename(name: str, limit: int) -> str:
+    """Shorten *name* to *limit* characters, keeping its extension.
+
+    A plain ``name[:limit]`` cuts from the left, so the extension is the
+    first thing lost: a 162-character ``...pdf`` came back ``....p`` and a
+    200-character one came back with no suffix at all. The bytes are fine
+    and the name is not -- the OS picks the application from the suffix, and
+    ``gateway.attachments`` hands this straight to ``Content-Disposition``,
+    so the file would not open by double-click (#3569).
+
+    The stem is trimmed instead and the suffix kept whole. A "suffix" longer
+    than :data:`MAX_FILENAME_SUFFIX`, or one containing a space, is not an
+    extension -- it is a name with a dot in it -- and gets no protection, so
+    a pathological 300-character tail cannot eat the budget.
+    """
+    if limit <= 0:
+        return ""
+    if len(name) <= limit:
+        return name
+    stem, dot, suffix = name.rpartition(".")
+    if not dot or not stem or len(suffix) > MAX_FILENAME_SUFFIX or " " in suffix:
+        return name[:limit]
+    tail = f".{suffix}"
+    if len(tail) >= limit:
+        return name[:limit]
+    return stem[: limit - len(tail)] + tail
+
+
 def is_attachment_ref(attachment: Any) -> bool:
     return isinstance(attachment, dict) and attachment.get("kind") == ATTACHMENT_REF_KIND
 

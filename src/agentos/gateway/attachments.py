@@ -11,7 +11,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
-from agentos.attachment_refs import transcript_material_path
+from agentos.attachment_refs import transcript_material_path, truncate_filename
 from agentos.gateway.config import GatewayConfig
 from agentos.paths import media_root_from_config
 
@@ -57,10 +57,15 @@ def _media_root_from_config(config: GatewayConfig) -> Path:
     return media_root_from_config(config)
 
 
+#: Bound on the ``Content-Disposition`` filename. Trimmed from the stem so a
+#: long name still downloads as something the OS can open.
+_MAX_DOWNLOAD_NAME = 160
+
+
 def _safe_download_name(value: object) -> str:
     raw = str(value or "").strip()
     cleaned = " ".join(raw.replace("/", " ").replace("\\", " ").split())
-    return cleaned[:160] or "attachment"
+    return truncate_filename(cleaned, _MAX_DOWNLOAD_NAME) or "attachment"
 
 
 def _safe_media_type(value: object) -> str:

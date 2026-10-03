@@ -257,6 +257,23 @@ With `filter_enabled = false` the list is identical on every turn, so it is
 injected as part of the cacheable system prompt. With filtering on it is re-picked
 per message and is kept out of the cached prefix instead.
 
+## Skill Install Policy
+
+`[skills.install_policy]` runs an operator-owned command against every hub
+skill before it is installed or updated:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Turn the policy on. Enabled with no usable `command`, every install is refused. |
+| `command` | `""` | Absolute path to the executable. Not resolved through `PATH`. |
+| `args` | `[]` | Arguments, e.g. `["openclaw-install-policy"]` for ClawScan. |
+| `pass_env` | `["PATH"]` | The only environment variables the command inherits. |
+| `timeout_seconds` | `300` | The install is blocked when the command runs longer. |
+| `max_output_bytes` | `1048576` | The install is blocked when the command prints more. |
+
+The request and response format, and what `--force` can and cannot override,
+are in [Install Security](features/skills.md#install-security).
+
 ## Skill Read Ceiling
 
 `[skills].max_skill_view_chars` caps one `skill_view` result:

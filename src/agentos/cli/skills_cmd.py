@@ -90,6 +90,11 @@ def _emit_skill_mutation_result(
         console.print(f"[green]{success_label}:[/] {name}{suffix}")
         if message:
             console.print(message)
+        registry_verdict = payload.get("registry_verdict")
+        if registry_verdict not in (None, "", "clean"):
+            console.print(f"[yellow]Registry verdict: {registry_verdict}[/]")
+        if payload.get("policy_decision") == "warn":
+            console.print(f"[yellow]Install policy: warn — {payload.get('policy_reason')}[/]")
         return
 
     console.print(f"[red]Failed:[/] {message or name}")
@@ -388,7 +393,11 @@ def skills_install(
         False,
         "--force",
         "-f",
-        help="Force install (skip the security block and the bundled-shadow refusal)",
+        help=(
+            "Force install: override a dangerous scan, a registry 'suspicious' verdict, "
+            "an install-policy warning, or the bundled-shadow refusal. Never overrides "
+            "a registry 'malicious' verdict or an install-policy block."
+        ),
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
@@ -430,6 +439,10 @@ def skills_install(
                 console.print(
                     f"[yellow]Security: {scan.verdict} ({len(scan.findings)} findings)[/]"
                 )
+            if result.registry_verdict not in ("", "clean"):
+                console.print(f"[yellow]Registry verdict: {result.registry_verdict}[/]")
+            if result.policy is not None and result.policy.decision == "warn":
+                console.print(f"[yellow]Install policy: warn — {result.policy.reason}[/]")
         else:
             console.print(f"[red]Failed:[/] {result.message}")
             raise typer.Exit(1)
