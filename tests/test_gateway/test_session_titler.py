@@ -275,3 +275,28 @@ async def test_hint_reaches_the_auxiliary_call(manager, monkeypatch):
     await titler.drain()
     assert captured["preferred_model"] == "deepseek-v4-flash"
     assert captured["preferred_provider"] == "opencap"
+
+
+@pytest.mark.asyncio
+async def test_channel_turns_are_titled_with_a_per_call_broadcast(manager, monkeypatch):
+    _stub_client(monkeypatch, "Channel title")
+    key = "agent:main:telegram:direct:u1"
+    await manager.create(key)
+    shared: list[str] = []
+    own: list[str] = []
+
+    async def shared_broadcast(k: str, _state: dict) -> None:
+        shared.append(k)
+
+    async def own_broadcast(k: str, _state: dict) -> None:
+        own.append(k)
+
+    # The titler is shared per manager, so whichever caller built it first
+    # must not decide where another caller's rename is announced.
+    titler = SessionTitler(manager, broadcast=shared_broadcast)
+    assert titler.maybe_schedule(key, "hi", run_kind="channel_turn", broadcast=own_broadcast)
+    await titler.drain()
+
+    node = await manager.get_session(key)
+    assert node is not None and node.display_name == "Channel title"
+    assert own == [key] and shared == []

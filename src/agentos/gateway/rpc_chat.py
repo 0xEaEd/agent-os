@@ -337,13 +337,15 @@ def _schedule_session_title(ctx: RpcContext, session_key: str, message: Any, ext
     timeout = float(getattr(sessions_cfg, "auto_title_timeout_seconds", 30.0) or 30.0)
     titler = titler_for(
         ctx.session_manager,
-        broadcast=broadcast,
         timeout=timeout,
         hint=fast_model_hint(getattr(ctx, "config", None)),
     )
     run_kind = extra.get("runKind", extra.get("run_kind"))
     titler.maybe_schedule(
-        session_key, message, run_kind=str(run_kind) if run_kind is not None else None
+        session_key,
+        message,
+        run_kind=str(run_kind) if run_kind is not None else None,
+        broadcast=broadcast,
     )
 
 

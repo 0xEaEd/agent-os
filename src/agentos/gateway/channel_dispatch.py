@@ -632,6 +632,13 @@ async def run_channel_dispatch(
                 )
             else:
                 await status_reactor.running(msg)
+                _schedule_channel_session_title(
+                    session_manager,
+                    session_key,
+                    raw_content,
+                    config=config,
+                    event_bridge=event_bridge,
+                )
 
                 typing_task = _start_typing_keepalive(
                     channel,
@@ -685,6 +692,14 @@ async def run_channel_dispatch(
 
                 reply_task.add_done_callback(_make_reply_done_callback(_in_flight, session_key))
             continue
+
+        _schedule_channel_session_title(
+            session_manager,
+            session_key,
+            raw_content,
+            config=config,
+            event_bridge=event_bridge,
+        )
 
         # Gap 3: Start typing indicator (background task). On a streaming
         # adapter it only covers the wait before the first chunk.
@@ -985,6 +1000,7 @@ async def _dispatch_combined_message_after_debounce(channel: Any, combined: Any,
         _in_flight.release(_reservation_token)
 
     await status_reactor.running(msg)
+    _schedule_channel_session_title(session_manager, session_key, raw_content, config=config, event_bridge=event_bridge)  # noqa: E501
     typing_task = _start_typing_keepalive(channel, msg, stop_signal=stream_relay.first_chunk_sent if stream_relay is not None else None)  # noqa: E501
     try:
         await _deliver_runtime_channel_reply(channel=channel, task_runtime=task_runtime, session_manager=session_manager, session_key=session_key, task_id=handle.task_id, route_envelope=route_envelope, inbound=msg, transcript_watermark=transcript_watermark, config=config, stream_relay=stream_relay)  # noqa: E501
@@ -995,6 +1011,43 @@ async def _dispatch_combined_message_after_debounce(channel: Any, combined: Any,
         await _emit_events(event_bridge, session_key, "turn_complete")
     await status_reactor.completed(msg)
 # fmt: on
+
+
+def _schedule_channel_session_title(
+    session_manager: Any,
+    session_key: str,
+    message: Any,
+    *,
+    config: Any,
+    event_bridge: EventBridge | None,
+) -> None:
+    """Name a placeholder-titled channel session from this message, off the turn path.
+
+    ``chat.send`` does this for WebChat and the desktop app; without it a
+    Telegram (or Slack, Discord, …) session keeps its short id in the sidebar.
+    Titling must never break a channel turn, so any failure is only logged.
+    """
+    sessions_cfg = getattr(config, "sessions", None)
+    if sessions_cfg is not None and not getattr(sessions_cfg, "auto_title", True):
+        return
+    if not isinstance(message, str):
+        return
+    try:
+        from agentos.gateway.session_titler import fast_model_hint, titler_for
+
+        async def broadcast(key: str, state: dict[str, Any]) -> None:
+            if event_bridge is not None:
+                await event_bridge.emit(
+                    key,
+                    "sessions.changed",
+                    build_sessions_changed_payload(key, "renamed", **state),
+                )
+
+        timeout = float(getattr(sessions_cfg, "auto_title_timeout_seconds", 30.0) or 30.0)
+        titler = titler_for(session_manager, timeout=timeout, hint=fast_model_hint(config))
+        titler.maybe_schedule(session_key, message, run_kind="channel_turn", broadcast=broadcast)
+    except Exception:
+        log.exception("channel_dispatch.session_title_schedule_failed", session_key=session_key)
 
 
 # ── Gap 1: Delivery context ─────────────────────────────────────────────
