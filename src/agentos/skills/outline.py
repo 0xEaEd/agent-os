@@ -17,6 +17,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from agentos.lines import split_lines_keepends
+
 #: Bodies at or under this are returned whole. Sized from the shipped set: the
 #: largest bundled skill is 21.6k characters and the median is 2.4k, so a 10k
 #: ceiling leaves every small skill untouched and only engages for the imported
@@ -89,7 +91,13 @@ def parse_sections(body: str) -> list[Section]:
     found: list[tuple[int, str, int]] = []  # (level, title, start offset)
     offset = 0
     fence: str | None = None  # the opening run, e.g. "```" or "````"
-    for line in body.splitlines(keepends=True):
+    # ``split_lines_keepends``: ``str.splitlines()`` also ends a line on a
+    # form feed, a vertical tab, a lone CR, NEL and U+2028/9, none of which
+    # end a line in markdown -- so a ``#`` after one of them was read as a
+    # heading and invented a section, the very thing the fence guard above
+    # exists to prevent (#3588). ``keepends`` is kept: ``offset`` is the
+    # running character position and has to count the terminators.
+    for line in split_lines_keepends(body):
         stripped = line.strip()
         fence_match = _FENCE_RE.match(line)
         if fence_match:

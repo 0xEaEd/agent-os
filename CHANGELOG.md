@@ -24,6 +24,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   statuses ClawHub relays as `upstream_scanners`.
 
 ### Fixed
+- Memory and skills: two line counters outside `agentos.tools` still used
+  `str.splitlines()`, which breaks on eleven characters where the rest of the
+  toolchain breaks only on a newline (#3176). `memory.embedding.chunk_text`
+  numbers the chunks it indexes, and those numbers are persisted and shown to
+  the user -- `rpc_memory` returns them as `startLine`/`endLine` and
+  `agentos memory search` prints them -- so a form feed or a lone carriage
+  return anywhere in a file offset every chunk after it against a grid no
+  other tool uses, and a search result pointed at a range `read_file` opens
+  somewhere else (#3585). `skills.outline.parse_sections` reads a `#` after
+  one of those characters as a heading and invented a section, which is the
+  very thing the fence guard beside it exists to prevent (#3588). Neither
+  module could import the helper where it lived, because `agentos.tools`'s
+  `__init__` registers every builtin tool and so imports memory and skills
+  straight back, so the line rule moved to `agentos.lines`;
+  `agentos.tools.builtin._lines` re-exports it and every existing import
+  keeps working.
 - `apply_patch`: a patch adding a line whose content carries a form feed, a
   vertical tab, a lone `
 `, NEL or U+2028/9 was rejected outright with

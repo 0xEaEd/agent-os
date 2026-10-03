@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 import structlog
 
+from agentos.lines import split_lines_keepends
 from agentos.memory.curated import CuratedMemoryStore
 from agentos.memory.redaction import redact_memory_text
 from agentos.memory.source_paths import is_memory_source_path, is_searchable_source_path
@@ -41,7 +42,6 @@ from agentos.memory.types import (
     normalize_memory_source_filter,
 )
 from agentos.safety.injection_guard import classify_injection
-from agentos.tools.builtin._lines import split_lines_keepends
 from agentos.tools.registry import tool
 from agentos.tools.types import ToolError, current_tool_context
 

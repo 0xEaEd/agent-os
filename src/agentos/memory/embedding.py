@@ -11,6 +11,7 @@ import httpx
 import structlog
 
 from agentos.env import trust_env as _trust_env
+from agentos.lines import split_lines_keepends
 from agentos.provider.openrouter_attribution import openrouter_app_headers
 
 logger = structlog.get_logger(__name__)
@@ -674,7 +675,15 @@ def chunk_text(
     Returns list of (start_line, end_line, chunk_text).
     CJK chars count as 1 token each; ASCII uses 4 chars per token.
     """
-    lines = text.splitlines(keepends=True)
+    # ``split_lines_keepends``, not ``str.splitlines()``: the latter breaks
+    # on eleven characters, and these line numbers are persisted by
+    # ``store`` and shown to the user -- ``rpc_memory`` returns them as
+    # ``startLine``/``endLine`` and ``agentos memory search`` prints them
+    # -- so they have to be the numbers ``read_file`` and ``memory.show``
+    # count. A memory file quoting tool output carries a form feed or a
+    # lone CR routinely, and one of those offset every chunk after it
+    # against a grid nothing else uses (#3585).
+    lines = split_lines_keepends(text)
     chunks: list[tuple[int, int, str]] = []
 
     current_tokens = 0

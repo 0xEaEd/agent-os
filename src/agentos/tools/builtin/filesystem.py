@@ -21,9 +21,9 @@ from xml.etree import ElementTree as ET
 import structlog
 
 from agentos.identity.workspace import BOOTSTRAP_FILENAMES
+from agentos.lines import split_lines
 from agentos.redact import redact_file_output
 from agentos.sandbox.integration import get_runtime, sandboxed
-from agentos.tools.builtin._lines import split_lines
 from agentos.tools.fuzzy_match import (
     AmbiguousMatchError,
     EscapeDriftError,
