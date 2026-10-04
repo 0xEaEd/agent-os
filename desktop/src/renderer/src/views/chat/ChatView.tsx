@@ -49,7 +49,7 @@ import { useConfigSnapshot } from '~/views/settings/use-snapshot'
 import { ProjectChip } from './ProjectChip'
 import { useDeskInstruments, type DeskProps } from '~/views/trading/desk/useDeskInstruments'
 import { useTradeLedger } from '~/views/trading/desk/useTradeLedger'
-import { requireMandateTouchId } from '~/views/trading/touch-id'
+import { requireMandateTouchId, requireTriggerTouchId } from '~/views/trading/touch-id'
 
 const NEW_CHAT_COMBO = 'mod+shift+o'
 const DEFAULT_AGENT_KEY = webchatSessionKey('main')
@@ -285,6 +285,12 @@ function ConnectedChat({
                   (m, p) => rpc.call(m, p),
                   String(params.mandateId ?? ''),
                 )
+              // A trigger card's "Approve & arm" (docs/triggers.md) is gated the same way.
+              if (method === 'trading.trigger.approve')
+                await requireTriggerTouchId(
+                  (m, p) => rpc.call(m, p),
+                  String(params.triggerId ?? ''),
+                )
               return rpc.call(method, params)
             },
             onOrder: (orderId) => {
@@ -323,6 +329,7 @@ function ConnectedChat({
     routePinned: route.isPinned,
     lpActions,
     dcaActions: lpActions,
+    triggerActions: lpActions,
   })
   const attachments = useAttachments()
   useEffect(() => {

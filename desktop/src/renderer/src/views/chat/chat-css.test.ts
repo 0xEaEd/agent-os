@@ -568,7 +568,7 @@ describe('desktop trigger card skin', () => {
     expect(card).toMatch(/font-variant-numeric: tabular-nums;/)
     expect(rule('.trigger-card::before')).toMatch(/background: var\(--trigger-rail\);/)
     expect(css).toMatch(
-      /\.trigger-card__facts dd,\s*\.trigger-card__fact-value,\s*\.trigger-fires,\s*\.trigger-card__foot \{\s*font-family: var\(--font-mono\);/,
+      /\.trigger-card__facts dd,\s*\.trigger-fact__value,\s*\.trigger-fires,\s*\.trigger-card__foot \{\s*font-family: var\(--font-mono\);/,
     )
   })
 
@@ -622,14 +622,9 @@ describe('desktop trigger card skin', () => {
     )
     expect(near).toBeTruthy()
     const list = near?.[1] ?? ''
-    for (const hook of [
-      "[data-trigger-dist='0']",
-      "[data-trigger-dist^='-0']",
-      "[data-trigger-dist^='0.']",
-      "[data-trigger-dist='1']",
-      "[data-trigger-dist='-1']",
-      '[data-trigger-near]',
-    ]) {
+    // The renderer classifies the signed distance itself (trigger.ts
+    // `triggerGauge`): `near` within 1 % of the line, `met` once it is crossed.
+    for (const hook of ["[data-trigger-proximity='near']", "[data-trigger-proximity='met']"]) {
       expect(list, hook).toContain(hook)
     }
   })

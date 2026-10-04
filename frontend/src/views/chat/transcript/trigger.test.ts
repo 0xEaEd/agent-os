@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { DCA_ARTIFACT_MIME } from './dca'
+import { DCA_ARTIFACT_MIME, formatCountdown, formatDcaPrice } from './dca'
+import { formatTokenAmount } from './lp'
 import {
   TRIGGER_ARTIFACT_MIME,
   TRIGGER_CONFIRM_MS,
@@ -74,6 +75,13 @@ function one(name: Name): TriggerOnePayload {
 
 function idOf(name: Name): string {
   return (fixture(name).trigger as Json).id as string
+}
+
+/** The clock a fixture was taken at: its `fetchedAt`. */
+function fetchedAtOf(name: Name): number {
+  const at = Date.parse(fixture(name).fetchedAt as string)
+  if (Number.isNaN(at)) throw new Error(`${name} has no fetchedAt`)
+  return at
 }
 
 /** A fixture's raw body with its trigger patched. */
@@ -229,6 +237,65 @@ describe('normalizeTriggerPayload', () => {
     expect(alert.condition.peakPriceUsd).not.toBeNull()
     expect(alert.condition.stopPriceUsd).not.toBeNull()
     expect(alert.market.balance).toBeNull()
+  })
+
+  it('keeps statusReason, the balance, the result and fire reasons as the engine sent them', () => {
+    const bodies = [
+      ...NAMES.filter((n) => fixture(n).kind === 'trigger').map((n) => fixture(n).trigger as Json),
+      ...(fixture('triggers').triggers as Json[]),
+    ]
+    const seen = { reason: 0, balance: 0, result: 0, fireReason: 0 }
+    for (const raw of bodies) {
+      const tr = payload<TriggerOnePayload>({ kind: 'trigger', trigger: raw }).trigger
+      const id = raw.id as string
+      expect(tr.statusReason, id).toBe(raw.statusReason ?? null)
+      if (raw.statusReason) seen.reason++
+
+      const balance = (raw.market as Json).balance as Json | null
+      expect(tr.market.balance, id).toEqual(
+        balance ? { raw: balance.raw, human: balance.human, usd: balance.usd ?? null } : null,
+      )
+      if (balance) seen.balance++
+
+      const result = raw.result as Json | null
+      if (result) {
+        seen.result++
+        const amount = (a: Json | null) =>
+          a ? { raw: a.raw, human: a.human, usd: a.usd ?? null } : null
+        expect(tr.result, id).toEqual({
+          orderId: result.orderId,
+          txHash: result.txHash ?? null,
+          explorerUrl: expect.stringMatching(/^https:\/\//) as unknown,
+          amountIn: amount(result.amountIn as Json | null),
+          amountOut: amount(result.amountOut as Json | null),
+          priceUsd: result.priceUsd ?? null,
+          gasUsd: result.gasUsd ?? null,
+        })
+        if (result.txHash) expect(tr.result!.explorerUrl).toContain(result.txHash as string)
+      } else {
+        expect(tr.result, id).toBeNull()
+      }
+
+      const fires = raw.fires as Json[]
+      expect(
+        tr.fires.map((f) => [f.n, f.status, f.reasonCode, f.reason, f.manual]),
+        id,
+      ).toEqual(
+        fires.map((f) => [
+          f.n,
+          f.status,
+          f.reasonCode ?? null,
+          f.reason ?? null,
+          f.manual === true,
+        ]),
+      )
+      seen.fireReason += fires.filter((f) => f.reasonCode).length
+    }
+    // The fixtures exercise each of these, so a regenerated set that drops one is noticed.
+    expect(seen.reason).toBeGreaterThan(0)
+    expect(seen.balance).toBeGreaterThan(0)
+    expect(seen.result).toBeGreaterThan(0)
+    expect(seen.fireReason).toBeGreaterThan(0)
   })
 
   it('reads the list and its totals, and the empty list', () => {
@@ -544,11 +611,17 @@ describe('the live line', () => {
   })
 
   it('words every other status', () => {
+    // Read at the fixture's own clock: its expiry is relative to `fetchedAt`.
     const awaiting = one('trigger-awaiting').trigger
-    expect(nowText(awaiting, NOW)).toMatch(/^awaiting approval · proposal expires in \d+ h \d+ m$/)
-    expect(nowText({ ...awaiting, expiresAt: '2026-10-04T09:00:00Z' }, NOW)).toBe(
-      'awaiting approval · proposal expiring',
+    const fetchedAt = fetchedAtOf('trigger-awaiting')
+    const expiresAt = Date.parse(awaiting.expiresAt!)
+    expect(expiresAt).toBeGreaterThan(fetchedAt)
+    expect(nowText(awaiting, fetchedAt)).toBe(
+      `awaiting approval · proposal expires in ${formatCountdown(expiresAt - fetchedAt)}`,
     )
+    // Past its expiry the engine has not swept it yet: the line says so, no countdown.
+    expect(nowText(awaiting, expiresAt)).toBe('awaiting approval · proposal expiring')
+    expect(nowText(awaiting, expiresAt + 60_000)).toBe('awaiting approval · proposal expiring')
     expect(nowText({ ...awaiting, expiresAt: null }, NOW)).toBe('awaiting approval')
     const done = one('trigger-done').trigger
     expect(nowText(done, NOW)).toMatch(/^done · sold [\d.,]+ \S+ at \$[\d,.]+$/)
@@ -729,9 +802,43 @@ describe('buildTriggerCard — trigger', () => {
         (n) => n.dataset.triggerFact,
       ),
     ).toEqual(['size', 'balance', 'valid', 'approval'])
+    const balance = p.trigger.market.balance
+    const balanceValue = card.querySelector<HTMLElement>(
+      '[data-trigger-fact="balance"] .trigger-fact__value',
+    )!
+    if (balance) {
+      // A sell is sized from the token it holds.
+      expect(balanceValue.textContent).toBe(
+        `${formatTokenAmount(balance.human)} ${p.trigger.token.symbol}`,
+      )
+      expect(balanceValue.dataset.triggerNoValue).toBeUndefined()
+    } else {
+      expect(balanceValue.dataset.triggerNoValue).toBe('true')
+    }
+    const valid = card.querySelector<HTMLElement>('[data-trigger-fact="valid"]')!
+    const validValue = valid.querySelector('.trigger-fact__value')!.textContent
+    if (p.trigger.validUntil) {
+      // A dated condition reads its day, with the full stamp on hover.
+      expect(validValue).not.toBe('GTC')
+      expect(validValue).toMatch(/^[A-Z][a-z]{2} \d{1,2}, \d{4}$/)
+      expect(valid.title).not.toBe('')
+    } else {
+      expect(validValue).toBe('GTC')
+      expect(valid.title).toBe('')
+    }
+  })
+
+  it('reads GTC when the condition has no end, and a date when it has one', () => {
+    const gtc = render(payload(withTrigger('trigger-armed', (tr) => (tr.validUntil = null))))
+    expect(gtc.querySelector('[data-trigger-fact="valid"] .trigger-fact__value')).toHaveTextContent(
+      'GTC',
+    )
+    const dated = render(
+      payload(withTrigger('trigger-armed', (tr) => (tr.validUntil = '2027-03-05T12:00:00Z'))),
+    )
     expect(
-      card.querySelector('[data-trigger-fact="valid"] .trigger-fact__value'),
-    ).toHaveTextContent('GTC')
+      dated.querySelector('[data-trigger-fact="valid"] .trigger-fact__value'),
+    ).toHaveTextContent('Mar 5, 2027')
   })
 
   it('shows the hits as a hook on the live line', () => {
@@ -742,15 +849,30 @@ describe('buildTriggerCard — trigger', () => {
   })
 
   it('draws the awaiting proposal with where its line came from', () => {
-    const card = render(one('trigger-awaiting'))
+    const p = one('trigger-awaiting')
+    const { condition } = p.trigger
+    expect(condition.fromPriceUsd).not.toBeNull()
+    const card = render(p)
     expect(card.dataset.triggerStatus).toBe('awaiting_approval')
     expect(card.dataset.triggerAction).toBe('buy')
-    expect(card.querySelector('.trigger-card__from')?.textContent).toMatch(
-      /^line set [−+]\d+\.\d % from \$[\d,.]+$/,
-    )
-    expect(
-      card.querySelector('[data-trigger-fact="valid"] .trigger-fact__value')?.textContent,
-    ).not.toBe('GTC')
+    const from = card.querySelector('.trigger-card__from')?.textContent ?? ''
+    expect(from).toMatch(/^line set [−+]?\d+\.\d % from \$[\d,.]+$/)
+    expect(from.endsWith(`from ${formatDcaPrice(condition.fromPriceUsd)}`)).toBe(true)
+    const move = ((condition.priceUsd! - condition.fromPriceUsd!) / condition.fromPriceUsd!) * 100
+    expect(from).toContain(`${Math.abs(move).toFixed(1)} %`)
+    // A buy waits on the quote it spends.
+    const balance = card.querySelector('[data-trigger-fact="balance"] .trigger-fact__value')
+    if (p.trigger.market.balance) {
+      expect(balance).toHaveTextContent(
+        `${formatTokenAmount(p.trigger.market.balance.human)} ${p.trigger.quote.symbol}`,
+      )
+    }
+    if (p.trigger.action.needsApproval) {
+      expect(card.querySelector('[data-trigger-fact="approval"]')).toHaveAttribute(
+        'data-trigger-waits',
+        'true',
+      )
+    }
   })
 
   it('draws a done sell with its fill and no reason line', () => {
@@ -1264,7 +1386,10 @@ describe('refresh and events', () => {
     read.mockImplementationOnce(() => Promise.reject(new Error('gateway down')))
     host.querySelector<HTMLButtonElement>('[data-trigger-foot="refresh"]')!.click()
     await flush()
-    expect(read).toHaveBeenLastCalledWith('trading.trigger.list', {})
+    expect(read).toHaveBeenLastCalledWith(
+      'trading.trigger.list',
+      (fixture('triggers').request as Json).params,
+    )
     expect(host.querySelector('.trigger-card__refresh-error')).toHaveTextContent(
       'refresh failed: gateway down',
     )
