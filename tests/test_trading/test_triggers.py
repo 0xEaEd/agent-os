@@ -484,6 +484,12 @@ async def test_create_validation(world: World) -> None:
         assert err.value.code == code, (overrides, err.value)
     with pytest.raises(TradingError, match="quote is required on Robinhood"):
         await world.create(chain=ROBINHOOD, token="AAPL")
+    # An alert never trades: watching USDC itself falls back to the native coin
+    # as its counter, and Robinhood Chain needs no quote for it.
+    on_usdc = (await world.create(kind="alert", token="USDC", amount_pct=None))["trigger"]
+    assert on_usdc["token"]["symbol"] == "USDC" and on_usdc["quote"]["symbol"] == "ETH"
+    on_rh = await world.create(kind="alert", chain=ROBINHOOD, token="AAPL", amount_pct=None)
+    assert on_rh["trigger"]["status"] == "armed" and on_rh["trigger"]["quote"]["symbol"] == "ETH"
     named = (await world.create(name="  My   stop ", amount_pct=None, amount="0.05"))["trigger"]
     assert named["name"] == "My stop" and named["action"]["amount"]["human"] == "0.05"
     assert named["action"]["label"] == "sell 0.05 WETH → USDC"

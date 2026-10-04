@@ -146,6 +146,11 @@ now: give an absolute price"*). `--trail` is always a percent.
 - No price known: *"price unknown: the trigger waits until ETH has a price"*
   (the trigger still arms).
 
+An **alert** never trades, so its quote is only the counter the card shows:
+the given `--quote`, else the chain's USDC, else (USDC itself being watched,
+or a chain with no canonical USDC) the native coin. An alert is never
+refused for its quote.
+
 ## Ledger (schema v8)
 
 ```sql

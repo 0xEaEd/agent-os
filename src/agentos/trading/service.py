@@ -5750,14 +5750,28 @@ class TradingService:
         except Exception as exc:
             raise _err(exc) from exc
         meta_token = await self._dca_token(chain, token)
-        quote_ref = (quote or "").strip() or chain.usdc
-        if not quote_ref:
-            raise self._trigger_invalid(
-                f"quote is required on {chain.name}: it has no canonical USDC"
-            )
-        meta_quote = await self._dca_token(chain, quote_ref)
-        if meta_quote.address == meta_token.address:
-            raise self._trigger_invalid("token and quote are the same token")
+        quote_ref = (quote or "").strip()
+        if kind_ == "alert":
+            # An alert never trades, so its quote is only the counter shown on
+            # the card: the chain's USDC when it is not the watched token
+            # itself, else the native coin. Never a reason to refuse.
+            if quote_ref:
+                meta_quote = await self._dca_token(chain, quote_ref)
+            else:
+                meta_quote = (
+                    await self._dca_token(chain, chain.usdc) if chain.usdc else native_token(chain)
+                )
+            if meta_quote.address == meta_token.address:
+                meta_quote = native_token(chain)
+        else:
+            traded_quote = quote_ref or chain.usdc
+            if not traded_quote:
+                raise self._trigger_invalid(
+                    f"quote is required on {chain.name}: it has no canonical USDC"
+                )
+            meta_quote = await self._dca_token(chain, traded_quote)
+            if meta_quote.address == meta_token.address:
+                raise self._trigger_invalid("token and quote are the same token")
         current = await self._dca_price(chain, meta_token.address)
         symbol = meta_token.symbol or "the token"
         price_usd: float | None = None
