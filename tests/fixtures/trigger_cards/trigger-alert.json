@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "kind": "trigger",
+  "fetchedAt": "2026-10-04T09:15:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "get",
+    "params": {
+      "triggerId": "trg_3d4e5f60"
+    }
+  },
+  "trigger": {
+    "id": "trg_3d4e5f60",
+    "name": "Alert WETH −10 % from peak",
+    "kind": "alert",
+    "status": "armed",
+    "statusReason": null,
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0x89e0F1c2A3b4C5d6E7f8091a2B3c4D5e6F7ada97",
+      "label": "Key main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "priceUsd": 3795.0
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1.0
+    },
+    "condition": {
+      "direction": "trail",
+      "priceUsd": null,
+      "trailPct": 10.0,
+      "fromPriceUsd": null,
+      "peakPriceUsd": 3980.0,
+      "stopPriceUsd": 3582.0,
+      "confirmTicks": 2,
+      "hits": 0,
+      "label": "10 % below peak"
+    },
+    "action": {
+      "kind": "alert",
+      "amountUsd": null,
+      "amountPct": null,
+      "amount": null,
+      "estimatedUsd": null,
+      "slippagePct": null,
+      "needsApproval": false,
+      "approvalThresholdUsd": 100.0,
+      "dailyCapUsd": 1000.0,
+      "label": "notify"
+    },
+    "market": {
+      "priceUsd": 3795.0,
+      "armedPriceUsd": 3720.0,
+      "distancePct": -5.61,
+      "checkedAt": "2026-10-04T09:14:48Z",
+      "balance": null
+    },
+    "fires": [],
+    "result": null,
+    "validUntil": null,
+    "initiator": "manual",
+    "sessionKey": null,
+    "createdAt": "2026-10-02T07:30:00Z",
+    "updatedAt": "2026-10-04T09:14:48Z",
+    "approvedAt": null,
+    "armedAt": "2026-10-02T07:30:00Z",
+    "triggeredAt": null,
+    "expiresAt": null
+  }
+}

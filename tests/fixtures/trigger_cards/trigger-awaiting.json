@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "kind": "trigger",
+  "fetchedAt": "2026-10-04T09:15:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "get",
+    "params": {
+      "triggerId": "trg_9e8f7a6b"
+    }
+  },
+  "trigger": {
+    "id": "trg_9e8f7a6b",
+    "name": "Buy WETH under $3,402",
+    "kind": "buy",
+    "status": "awaiting_approval",
+    "statusReason": null,
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0x89e0F1c2A3b4C5d6E7f8091a2B3c4D5e6F7ada97",
+      "label": "Key main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "priceUsd": 3780.0
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1.0
+    },
+    "condition": {
+      "direction": "below",
+      "priceUsd": 3402.0,
+      "trailPct": null,
+      "fromPriceUsd": 3780.0,
+      "peakPriceUsd": null,
+      "stopPriceUsd": null,
+      "confirmTicks": 2,
+      "hits": 0,
+      "label": "under $3,402"
+    },
+    "action": {
+      "kind": "buy",
+      "amountUsd": 50.0,
+      "amountPct": null,
+      "amount": null,
+      "estimatedUsd": 50.0,
+      "slippagePct": 1.0,
+      "needsApproval": false,
+      "approvalThresholdUsd": 100.0,
+      "dailyCapUsd": 1000.0,
+      "label": "buy $50 of WETH with USDC"
+    },
+    "market": {
+      "priceUsd": 3780.0,
+      "armedPriceUsd": null,
+      "distancePct": -10.0,
+      "checkedAt": "2026-10-04T09:10:00Z",
+      "balance": {
+        "raw": "120500000",
+        "human": "120.5",
+        "usd": 120.5
+      }
+    },
+    "fires": [],
+    "result": null,
+    "validUntil": "2026-10-11T09:10:00Z",
+    "initiator": "agent",
+    "sessionKey": "agent:main:desk:7c1e",
+    "createdAt": "2026-10-04T09:10:00Z",
+    "updatedAt": "2026-10-04T09:10:00Z",
+    "approvedAt": null,
+    "armedAt": null,
+    "triggeredAt": null,
+    "expiresAt": "2026-10-05T09:10:00Z"
+  }
+}

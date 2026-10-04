@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "kind": "trigger",
+  "fetchedAt": "2026-10-04T09:15:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "get",
+    "params": {
+      "triggerId": "trg_5c6d7e8f"
+    }
+  },
+  "trigger": {
+    "id": "trg_5c6d7e8f",
+    "name": "Take-profit WETH",
+    "kind": "sell",
+    "status": "done",
+    "statusReason": "sold 0.025 WETH for 105.3 USDC at $4,212",
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0x89e0F1c2A3b4C5d6E7f8091a2B3c4D5e6F7ada97",
+      "label": "Key main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "priceUsd": 4205.0
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1.0
+    },
+    "condition": {
+      "direction": "above",
+      "priceUsd": 4200.0,
+      "trailPct": null,
+      "fromPriceUsd": null,
+      "peakPriceUsd": null,
+      "stopPriceUsd": null,
+      "confirmTicks": 2,
+      "hits": 2,
+      "label": "over $4,200"
+    },
+    "action": {
+      "kind": "sell",
+      "amountUsd": null,
+      "amountPct": null,
+      "amount": {
+        "raw": "25000000000000000",
+        "human": "0.025",
+        "usd": 105.13
+      },
+      "estimatedUsd": 105.13,
+      "slippagePct": 1.0,
+      "needsApproval": true,
+      "approvalThresholdUsd": 100.0,
+      "dailyCapUsd": 1000.0,
+      "label": "sell 0.025 WETH → USDC"
+    },
+    "market": {
+      "priceUsd": 4205.0,
+      "armedPriceUsd": 3950.0,
+      "distancePct": 0.0,
+      "checkedAt": "2026-10-03T14:02:30Z",
+      "balance": {
+        "raw": "25000000000000000",
+        "human": "0.025",
+        "usd": 105.13
+      }
+    },
+    "fires": [
+      {
+        "n": 1,
+        "at": "2026-10-03T14:01:00Z",
+        "manual": false,
+        "status": "filled",
+        "reasonCode": null,
+        "reason": null,
+        "priceUsd": 4212.0,
+        "orderId": "ord_00000000002b",
+        "txHash": "0x7f3a91c2d4e5b6a77f3a91c2d4e5b6a77f3a91c2d4e5b6a77f3a91c2d4e5b6a7",
+        "explorerUrl": "https://basescan.org/tx/0x7f3a91c2d4e5b6a77f3a91c2d4e5b6a77f3a91c2d4e5b6a77f3a91c2d4e5b6a7"
+      }
+    ],
+    "result": {
+      "orderId": "ord_00000000002b",
+      "txHash": "0x7f3a91c2d4e5b6a77f3a91c2d4e5b6a77f3a91c2d4e5b6a77f3a91c2d4e5b6a7",
+      "explorerUrl": "https://basescan.org/tx/0x7f3a91c2d4e5b6a77f3a91c2d4e5b6a77f3a91c2d4e5b6a77f3a91c2d4e5b6a7",
+      "amountIn": {
+        "raw": "25000000000000000",
+        "human": "0.025",
+        "usd": 105.3
+      },
+      "amountOut": {
+        "raw": "105300000",
+        "human": "105.3",
+        "usd": 105.3
+      },
+      "priceUsd": 4212.0,
+      "gasUsd": 0.02
+    },
+    "validUntil": null,
+    "initiator": "manual",
+    "sessionKey": null,
+    "createdAt": "2026-10-01T10:00:00Z",
+    "updatedAt": "2026-10-03T14:02:30Z",
+    "approvedAt": null,
+    "armedAt": "2026-10-01T10:00:00Z",
+    "triggeredAt": "2026-10-03T14:01:00Z",
+    "expiresAt": null
+  }
+}

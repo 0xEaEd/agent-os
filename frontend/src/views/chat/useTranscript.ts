@@ -14,6 +14,11 @@ import { createChartMounter, type ChartMounter } from './transcript/chart'
 import { createDcaMounter, type DcaActions, type DcaMounter } from './transcript/dca'
 import { createLpMounter, type LpActions, type LpMounter } from './transcript/lp'
 import {
+  createTriggerMounter,
+  type TriggerActions,
+  type TriggerMounter,
+} from './transcript/trigger'
+import {
   createStreamController,
   JUMP_TO_TAIL_GAP_PX,
   type StreamController,
@@ -254,6 +259,12 @@ export function useTranscript(opts: {
    * without it the cards carry no `.dca-actions`. Read live.
    */
   dcaActions?: DcaActions | null
+  /**
+   * The price trigger controls (trigger.ts: approve, reject, pause, resume,
+   * fire now, stop). Operator-only like `dcaActions`, so only the desktop's
+   * desk passes it; without it the cards carry no `.trigger-actions`. Read live.
+   */
+  triggerActions?: TriggerActions | null
 }): {
   containerRef: React.RefObject<HTMLDivElement | null>
   routerFxDockRef: React.RefObject<HTMLDivElement | null>
@@ -544,22 +555,52 @@ export function useTranscript(opts: {
       actions: () => dcaActionsRef.current,
     }),
   )
-  // A parked LP write's button waits for its order to settle; a DCA card
-  // re-reads itself when one of its buys settles.
+  // Price trigger cards (trigger.ts). Owns the "checked N s ago" clock (1 s
+  // while the stamp counts seconds) and the copy / Stop / Fire-now confirm
+  // resets, all cleared on unmount. ↻ re-reads over this connection
+  // (`trading.trigger.get` / `list` are agent-callable); the controls exist
+  // only while the caller hands over `triggerActions`.
+  const triggerActionsRef = useRef<TriggerActions | null>(opts.triggerActions ?? null)
+  useEffect(() => {
+    triggerActionsRef.current = opts.triggerActions ?? null
+  }, [opts.triggerActions])
+  // eslint-disable-next-line react-hooks/refs -- the factory stores the getters and reads .current only later, inside click handlers and renders outside React's render
+  const [triggerMounter] = useState<TriggerMounter>(() =>
+    createTriggerMounter({
+      fetchPayload: fetchChartPayload,
+      call: (method, params) => rpc.call(method, params),
+      actions: () => triggerActionsRef.current,
+    }),
+  )
+  // A parked LP write's button waits for its order to settle; a DCA or a
+  // trigger card re-reads itself when one of its orders settles.
   useEffect(
     () =>
       rpc.on('trading.order.finished', (payload: unknown) => {
-        const order = (payload as { order?: { orderId?: unknown } } | null)?.order
+        const order = (payload as { order?: { orderId?: unknown; triggerId?: unknown } } | null)
+          ?.order
         if (typeof order?.orderId !== 'string') return
         lpMounter.orderFinished(order.orderId)
         dcaMounter.orderFinished(order.orderId)
+        triggerMounter.orderFinished(
+          order.orderId,
+          typeof order.triggerId === 'string' ? order.triggerId : null,
+        )
       }),
-    [rpc, lpMounter, dcaMounter],
+    [rpc, lpMounter, dcaMounter, triggerMounter],
   )
   // Every mandate state change carries the full mandate: swap it in place.
   useEffect(
     () => rpc.on('trading.dca.changed', (payload: unknown) => dcaMounter.mandateChanged(payload)),
     [rpc, dcaMounter],
+  )
+  // Likewise every trigger state change carries the full trigger.
+  useEffect(
+    () =>
+      rpc.on('trading.trigger.changed', (payload: unknown) =>
+        triggerMounter.triggerChanged(payload),
+      ),
+    [rpc, triggerMounter],
   )
 
   // One seam for both inline-artifact renderers. The downstream deps (stream.ts,
@@ -572,8 +613,9 @@ export function useTranscript(opts: {
       cardsMounter.mountCards(container)
       lpMounter.mountLp(container)
       dcaMounter.mountDca(container)
+      triggerMounter.mountTrigger(container)
     },
-    [chartMounter, cardsMounter, lpMounter, dcaMounter],
+    [chartMounter, cardsMounter, lpMounter, dcaMounter, triggerMounter],
   )
 
   useEffect(() => {
@@ -584,8 +626,9 @@ export function useTranscript(opts: {
       cardsMounter.destroyAll()
       lpMounter.destroyAll()
       dcaMounter.destroyAll()
+      triggerMounter.destroyAll()
     }
-  }, [chartMounter, cardsMounter, lpMounter, dcaMounter])
+  }, [chartMounter, cardsMounter, lpMounter, dcaMounter, triggerMounter])
 
   // eslint-disable-next-line react-hooks/refs -- factory stores the refs and reads .current only later, inside methods invoked outside render (never at creation)
   const [controller] = useState<StreamController>(() =>
