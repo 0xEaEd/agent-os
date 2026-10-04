@@ -623,6 +623,11 @@ def _redact_named_credentials(
             ),
             text,
         )
+    # Before the assignment pass: that one consumes a whole URL as one
+    # ``scheme:`` match, so a query credential has to be masked while the
+    # query string is still its own text.
+    if assignments and "=" in text and ("?" in text or "&" in text):
+        text = _redact_query_credentials(text, mask=mask)
     if assignments and ("=" in text or ":" in text):
         text = _redact_assignments(text, mask=mask)
     return text
@@ -698,6 +703,30 @@ def _redact_pem_blocks(text: str, *, line_safe: bool) -> str:
         return "\n".join(masked)
 
     return _PEM_PRIVATE_KEY_BLOCK_RE.sub(_mask_block, text)
+
+
+#: ``?api_key=…`` / ``&password=…`` -- a credential in a URL query string.
+#: A pass of its own because :data:`_ASSIGNMENT_RE` cannot reach one: a URL's
+#: own ``scheme:`` matches that pattern first, with the rest of the URL as its
+#: "value", so every query parameter inside is consumed and never examined --
+#: ``https://x/v1?api_key=…`` matched as ``https`` = ``//x/v1?api_key=…``,
+#: and ``https`` is not a credential name (#3607). The value stops at the next
+#: separator, so ``&`` cannot run one parameter into the next.
+_QUERY_CREDENTIAL_RE = re.compile(
+    r"(?<=[?&])([A-Za-z][A-Za-z0-9_.\-]{0,64})=([^&\s\"'<>`]{1,4096})"
+)
+
+
+def _redact_query_credentials(text: str, *, mask: Callable[[str], str]) -> str:
+    """Mask the value of a credential-named URL query parameter."""
+
+    def _replace(match: re.Match[str]) -> str:
+        name, value = match.group(1), match.group(2)
+        if not _is_credential_name(name) or not _is_secret_literal_value(value):
+            return match.group(0)
+        return f"{name}={mask(value)}"
+
+    return _QUERY_CREDENTIAL_RE.sub(_replace, text)
 
 
 def _redact_assignments(text: str, *, mask: Callable[[str], str] = _mask_token) -> str:

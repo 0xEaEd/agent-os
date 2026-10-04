@@ -19,6 +19,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   on for. They are now matched as whole names. `PGPASSFILE`, which holds a
   path rather than a secret, is deliberately not, and the file it names has
   had a rule of its own since #2620/#2721. (#3608)
+- Redaction: a credential in a URL query string -- `?api_key=…`,
+  `&access_token=…`, `&password=…` -- was never masked, although the
+  *userinfo* of the same URL is (#3432). The name-driven pass recognises all
+  three names; what it could not do is reach them. `_ASSIGNMENT_RE` matches a
+  URL's own `scheme:` first, with the rest of the URL as its "value", and
+  since `https` is not a credential name the span is returned unchanged --
+  and consumed, so the query parameters inside are never examined. A pass of
+  its own now masks a credential-named query parameter before the assignment
+  pass runs, stopping its value at the next `&` so one parameter cannot
+  swallow the next. It is under the same gate as the assignment pass, so it
+  inherits that policy rather than widening it: off for source files and for
+  an arbitrary command's output. (#3607)
+- Browser tool: the newest-Node sort added with the PATH fallback (#3604) was
+  a no-op for fnm, so an older Node's `agent-browser` could win. `_version_key`
+  read the version from the directory above the leaf, which is right for nvm
+  (`.../versions/node/v24.16.0/bin`) and wrong for fnm
+  (`.../node-versions/v24.16.0/installation/bin`), where the parent of `bin`
+  is `installation` -- every fnm candidate keyed to `()`, so the sort had
+  nothing to order by and `glob` order decided. The version is now taken from
+  whichever path component parses as one, searched from the right, so both
+  layouts order newest first. (#3606)
+- Identity: a workspace bootstrap file (`AGENTS.md`, `SOUL.md`, …) saved with
+  a byte-order mark reached the system prompt as one. `identity.workspace`
+  read them as plain `utf-8` with `errors="replace"`, while the other two
+  readers of user-authored Markdown already honour a mark -- `SKILL.md` since
+  #2697 and knowledge-base ingest since #2670. PowerShell 5's `Set-Content
+  -Encoding UTF8` writes a UTF-8 BOM, which prepended `﻿` to the first
+  character; its `>` and `Out-File` write UTF-16, which decoded -- without
+  failing, because of `errors="replace"` -- into interleaved NULs and
+  replacement characters, so the agent was handed unreadable text where its
+  operating rules should be, at twice the length against the bootstrap
+  budget, crowding out the files after it. The rule now lives once, in
+  `agentos.text_encoding`, which `memory.ingest` also delegates to; the probe
+  reads four bytes rather than two, so UTF-32 is no longer read as UTF-16.
+  `errors="replace"` is kept, so a genuinely undecodable file still degrades
+  rather than failing a session. (#3587)
 - Browser: a gateway started by the desktop app, launchd or systemd now finds
   an `agent-browser` installed with `npm install -g` under nvm, fnm, Volta,
   pnpm, Bun or Homebrew. Those launchers pass a bare `PATH`, so the binary was
