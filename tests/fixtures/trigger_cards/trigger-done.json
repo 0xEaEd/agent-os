@@ -58,7 +58,7 @@
         "human": "0.02",
         "usd": 40.9
       },
-      "estimatedUsd": 40.9,
+      "estimatedUsd": 42.4,
       "slippagePct": null,
       "needsApproval": false,
       "approvalThresholdUsd": 100.0,
@@ -70,11 +70,7 @@
       "armedPriceUsd": 2000.0,
       "distancePct": null,
       "checkedAt": "2026-09-20T09:01:00Z",
-      "balance": {
-        "raw": "80000000000000000",
-        "human": "0.08",
-        "usd": 163.6
-      }
+      "balance": null
     },
     "fires": [
       {

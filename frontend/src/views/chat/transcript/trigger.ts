@@ -1105,10 +1105,13 @@ function gaugeNode(trigger: Trigger): HTMLElement | null {
   const linePrice = trail ? c.stopPriceUsd : c.priceUsd
   const gauge = el('div', 'trigger-gauge')
   gauge.dataset.triggerDirection = c.direction
-  if (model.distancePct !== null) {
-    gauge.dataset.triggerDist = String(Math.round(model.distancePct * 100) / 100)
+  // A finished trigger has no distance left to tint: the dot is just today's price.
+  if (!isTriggerTerminal(trigger.status)) {
+    if (model.distancePct !== null) {
+      gauge.dataset.triggerDist = String(Math.round(model.distancePct * 100) / 100)
+    }
+    if (model.proximity) gauge.dataset.triggerProximity = model.proximity
   }
-  if (model.proximity) gauge.dataset.triggerProximity = model.proximity
   gauge.setAttribute('role', 'img')
   gauge.setAttribute(
     'aria-label',
@@ -1243,9 +1246,48 @@ function fact(key: string, label: string, value: string, noValue = false): HTMLE
   return cell
 }
 
-/** "50 % · ≈ $189", "$50", "0.05 ETH · ≈ $189", "—". */
+/** A trigger that will not watch the price again: done, stopped, rejected, expired. */
+export function isTriggerTerminal(status: TriggerStatus): boolean {
+  return status === 'done' || status === 'stopped' || status === 'rejected' || status === 'expired'
+}
+
+/**
+ * What the fill moved: "0.02 WETH → 42.4 USDC · ≈ $42.4" (amountIn alone
+ * when the out side is unknown); '' when there is no result to read.
+ */
+function movedText(trigger: Trigger): string {
+  const result = trigger.result
+  if (!result?.amountIn?.human) return ''
+  const sell = trigger.kind !== 'buy'
+  const symbolIn = sell ? trigger.token.symbol : trigger.quote.symbol
+  const symbolOut = sell ? trigger.quote.symbol : trigger.token.symbol
+  const amountIn = formatTokenAmount(result.amountIn.human)
+  const moved = result.amountOut?.human
+    ? t('chat.triggerSizeMoved', {
+        amountIn,
+        symbolIn,
+        amountOut: formatTokenAmount(result.amountOut.human),
+        symbolOut,
+      })
+    : `${amountIn} ${symbolIn}`
+  const usd = result.amountIn.usd ?? result.amountOut?.usd ?? null
+  return [moved, usd !== null ? t('chat.triggerApprox', { usd: formatDcaUsd(usd) }) : '']
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/**
+ * "50 % · ≈ $189", "$50", "0.05 ETH · ≈ $189", "notify only", "—"; once a
+ * terminal trigger has filled, what the fill moved instead of what a fire
+ * would move now.
+ */
 export function sizeText(trigger: Trigger): string {
   const { action } = trigger
+  if (trigger.kind === 'alert') return t('chat.triggerSizeNotify')
+  if (isTriggerTerminal(trigger.status)) {
+    const moved = movedText(trigger)
+    if (moved) return moved
+  }
   const approx =
     action.estimatedUsd !== null
       ? t('chat.triggerApprox', { usd: formatDcaUsd(action.estimatedUsd) })
@@ -1265,38 +1307,52 @@ export function sizeText(trigger: Trigger): string {
   return NO_VALUE
 }
 
+/**
+ * size · wallet balance · valid until · approval. The balance is the wallet
+ * now, so a finished trigger (or an alert, which spends nothing) leaves it
+ * out rather than show a figure that is not part of its story; an alert
+ * places no order, so it has no approval either. An odd count lets the size
+ * span the row (CSS).
+ */
 function factsSection(trigger: Trigger): HTMLElement {
   const facts = el('section', 'trigger-card__facts')
+  const terminal = isTriggerTerminal(trigger.status)
   const size = sizeText(trigger)
-  facts.append(fact('size', t('chat.triggerFactSize'), size, size === NO_VALUE))
+  const sizeCell = fact('size', t('chat.triggerFactSize'), size, size === NO_VALUE)
+  if (size !== NO_VALUE) sizeCell.title = size
+  facts.append(sizeCell)
 
-  const balance = trigger.market.balance
-  const balanceSymbol = trigger.kind === 'buy' ? trigger.quote.symbol : trigger.token.symbol
-  facts.append(
-    fact(
-      'balance',
-      t('chat.triggerFactBalance'),
-      balance && balance.human ? `${formatTokenAmount(balance.human)} ${balanceSymbol}` : NO_VALUE,
-      !balance,
-    ),
-  )
+  if (trigger.kind !== 'alert' && !terminal) {
+    const balance = trigger.market.balance
+    const balanceSymbol = trigger.kind === 'buy' ? trigger.quote.symbol : trigger.token.symbol
+    facts.append(
+      fact(
+        'balance',
+        t('chat.triggerFactBalance'),
+        balance && balance.human
+          ? `${formatTokenAmount(balance.human)} ${balanceSymbol}`
+          : NO_VALUE,
+        !balance,
+      ),
+    )
+  }
 
   const valid = trigger.validUntil ? formatWhen(trigger.validUntil, false) : ''
   const validCell = fact('valid', t('chat.triggerFactValid'), valid || t('chat.triggerGtc'))
   if (trigger.validUntil) validCell.title = formatWhen(trigger.validUntil, true)
   facts.append(validCell)
 
-  const approval =
-    trigger.kind === 'alert'
-      ? t('chat.triggerApprovalNone')
-      : trigger.action.needsApproval
-        ? t('chat.triggerApprovalWaits', {
-            usd: formatDcaUsd(trigger.action.approvalThresholdUsd),
-          })
-        : t('chat.triggerApprovalAuto')
-  const approvalCell = fact('approval', t('chat.triggerFactApproval'), approval)
-  if (trigger.action.needsApproval) approvalCell.dataset.triggerWaits = 'true'
-  facts.append(approvalCell)
+  if (trigger.kind !== 'alert') {
+    const approval = trigger.action.needsApproval
+      ? t('chat.triggerApprovalWaits', {
+          usd: formatDcaUsd(trigger.action.approvalThresholdUsd),
+        })
+      : t('chat.triggerApprovalAuto')
+    const approvalCell = fact('approval', t('chat.triggerFactApproval'), approval)
+    // Only a trigger that can still fire has anything to wait for.
+    if (trigger.action.needsApproval && !terminal) approvalCell.dataset.triggerWaits = 'true'
+    facts.append(approvalCell)
+  }
   return facts
 }
 

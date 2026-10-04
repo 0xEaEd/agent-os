@@ -548,6 +548,36 @@ def test_panel_distance_and_trail(client: _Client) -> None:
     assert "peak $4,200.00 · stop $3,780.00" in result.stdout
 
 
+def test_panel_amounts_are_never_scientific(client: _Client) -> None:
+    payload = _fixture("trigger-done")
+    trigger = payload["trigger"]
+    trigger["market"]["balance"] = {"raw": "95367200000000", "human": "0.0000953672", "usd": 0.2}
+    trigger["result"]["amountIn"]["human"] = "0.00001234567"
+    client.responses["trading.trigger.get"] = payload
+    result = runner.invoke(trade_cmd.app, ["trigger", "show", TID])
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert "balance 0.0000953672 WETH" in out, out
+    assert "0.0000123457 WETH →" in out, out
+    assert "e-0" not in out
+
+
+@pytest.mark.parametrize(
+    ("human", "text"),
+    [
+        ("9.53672e-05", "0.0000953672 ETH"),
+        ("0.0000953672312", "0.0000953672 ETH"),
+        ("37.6", "37.6 ETH"),
+        ("1234567.891", "1234570 ETH"),
+        ("0", "0 ETH"),
+        ("", "—"),
+        ("n/a", "n/a ETH"),
+    ],
+)
+def test_amount_text_is_plain_decimal(human: str, text: str) -> None:
+    assert trade_cmd._dca_amount({"human": human}, "ETH") == text
+
+
 def test_list_table(client: _Client) -> None:
     payload = _fixture("triggers")
     client.responses["trading.trigger.list"] = payload

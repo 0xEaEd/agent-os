@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { DCA_ARTIFACT_MIME, formatCountdown, formatDcaPrice } from './dca'
+import { DCA_ARTIFACT_MIME, formatCountdown, formatDcaPrice, formatDcaUsd } from './dca'
 import { formatTokenAmount } from './lp'
 import {
   TRIGGER_ARTIFACT_MIME,
@@ -18,6 +18,7 @@ import {
   formatDistance,
   heroText,
   isTriggerArtifact,
+  isTriggerTerminal,
   layoutTriggerCard,
   normalizeTriggerPayload,
   normalizeTriggerRequest,
@@ -491,7 +492,7 @@ describe('hero, condition and distance text', () => {
     expect(heroText(usd)).toMatch(new RegExp(`^sell \\$100 of ${sym} when `))
     expect(sizeText({ ...pct, action: { ...pct.action, estimatedUsd: 189 } })).toBe('50 % · ≈ $189')
     expect(sizeText(usd)).toBe('$100')
-    expect(sizeText(one('trigger-alert').trigger)).toBe('—')
+    expect(sizeText(one('trigger-alert').trigger)).toBe('notify only')
   })
 
   it('derives the condition when the payload has no label', () => {
@@ -891,6 +892,124 @@ describe('buildTriggerCard — trigger', () => {
     expect(link.href).toMatch(/^https:\/\//)
     expect(link.rel).toBe('noopener noreferrer')
     expect(link.target).toBe('_blank')
+  })
+
+  it('reads a done fill as what it moved, never the wallet now', () => {
+    const p = one('trigger-done')
+    const tr = p.trigger
+    const { amountIn, amountOut } = tr.result!
+    // A sell spends the token and receives the quote.
+    const moved = `${formatTokenAmount(amountIn!.human)} ${tr.token.symbol} → ${formatTokenAmount(
+      amountOut!.human,
+    )} ${tr.quote.symbol}`
+    const usd = amountIn!.usd !== null ? ` · ≈ ${formatDcaUsd(amountIn!.usd)}` : ''
+    expect(sizeText(tr)).toBe(`${moved}${usd}`)
+    const card = render(p)
+    const facts = [...card.querySelectorAll<HTMLElement>('.trigger-card__facts .trigger-fact')]
+    // The balance is the wallet now: a finished trigger leaves it out, whatever the engine sent.
+    expect(facts.map((n) => n.dataset.triggerFact)).toEqual(['size', 'valid', 'approval'])
+    expect(card.querySelector('[data-trigger-fact="size"] .trigger-fact__value')?.textContent).toBe(
+      `${moved}${usd}`,
+    )
+    expect(card.querySelector('[data-trigger-fact="size"]')).toHaveAttribute(
+      'title',
+      `${moved}${usd}`,
+    )
+    expect(card.querySelector('.trigger-card__facts')?.textContent).not.toMatch(/wallet balance/)
+    // Its hero still says how it ended.
+    expect(card.querySelector('.trigger-card__now')?.textContent).toBe(nowText(tr, NOW))
+    expect(card.querySelector('.trigger-card__now')?.textContent).toMatch(/^done · sold /)
+
+    // Out side unknown: the in side alone, with the in side's USD.
+    const inOnly = { ...tr, result: { ...tr.result!, amountOut: null } }
+    expect(sizeText(inOnly)).toBe(`${formatTokenAmount(amountIn!.human)} ${tr.token.symbol}${usd}`)
+    // A buy spends the quote and receives the token.
+    const bought = { ...tr, kind: 'buy' as const }
+    expect(sizeText(bought)).toBe(
+      `${formatTokenAmount(amountIn!.human)} ${tr.quote.symbol} → ${formatTokenAmount(
+        amountOut!.human,
+      )} ${tr.token.symbol}${usd}`,
+    )
+    // No result (stopped, expired): the plan as it was.
+    const stopped = { ...tr, status: 'stopped' as const, result: null }
+    expect(sizeText(stopped)).not.toContain('→')
+    // An old engine that still sends a balance and a stale estimate cannot leak into a done card.
+    const stale = render(
+      payload(
+        withTrigger('trigger-done', (raw) => {
+          raw.market = {
+            ...(raw.market as Json),
+            balance: { raw: '0', human: '0', usd: 0 },
+          }
+          raw.action = { ...(raw.action as Json), amountPct: 100, estimatedUsd: 0 }
+        }),
+      ),
+    )
+    expect(stale.querySelector('[data-trigger-fact="balance"]')).toBeNull()
+    expect(stale.querySelector('[data-trigger-fact="size"]')?.textContent).toContain(moved)
+    expect(stale.querySelector('[data-trigger-fact="size"]')?.textContent).not.toContain('100 %')
+  })
+
+  it('keeps the live balance and approval hook only while the trigger can fire', () => {
+    const waiting = withTrigger('trigger-done', (raw) => {
+      raw.action = { ...(raw.action as Json), needsApproval: true }
+    })
+    const done = render(payload(waiting))
+    expect(done.querySelector('[data-trigger-fact="approval"]')).not.toHaveAttribute(
+      'data-trigger-waits',
+    )
+    const armed = render(
+      payload({ ...waiting, trigger: { ...(waiting.trigger as Json), status: 'armed' } }),
+    )
+    expect(armed.querySelector('[data-trigger-fact="approval"]')).toHaveAttribute(
+      'data-trigger-waits',
+      'true',
+    )
+    expect(armed.querySelector('[data-trigger-fact="balance"]')).not.toBeNull()
+    for (const status of ['done', 'stopped', 'rejected', 'expired'] as const) {
+      expect(isTriggerTerminal(status), status).toBe(true)
+    }
+    for (const status of ['awaiting_approval', 'armed', 'triggered', 'paused'] as const) {
+      expect(isTriggerTerminal(status), status).toBe(false)
+    }
+  })
+
+  it('draws an alert as notify only: no balance, no approval', () => {
+    const p = one('trigger-alert')
+    expect(p.trigger.kind).toBe('alert')
+    const card = render(p)
+    expect(
+      [...card.querySelectorAll<HTMLElement>('.trigger-card__facts .trigger-fact')].map(
+        (n) => n.dataset.triggerFact,
+      ),
+    ).toEqual(['size', 'valid'])
+    const size = card.querySelector<HTMLElement>('[data-trigger-fact="size"] .trigger-fact__value')!
+    expect(size.textContent).toBe('notify only')
+    expect(size.dataset.triggerNoValue).toBeUndefined()
+  })
+
+  it('ends a done alert at its price, with no distance after it or on the gauge', () => {
+    const fired = one('trigger-done').trigger.fires[0]!
+    const p = payload<TriggerOnePayload>(
+      inStatus('trigger-alert', 'done', {
+        statusReason: 'alerted at $1.00',
+        fires: [{ ...fired, status: 'alerted', priceUsd: 1, orderId: null, txHash: null }],
+      }),
+    )
+    // The engine's last distance is stale once the alert has fired.
+    expect(distancePctOf(p.trigger)).not.toBeNull()
+    const card = render(p)
+    expect(nowText(p.trigger, NOW)).toBe('done · alerted at $1.00')
+    expect(card.querySelector('.trigger-card__now')?.textContent).toBe('done · alerted at $1.00')
+    expect(card.querySelector('.trigger-card__reason')).toBeNull()
+    const gauge = card.querySelector<HTMLElement>('.trigger-gauge')
+    if (gauge) {
+      expect(gauge.dataset.triggerDist).toBeUndefined()
+      expect(gauge.dataset.triggerProximity).toBeUndefined()
+    }
+    expect(card.querySelector('[data-trigger-fact="size"]')?.textContent).toContain('notify only')
+    expect(card.querySelector('[data-trigger-fact="approval"]')).toBeNull()
+    expect(card.querySelector('[data-trigger-fact="balance"]')).toBeNull()
   })
 
   it('lists at most the five newest fires and words each outcome', () => {

@@ -325,7 +325,9 @@ agentos trade trigger approve|reject|pause|resume|stop|fire TRG_ID --json   # th
 # "cắt lỗ 10%" / "stop loss 10%" → --sell --pct 100 --below -10%; "chốt lời 20%" → --sell --pct 50
 # --above +20% (size 100% when not said); "mua $50 ETH khi về 3500" → --buy --usd 50 --below 3500;
 # "trailing stop 10%" → --sell --pct 100 --trail 10; "báo tôi khi ETH lên 5000" → --alert --above 5000.
-# Always report the id (trg_…). An --alert needs no quote.
+# --quote defaults to the chain's USDC, or the native coin when USDC itself is the token
+# ("bán hết USDC khi …" → create USDC --sell --pct 100 … sells USDC for ETH); on Robinhood
+# Chain name it for --sell/--buy. Always report the id (trg_…). An --alert needs no quote.
 # "How is my DCA doing?" → dca list --json (or dca show DCA_ID --json) and answer in one
 # line (status, spent of cap, next buy); the card shows the rest. Always give the mandate id.
 # Errors (JSON on stderr, exit 2 = fix the input): trading.dca.invalid (the message names the

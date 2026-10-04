@@ -5771,7 +5771,11 @@ class TradingService:
                 )
             meta_quote = await self._dca_token(chain, traded_quote)
             if meta_quote.address == meta_token.address:
-                raise self._trigger_invalid("token and quote are the same token")
+                if quote_ref:
+                    raise self._trigger_invalid("token and quote are the same token")
+                # "Sell all my USDC" with no quote: the default (USDC) is the
+                # token itself, so the natural counter is the native coin.
+                meta_quote = native_token(chain)
         current = await self._dca_price(chain, meta_token.address)
         symbol = meta_token.symbol or "the token"
         price_usd: float | None = None
@@ -6393,14 +6397,12 @@ class TradingService:
     async def _trigger_balance(
         self, chain: ChainSpec, row: dict[str, Any], address: str
     ) -> int | None:
-        """The wallet's balance of ``address`` for a card.
+        """The wallet's balance of ``address`` for a live trigger's card.
 
-        Read from the chain while the trigger is live, from the ledger's cache
-        once it is over (or when the read fails).
+        Read from the chain, from the ledger's cache when the read fails. A
+        terminal card shows no balance (``triggers.trigger_json``).
         """
         cached = self.ledger.get_balance(chain.chain_id, str(row["wallet"]), address)
-        if row["status"] not in triggers.LIVE_STATUSES:
-            return cached
         try:
             record = self.vault.get(str(row["wallet"]))
             meta = await self.token_meta(chain, address)
@@ -6442,7 +6444,7 @@ class TradingService:
                     gas_usd=gas.get(str(order["order_id"])),
                 )
         balance_raw: int | None = None
-        if kind != "alert":
+        if kind != "alert" and row["status"] in triggers.LIVE_STATUSES:
             held = str(row["token"] if kind == "sell" else row["quote"])
             balance_raw = await self._trigger_balance(chain, row, held)
         try:

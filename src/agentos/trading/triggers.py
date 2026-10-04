@@ -535,10 +535,15 @@ def trigger_json(
     """The ``Trigger`` object. ``fires`` are ready ``Fire`` dicts, newest first.
 
     ``balance_raw`` is the wallet's token (sell) or quote (buy) balance now;
-    ignored for an alert.
+    ignored for an alert and once the trigger is over: the wallet now says
+    nothing about what the trigger did, so a terminal card has no balance and
+    its ``estimatedUsd`` is what its order actually moved (``result``).
     """
     kind = str(row["kind"])
     status = str(row["status"])
+    live = status in LIVE_STATUSES
+    if not live:
+        balance_raw = None
     direction = str(row["direction"])
     trail = finite(row.get("trail_pct"))
     threshold = finite(row.get("price_usd"))
@@ -551,6 +556,8 @@ def trigger_json(
     estimate = estimated_usd(
         row, token_decimals=token_dec, token_price=now_price, balance_raw=balance_raw
     )
+    if not live and result is not None:
+        estimate = finite((result.get("amountIn") or {}).get("usd"))
     amount: dict[str, Any] | None = None
     amount_human: str | None = None
     if row.get("amount_raw") is not None:
@@ -563,7 +570,6 @@ def trigger_json(
         else:
             balance = amount_json(int(balance_raw), quote_dec, quote_price)
     slippage = row.get("slippage_pct")
-    live = status in LIVE_STATUSES
     return {
         "id": row["trigger_id"],
         "name": row["name"],

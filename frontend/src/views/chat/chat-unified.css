@@ -2797,11 +2797,16 @@
   font-weight: 600;
 }
 
-/* Facts: 2×2. */
+/* Facts: 2×2 (2 columns; fewer cells on alerts and finished triggers). */
 .chat-surface .trigger-card__facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
+}
+
+/* An odd count (a finished trigger has no balance) gives the size the row. */
+.chat-surface .trigger-card__facts > .trigger-fact:first-child:nth-last-child(odd) {
+  grid-column: 1 / -1;
 }
 
 .chat-surface .trigger-fact {

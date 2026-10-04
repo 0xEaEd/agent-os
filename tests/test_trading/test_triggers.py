@@ -26,7 +26,7 @@ import pytest
 
 from agentos.trading import service as service_module
 from agentos.trading import triggers
-from agentos.trading.chains import BASE, ROBINHOOD
+from agentos.trading.chains import BASE, NATIVE_ADDRESS, ROBINHOOD
 from agentos.trading.dca import iso
 from agentos.trading.ledger import SCHEMA_VERSION, Ledger
 from agentos.trading.service import TradingError, TradingService
@@ -470,7 +470,7 @@ async def test_create_validation(world: World) -> None:
         ({"kind": "alert"}, "trading.trigger.invalid"),
         ({"price": "0"}, "trading.trigger.invalid"),
         ({"valid_for_seconds": 30}, "trading.trigger.invalid"),
-        ({"token": "USDC"}, "trading.trigger.invalid"),  # token == quote
+        ({"token": "USDC", "quote": "USDC"}, "trading.trigger.invalid"),  # given quote == token
         ({"wallet": "all"}, "trading.trigger.invalid"),
         ({"slippage_pct": 50}, "trading.trigger.invalid"),
         ({"token": "NOPE"}, "trading.token_not_found"),
@@ -490,6 +490,20 @@ async def test_create_validation(world: World) -> None:
     assert on_usdc["token"]["symbol"] == "USDC" and on_usdc["quote"]["symbol"] == "ETH"
     on_rh = await world.create(kind="alert", chain=ROBINHOOD, token="AAPL", amount_pct=None)
     assert on_rh["trigger"]["status"] == "armed" and on_rh["trigger"]["quote"]["symbol"] == "ETH"
+    # "Sell all my USDC" with no quote: the default quote (USDC) is the token
+    # itself, so the trigger sells it for the native coin.
+    all_usdc = (await world.create(token="USDC", direction="above", price="0.5", amount_pct=100))[
+        "trigger"
+    ]
+    assert all_usdc["token"]["symbol"] == "USDC" and all_usdc["quote"]["symbol"] == "ETH"
+    assert all_usdc["quote"]["address"] == NATIVE_ADDRESS
+    assert all_usdc["action"]["label"] == "sell 100 % of USDC → ETH"
+    buy_usdc = (
+        await world.create(
+            kind="buy", token="USDC", direction="below", price="2", amount_pct=None, amount_usd=5
+        )
+    )["trigger"]
+    assert buy_usdc["quote"]["symbol"] == "ETH"
     named = (await world.create(name="  My   stop ", amount_pct=None, amount="0.05"))["trigger"]
     assert named["name"] == "My stop" and named["action"]["amount"]["human"] == "0.05"
     assert named["action"]["label"] == "sell 0.05 WETH → USDC"
@@ -637,6 +651,47 @@ async def test_sell_by_pct_sizes_from_the_balance_at_fire_time(world: World) -> 
     assert result["priceUsd"] == pytest.approx(1880.0) and result["gasUsd"] is not None
     fired = _events(world.service, "trading.trigger.fired")
     assert len(fired) == 1 and fired[0]["fire"]["orderId"] == order["orderId"]
+
+
+async def test_result_gas_counts_the_approval_and_the_card_shows_what_moved(
+    world: World,
+) -> None:
+    # The sell needs an ERC-20 approve first: its gas is the order's too.
+    world.uniswap.approval_needed = True
+    world.chain.set_erc20(WETH, world.wallet, 5 * 10**16)  # 0.05 WETH: under the threshold
+    trigger_id = (await world.create(amount_pct=100))["trigger"]["id"]
+    await world.check(1890)
+    await world.check(1880)
+    (order_row,) = world.service.ledger.orders_for_trigger(trigger_id)
+    order_id = str(order_row["order_id"])
+    assert order_row["status"] == "confirmed" and order_row["approval_tx_hash"]
+    entries = [
+        e
+        for e in world.service.ledger.list_entries(wallet=world.wallet)
+        if e.get("order_id") == order_id
+    ]
+    assert sorted(e["kind"] for e in entries) == ["approval", "swap"]
+    booked = sum(float(e["gas_usd"]) for e in entries)
+    assert world.service.ledger.order_gas_usd([order_id])[order_id] == pytest.approx(booked)
+    card = (await world.service.trigger_get(trigger_id))["trigger"]
+    assert card["status"] == "done"
+    assert card["result"]["gasUsd"] == pytest.approx(booked)
+    # A done card says what was sold, not what the (now empty) wallet holds.
+    assert world.weth() == 0
+    assert card["result"]["amountIn"]["human"] == "0.05"
+    assert card["action"]["estimatedUsd"] == pytest.approx(94.0)
+    assert card["action"]["estimatedUsd"] == card["result"]["amountIn"]["usd"]
+    assert card["market"]["balance"] is None and card["market"]["distancePct"] is None
+
+
+async def test_a_stopped_card_has_no_balance(world: World) -> None:
+    trigger_id = (await world.create())["trigger"]["id"]
+    live = (await world.service.trigger_get(trigger_id))["trigger"]
+    assert live["market"]["balance"]["human"] == "0.1"
+    assert live["action"]["estimatedUsd"] == pytest.approx(100.0)
+    stopped = (await world.service.trigger_stop(trigger_id))["trigger"]
+    assert stopped["status"] == "stopped" and stopped["result"] is None
+    assert stopped["market"]["balance"] is None
 
 
 async def test_buy_by_usd(world: World) -> None:

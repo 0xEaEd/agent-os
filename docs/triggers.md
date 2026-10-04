@@ -29,7 +29,7 @@ price, repeating alerts, LP-range alerts (follow-up).
 |---|---|
 | **kind** | what fires: `sell` (token → quote), `buy` (quote → token) or `alert` (a notification, no order) |
 | **token** | the token whose USD price is watched **and** traded |
-| **quote** | the counter token: what a sell receives / a buy spends; defaults to the chain's USDC |
+| **quote** | the counter token: what a sell receives / a buy spends; defaults to the chain's USDC, or the native coin when USDC itself is the token |
 | **condition** | `below <price>`, `above <price>`, or `trail <pct>` (price falls `pct` % from the highest price seen since arming) |
 | **armed** | the trigger is live and being checked every tick |
 | **fire** | one attempt to act when the condition held (or a manual *Fire now*) |
@@ -146,6 +146,12 @@ now: give an absolute price"*). `--trail` is always a percent.
 - No price known: *"price unknown: the trigger waits until ETH has a price"*
   (the trigger still arms).
 
+The quote of a **sell** or **buy** defaults to the chain's USDC, or the
+native coin when USDC itself is the token: `trigger create USDC --sell --pct
+100 --above 0.5` sells USDC for ETH (`sell 100 % of USDC → ETH`). Only a
+`--quote` the user gives that equals the token is refused (*"token and quote
+are the same token"*); a chain with no canonical USDC needs `--quote`.
+
 An **alert** never trades, so its quote is only the counter the card shows:
 the given `--quote`, else the chain's USDC, else (USDC itself being watched,
 or a chain with no canonical USDC) the native coin. An alert is never
@@ -240,7 +246,7 @@ Errors are `TradingError` codes: `trading.trigger.not_found`,
 direction; `buy` with `trail`; no size on sell/buy, more than one size, a
 size on `alert`; `amount_pct` outside 0 < pct ≤ 100; price ≤ 0; trail
 outside 0 < pct < 100; `valid_for` under 60 s; a percent price with no
-current price; quote missing on Robinhood Chain; token == quote; wallet
+current price; quote missing on Robinhood Chain; a given quote == token; wallet
 `all`), `trading.operator_required` (RPC layer), plus `trading.disabled`,
 `wallet.locked`, `trading.unsupported_chain`, `trading.token_not_found`.
 At create, `slippagePct` may not exceed the agent slippage ceiling.
@@ -287,7 +293,7 @@ Trigger = {
     "amountUsd": number | null,           // buy: spend; sell: size when given in USD
     "amountPct": number | null,           // sell: % of balance
     "amount": Amount | null,              // sell: fixed token amount
-    "estimatedUsd": number | null,        // what the fire would move at the current price (sell pct/amount × price)
+    "estimatedUsd": number | null,        // what the fire would move at the current price (sell pct/amount × price); once terminal with a result: result.amountIn.usd, what actually moved
     "slippagePct": number | null,
     "needsApproval": boolean,             // estimatedUsd > approvalThresholdUsd
     "approvalThresholdUsd": number, "dailyCapUsd": number,
@@ -298,7 +304,7 @@ Trigger = {
     "armedPriceUsd": number | null,
     "distancePct": number | null,         // signed % move from priceUsd needed to fire: −2.1 (must fall), +4.0 (must rise); 0 when already met
     "checkedAt": iso | null,
-    "balance": Amount | null              // the wallet's token (sell) / quote (buy) balance now; null for alert
+    "balance": Amount | null              // the wallet's token (sell) / quote (buy) balance now; null for alert and for a terminal trigger
   },
   "fires": [Fire],                        // newest first, ≤ 20
   "result": {                             // when done by an order

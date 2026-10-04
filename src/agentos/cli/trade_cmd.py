@@ -22,6 +22,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, tzinfo
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -2517,13 +2518,17 @@ def _dca_bar(progress: Any, width: int = _DCA_BAR_WIDTH) -> str:
 
 
 def _dca_amount(amount: Any, symbol: str) -> str:
+    """``0.0000953672 ETH``: six significant digits, never scientific notation."""
     human = _dict(amount).get("human")
     if human is None or human == "":
         return "—"
     try:
-        return f"{float(human):.6g} {symbol}"
-    except (TypeError, ValueError):
+        value = Decimal(f"{Decimal(str(human)):.6g}")
+    except (InvalidOperation, ValueError):
         return f"{human} {symbol}"
+    if not value.is_finite():
+        return f"{human} {symbol}"
+    return f"{value:f} {symbol}"
 
 
 def _dca_pair(mandate: dict[str, Any]) -> str:
@@ -3330,7 +3335,12 @@ def trigger_create(
         None, "--usd", help="--buy: US dollars to spend; --sell: US dollars' worth to sell"
     ),
     quote: str | None = typer.Option(
-        None, "--quote", help="Counter token (default the chain's USDC; required on robinhood)"
+        None,
+        "--quote",
+        help=(
+            "Counter token (default the chain's USDC, or the native coin when the token "
+            "is USDC; required on robinhood for --sell/--buy)"
+        ),
     ),
     chain: str = typer.Option("base", "--chain", help="base or robinhood"),
     wallet: str | None = typer.Option(
