@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Redaction: `PGPASSWORD`, `MYSQL_PWD` and `REDISCLI_AUTH` went through an
+  `env` dump verbatim while `DB_PASSWORD` beside them was masked. Names are
+  matched on segment boundaries, and these do not produce the segment the
+  vocabulary holds: `PGPASSWORD` is one all-caps run with no separator and no
+  case boundary, so it stays a single segment and `password` is never found
+  inside it, while `MYSQL_PWD` and `REDISCLI_AUTH` split into `pwd` and
+  `auth`, neither strong enough alone to add as a segment. All three are the
+  documented password variable for their client -- libpq, mysql and
+  redis-cli -- and `env` is exactly the output the assignment pass is turned
+  on for. They are now matched as whole names. `PGPASSFILE`, which holds a
+  path rather than a secret, is deliberately not, and the file it names has
+  had a rule of its own since #2620/#2721. (#3608)
 - Redaction: a credential in a URL query string -- `?api_key=…`,
   `&access_token=…`, `&password=…` -- was never masked, although the
   *userinfo* of the same URL is (#3432). The name-driven pass recognises all
