@@ -93,18 +93,21 @@ export function TriggerCard({
   const facts: { key: string; label: string; value: string; tone?: 'warn' }[] = [
     { key: 'what', label: t('trading.trigger.card.fact.what'), value: actionText(tr) },
     { key: 'when', label: t('trading.trigger.card.fact.when'), value: conditionText(tr) },
-    {
+  ]
+  // An alert places no order: no size, no balance, no approval to wait for.
+  if (trades) {
+    facts.push({
       key: 'size',
       label: t('trading.trigger.card.fact.size'),
-      value: trades ? sizeText(tr) : t('trading.trigger.card.notifyOnly'),
-      tone: trades && tr.action.needsApproval ? 'warn' : undefined,
-    },
-    {
-      key: 'now',
-      label: t('trading.trigger.card.fact.now'),
-      value: priceText(tr.market?.priceUsd ?? tr.token.priceUsd),
-    },
-  ]
+      value: sizeText(tr),
+      tone: tr.action.needsApproval ? 'warn' : undefined,
+    })
+  }
+  facts.push({
+    key: 'now',
+    label: t('trading.trigger.card.fact.now'),
+    value: priceText(tr.market?.priceUsd ?? tr.token.priceUsd),
+  })
   if (trades && balance) {
     facts.push({
       key: 'balance',
@@ -193,7 +196,9 @@ export function TriggerCard({
         </ul>
       ) : null}
 
-      <p className="trd-trigger__enforced">{t('trading.trigger.card.enforced')}</p>
+      <p className="trd-trigger__enforced" data-testid="trigger-enforced">
+        {t(trades ? 'trading.trigger.card.enforced' : 'trading.trigger.card.enforcedAlert')}
+      </p>
 
       {tr.statusReason ? (
         <section className="trd-card__note" data-testid="trigger-reason">

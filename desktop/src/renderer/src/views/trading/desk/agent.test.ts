@@ -326,6 +326,31 @@ describe('tradingAgentFiles · price triggers (v20)', () => {
   })
 })
 
+describe('tradingAgentFiles · where a trigger is approved, and USDC (v21)', () => {
+  const agents = tradingAgentFiles()['AGENTS.md'] ?? ''
+  const section = agents.slice(agents.indexOf('## Triggers'), agents.indexOf('## Bridging'))
+
+  it('points at the chat card and the approvals area, never the BOOK', () => {
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(21)
+    expect(section.length).toBeGreaterThan(0)
+    // The live desk heard "Approve & arm trong Book": the button is not there.
+    expect(section).toMatch(
+      /\*\*Approve & arm\*\*\s+button is on the trigger card in this chat and on the\s+same proposal in the approvals area above the composer\s+—\s+not in the BOOK/,
+    )
+  })
+
+  it('needs no --quote for a USDC sell or buy: the engine trades it against the native coin', () => {
+    expect(section).toMatch(/A stablecoin sell or buy — USDC itself as the token/)
+    expect(section).toMatch(
+      /needs no `--quote`: the engine sells it to \/ buys it with the chain's\s+native coin \(ETH\)/,
+    )
+    expect(section).toMatch(
+      /`agentos trade trigger create USDC --sell --pct 100 --above 0\.5\s+--json`/,
+    )
+    expect(section).toMatch(/Never pass `--quote USDC` for a USDC trigger/)
+  })
+})
+
 describe('syncTradingAgent', () => {
   function rpcWith(agents: Array<{ id: string }>) {
     const calls: Array<[string, Record<string, unknown>]> = []

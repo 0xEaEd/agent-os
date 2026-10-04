@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const css = readFileSync('src/renderer/src/views/chat/chat.css', 'utf8')
@@ -685,5 +686,87 @@ describe('desktop trigger card skin', () => {
       expect(block, r).toBeTruthy()
       expect(block, r).not.toMatch(/text-transform/)
     }
+  })
+})
+
+// The shared renderer is the class inventory: every class it emits must be
+// drawn by the desk skin, or that part renders bare — the live desk once ran
+// "trên 0.5Base" together in the header, put a list row's status dot on a line
+// of its own and printed "↻refresh⧉copy id" as one word, all from rules that
+// were never written. Read the renderer itself so a class added there fails
+// here until the skin draws it.
+describe('desktop trigger skin covers the shared renderer', () => {
+  // Beside this file: views/chat → the repo root is six levels up. (jsdom
+  // gives `import.meta.url` an http scheme, so the path comes from __dirname.)
+  const renderer = readFileSync(
+    resolve(__dirname, '../../../../../../frontend/src/views/chat/transcript/trigger.ts'),
+    'utf8',
+  )
+  // Every quoted or template literal, split into class-shaped tokens: the
+  // `el(tag, 'a b')` class names, the SVG `class:` values and the selectors the
+  // mounter queries. `data-trigger-*` attribute names start with `data-` and
+  // a path like `trigger-cards/` ends in a slash, so neither counts.
+  const literals = renderer.match(/'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g) ?? []
+  const emitted = new Set(
+    literals.flatMap((lit) =>
+      [
+        ...lit.matchAll(
+          /(?<![\w-])(?:msg-artifact-trigger(?:(?:-{1,2}|__)[a-z0-9]+)*|trigger(?:(?:-{1,2}|__)[a-z0-9]+)+)(?![\w/-])/g,
+        ),
+      ].map((m) => m[0]),
+    ),
+  )
+  const drawn = (cls: string): boolean => {
+    const hook = new RegExp(`\\.${cls}(?![\\w-])`)
+    return selectors.some((sel) => hook.test(sel))
+  }
+
+  it('reads the inventory off the renderer', () => {
+    // A broken extraction must not pass by finding nothing to check.
+    expect(emitted.size).toBeGreaterThan(60)
+    for (const cls of [
+      'trigger-card__title',
+      'trigger-chain',
+      'trigger-pill__dot',
+      'trigger-row__dot',
+      'trigger-row__main',
+      'trigger-card__actions',
+      'trigger-card__action-glyph',
+      'trigger-sep',
+      'msg-artifact-trigger__body',
+    ]) {
+      expect(emitted, cls).toContain(cls)
+    }
+  })
+
+  it('has at least one rule for every class the renderer emits', () => {
+    const missing = [...emitted].filter((cls) => !drawn(cls))
+    expect(missing).toEqual([])
+  })
+
+  it('lays the list row out as a grid with the dot in its own column', () => {
+    const row = css.match(/^\.trigger-row \{[\s\S]*?^\}/m)?.[0]
+    expect(row).toMatch(/display: grid;/)
+    expect(row).toMatch(/grid-template-columns: max-content minmax\(0, 1fr\)/)
+    expect(css).toMatch(/^\.trigger-row__dot \{[^}]*width: 6px;/m)
+    // The old ::before dot was a flex item that wrapped onto its own line.
+    expect(selectors).not.toContain('.trigger-row::before')
+  })
+
+  it('spaces the header, the pill dot and the footer actions', () => {
+    expect(css).toMatch(/^\.trigger-card__title \{[^}]*display: flex;[^}]*gap: \d+px;/m)
+    expect(css).toMatch(/^\.trigger-pill__dot \{[^}]*background: currentColor;/m)
+    expect(css).toMatch(/^\.trigger-card__actions \{[^}]*gap: \d+px;/m)
+    expect(css).toMatch(/^\.msg-body \.trigger-card__action \{[^}]*gap: \d+px;/m)
+    // A list head holds only its title: it must not be pushed to the right.
+    expect(selectors).not.toContain('.trigger-card__head > :last-child')
+  })
+
+  it('colours a fire by the attribute the renderer stamps', () => {
+    expect(renderer).toMatch(/row\.dataset\.triggerFireStatus = /)
+    expect(selectors).toContain(
+      ".trigger-fire[data-trigger-fire-status='failed'] .trigger-fire__status",
+    )
+    expect(selectors.some((sel) => sel.includes('.trigger-fire[data-status='))).toBe(false)
   })
 })

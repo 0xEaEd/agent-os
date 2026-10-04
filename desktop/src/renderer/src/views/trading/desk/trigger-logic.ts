@@ -151,8 +151,35 @@ export function planText(tr: Pick<Trigger, 'action' | 'token' | 'condition'>): s
   return [`${tr.action.kind}${size ? ` ${size}` : ''} ${tr.token.symbol}`, when].join(' · ')
 }
 
-/** "50 % · ≈ $189", "$50", "0.05 ETH · ≈ $189", "—": the card's size fact. */
-export function sizeText(tr: Pick<Trigger, 'action' | 'token'>): string {
+/**
+ * What a done trigger's order actually moved: "0.02 ETH → 42.4 USDC · ≈ $42.40"
+ * (the in side alone when the out side is unknown); '' without a result.
+ */
+export function movedText(tr: Pick<Trigger, 'action' | 'token' | 'quote' | 'result'>): string {
+  const r = tr.result
+  if (!r?.amountIn?.human) return ''
+  const [inSym, outSym] =
+    tr.action.kind === 'buy'
+      ? [tr.quote.symbol, tr.token.symbol]
+      : [tr.token.symbol, tr.quote.symbol]
+  const moved = r.amountOut?.human
+    ? `${formatAmount(r.amountIn.human)} ${inSym} → ${formatAmount(r.amountOut.human)} ${outSym}`
+    : `${formatAmount(r.amountIn.human)} ${inSym}`
+  const usd = r.amountIn.usd ?? tr.action.estimatedUsd
+  return usd !== null && Number.isFinite(usd) ? `${moved} · ≈ ${usdText(usd)}` : moved
+}
+
+/**
+ * "50 % · ≈ $189", "$50", "0.05 ETH · ≈ $189", "—": the card's size fact. A
+ * done trigger with a result says what its order moved instead of the plan.
+ */
+export function sizeText(
+  tr: Pick<Trigger, 'action' | 'token'> & Partial<Pick<Trigger, 'quote' | 'result' | 'status'>>,
+): string {
+  if (tr.status === 'done' && tr.result && tr.quote) {
+    const moved = movedText({ ...tr, quote: tr.quote, result: tr.result })
+    if (moved) return moved
+  }
   const size = sizeOnly(tr)
   if (!size) return '—'
   const est = tr.action.estimatedUsd
@@ -183,6 +210,12 @@ export function triggerStateKey(tr: Pick<Trigger, 'status'>): MessageKey {
 export function triggerWord(tr: Trigger): string {
   const state = t(triggerStateKey(tr))
   if (tr.status === 'triggered') return `${state} · ${t('trading.trigger.word.orderOpen')}`
+  // Done says how it ended ("Done · sold 0.05 ETH … at $3,788"); never a
+  // distance — a finished trigger has no line left to reach.
+  if (tr.status === 'done') {
+    const reason = triggerReason(tr)
+    return reason && reason !== 'user' ? `${state} · ${reason}` : state
+  }
   if (tr.status !== 'armed') return state
   const hits = tr.condition?.hits ?? 0
   const need = tr.condition?.confirmTicks ?? 2
@@ -203,6 +236,12 @@ export function triggerWord(tr: Trigger): string {
  * approval".
  */
 export function nowText(tr: Trigger): string {
+  // Finished: how it ended, never a stale distance to a line it no longer watches.
+  if (TERMINAL.has(tr.status)) {
+    const state = t(triggerStateKey(tr)).toLowerCase()
+    const reason = triggerReason(tr)
+    return reason && reason !== 'user' ? `${state} · ${reason}` : state
+  }
   if (tr.status === 'awaiting_approval') {
     const price = tr.market?.priceUsd ?? tr.token.priceUsd
     return price !== null

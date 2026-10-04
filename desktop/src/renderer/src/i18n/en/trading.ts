@@ -1048,10 +1048,11 @@ export const trading = {
   'trading.trigger.card.gtc': 'until stopped',
   'trading.trigger.card.automatic': 'trades at once',
   'trading.trigger.card.waits': 'waits for you · over {threshold}',
-  'trading.trigger.card.notifyOnly': 'a notification, no order',
   'trading.trigger.card.needsApproval': 'Fire waits for you',
   'trading.trigger.card.enforced':
     'The engine watches the price and confirms it on two checks in a row before it acts. Every fire is an ordinary order through your limits.',
+  'trading.trigger.card.enforcedAlert':
+    'The engine watches the price and confirms it on two checks in a row, then notifies you once. An alert places no order and moves no funds.',
   'trading.trigger.card.approve': 'Approve & arm',
   'trading.trigger.card.reject': 'Reject',
   'trading.trigger.warn.noPrice': 'price unknown: the trigger waits until {token} has a price',

@@ -26,6 +26,7 @@ import {
 
 const NO_MANDATES: Mandate[] = []
 const NO_TRIGGERS: Trigger[] = []
+const NO_IDS: ReadonlySet<string> = new Set()
 /** A second click on Stop within this long stops the mandate; after it, the button disarms. */
 const STOP_ARM_MS = 4000
 
@@ -135,28 +136,28 @@ function MandateProgress({ mandate }: { mandate: Mandate }) {
  * The one-line band above the composer that says what the missions are
  * doing. Renders nothing when there is nothing running: a band that says
  * IDLE over an idle composer is chrome, not information.
+ *
+ * Price triggers are not named here: their rows in the controls below
+ * already carry the state word, the price and the distance, and naming
+ * them twice cost the transcript a line per trigger.
  */
 export function MissionStrip({
   missions,
   running,
   pendingApprovals,
   mandates = NO_MANDATES,
-  triggers = NO_TRIGGERS,
 }: {
   missions: RawJob[]
   running: ReadonlySet<string>
   pendingApprovals: number
   /** The desk's DCA mandates, listed after the cron missions. */
   mandates?: Mandate[]
-  /** The desk's price triggers, listed after the mandates. */
-  triggers?: Trigger[]
 }) {
   const now = useMandateClock(mandates)
   // The finished rows left out are counted (and opened) in the controls row
   // below, once; the strip only names what it shows.
   const { rows } = mandateRows(mandates)
-  const { rows: triggerItems } = triggerRows(triggers)
-  if (missions.length === 0 && mandates.length === 0 && triggers.length === 0) return null
+  if (missions.length === 0 && mandates.length === 0) return null
   return (
     <div className="trd-mstrip" role="status" data-testid="mission-strip">
       {missions.map((job) => {
@@ -186,20 +187,6 @@ export function MissionStrip({
           <span className="trd-mstrip__word trd-mono">{mandateProgressText(m)}</span>
         </span>
       ))}
-      {triggerItems.map((tr) => (
-        <span
-          key={tr.id}
-          className="trd-mstrip__item"
-          data-kind="trigger"
-          data-state={tr.status}
-          data-near={isNear(tr) || undefined}
-          data-testid="mission-strip-trigger"
-        >
-          <span className="trd-mstrip__dot" aria-hidden />
-          <b>{tr.name}</b>
-          <span className="trd-mstrip__word">{triggerWord(tr)}</span>
-        </span>
-      ))}
     </div>
   )
 }
@@ -227,6 +214,7 @@ export function MissionControls({
   onMandateEdit,
   onMandateStop,
   triggers = NO_TRIGGERS,
+  askedTriggers = NO_IDS,
   triggerBusy = null,
   onTriggerPause,
   onTriggerResume,
@@ -255,6 +243,11 @@ export function MissionControls({
   onMandateStop?: (m: Mandate) => void
   /** Price triggers, listed after the mandates with their own controls. */
   triggers?: Trigger[]
+  /**
+   * Pending triggers whose proposal card is already on screen in the
+   * approvals region: decided there, so not listed again as a row.
+   */
+  askedTriggers?: ReadonlySet<string>
   /** The trigger with a write in flight: its row is locked until it lands. */
   triggerBusy?: string | null
   onTriggerPause?: (tr: Trigger) => void
@@ -266,7 +259,10 @@ export function MissionControls({
   const [showAll, setShowAll] = useState(false)
   const { rows, more } = mandateRows(mandates, showAll)
   const [showAllTriggers, setShowAllTriggers] = useState(false)
-  const triggerList = triggerRows(triggers, showAllTriggers)
+  const triggerList = triggerRows(
+    askedTriggers.size ? triggers.filter((tr) => !askedTriggers.has(tr.id)) : triggers,
+    showAllTriggers,
+  )
   return (
     <div className="trd-mctl" data-testid="mission-controls">
       {missions.map((job) => {
@@ -480,7 +476,7 @@ function MandateRow({
         <span className="trd-mctl__hint">{t('trading.dca.review')}</span>
       ) : null}
       {steerable ? (
-        <>
+        <span className="trd-mctl__ctl">
           {m.status === 'active' ? (
             <Button
               variant="ghost"
@@ -555,7 +551,7 @@ function MandateRow({
               <OctagonX className="size-3.5" strokeWidth={1.75} aria-hidden />
             </Button>
           )}
-        </>
+        </span>
       ) : null}
     </div>
   )
@@ -611,6 +607,7 @@ function TriggerRow({
   // The engine's statusReason on hover: "paused: nothing to sell", "alerted at $3,790".
   const reason = triggerTitle(tr)
   const fireLabel = t(fireNowKey(tr))
+  const word = triggerWord(tr)
   return (
     <div
       className="trd-mctl__row"
@@ -628,8 +625,9 @@ function TriggerRow({
       <span className="trd-mctl__name" title={reason ? `${tr.name} · ${reason}` : tr.name}>
         {tr.name}
       </span>
-      <span className="trd-mctl__word" data-testid="trigger-word">
-        {triggerWord(tr)}
+      {/* Ellipsized in a narrow column: the whole word on hover. */}
+      <span className="trd-mctl__word" data-testid="trigger-word" title={word}>
+        {word}
       </span>
       <span className="trd-mctl__runs trd-mono" data-testid="trigger-plan">
         {planText(tr)}
@@ -637,97 +635,99 @@ function TriggerRow({
       {tr.status === 'awaiting_approval' ? (
         <span className="trd-mctl__hint">{t('trading.trigger.review')}</span>
       ) : null}
-      {steerable ? (
-        <>
-          {tr.status === 'armed' ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              disabled={busy}
-              aria-label={t('trading.trigger.pause')}
-              title={t('trading.trigger.pause')}
-              onClick={() => onPause?.(tr)}
-              data-testid="trigger-pause"
-            >
-              <Pause className="size-3.5" strokeWidth={1.75} aria-hidden />
-            </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="icon"
-              disabled={busy}
-              aria-label={t('trading.trigger.resume')}
-              title={t('trading.trigger.resume')}
-              onClick={() => onResume?.(tr)}
-              data-testid="trigger-resume"
-            >
-              <Play className="size-3.5" strokeWidth={1.75} aria-hidden />
-            </Button>
-          )}
-          {fireArmed ? (
+      {stoppable ? (
+        <span className="trd-mctl__ctl">
+          {steerable ? (
+            <>
+              {tr.status === 'armed' ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={t('trading.trigger.pause')}
+                  title={t('trading.trigger.pause')}
+                  onClick={() => onPause?.(tr)}
+                  data-testid="trigger-pause"
+                >
+                  <Pause className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={t('trading.trigger.resume')}
+                  title={t('trading.trigger.resume')}
+                  onClick={() => onResume?.(tr)}
+                  data-testid="trigger-resume"
+                >
+                  <Play className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              )}
+              {fireArmed ? (
+                <button
+                  type="button"
+                  className="trd-mctl__confirm app-no-drag"
+                  data-tone="fire"
+                  disabled={busy}
+                  onClick={() => {
+                    setFireArmed(false)
+                    onFire?.(tr)
+                  }}
+                  data-testid="trigger-fire"
+                  data-armed
+                >
+                  {`${fireLabel} ${t('trading.trigger.fireAgain')}`}
+                </button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={fireLabel}
+                  title={fireLabel}
+                  onClick={() => {
+                    setStopArmed(false)
+                    setFireArmed(true)
+                  }}
+                  data-testid="trigger-fire"
+                >
+                  <Zap className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              )}
+            </>
+          ) : null}
+          {stopArmed ? (
             <button
               type="button"
               className="trd-mctl__confirm app-no-drag"
-              data-tone="fire"
               disabled={busy}
               onClick={() => {
-                setFireArmed(false)
-                onFire?.(tr)
+                setStopArmed(false)
+                onStop?.(tr)
               }}
-              data-testid="trigger-fire"
+              data-testid="trigger-stop"
               data-armed
             >
-              {`${fireLabel} ${t('trading.trigger.fireAgain')}`}
+              {t('trading.trigger.stopAgain')}
             </button>
           ) : (
             <Button
               variant="ghost"
               size="icon"
               disabled={busy}
-              aria-label={fireLabel}
-              title={fireLabel}
+              aria-label={t('trading.trigger.stop')}
+              title={t('trading.trigger.stop')}
               onClick={() => {
-                setStopArmed(false)
-                setFireArmed(true)
+                setFireArmed(false)
+                setStopArmed(true)
               }}
-              data-testid="trigger-fire"
+              data-testid="trigger-stop"
             >
-              <Zap className="size-3.5" strokeWidth={1.75} aria-hidden />
+              <OctagonX className="size-3.5" strokeWidth={1.75} aria-hidden />
             </Button>
           )}
-        </>
-      ) : null}
-      {stoppable ? (
-        stopArmed ? (
-          <button
-            type="button"
-            className="trd-mctl__confirm app-no-drag"
-            disabled={busy}
-            onClick={() => {
-              setStopArmed(false)
-              onStop?.(tr)
-            }}
-            data-testid="trigger-stop"
-            data-armed
-          >
-            {t('trading.trigger.stopAgain')}
-          </button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="icon"
-            disabled={busy}
-            aria-label={t('trading.trigger.stop')}
-            title={t('trading.trigger.stop')}
-            onClick={() => {
-              setFireArmed(false)
-              setStopArmed(true)
-            }}
-            data-testid="trigger-stop"
-          >
-            <OctagonX className="size-3.5" strokeWidth={1.75} aria-hidden />
-          </Button>
-        )
+        </span>
       ) : null}
     </div>
   )

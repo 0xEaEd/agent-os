@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 20
+export const TRADING_AGENT_VERSION = 21
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -232,9 +232,18 @@ Reading it:
 - "mua $50 ETH khi về 3500" → \`--buy --usd 50 --below 3500\`.
 - "trailing stop 10 %" → \`--sell --pct 100 --trail 10\`.
 - "báo tôi khi ETH lên 5000" → \`--alert --above 5000\`.
+- A stablecoin sell or buy — USDC itself as the token,
+  "bán hết USDC khi lên 0.5", "buy USDC with ETH if it drops to 0.99" —
+  needs no \`--quote\`: the engine sells it to / buys it with the chain's
+  native coin (ETH):
+  \`agentos trade trigger create USDC --sell --pct 100 --above 0.5 --json\`.
+  Never pass \`--quote USDC\` for a USDC trigger (token and quote would be
+  the same token) and never ask which coin to trade it for.
 - From you \`create\` always answers \`status: "awaiting_approval"\`. The
-  card carries an **Approve & arm** button: say so in one sentence with the
-  trigger id (\`trg_…\`), then stop. Never approve it yourself.
+  **Approve & arm** button is on the trigger card in this chat and on the
+  same proposal in the approvals area above the composer — not in the BOOK.
+  Say so in one sentence with the trigger id (\`trg_…\`), then stop. Never
+  approve it yourself.
 - "how are my triggers" → \`agentos trade trigger list --json\`, answered in
   one line. Never state a trigger's status from memory: read it in the same
   turn first.

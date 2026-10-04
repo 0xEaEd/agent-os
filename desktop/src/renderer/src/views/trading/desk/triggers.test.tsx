@@ -184,6 +184,49 @@ describe('trigger logic', () => {
     expect(nowText(PENDING)).toBe('ETH $3,882 · awaiting approval')
   })
 
+  it('says how a finished trigger ended, never a stale distance, and what its order moved', () => {
+    // A ledger row from before the engine nulled it still carries a distance.
+    const done = trigger({
+      status: 'done',
+      statusReason: 'sold 0.02 ETH for 42.4 USDC at $2,120',
+      market: { ...PAYLOAD.trigger.market, priceUsd: 2120, distancePct: -2.1, balance: null },
+      action: { ...PAYLOAD.trigger.action, estimatedUsd: 42.4 },
+      result: {
+        orderId: 'ord_000000000001',
+        txHash: null,
+        explorerUrl: null,
+        amountIn: { raw: '20000000000000000', human: '0.02', usd: 42.4 },
+        amountOut: { raw: '42400000', human: '42.4', usd: 42.4 },
+        priceUsd: 2120,
+        gasUsd: 0.01,
+      },
+    })
+    expect(triggerWord(done)).toBe('Done · sold 0.02 ETH for 42.4 USDC at $2,120')
+    expect(nowText(done)).toBe('done · sold 0.02 ETH for 42.4 USDC at $2,120')
+    for (const text of [triggerWord(done), nowText(done)]) {
+      expect(text).not.toMatch(/%|line/)
+    }
+    expect(sizeText(done)).toBe('0.02 ETH → 42.4 USDC · ≈ $42.40')
+    // A buy moved the quote in and the token out.
+    const bought = {
+      ...done,
+      kind: 'buy' as const,
+      action: { ...BUY.action, estimatedUsd: 42.4 },
+      result: {
+        ...done.result!,
+        amountIn: { raw: '42400000', human: '42.4', usd: 42.4 },
+        amountOut: { raw: '20000000000000000', human: '0.02', usd: 42.4 },
+      },
+    }
+    expect(sizeText(bought)).toBe('42.4 USDC → 0.02 ETH · ≈ $42.40')
+    // Stopped by the user: the state alone, the reason stays on hover.
+    const stopped = trigger({ status: 'stopped', statusReason: 'user', market: done.market })
+    expect(triggerWord(stopped)).toBe('Stopped')
+    expect(nowText(stopped)).toBe('stopped')
+    // Without a result the size is still the plan.
+    expect(sizeText(trigger({ status: 'done', result: null }))).toBe('50 % · ≈ $194')
+  })
+
   it('is near within 1 % of the line, and only while armed', () => {
     expect(isNear(near())).toBe(true)
     expect(isNear(trigger())).toBe(false)
@@ -313,11 +356,41 @@ describe('TriggerCard', () => {
     )
     // An alert trades nothing: no size, no balance, no approval line.
     const card = screen.getByTestId('trigger-card')
-    expect(card.querySelector(`[data-fact='size'] dd`)).toHaveTextContent(
-      'a notification, no order',
-    )
+    expect(card.querySelector(`[data-fact='what'] dd`)).toHaveTextContent('notify')
+    expect(card.querySelector(`[data-fact='size']`)).toBeNull()
     expect(card.querySelector(`[data-fact='approval']`)).toBeNull()
     expect(card.querySelector(`[data-fact='balance']`)).toBeNull()
+    expect(screen.queryByTestId('trigger-needs-approval')).toBeNull()
+  })
+
+  it('says an alert only notifies: no order, never "an ordinary order through your limits"', () => {
+    const { unmount } = renderDesk(
+      <TriggerCard
+        trigger={{ ...ALERT, status: 'awaiting_approval' }}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+      />,
+    )
+    const enforced = screen.getByTestId('trigger-enforced')
+    expect(enforced).toHaveTextContent('notifies you once')
+    expect(enforced).toHaveTextContent('An alert places no order')
+    expect(enforced).not.toHaveTextContent('ordinary order')
+    unmount()
+    // A trigger that trades still says every fire goes through the limits.
+    renderDesk(
+      <TriggerCard
+        trigger={PENDING}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+      />,
+    )
+    expect(screen.getByTestId('trigger-enforced')).toHaveTextContent(
+      'Every fire is an ordinary order through your limits.',
+    )
   })
 
   it('locks both buttons while the decision is in flight, and says Touch ID while it asks', () => {
@@ -539,6 +612,48 @@ describe('triggers among the missions', () => {
     expect(screen.getByTestId('trigger-stop')).toBeDisabled()
   })
 
+  it('leaves out a pending trigger whose card is already in the approvals region', () => {
+    controls([PENDING, trigger()], { askedTriggers: new Set([PENDING.id]) })
+    const rows = screen.getAllByTestId('trigger-row')
+    expect(rows.map((r) => r.getAttribute('data-trigger'))).toEqual(['trg_1a2b3c4d'])
+    expect(screen.queryByText('Review it above the composer')).toBeNull()
+  })
+
+  it('obeys the mandates’ caps: live rows, then two finished newest first, then "+N more"', () => {
+    const all = [
+      trigger(),
+      trigger({ id: 'c', status: 'expired', updatedAt: '2026-10-04T05:30:00Z' }),
+      trigger({ id: 'b', status: 'stopped', updatedAt: '2026-10-04T05:45:00Z' }),
+      trigger({ id: 'a', status: 'done', updatedAt: '2026-10-04T05:40:00Z' }),
+      // Finished over an hour ago: gone from the desk.
+      trigger({ id: 'old', status: 'done', updatedAt: '2026-10-04T04:30:00Z' }),
+    ]
+    controls(deskTriggers(all, SESSION, NOW))
+    const ids = () =>
+      screen.getAllByTestId('trigger-row').map((r) => r.getAttribute('data-trigger'))
+    expect(ids()).toEqual(['trg_1a2b3c4d', 'b', 'a'])
+    expect(screen.getByTestId('trigger-more')).toHaveTextContent('+1 more')
+    fireEvent.click(screen.getByTestId('trigger-more'))
+    expect(ids()).toEqual(['trg_1a2b3c4d', 'b', 'a', 'c'])
+    expect(screen.getByTestId('trigger-more')).toHaveTextContent('show fewer')
+  })
+
+  it('keeps every control of a row in one group, so the group wraps whole and Stop stays reachable', () => {
+    controls([trigger(), trigger({ id: 't', status: 'triggered' })])
+    const [armed, fired] = screen.getAllByTestId('trigger-row') as HTMLElement[]
+    const group = armed!.querySelector('.trd-mctl__ctl')
+    expect(group).not.toBeNull()
+    for (const id of ['trigger-pause', 'trigger-fire', 'trigger-stop']) {
+      expect(group).toContainElement(within(armed!).getByTestId(id))
+    }
+    // The armed second click is spelled out inside the same group.
+    fireEvent.click(within(armed!).getByTestId('trigger-stop'))
+    expect(group).toContainElement(within(armed!).getByTestId('trigger-stop'))
+    expect(fired!.querySelector('.trd-mctl__ctl')).toContainElement(
+      within(fired!).getByTestId('trigger-stop'),
+    )
+  })
+
   it('shows two finished rows at most, then "+N more"', () => {
     controls([
       trigger(),
@@ -551,17 +666,33 @@ describe('triggers among the missions', () => {
     expect(screen.getAllByTestId('trigger-row')).toHaveLength(4)
   })
 
-  it('names triggers in the strip above the composer; the status strip sums them in one chip', () => {
+  it('names a trigger once, in its row; the strip above the composer leaves it out', () => {
+    // The dot strip used to repeat every trigger row word for word, a line
+    // per trigger taken from the transcript.
     renderDesk(
       <>
-        <MissionStrip missions={[]} running={new Set()} pendingApprovals={0} triggers={[near()]} />
+        <MissionStrip missions={[]} running={new Set()} pendingApprovals={0} mandates={[]} />
+        <MissionControls
+          missions={[]}
+          running={new Set()}
+          pendingApprovals={0}
+          busy={false}
+          onStart={vi.fn()}
+          onEdit={vi.fn()}
+          onRun={vi.fn()}
+          onSetEnabled={vi.fn()}
+          onRemove={vi.fn()}
+          showStart={false}
+          triggers={[near()]}
+        />
         <StatusStrip mode="trading" onSwitchMode={vi.fn()} triggers={[near(), BUY]} />
       </>,
     )
-    expect(screen.getByTestId('mission-strip-trigger')).toHaveTextContent(
-      'Stop-loss ETHArmed · ETH $3,811 · −0.3 %',
-    )
-    expect(screen.getByTestId('mission-strip-trigger')).toHaveAttribute('data-near', 'true')
+    expect(screen.queryByTestId('mission-strip')).toBeNull()
+    expect(screen.queryByTestId('mission-strip-trigger')).toBeNull()
+    expect(screen.getAllByTestId('trigger-row')).toHaveLength(1)
+    expect(screen.getByTestId('trigger-word')).toHaveTextContent('Armed · ETH $3,811 · −0.3 %')
+    expect(screen.getByTestId('trigger-row')).toHaveAttribute('data-near', 'true')
     const chip = screen.getByTestId('strip-triggers')
     expect(chip).toHaveTextContent(/^Triggers ×2 · near$/)
     expect(chip).toHaveAttribute('data-state', 'near')
@@ -741,5 +872,61 @@ describe('useMissions · triggers', () => {
     // No `fire` in the answer and no manual fire in the history: said, not silent.
     await fireNow(null)
     expect(toasts.info).toHaveBeenLastCalledWith('Nothing fired · Stop-loss ETH', id)
+  })
+})
+
+// jsdom has no layout, so the geometry the live desk got wrong is pinned in
+// desk.css itself. A trigger row once ran 600px wide in a 544px column, its
+// Stop under the BOOK where no pointer could reach it; and with a proposal
+// docked the transcript shrank to 28px.
+describe('missions rows and the transcript floor · CSS contract', () => {
+  const deskCss = readFileSync('src/renderer/src/views/trading/desk/desk.css', 'utf8')
+  const rules = [...deskCss.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(
+    ([, selector = '', body = '']) => ({ selector: selector.trim(), body }),
+  )
+  const rule = (selector: string) => rules.find((r) => r.selector === selector)?.body ?? ''
+
+  it('never lets a row outgrow its column: it shrinks, wraps, and its texts ellipsize', () => {
+    const row = rule('.trd-mctl__row')
+    expect(row).toMatch(/min-width: 0;/)
+    expect(row).toMatch(/max-width: 100%;/)
+    expect(row).toMatch(/flex-wrap: wrap;/)
+    // A fixed height cannot hold a second line.
+    expect(row).not.toMatch(/(^|[^-])height: \d+px;/m)
+    expect(row).toMatch(/min-height: \d+px;/)
+    for (const part of ['.trd-mctl__name', '.trd-mctl__word', '.trd-mctl__runs']) {
+      expect(rule(part), part).toMatch(/overflow: hidden;/)
+      expect(rule(part), part).toMatch(/text-overflow: ellipsis;/)
+    }
+    // The controls are one group that never shrinks: it drops to the next line whole.
+    const ctl = rule('.trd-mctl__ctl')
+    expect(ctl).toMatch(/flex-shrink: 0;/)
+    expect(ctl).toMatch(/margin-left: auto;/)
+    expect(rule('.trd-mctl')).toMatch(/min-width: 0;/)
+  })
+
+  it('caps the rows band and lets it scroll, so it cannot eat the transcript', () => {
+    const band = rule('.trd-mctl')
+    expect(band).toMatch(/max-height: min\([\d.]+rem, \d+vh\);/)
+    expect(band).toMatch(/overflow-y: auto;/)
+  })
+
+  it('gives the desk transcript a floor and lets the approvals region yield instead', () => {
+    const thread = rule('.chat-desktop[data-desk] .chat-thread')
+    expect(thread).toMatch(/flex: 1 1 0;/)
+    const floor = /min-height: clamp\(([\d.]+)rem, (\d+)vh, ([\d.]+)rem\);/.exec(thread)
+    expect(floor).toBeTruthy()
+    // At a 1200×800 window the floor is well over the 28px the tester saw.
+    const px = Math.min(
+      Math.max(Number(floor![1]) * 16, (Number(floor![2]) / 100) * 800),
+      Number(floor![3]) * 16,
+    )
+    expect(px).toBeGreaterThanOrEqual(120)
+    const asks = rule('.trd-asks')
+    expect(asks).toMatch(/flex: 0 1 auto;/)
+    expect(asks).not.toMatch(/flex-shrink: 0;/)
+    // …and scrolls its cards inside its own cap.
+    expect(asks).toMatch(/max-height: min\(\d+vh, [\d.]+rem\);/)
+    expect(asks).toMatch(/overflow-y: auto;/)
   })
 })

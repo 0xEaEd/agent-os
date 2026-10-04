@@ -372,6 +372,12 @@ export function useDeskInstruments(
   const missionRuns = desk?.missions.running ?? NO_RUNS
   const awaitingMandates = desk?.missions.awaitingMandates ?? NO_MANDATES
   const awaitingTriggers = desk?.missions.awaitingTriggers ?? NO_TRIGGERS
+  // A pending trigger's card sits in the approvals region; its Missions row
+  // would only repeat it, so the controls leave it out.
+  const askedTriggers = useMemo(
+    () => new Set(awaitingTriggers.map((tr) => tr.id)),
+    [awaitingTriggers],
+  )
   // `pick` is the catalogue; `form` is one contract, with the preset it came
   // from (null for a blank contract, an edit, or the one-shot swap chip). A
   // DCA mandate being edited rides along as `mandate`.
@@ -485,13 +491,14 @@ export function useDeskInstruments(
           running={missions.running}
           pendingApprovals={pendingOrders.length}
           mandates={missions.mandates}
-          triggers={missions.triggers}
         />
       </div>
     ),
     seats: (
       <div className="trd-seatstack">
-        {missions.missions.length || missions.mandates.length || missions.triggers.length ? (
+        {missions.missions.length ||
+        missions.mandates.length ||
+        missions.triggers.some((tr) => !askedTriggers.has(tr.id)) ? (
           <MissionControls
             missions={missions.missions}
             running={missions.running}
@@ -519,6 +526,7 @@ export function useDeskInstruments(
             }
             onMandateStop={(m) => void missions.mandate.stop(m)}
             triggers={missions.triggers}
+            askedTriggers={askedTriggers}
             triggerBusy={missions.trigger.pending}
             onTriggerPause={(tr) => void missions.trigger.pause(tr)}
             onTriggerResume={(tr) => void missions.trigger.resume(tr)}

@@ -430,7 +430,10 @@ export interface Trigger {
     amountUsd: number | null
     amountPct: number | null
     amount: LpPlanAmount | null
-    /** What the fire would move at the current price. */
+    /**
+     * What the fire would move at the current price; once terminal with a
+     * result, what the order actually moved.
+     */
     estimatedUsd: number | null
     slippagePct: number | null
     needsApproval: boolean
@@ -446,7 +449,7 @@ export interface Trigger {
     /** Signed % move from priceUsd needed to fire: −2.1 must fall, +4.0 must rise; 0 when met. */
     distancePct: number | null
     checkedAt: string | null
-    /** The wallet's token (sell) / quote (buy) balance now; null for an alert. */
+    /** The wallet's token (sell) / quote (buy) balance now; null for an alert and once terminal. */
     balance: LpPlanAmount | null
   }
   /** Newest first, at most 20. */

@@ -531,21 +531,40 @@
   background: var(--danger);
   color: var(--danger);
 }
+/* Rows never outgrow the column: the controls are a band above the
+   composer, and a row that ran under the BOOK put its Stop out of reach.
+   The list scrolls inside its own cap so the transcript keeps its floor. */
 .trd-mctl {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 0 2px;
+  min-width: 0;
+  max-height: min(9.5rem, 22vh);
+  padding: 1px 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
+/* A row shrinks and wraps: its texts ellipsize, its controls (one group)
+   drop to a second line rather than past the edge. */
 .trd-mctl__row {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  height: 26px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 26px;
   padding: 0 2px 0 10px;
-  border-radius: var(--radius-pill);
+  border-radius: 13px;
   background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-mctl__ctl {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
 }
 .trd-mctl__row[data-state='running'] {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
@@ -609,6 +628,7 @@
 }
 .trd-mctl__kind {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   height: 18px;
   padding: 0 6px;
@@ -625,9 +645,11 @@
 }
 .trd-mctl__word {
   margin-right: 4px;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: 10.5px;
   letter-spacing: 0.06em;
+  text-overflow: ellipsis;
   white-space: nowrap;
   text-transform: uppercase;
   color: var(--muted-foreground);
@@ -650,6 +672,8 @@
    bought nothing, so a finished row with no buys never reads as a success. */
 .trd-mctl__runs {
   margin-right: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -681,6 +705,9 @@
   outline-offset: 1px;
 }
 .trd-mctl__hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding-right: 8px;
   font-size: 11px;
   color: var(--dim);
@@ -761,10 +788,6 @@
 .trd-mstrip__item[data-near] .trd-mstrip__dot {
   background: var(--warn);
 }
-.trd-mctl__row[data-kind='trigger'] .trd-mctl__runs {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 /* Fire now, armed: spelled out in amber — it trades at once, it is not final. */
 .trd-mctl__row .trd-mctl__confirm[data-tone='fire'] {
   color: var(--warn);
@@ -810,7 +833,7 @@
   position: relative;
   z-index: 3;
   display: flex;
-  flex-shrink: 0;
+  flex: 0 1 auto;
   flex-direction: column;
   gap: 8px;
   width: 100%;
@@ -2006,8 +2029,15 @@ body[data-dragging] .trd-book__handle {
   height: auto;
   min-height: 0;
 }
+/* The transcript keeps a floor. With a proposal docked, the dot strip, the
+   mission rows and the composer all above the fold, it once shrank to 28px
+   and hid the very card the agent had just posted. A zero basis freezes it
+   at the floor when space runs short, so the approvals region (the one
+   flexible sibling) yields first and scrolls inside its own cap. */
 .chat-desktop[data-desk] .chat-thread {
   --chat-col: min(56rem, calc(100% - 3rem));
+  flex: 1 1 0;
+  min-height: clamp(6rem, 22vh, 11rem);
 }
 .chat-desktop[data-desk] .composer-shell {
   padding-top: 0;
