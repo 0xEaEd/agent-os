@@ -32,6 +32,7 @@ import {
 } from './artifacts'
 import { CHART_ARTIFACT_MIME } from './chart'
 import { DCA_ARTIFACT_MIME } from './dca'
+import { TRIGGER_ARTIFACT_MIME } from './trigger'
 import { LP_ARTIFACT_MIME } from './lp'
 
 /* ── artifactMime / artifactName (chat.js:7523-7529) ────────────────────── */
@@ -127,6 +128,24 @@ describe('artifactCategory (parity chat.js:7538)', () => {
       artifactCategory({ mime: `${DCA_ARTIFACT_MIME}; charset=utf-8`, name: 'x.json' } as never),
     ).toBe('dca')
   })
+  it('classifies the AgentOS trigger mime as "trigger" (no legacy counterpart)', () => {
+    expect(artifactCategory({ mime: TRIGGER_ARTIFACT_MIME, name: 'trigger.json' } as never)).toBe(
+      'trigger',
+    )
+    expect(
+      artifactCategory({
+        mime: `${TRIGGER_ARTIFACT_MIME}; charset=utf-8`,
+        name: 'x.json',
+      } as never),
+    ).toBe('trigger')
+    expect(
+      artifactCategory({ mime: 'APPLICATION/VND.AGENTOS.TRIGGER+JSON', name: 'x.json' } as never),
+    ).toBe('trigger')
+    // A near miss is not a trigger card.
+    expect(
+      artifactCategory({ mime: 'application/vnd.agentos.triggers+json', name: 'x.json' } as never),
+    ).not.toBe('trigger')
+  })
 })
 
 /* ── artifactCategoryLabel (chat.js:7551) ───────────────────────────────── */
@@ -140,6 +159,7 @@ describe('artifactCategoryLabel (parity chat.js:7551)', () => {
     expect(artifactCategoryLabel('chart')).toBe('chart')
     expect(artifactCategoryLabel('lp')).toBe('lp')
     expect(artifactCategoryLabel('dca')).toBe('dca')
+    expect(artifactCategoryLabel('trigger')).toBe('trigger')
   })
   it('defaults unknown / visual / file categories to "file"', () => {
     expect(artifactCategoryLabel('visual')).toBe('file')
@@ -427,6 +447,54 @@ describe('createArtifactRenderer DCA artifacts', () => {
 
     expect(mountCharts).toHaveBeenCalledWith(body)
     expect(body.querySelector('[data-dca-src]')).not.toBeNull()
+  })
+})
+
+/* ── trigger card placeholder + mounter handoff (AgentOS-native) ────────── */
+
+const TRIGGER_ARTIFACT: Artifact = {
+  id: 'trg-1',
+  name: 'trigger-stop-loss-weth-20261004T091500Z.json',
+  mime: TRIGGER_ARTIFACT_MIME,
+  download_url: '/api/v1/artifacts/trg-1',
+}
+
+describe('createArtifactRenderer trigger artifacts', () => {
+  it('renders a mount placeholder carrying the hooks the trigger mounter looks for', () => {
+    const { deps } = chartRendererDeps()
+    const container = document.createElement('div')
+    container.innerHTML = createArtifactRenderer(deps).renderArtifacts([
+      TRIGGER_ARTIFACT,
+      DCA_ARTIFACT,
+    ])
+
+    const host = container.querySelector<HTMLElement>('[data-trigger-src]')
+    expect(host).not.toBeNull()
+    expect(host?.classList.contains('msg-artifact-trigger')).toBe(true)
+    expect(host?.dataset.triggerSrc).toBe(
+      '/api/v1/artifacts/trg-1?sessionKey=agent%3Amain%3Awebchat%3Atest&token=tok',
+    )
+    expect(host?.dataset.artifactCategory).toBe('trigger')
+    expect(host?.querySelector('.msg-artifact-trigger__body')).not.toBeNull()
+    expect(host?.querySelector('.msg-artifact-trigger__status')).toHaveTextContent(
+      'Loading trigger…',
+    )
+    // Its own group, apart from the DCA group next to it; never a download target.
+    expect(container.querySelector('.msg-artifact-trigger-group [data-trigger-src]')).toBe(host)
+    expect(container.querySelector('.msg-artifact-trigger-group [data-dca-src]')).toBeNull()
+    expect(container.querySelector('.msg-artifact-dca-group [data-dca-src]')).not.toBeNull()
+    expect(container.querySelector('.msg-artifact-files')).toBeNull()
+    expect(container.querySelector('[data-artifact-download]')).toBeNull()
+  })
+
+  it('hands a streamed trigger artifact to the mounter as soon as it lands', () => {
+    const mountCharts = vi.fn()
+    const { deps, body } = chartRendererDeps({ mountCharts })
+
+    createArtifactRenderer(deps).appendArtifact(TRIGGER_ARTIFACT)
+
+    expect(mountCharts).toHaveBeenCalledWith(body)
+    expect(body.querySelector('[data-trigger-src]')).not.toBeNull()
   })
 })
 

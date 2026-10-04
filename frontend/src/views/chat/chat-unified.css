@@ -2480,6 +2480,762 @@
   }
 }
 
+/* Price trigger cards (trigger.ts, docs/triggers.md). One renderer, two
+   layouts keyed by `.trigger-card[data-trigger-kind]` (trigger | triggers).
+   Read-only on the web: the same instrument look as the DCA card — the
+   sentence as the largest line, the live price against the line, a gauge,
+   four facts. Status colours come from the theme's --ok/--warn/--info tokens;
+   the pill always carries the status word as well. The desktop reskins the
+   same hooks (`data-trigger-action`, `-status`, `-chain`, `-layout`,
+   `-stale`, the gauge's `data-trigger-dist` / `-proximity`). */
+.chat-surface .msg-artifact-trigger-group {
+  display: grid;
+  gap: 0.625rem;
+  max-width: min(40rem, 100%);
+}
+
+.chat-surface .msg-artifact-trigger {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .msg-artifact-trigger__body:empty {
+  display: none;
+}
+
+.chat-surface .msg-artifact-trigger__status {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-surface);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .msg-artifact-trigger__status[hidden] {
+  display: none;
+}
+
+.chat-surface .trigger-card {
+  --trigger-tone: var(--dim);
+  display: grid;
+  gap: 0.875rem;
+  min-width: 0;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-surface .trigger-card[data-trigger-status='awaiting_approval'],
+.chat-surface .trigger-row[data-trigger-status='awaiting_approval'],
+.chat-surface .trigger-pill[data-status='awaiting_approval'] {
+  --trigger-tone: var(--warn);
+}
+
+.chat-surface .trigger-card[data-trigger-status='armed'],
+.chat-surface .trigger-row[data-trigger-status='armed'],
+.chat-surface .trigger-pill[data-status='armed'] {
+  --trigger-tone: var(--ok);
+}
+
+.chat-surface .trigger-card:is([data-trigger-status='triggered'], [data-trigger-status='done']),
+.chat-surface .trigger-row:is([data-trigger-status='triggered'], [data-trigger-status='done']),
+.chat-surface .trigger-pill:is([data-status='triggered'], [data-status='done']) {
+  --trigger-tone: var(--info);
+}
+
+.chat-surface .trigger-card[data-trigger-status='paused'],
+.chat-surface .trigger-row[data-trigger-status='paused'],
+.chat-surface .trigger-pill[data-status='paused'] {
+  --trigger-tone: var(--dim);
+}
+
+.chat-surface
+  .trigger-card:is(
+    [data-trigger-status='stopped'],
+    [data-trigger-status='rejected'],
+    [data-trigger-status='expired']
+  ),
+.chat-surface
+  .trigger-row:is(
+    [data-trigger-status='stopped'],
+    [data-trigger-status='rejected'],
+    [data-trigger-status='expired']
+  ),
+.chat-surface
+  .trigger-pill:is([data-status='stopped'], [data-status='rejected'], [data-status='expired']) {
+  --trigger-tone: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
+}
+
+.chat-surface .trigger-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  min-width: 0;
+}
+
+.chat-surface .trigger-card__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
+}
+
+/* The kind glyph lives in CSS only: ▼ sell, ▲ buy, a bell for an alert. */
+.chat-surface .trigger-card__glyph::before {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .trigger-card[data-trigger-action='sell'] .trigger-card__glyph::before {
+  color: var(--danger);
+  content: '▼';
+}
+
+.chat-surface .trigger-card[data-trigger-action='buy'] .trigger-card__glyph::before {
+  color: var(--ok);
+  content: '▲';
+}
+
+.chat-surface .trigger-card[data-trigger-action='alert'] .trigger-card__glyph::before {
+  content: '\1F514';
+}
+
+.chat-surface .trigger-card__name,
+.chat-surface .trigger-card__list-title {
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .trigger-sep {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.chat-surface .trigger-card__count {
+  color: var(--muted-foreground);
+  font-size: 0.9375rem;
+}
+
+.chat-surface .trigger-chain {
+  padding: 0.0625rem 0.4375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  white-space: nowrap;
+}
+
+.chat-surface .trigger-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--trigger-tone) 45%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--trigger-tone) 12%, transparent);
+  color: var(--trigger-tone);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chat-surface .trigger-pill__dot {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.chat-surface .trigger-pill__text {
+  white-space: nowrap;
+}
+
+/* A proposal waiting on the user and a fire in flight breathe, softly. */
+.chat-surface .trigger-pill[data-status='awaiting_approval'] .trigger-pill__dot,
+.chat-surface .trigger-pill[data-status='triggered'] .trigger-pill__dot {
+  animation: trigger-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes trigger-pulse {
+  50% {
+    box-shadow: 0 0 0 0.25rem color-mix(in srgb, currentColor 22%, transparent);
+    opacity: 0.55;
+  }
+}
+
+/* Hero: the sentence, then the live line. */
+.chat-surface .trigger-card__hero {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.chat-surface .trigger-card__hero-line {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.chat-surface .trigger-card__now {
+  margin: 0;
+  color: var(--trigger-tone);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.chat-surface .trigger-card__now[data-trigger-hits] {
+  font-weight: 600;
+}
+
+.chat-surface .trigger-card__from,
+.chat-surface .trigger-card__reason {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .trigger-card[data-trigger-status='paused'] .trigger-card__reason {
+  color: var(--warn);
+}
+
+/* Gauge: one rail, the line as a tick, the price as a dot, the span where
+   the condition holds shaded. SVG in percent coordinates, labels in HTML. */
+.chat-surface .trigger-gauge {
+  display: grid;
+  gap: 0.125rem;
+}
+
+.chat-surface .trigger-gauge__svg {
+  display: block;
+  width: 100%;
+  height: 1.5rem;
+  overflow: visible;
+}
+
+.chat-surface .trigger-gauge__rail {
+  stroke: var(--border);
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.chat-surface .trigger-gauge__zone {
+  fill: color-mix(in srgb, var(--trigger-tone) 14%, transparent);
+}
+
+.chat-surface .trigger-gauge__line {
+  stroke: var(--foreground);
+  stroke-width: 2;
+}
+
+.chat-surface .trigger-gauge__peak {
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 2 2;
+  stroke-width: 1.5;
+}
+
+.chat-surface .trigger-gauge__now {
+  fill: var(--foreground);
+  stroke: var(--card);
+  stroke-width: 2;
+}
+
+.chat-surface .trigger-gauge[data-trigger-proximity='near'] .trigger-gauge__now,
+.chat-surface .trigger-gauge[data-trigger-proximity='met'] .trigger-gauge__now {
+  fill: var(--warn);
+}
+
+.chat-surface .trigger-gauge[data-trigger-proximity='met'] .trigger-gauge__zone {
+  fill: color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+.chat-surface .trigger-gauge__labels {
+  position: relative;
+  height: 0.875rem;
+}
+
+.chat-surface .trigger-gauge__label {
+  position: absolute;
+  top: 0;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  line-height: 0.875rem;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.chat-surface .trigger-gauge__label[data-align='start'] {
+  transform: none;
+}
+
+.chat-surface .trigger-gauge__label[data-align='end'] {
+  transform: translateX(-100%);
+}
+
+.chat-surface .trigger-gauge__label:is([data-mark='line'], [data-mark='stop']),
+.chat-surface .trigger-gauge__label[data-mark='now'] {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+/* Facts: 2×2. */
+.chat-surface .trigger-card__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.chat-surface .trigger-fact {
+  display: grid;
+  align-content: start;
+  gap: 0.125rem;
+  min-width: 0;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius-control);
+  background: var(--background);
+}
+
+.chat-surface .trigger-fact__label {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .trigger-fact__value {
+  overflow: hidden;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .trigger-fact__value[data-trigger-no-value] {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.chat-surface .trigger-fact[data-trigger-waits] .trigger-fact__value {
+  color: var(--warn);
+}
+
+/* Recent fires: one mono line each, newest first. */
+.chat-surface .trigger-fires {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.chat-surface .trigger-fires__title {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+
+.chat-surface .trigger-fires__list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .trigger-fire {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  min-width: 0;
+  padding: 0.25rem 0;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .trigger-fire > :not(.trigger-fire__detail) {
+  flex-shrink: 0;
+}
+
+.chat-surface .trigger-fire__n {
+  min-width: 1.75rem;
+  color: var(--dim);
+}
+
+.chat-surface .trigger-fire__ago,
+.chat-surface .trigger-fire__status {
+  color: var(--muted-foreground);
+}
+
+.chat-surface .trigger-fire__ago {
+  min-width: 3.5rem;
+}
+
+.chat-surface
+  .trigger-fire:is([data-trigger-fire-status='filled'], [data-trigger-fire-status='alerted'])
+  .trigger-fire__status {
+  color: var(--ok);
+}
+
+.chat-surface
+  .trigger-fire:is([data-trigger-fire-status='skipped'], [data-trigger-fire-status='parked'])
+  .trigger-fire__status {
+  color: var(--warn);
+}
+
+.chat-surface .trigger-fire[data-trigger-fire-status='failed'] .trigger-fire__status {
+  color: var(--danger);
+}
+
+.chat-surface .trigger-fire[data-trigger-fire-status='pending'] .trigger-fire__status {
+  animation: trigger-pending 1.4s ease-in-out infinite;
+}
+
+@keyframes trigger-pending {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.chat-surface .trigger-fire__detail {
+  overflow: hidden;
+  flex: 1 1 0;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .trigger-fire__manual {
+  padding: 0 0.3125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+}
+
+.chat-surface .msg-body .trigger-card a.trigger-fire__link {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+
+.chat-surface .msg-body .trigger-card a.trigger-fire__link:hover,
+.chat-surface .msg-body .trigger-card a.trigger-fire__link:focus-visible {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+
+/* Controls (desktop desk only: the web never renders them). */
+.chat-surface .trigger-actions {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.chat-surface .trigger-actions__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.chat-surface .trigger-actions--compact {
+  gap: 0.25rem;
+}
+
+.chat-surface .trigger-action {
+  padding: 0.3125rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.chat-surface .trigger-action:hover:not(:disabled),
+.chat-surface .trigger-action:focus-visible {
+  border-color: color-mix(in srgb, var(--foreground) 40%, transparent);
+}
+
+.chat-surface .trigger-action[data-trigger-tone='primary'] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 600;
+}
+
+.chat-surface .trigger-action[data-trigger-tone='danger'] {
+  color: var(--danger);
+}
+
+.chat-surface .trigger-action[data-trigger-confirm] {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  font-weight: 600;
+}
+
+.chat-surface .trigger-action[data-trigger-compact] {
+  padding: 0.125rem 0.5rem;
+  font-size: 0.6875rem;
+}
+
+.chat-surface .trigger-action:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+.chat-surface .trigger-action[data-trigger-pending] {
+  opacity: 0.8;
+}
+
+.chat-surface .trigger-actions__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
+.chat-surface .trigger-actions__error[hidden] {
+  display: none;
+}
+
+.chat-surface .trigger-card__warnings {
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+
+.chat-surface .trigger-card__warning + .trigger-card__warning {
+  margin-top: 0.125rem;
+}
+
+.chat-surface .trigger-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .trigger-card__foot-meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-surface .trigger-card__as-of {
+  color: var(--dim);
+}
+
+.chat-surface .trigger-card__ago {
+  white-space: nowrap;
+}
+
+.chat-surface .trigger-card__actions {
+  display: inline-flex;
+  gap: 0.75rem;
+}
+
+.chat-surface .trigger-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chat-surface .trigger-card__action:hover,
+.chat-surface .trigger-card__action:focus-visible {
+  color: var(--foreground);
+}
+
+.chat-surface .trigger-card__action-glyph {
+  line-height: 1;
+}
+
+.chat-surface .trigger-card__action-label,
+.chat-surface .trigger-card__stale-text {
+  white-space: nowrap;
+}
+
+.chat-surface .trigger-card__copy[data-trigger-copied='true'] {
+  color: var(--ok);
+}
+
+.chat-surface .trigger-card__copy[data-trigger-copied='failed'] {
+  color: var(--danger);
+}
+
+.chat-surface .trigger-card__refresh:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.chat-surface .trigger-card__refresh-error {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+
+/* A card still drawing its artifact snapshot (live read in flight, or
+   failed): controls off, not "busy" — nothing is running on them. */
+.chat-surface .trigger-card[data-trigger-stale] .trigger-action:disabled {
+  cursor: not-allowed;
+}
+
+.chat-surface .trigger-card__stale {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .trigger-card__stale-refresh {
+  padding: 0 0.25rem;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-surface .trigger-card__stale-refresh:hover,
+.chat-surface .trigger-card__stale-refresh:focus-visible {
+  color: var(--foreground);
+}
+
+/* ↻ and a control in flight keep the old figures on screen, dimmed. */
+.chat-surface .trigger-card[data-trigger-refreshing] > :not(.trigger-card__foot),
+.chat-surface .trigger-card[data-trigger-busy] > :not(.trigger-actions, .trigger-card__foot) {
+  opacity: 0.6;
+  transition: opacity 160ms ease-out;
+}
+
+/* The list: status dot · name · state, the plan and the live price under
+   it, compact controls on the right (under the text when narrow). */
+.chat-surface .trigger-totals {
+  margin: -0.25rem 0 0;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.chat-surface .trigger-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-surface .trigger-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 0.25rem 0.625rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.chat-surface .trigger-row__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--trigger-tone);
+}
+
+.chat-surface .trigger-row__main {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.chat-surface .trigger-row__top {
+  display: flex;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  min-width: 0;
+}
+
+.chat-surface .trigger-row__name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .trigger-row__state {
+  flex-shrink: 0;
+  color: var(--trigger-tone);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-surface .trigger-row__plan {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-surface .trigger-row__now {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .trigger-row[data-trigger-proximity='near'] .trigger-row__now,
+.chat-surface .trigger-row[data-trigger-proximity='met'] .trigger-row__now {
+  color: var(--warn);
+}
+
+.chat-surface .trigger-card[data-trigger-layout='narrow'] .trigger-row {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.chat-surface .trigger-card[data-trigger-layout='narrow'] .trigger-row .trigger-actions {
+  grid-column: 2;
+}
+
+.chat-surface .trigger-card__empty {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-surface .trigger-pill[data-status='awaiting_approval'] .trigger-pill__dot,
+  .chat-surface .trigger-pill[data-status='triggered'] .trigger-pill__dot,
+  .chat-surface .trigger-fire[data-trigger-fire-status='pending'] .trigger-fire__status {
+    animation: none;
+  }
+}
+
 /* Crosshair readout. lightweight-charts has no tooltip, so this strip carries
    the hovered candle's OHLC and its move. It takes its own row above the
    canvas rather than floating over it, so it can neither be clipped by the

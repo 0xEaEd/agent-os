@@ -448,3 +448,96 @@ describe('DCA card CSS contract', () => {
     )
   })
 })
+
+describe('trigger card CSS contract', () => {
+  const block = (selector: string): string | undefined =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+    )?.[0]
+
+  it('styles the placeholder and its own group', () => {
+    expect(block('.chat-surface .msg-artifact-trigger-group')).toMatch(/display: grid;/)
+    expect(block('.chat-surface .msg-artifact-trigger__body:empty')).toMatch(/display: none;/)
+    expect(block('.chat-surface .msg-artifact-trigger__status[hidden]')).toMatch(/display: none;/)
+  })
+
+  it('tones every status through theme tokens, the pill included', () => {
+    for (const [status, token] of [
+      ['awaiting_approval', '--warn'],
+      ['armed', '--ok'],
+      ['paused', '--dim'],
+    ]) {
+      expect(css).toMatch(
+        new RegExp(
+          `\\.trigger-pill\\[data-status='${status}'\\] \\{\\s*--trigger-tone: var\\(${token}\\);`,
+        ),
+      )
+    }
+    expect(css).toMatch(
+      /\.trigger-pill:is\(\[data-status='triggered'\], \[data-status='done'\]\) \{\s*--trigger-tone: var\(--info\);/,
+    )
+    expect(css).toMatch(/\.trigger-pill:is\(\[data-status='stopped'\],/)
+    expect(block('.chat-surface .trigger-pill')).toMatch(/color: var\(--trigger-tone\);/)
+  })
+
+  it('pulses a pending proposal and a fire in flight, and not under reduced motion', () => {
+    expect(css).toMatch(
+      /\.trigger-pill\[data-status='triggered'\] \.trigger-pill__dot \{\s*animation: trigger-pulse/,
+    )
+    const reduced = css.match(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.chat-surface \.trigger-pill[^{]*\{[^}]*\}/,
+    )?.[0]
+    expect(reduced).toContain(
+      ".chat-surface .trigger-pill[data-status='awaiting_approval'] .trigger-pill__dot",
+    )
+    expect(reduced).toContain(
+      ".chat-surface .trigger-pill[data-status='triggered'] .trigger-pill__dot",
+    )
+    expect(reduced).toMatch(/animation: none;/)
+  })
+
+  it('draws the kind glyph from data-trigger-action, in CSS only', () => {
+    expect(
+      block(".chat-surface .trigger-card[data-trigger-action='sell'] .trigger-card__glyph::before"),
+    ).toMatch(/content: '▼';/)
+    expect(
+      block(".chat-surface .trigger-card[data-trigger-action='buy'] .trigger-card__glyph::before"),
+    ).toMatch(/content: '▲';/)
+    expect(
+      block(
+        ".chat-surface .trigger-card[data-trigger-action='alert'] .trigger-card__glyph::before",
+      ),
+    ).toMatch(/content: '\\1F514';/)
+  })
+
+  it('draws the gauge and tints it amber near the line', () => {
+    expect(block('.chat-surface .trigger-gauge__svg')).toMatch(/width: 100%;/)
+    expect(block('.chat-surface .trigger-gauge__zone')).toMatch(/var\(--trigger-tone\)/)
+    expect(css).toMatch(
+      /\.trigger-gauge\[data-trigger-proximity='near'\] \.trigger-gauge__now,[\s\S]*?fill: var\(--warn\);/,
+    )
+    expect(block(".chat-surface .trigger-gauge__label[data-align='end']")).toMatch(
+      /transform: translateX\(-100%\);/,
+    )
+  })
+
+  it('puts the facts 2×2 and marks a stale card', () => {
+    expect(block('.chat-surface .trigger-card__facts')).toMatch(
+      /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/,
+    )
+    expect(
+      block('.chat-surface .trigger-card[data-trigger-stale] .trigger-action:disabled'),
+    ).toMatch(/cursor: not-allowed;/)
+    expect(block('.chat-surface .trigger-card__stale')).toMatch(/color: var\(--warn\);/)
+  })
+
+  it('shows controls with an armed confirm and an inline error, and keeps links out of the link colour', () => {
+    expect(block(".chat-surface .trigger-action[data-trigger-tone='primary']")).toMatch(
+      /background: var\(--primary\);/,
+    )
+    expect(block('.chat-surface .trigger-action[data-trigger-confirm]')).toMatch(/var\(--danger\)/)
+    expect(block('.chat-surface .trigger-actions__error')).toMatch(/color: var\(--danger\);/)
+    expect(block('.chat-surface .trigger-actions__error[hidden]')).toMatch(/display: none;/)
+    expect(css).toContain('.chat-surface .msg-body .trigger-card a.trigger-fire__link {')
+  })
+})
