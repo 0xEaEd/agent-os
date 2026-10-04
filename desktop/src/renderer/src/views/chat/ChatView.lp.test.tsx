@@ -32,7 +32,11 @@ const seen: {
   focus: unknown
 } = { lpActions: undefined, dcaActions: undefined, own: new Set(), focus: null }
 // What the desk instruments render into the chat's slots (null = nothing).
-const slots: { region: ReactNode; seats: ReactNode } = { region: null, seats: null }
+const slots: { region: ReactNode; seats: ReactNode; emptyHint: ReactNode } = {
+  region: null,
+  seats: null,
+  emptyHint: null,
+}
 
 vi.mock('@/views/chat/useTranscript', () => ({
   useTranscript: (opts: { lpActions?: LpActions | null; dcaActions?: LpActions | null }) => {
@@ -71,7 +75,7 @@ vi.mock('~/views/trading/desk/useDeskInstruments', () => ({
       placeholder: undefined,
       still: false,
       modal: null,
-      emptyHint: null,
+      emptyHint: slots.emptyHint,
       onFocusChange: () => {},
     }
   },
@@ -93,6 +97,7 @@ function mount(desk: DeskProps | null) {
 beforeEach(() => {
   slots.region = null
   slots.seats = null
+  slots.emptyHint = null
   seen.lpActions = undefined
   seen.dcaActions = undefined
   seen.own = new Set()
@@ -193,5 +198,25 @@ describe('ChatView · the approvals region and the composer chips', () => {
     expect(follows(thread, region)).toBe(true)
     expect(follows(region, seats)).toBe(true)
     expect(follows(region, shell)).toBe(true)
+  })
+
+  // Positioned against the stage, the desk's empty hint ran down behind the
+  // approvals region and read through its card. It lives in the transcript's
+  // own box now, beside the thread, and the region is outside that box.
+  it('keeps the empty hint inside the transcript box, never over the region', () => {
+    slots.region = <div className="trd-asks" data-testid="approvals-region" />
+    slots.emptyHint = <div className="trd-chat__empty" data-testid="chat-empty" />
+    const desk = { entering: false, onFirstSend: vi.fn() } as unknown as DeskProps
+    const { container } = mount(desk)
+    const box = container.querySelector('.chat-transcript')!
+    const hint = container.querySelector('[data-testid=chat-empty]')!
+    const region = container.querySelector('[data-testid=approvals-region]')!
+    expect(hint.parentElement).toBe(box)
+    expect(container.querySelector('.chat-thread')!.parentElement).toBe(box)
+    expect(container.querySelector('.chat-history-loading')!.parentElement).toBe(box)
+    expect(box.contains(region)).toBe(false)
+    expect(region.parentElement).toBe(box.parentElement)
+    // One empty state: the desk's hint is the only one in the tree.
+    expect(container.querySelectorAll('[data-testid=chat-empty], .chat-empty')).toHaveLength(1)
   })
 })

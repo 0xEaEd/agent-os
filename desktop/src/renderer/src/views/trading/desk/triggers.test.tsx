@@ -303,6 +303,12 @@ describe('TriggerCard', () => {
     expect(fact('validUntil')).toBe('until stopped')
     expect(fact('approval')).toBe('waits for you · over $100')
     expect(fact('expires')).toMatch(/^Oct (4|5) \d{2}:\d{2}$/)
+    // Beside "Valid until · until stopped", the proposal's deadline is named as
+    // one: an "Expires" there read as a contradiction.
+    const label = (key: string) => card.querySelector(`[data-fact='${key}'] dt`)?.textContent
+    expect(label('validUntil')).toBe('Valid until')
+    expect(label('expires')).toBe('Decide by')
+    expect(within(card).queryByText('Expires')).toBeNull()
     expect(screen.getByTestId('trigger-needs-approval')).toBeInTheDocument()
     expect(screen.getByTestId('trigger-warnings')).toHaveTextContent(
       'a sell of ≈$194 is above the $100 approval threshold and will wait for you when it fires',
@@ -912,7 +918,8 @@ describe('missions rows and the transcript floor · CSS contract', () => {
   })
 
   it('gives the desk transcript a floor and lets the approvals region yield instead', () => {
-    const thread = rule('.chat-desktop[data-desk] .chat-thread')
+    // The floor is on the transcript's box (thread + what is laid over it).
+    const thread = rule('.chat-desktop[data-desk] .chat-transcript')
     expect(thread).toMatch(/flex: 1 1 0;/)
     const floor = /min-height: clamp\(([\d.]+)rem, (\d+)vh, ([\d.]+)rem\);/.exec(thread)
     expect(floor).toBeTruthy()
@@ -928,5 +935,78 @@ describe('missions rows and the transcript floor · CSS contract', () => {
     // …and scrolls its cards inside its own cap.
     expect(asks).toMatch(/max-height: min\(\d+vh, [\d.]+rem\);/)
     expect(asks).toMatch(/overflow-y: auto;/)
+  })
+
+  // At 1200×800 the region got 238px for a 275px trigger card: its
+  // explanation, and a second proposal entirely, sat behind an inner scroll.
+  it('folds the rows band while a proposal is docked, and gives the room to the region', () => {
+    const band = /max-height: min\(([\d.]+)rem, (\d+)vh\);/
+    const capAt800 = (body: string) => {
+      const m = band.exec(body)
+      expect(m, body).toBeTruthy()
+      return Math.min(Number(m![1]) * 16, (Number(m![2]) / 100) * 800)
+    }
+    const docked = rule('.chat-stage:has(> .trd-asks) .trd-mctl')
+    const atRest = capAt800(rule('.trd-mctl'))
+    // About two rows (26px each, 6px apart), and at least 80px handed over.
+    expect(capAt800(docked)).toBeGreaterThanOrEqual(58)
+    expect(atRest - capAt800(docked)).toBeGreaterThanOrEqual(80)
+    // The region's own cap is never the limit at 800px: it may take 46vh.
+    const asks = /max-height: min\((\d+)vh, ([\d.]+)rem\);/.exec(rule('.trd-asks'))!
+    expect(Math.min((Number(asks[1]) / 100) * 800, Number(asks[2]) * 16)).toBeGreaterThanOrEqual(
+      0.46 * 800,
+    )
+  })
+
+  // The band's cap cut the collapsed "+8 more" off a few pixels short.
+  it('keeps the last "+N more" at the foot of the band, on a plate', () => {
+    const more = rule('.trd-mctl > .trd-mctl__more:not(:has(~ .trd-mctl__more))')
+    expect(more).toMatch(/position: sticky;/)
+    expect(more).toMatch(/bottom: 0;/)
+    expect(more).toMatch(/background: var\(--elevated\);/)
+  })
+})
+
+// The desk's empty hint once read through a docked proposal ("Tell the desk
+// what to do" over "awaiting approval", "Does", "When"), and the renderer's
+// own "No messages yet." sat above it.
+describe('approvals cards and the empty transcript · CSS contract', () => {
+  const deskCss = readFileSync('src/renderer/src/views/trading/desk/desk.css', 'utf8')
+  const chatCss = readFileSync('src/renderer/src/views/chat/chat.css', 'utf8')
+  const rulesOf = (css: string) =>
+    [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(
+      ([, selector = '', body = '']) => ({ selector: selector.trim(), body }),
+    )
+  const desk = rulesOf(deskCss)
+  const chat = rulesOf(chatCss)
+  const rule = (rules: typeof desk, selector: string) =>
+    rules.find((r) => r.selector === selector)?.body ?? ''
+
+  it('paints every approvals card opaque — trigger, DCA and order alike', () => {
+    const card = rule(desk, '.trd-card')
+    expect(card).toMatch(/background: var\(--elevated\);/)
+    expect(card).not.toMatch(/transparent/)
+    // No variant brings the see-through plate back.
+    for (const r of desk) {
+      if (!/\.trd-card(\.trd-(trigger|mandate)|\[data-kind)/.test(r.selector)) continue
+      expect(r.body, r.selector).not.toMatch(/background:[^;]*transparent/)
+    }
+  })
+
+  it('lays the empty hint over the transcript box, which clips it', () => {
+    const box = rule(chat, '.chat-transcript')
+    expect(box).toMatch(/position: relative;/)
+    expect(box).toMatch(/overflow: hidden;/)
+    expect(box).toMatch(/min-height: 0;/)
+    const hint = rule(desk, '.trd-chat__empty')
+    expect(hint).toMatch(/position: absolute;/)
+    expect(hint).toMatch(/inset: 0;/)
+    expect(rule(chat, '.chat-history-loading')).toMatch(/inset: 0;/)
+  })
+
+  it('says the empty desk once: the renderer’s own empty line is hidden at the desk', () => {
+    expect(rule(desk, '.chat-desktop[data-desk] .chat-empty')).toMatch(/display: none;/)
+    // The old selector keyed on a wrapper the desk no longer renders.
+    expect(desk.some((r) => r.selector === '.trd-chat .chat-empty')).toBe(false)
   })
 })

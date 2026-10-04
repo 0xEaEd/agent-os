@@ -52,6 +52,17 @@ import {
   type LpWallet,
 } from './lp'
 
+/**
+ * Every price a trigger card says — the hero, the gauge's labels, the live
+ * line, a fire — in one voice, the engine's (`price_text`): under a dollar the
+ * shared formatter trims "$0.50" to "$0.5", so the gauge read `line $0.5`
+ * under a hero that said `over $0.50`. Whole cents keep two decimals.
+ */
+export function formatTriggerPrice(value: number | null): string {
+  const text = formatDcaPrice(value)
+  return /^\$0\.\d$/.test(text) ? `${text}0` : text
+}
+
 /** The mime the engine publishes a price trigger read-out under. */
 export const TRIGGER_ARTIFACT_MIME = 'application/vnd.agentos.trigger+json'
 
@@ -547,9 +558,9 @@ export function conditionLabel(trigger: Trigger): string {
   if (c.label) return c.label
   switch (c.direction) {
     case 'below':
-      return t('chat.triggerCondBelow', { price: formatDcaPrice(c.priceUsd) })
+      return t('chat.triggerCondBelow', { price: formatTriggerPrice(c.priceUsd) })
     case 'above':
-      return t('chat.triggerCondAbove', { price: formatDcaPrice(c.priceUsd) })
+      return t('chat.triggerCondAbove', { price: formatTriggerPrice(c.priceUsd) })
     case 'trail':
       return t('chat.triggerCondTrail', {
         pct: c.trailPct !== null ? pctNumber(c.trailPct) : NO_VALUE,
@@ -656,19 +667,19 @@ function doneText(trigger: Trigger): string {
     return t('chat.triggerNowDoneSold', {
       amount: formatTokenAmount(result.amountIn.human),
       token: trigger.token.symbol,
-      price: formatDcaPrice(result.priceUsd),
+      price: formatTriggerPrice(result.priceUsd),
     })
   }
   if (result && trigger.kind === 'buy' && result.amountOut) {
     return t('chat.triggerNowDoneBought', {
       amount: formatTokenAmount(result.amountOut.human),
       token: trigger.token.symbol,
-      price: formatDcaPrice(result.priceUsd),
+      price: formatTriggerPrice(result.priceUsd),
     })
   }
   const alerted = trigger.fires.find((f) => f.status === 'alerted')
   if (trigger.kind === 'alert' && alerted?.priceUsd) {
-    return t('chat.triggerNowDoneAlerted', { price: formatDcaPrice(alerted.priceUsd) })
+    return t('chat.triggerNowDoneAlerted', { price: formatTriggerPrice(alerted.priceUsd) })
   }
   return trigger.statusReason
     ? `${t('chat.triggerNowDone')} · ${trigger.statusReason}`
@@ -697,7 +708,7 @@ export function nowText(trigger: Trigger, nowMs: number): string {
         return [t('chat.triggerWaitingPrice'), checked].filter(Boolean).join(' · ')
       }
       const { hits, confirmTicks } = trigger.condition
-      const parts = [`${trigger.token.symbol} ${formatDcaPrice(now)}`]
+      const parts = [`${trigger.token.symbol} ${formatTriggerPrice(now)}`]
       if (hits > 0 && hits < confirmTicks) {
         parts.push(tPlural('chat.triggerConfirming', confirmTicks - hits))
       } else {
@@ -862,7 +873,9 @@ function reasonCodeText(code: string | null): string {
 /** What a fire did, in one phrase (the part after its status word). */
 export function fireDetail(fire: TriggerFire, trigger: Trigger): string {
   const at =
-    fire.priceUsd !== null ? t('chat.triggerFireAt', { price: formatDcaPrice(fire.priceUsd) }) : ''
+    fire.priceUsd !== null
+      ? t('chat.triggerFireAt', { price: formatTriggerPrice(fire.priceUsd) })
+      : ''
   switch (fire.status) {
     case 'filled': {
       const result = trigger.result
@@ -873,7 +886,7 @@ export function fireDetail(fire: TriggerFire, trigger: Trigger): string {
           symbolIn: sell ? trigger.token.symbol : trigger.quote.symbol,
           amountOut: result.amountOut ? formatTokenAmount(result.amountOut.human) : NO_VALUE,
           symbolOut: sell ? trigger.quote.symbol : trigger.token.symbol,
-          price: formatDcaPrice(result.priceUsd ?? fire.priceUsd),
+          price: formatTriggerPrice(result.priceUsd ?? fire.priceUsd),
         })
       }
       return at
@@ -1082,7 +1095,7 @@ function fromNode(trigger: Trigger): HTMLElement | null {
     'trigger-card__from',
     t('chat.triggerFromPrice', {
       pct: `${move > 0 ? '+' : move < 0 ? '−' : ''}${Math.abs(move).toFixed(1)} %`,
-      price: formatDcaPrice(fromPriceUsd),
+      price: formatTriggerPrice(fromPriceUsd),
     }),
   )
 }
@@ -1117,13 +1130,13 @@ function gaugeNode(trigger: Trigger): HTMLElement | null {
     'aria-label',
     trail
       ? t('chat.triggerGaugeTrailLabel', {
-          now: formatDcaPrice(trigger.market.priceUsd),
-          peak: formatDcaPrice(c.peakPriceUsd),
-          stop: formatDcaPrice(c.stopPriceUsd),
+          now: formatTriggerPrice(trigger.market.priceUsd),
+          peak: formatTriggerPrice(c.peakPriceUsd),
+          stop: formatTriggerPrice(c.stopPriceUsd),
         })
       : t('chat.triggerGaugeLabel', {
-          now: formatDcaPrice(trigger.market.priceUsd),
-          line: formatDcaPrice(c.priceUsd),
+          now: formatTriggerPrice(trigger.market.priceUsd),
+          line: formatTriggerPrice(c.priceUsd),
         }),
   )
 
@@ -1202,8 +1215,8 @@ function gaugeNode(trigger: Trigger): HTMLElement | null {
         trail ? 'stop' : 'line',
         lineAt,
         trail
-          ? t('chat.triggerGaugeStop', { price: formatDcaPrice(linePrice) })
-          : t('chat.triggerGaugeLine', { price: formatDcaPrice(linePrice) }),
+          ? t('chat.triggerGaugeStop', { price: formatTriggerPrice(linePrice) })
+          : t('chat.triggerGaugeLine', { price: formatTriggerPrice(linePrice) }),
       ),
     )
   }
@@ -1212,7 +1225,7 @@ function gaugeNode(trigger: Trigger): HTMLElement | null {
       label(
         'peak',
         model.peak,
-        t('chat.triggerGaugePeak', { price: formatDcaPrice(c.peakPriceUsd) }),
+        t('chat.triggerGaugePeak', { price: formatTriggerPrice(c.peakPriceUsd) }),
       ),
     )
   }
@@ -1223,7 +1236,7 @@ function gaugeNode(trigger: Trigger): HTMLElement | null {
       label(
         'now',
         model.current,
-        t('chat.triggerGaugeNow', { price: formatDcaPrice(trigger.market.priceUsd) }),
+        t('chat.triggerGaugeNow', { price: formatTriggerPrice(trigger.market.priceUsd) }),
       ),
     )
   }
@@ -1606,7 +1619,7 @@ export function rowPlanText(trigger: Trigger): string {
 export function rowNowText(trigger: Trigger): string {
   const now = trigger.market.priceUsd
   const parts: string[] = []
-  if (now !== null) parts.push(`${trigger.token.symbol} ${formatDcaPrice(now)}`)
+  if (now !== null) parts.push(`${trigger.token.symbol} ${formatTriggerPrice(now)}`)
   if (trigger.status === 'armed' || trigger.status === 'paused') {
     const { hits, confirmTicks } = trigger.condition
     if (trigger.status === 'armed' && hits > 0 && hits < confirmTicks) {

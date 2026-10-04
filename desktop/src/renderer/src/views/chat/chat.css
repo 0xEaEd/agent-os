@@ -33,6 +33,19 @@
   min-height: 0;
 }
 
+/* The transcript's box: the scrolling thread plus what is laid over it (the
+   loading line, the desk's empty hint). Those are positioned against this
+   box, not the stage — on the stage, the desk's hint ran down over the
+   approvals region and its cards. */
+.chat-transcript {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .chat-thread {
   flex: 1 1 auto;
   min-height: 0;
@@ -59,7 +72,7 @@
 
 .chat-history-loading {
   position: absolute;
-  inset: 0 0 6rem;
+  inset: 0;
   z-index: 1;
   display: flex;
   align-items: center;
@@ -81,8 +94,7 @@
 }
 
 /* Before the first send: hide the empty thread, centre the composer column. */
-.chat-desktop[data-docked='false'] .chat-thread,
-.chat-desktop[data-docked='false'] .chat-history-loading {
+.chat-desktop[data-docked='false'] .chat-transcript {
   display: none;
 }
 
@@ -3724,9 +3736,12 @@
   color: var(--dim);
 }
 .trigger-fire__detail {
+  /* Wraps under itself rather than ellipsizing: cut at the end, a fill lost
+     its "@ $1.00" — the one figure that says what it filled at. */
+  flex: 1 1 0;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .trigger-fire__manual {
   flex-shrink: 0;

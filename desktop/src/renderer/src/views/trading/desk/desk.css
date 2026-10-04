@@ -317,9 +317,12 @@
 .trd-card__spacer {
   flex: 1;
 }
+/* Laid over the transcript's own box (`.chat-transcript`), never the stage:
+   positioned against the stage it ran down behind the approvals region and
+   read through its cards. */
 .trd-chat__empty {
   position: absolute;
-  inset: 0 0 20%;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -545,6 +548,14 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* While a proposal is docked (the approvals region is a child of the stage)
+   the decision is what the column is for: the rows band folds to about two
+   rows and scrolls, and the room it gives up goes to the region. At a
+   1200×800 window the region was 238px for a 275px trigger card — its
+   explanation and every card after it sat behind an inner scroll. */
+.chat-stage:has(> .trd-asks) .trd-mctl {
+  max-height: min(4rem, 10vh);
+}
 /* A row shrinks and wraps: its texts ellipsize, its controls (one group)
    drop to a second line rather than past the edge. */
 .trd-mctl__row {
@@ -694,6 +705,14 @@
   white-space: nowrap;
   color: var(--dim);
   cursor: pointer;
+}
+/* The last "+N more" in the band stays at its foot while the rows scroll: at
+   the band's cap it was cut off a few pixels short of legible. */
+.trd-mctl > .trd-mctl__more:not(:has(~ .trd-mctl__more)) {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--elevated);
 }
 .trd-mctl__more:hover {
   color: var(--foreground);
@@ -847,7 +866,9 @@
 .trd-card {
   border-radius: var(--radius-surface);
   padding: 12px 14px 12px;
-  background: color-mix(in srgb, var(--elevated) 92%, transparent);
+  /* Opaque: a card docks over the canvas and the foot of the transcript, and
+     at 92% the desk's empty hint read through its facts. */
+  background: var(--elevated);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, var(--border)),
     inset 3px 0 0 var(--warn);
@@ -1615,8 +1636,9 @@ body[data-dragging] .trd-book__handle {
 .trd-book .trd-table td.trd-col--asset {
   padding-left: 12px;
 }
-/* The shared renderer's own "No messages yet." would sit under the desk's hint. */
-.trd-chat .chat-empty {
+/* The shared renderer's own "No messages yet." would sit over the desk's hint:
+   the desk says it once, in its own words. */
+.chat-desktop[data-desk] .chat-empty {
   display: none;
 }
 
@@ -2034,10 +2056,12 @@ body[data-dragging] .trd-book__handle {
    and hid the very card the agent had just posted. A zero basis freezes it
    at the floor when space runs short, so the approvals region (the one
    flexible sibling) yields first and scrolls inside its own cap. */
-.chat-desktop[data-desk] .chat-thread {
-  --chat-col: min(56rem, calc(100% - 3rem));
+.chat-desktop[data-desk] .chat-transcript {
   flex: 1 1 0;
   min-height: clamp(6rem, 22vh, 11rem);
+}
+.chat-desktop[data-desk] .chat-thread {
+  --chat-col: min(56rem, calc(100% - 3rem));
 }
 .chat-desktop[data-desk] .composer-shell {
   padding-top: 0;

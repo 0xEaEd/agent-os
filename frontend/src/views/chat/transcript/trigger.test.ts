@@ -16,6 +16,7 @@ import {
   distancePctOf,
   distanceText,
   formatDistance,
+  formatTriggerPrice,
   heroText,
   isTriggerArtifact,
   isTriggerTerminal,
@@ -768,6 +769,38 @@ describe('triggerGauge', () => {
       [...trail.querySelectorAll<HTMLElement>('.trigger-gauge__label')].map((n) => n.dataset.mark),
     ).toEqual(['stop', 'peak', 'now'])
   })
+
+  // A sell over $0.50 read "over $0.50" in its hero (the engine's label) and
+  // "line $0.5" on its gauge: one card, two voices for one price.
+  it('says the gauge prices in the hero’s voice: whole cents keep two decimals', () => {
+    expect(formatTriggerPrice(0.5)).toBe('$0.50')
+    expect(formatTriggerPrice(0.1)).toBe('$0.10')
+    expect(formatTriggerPrice(0.05)).toBe('$0.05')
+    expect(formatTriggerPrice(0.1234)).toBe('$0.123')
+    expect(formatTriggerPrice(1)).toBe('$1.00')
+    expect(formatTriggerPrice(3780)).toBe('$3,780')
+    expect(formatTriggerPrice(null)).toBe(formatDcaPrice(null))
+    const p = payload<TriggerOnePayload>(
+      withTrigger('trigger-armed', (tr) => {
+        tr.condition = {
+          ...(tr.condition as Json),
+          direction: 'above',
+          priceUsd: 0.5,
+          label: 'over $0.50',
+          hits: 0,
+        }
+        tr.market = { ...(tr.market as Json), priceUsd: 1, distancePct: 0 }
+      }),
+    )
+    const card = render(p)
+    expect(card.querySelector('.trigger-card__hero')?.textContent).toContain('over $0.50')
+    const gauge = card.querySelector<HTMLElement>('.trigger-gauge')!
+    expect(texts(gauge, '.trigger-gauge__label')).toEqual(['line $0.50', 'now $1.00'])
+    // …and the derived label, when the engine sent none, says it the same way.
+    expect(
+      conditionLabel(triggerWith('trigger-armed', { direction: 'above', priceUsd: 0.5 })),
+    ).toBe('over $0.50')
+  })
 })
 
 /* ── the card ──────────────────────────────────────────────────────────── */
@@ -886,7 +919,7 @@ describe('buildTriggerCard — trigger', () => {
     expect(fire.dataset.triggerFireStatus).toBe('filled')
     expect(fire.querySelector('.trigger-fire__n')?.textContent).toMatch(/^#\d+$/)
     expect(fire.querySelector('.trigger-fire__detail')?.textContent).toMatch(
-      /^[\d.,]+ \S+ → [\d.,]+ \S+ @ \$[\d,.]+$/,
+      /^[\d.,]+ \S+ → [\d.,]+ \S+ @\u00a0\$[\d,.]+$/,
     )
     const link = fire.querySelector<HTMLAnchorElement>('a.trigger-fire__link')!
     expect(link.href).toMatch(/^https:\/\//)
@@ -1054,6 +1087,8 @@ describe('buildTriggerCard — trigger', () => {
     )
     expect(rows[2]!.querySelector('.trigger-fire__status')).toHaveTextContent('awaiting approval')
     expect(rows[2]!.querySelector('.trigger-fire__detail')).toHaveTextContent('@ $3,790')
+    // "@" and its price are one unit: a wrapping detail never splits them.
+    expect(rows[2]!.querySelector('.trigger-fire__detail')?.textContent).toBe('@\u00a0$3,790')
     expect(rows[3]!.querySelector('.trigger-fire__manual')).not.toBeNull()
     expect(rows[4]!.querySelector('.trigger-fire__detail')).toHaveTextContent('quote: no route')
   })
@@ -1939,6 +1974,16 @@ describe('CSS contract', () => {
         new RegExp(`\\.${name.replace(/[-_]/g, (c) => `\\${c}`)}(?![\\w-])`),
       )
     }
+  })
+
+  // A done fill's detail ("0.02993 USDC → 0.0₄1108 ETH @ $1.00") was cut
+  // with an ellipsis, and the price it filled at was the part that went.
+  it('wraps a fire’s detail instead of ellipsizing it', () => {
+    const detail = css.match(/\.chat-surface \.trigger-fire__detail \{[^}]*\}/)?.[0] ?? ''
+    expect(detail).toMatch(/white-space: normal;/)
+    expect(detail).toMatch(/min-width: 0;/)
+    expect(detail).not.toMatch(/text-overflow: ellipsis;/)
+    expect(detail).not.toMatch(/overflow: hidden;/)
   })
 
   it('keys the skin on the contract data hooks', () => {

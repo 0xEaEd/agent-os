@@ -838,12 +838,17 @@ function ConnectedChat({
 
       <div className="chat-stage" onDrop={onDrop} onDragOver={onDragOver} onPaste={onPaste}>
         <h1 className="sr-only">{tw('chat.srTitle')}</h1>
-        <div className="chat-thread" ref={containerRef} data-history-ready="false" />
-        <div className="chat-history-loading" role="status" aria-live="polite">
-          <span className="chat-history-loading__dot" aria-hidden="true" />
-          <span>{desk ? t('trading.chat.opening') : tw('chat.opening')}</span>
+        {/* The transcript's own box: the loading line and the desk's empty
+            hint are positioned in it, so neither can spill over the desk's
+            approvals region or the composer below it. */}
+        <div className="chat-transcript">
+          <div className="chat-thread" ref={containerRef} data-history-ready="false" />
+          <div className="chat-history-loading" role="status" aria-live="polite">
+            <span className="chat-history-loading__dot" aria-hidden="true" />
+            <span>{desk ? t('trading.chat.opening') : tw('chat.opening')}</span>
+          </div>
+          {instruments.emptyHint}
         </div>
-        {instruments.emptyHint}
 
         {/* Zero-height dock at the foot of the transcript — above the desk's
             approvals region, whose cards (and their notes) it used to cover,

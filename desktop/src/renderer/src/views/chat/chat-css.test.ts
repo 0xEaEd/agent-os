@@ -680,6 +680,16 @@ describe('desktop trigger card skin', () => {
     )
   })
 
+  // A done fill's detail lost its "@ $1.00" to an ellipsis: the one figure
+  // that says what the trigger filled at.
+  it('wraps a fire’s detail rather than ellipsizing it', () => {
+    const detail = rule('.trigger-fire__detail')
+    expect(detail).toMatch(/white-space: normal;/)
+    expect(detail).toMatch(/min-width: 0;/)
+    expect(detail).not.toMatch(/text-overflow: ellipsis;/)
+    expect(detail).not.toMatch(/overflow: hidden;/)
+  })
+
   it('never changes the case of a token symbol in the sentence or the facts', () => {
     for (const r of ['.trigger-card__hero', '.trigger-card__facts dd,']) {
       const block = css.match(new RegExp(`^\\${r}[^{]*\\{[\\s\\S]*?^\\}`, 'm'))?.[0]

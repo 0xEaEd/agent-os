@@ -541,8 +541,9 @@ export const chat = defineNamespace('chat', {
   triggerFireExpired: 'expired',
   triggerFireRejected: 'rejected',
   triggerFireUnknown: 'unknown',
-  triggerFireSwap: '{amountIn} {symbolIn} → {amountOut} {symbolOut} @ {price}',
-  triggerFireAt: '@ {price}',
+  // A no-break space ties "@" to its price: a fire's detail wraps, never between the two.
+  triggerFireSwap: '{amountIn} {symbolIn} → {amountOut} {symbolOut} @\u00a0{price}',
+  triggerFireAt: '@\u00a0{price}',
   triggerFireManual: 'fired by hand',
   triggerReasonBalance: 'insufficient balance',
   triggerReasonInterrupted: 'interrupted',

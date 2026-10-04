@@ -2918,11 +2918,11 @@
 }
 
 .chat-surface .trigger-fire__detail {
-  overflow: hidden;
+  /* Wraps rather than ellipsizes: cut at the end, a fill lost its "@ $1.00". */
   flex: 1 1 0;
   min-width: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .chat-surface .trigger-fire__manual {

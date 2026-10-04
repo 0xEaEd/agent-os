@@ -927,7 +927,8 @@ export const trading = {
   'trading.dca.card.fact.wallet': 'Wallet',
   'trading.dca.card.fact.chain': 'Chain',
   'trading.dca.card.fact.first': 'First buy',
-  'trading.dca.card.fact.expires': 'Expires',
+  // The proposal's deadline, not the end of the DCA.
+  'trading.dca.card.fact.decideBy': 'Decide by',
   'trading.dca.card.firstNow': 'on approval',
   'trading.dca.card.firstNext': 'after {every}',
   'trading.dca.card.untilCap': 'until the cap',
@@ -1044,7 +1045,9 @@ export const trading = {
   'trading.trigger.card.fact.chain': 'Chain',
   'trading.trigger.card.fact.validUntil': 'Valid until',
   'trading.trigger.card.fact.approval': 'On fire',
-  'trading.trigger.card.fact.expires': 'Expires',
+  // The proposal's own deadline, not the trigger's: beside "Valid until" an
+  // "Expires" read as a contradiction of it.
+  'trading.trigger.card.fact.decideBy': 'Decide by',
   'trading.trigger.card.gtc': 'until stopped',
   'trading.trigger.card.automatic': 'trades at once',
   'trading.trigger.card.waits': 'waits for you · over {threshold}',

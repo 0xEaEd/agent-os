@@ -137,9 +137,11 @@ export function TriggerCard({
       tone: tr.action.needsApproval ? 'warn' : undefined,
     })
   }
+  // `expiresAt` is the proposal's deadline (24 h to decide), not the
+  // trigger's life — that is "Valid until" above.
   const expires = shortDate(tr.expiresAt)
   if (expires) {
-    facts.push({ key: 'expires', label: t('trading.trigger.card.fact.expires'), value: expires })
+    facts.push({ key: 'expires', label: t('trading.trigger.card.fact.decideBy'), value: expires })
   }
   const notes = [...new Set([...warnings, ...triggerNotes(tr, walletName(tr, wallets))])]
 
