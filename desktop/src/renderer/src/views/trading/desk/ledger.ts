@@ -42,6 +42,15 @@ export type TradeKind =
   | 'dca_run'
   | 'dca_stop'
   | 'dca_update'
+  | 'trigger'
+  | 'trigger_list'
+  | 'trigger_create'
+  | 'trigger_approve'
+  | 'trigger_reject'
+  | 'trigger_pause'
+  | 'trigger_resume'
+  | 'trigger_stop'
+  | 'trigger_fire'
   | 'other'
 
 export interface TradeCall {
@@ -119,6 +128,82 @@ const DCA_SUBS: Record<string, TradeKind> = {
   run: 'dca_run',
   stop: 'dca_stop',
   update: 'dca_update',
+}
+
+/** `trade trigger <sub>`: each subcommand is its own row kind (docs/triggers.md). */
+const TRIGGER_SUBS: Record<string, TradeKind> = {
+  create: 'trigger_create',
+  list: 'trigger_list',
+  show: 'trigger',
+  approve: 'trigger_approve',
+  reject: 'trigger_reject',
+  pause: 'trigger_pause',
+  resume: 'trigger_resume',
+  stop: 'trigger_stop',
+  fire: 'trigger_fire',
+}
+
+/** Every trigger row kind. */
+export function isTriggerKind(kind: TradeKind): boolean {
+  return kind === 'trigger' || kind.startsWith('trigger_')
+}
+
+/** `trade trigger create` flags that take no value (beside the shared ones). */
+const TRIGGER_BOOLEAN_FLAGS = new Set(['--sell', '--buy', '--alert'])
+
+/**
+ * What a `trigger create` command line arms, as its row title says it:
+ * "Stop-loss", "Take-profit", "Trailing stop", "Buy the dip", "Buy the
+ * breakout", "Price alert".
+ */
+function triggerCreateTitle(args: string): string {
+  const has = (name: string) => new RegExp(`(?:^|\\s)--${name}(?:\\s|=|$)`).test(args)
+  if (has('alert')) return 'Price alert'
+  if (has('buy')) return has('above') ? 'Buy the breakout' : 'Buy the dip'
+  if (has('trail')) return 'Trailing stop'
+  if (has('above')) return 'Take-profit'
+  return 'Stop-loss'
+}
+
+/** "$3,800" for an absolute price, "10 % under now" / "15 % over now" for a percent. */
+function triggerPriceWord(value: string, side: 'under' | 'over'): string {
+  const v = value.trim()
+  const pct = /^([+-]?)(\d+(?:\.\d+)?)%$/.exec(v)
+  if (pct) return `${pct[2]} % ${side} now`
+  const n = Number(v.replace(/[$,]/g, ''))
+  if (!Number.isFinite(n) || n <= 0) return `${side} ${v}`
+  const text =
+    n >= 1000
+      ? `$${Math.round(n).toLocaleString('en-US')}`
+      : `$${n.toLocaleString('en-US', { maximumFractionDigits: 6 })}`
+  return `${side} ${text}`
+}
+
+/** "under $3,800", "10 % under now", "over $5,000", "10 % below peak" from the flags. */
+function triggerConditionWord(args: string): string {
+  const below = flag(args, 'below')
+  if (below) return triggerPriceWord(below, 'under')
+  const above = flag(args, 'above')
+  if (above) return triggerPriceWord(above, 'over')
+  const trail = flag(args, 'trail')
+  if (trail) return `${trail.replace(/%$/, '')} % below peak`
+  return ''
+}
+
+/** The positional words of a `trade trigger` command line. */
+function triggerPositionals(args: string): string[] {
+  const out: string[] = []
+  const words = args.trim().split(/\s+/).filter(Boolean)
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]!
+    if (!w.startsWith('--')) {
+      out.push(w)
+      continue
+    }
+    if (w.includes('=') || LP_BOOLEAN_FLAGS.has(w) || TRIGGER_BOOLEAN_FLAGS.has(w)) continue
+    if (words[i + 1] && !words[i + 1]!.startsWith('--')) i++
+  }
+  return out
 }
 
 /** Every DCA row kind. */
@@ -220,6 +305,15 @@ const TITLES: Record<TradeKind, string> = {
   dca_run: 'Buy now',
   dca_stop: 'Stop DCA',
   dca_update: 'Update DCA',
+  trigger: 'Trigger status',
+  trigger_list: 'Triggers',
+  trigger_create: 'New trigger',
+  trigger_approve: 'Approve trigger',
+  trigger_reject: 'Reject trigger',
+  trigger_pause: 'Pause trigger',
+  trigger_resume: 'Resume trigger',
+  trigger_stop: 'Stop trigger',
+  trigger_fire: 'Fire now',
   other: 'Trade call',
 }
 
@@ -261,11 +355,14 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
       kind = LP_WRITES[(lpPositionals(args)[0] ?? '').toLowerCase()] ?? 'lp'
     } else if (sub === 'dca') {
       kind = DCA_SUBS[(lpPositionals(args)[0] ?? '').toLowerCase()] ?? 'dca'
+    } else if (sub === 'trigger') {
+      kind = TRIGGER_SUBS[(triggerPositionals(args)[0] ?? '').toLowerCase()] ?? 'trigger'
     }
   } else if (sub === 'balances') kind = 'balances'
   else kind = 'wallet'
 
   let detail = ''
+  let title = TITLES[kind]
   if (kind === 'quote' || kind === 'swap') {
     const tin = flag(args, 'in')
     const tout = flag(args, 'out')
@@ -352,6 +449,17 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
   } else if (isDcaKind(kind)) {
     // Every other DCA subcommand names one mandate: its id is the detail.
     detail = lpPositionals(args)[1] ?? ''
+  } else if (kind === 'trigger_create') {
+    // `trigger create ETH --sell --pct 50 --below 3800` → "Stop-loss" · "ETH · under $3,800".
+    const token = triggerPositionals(args)[1] ?? ''
+    const shown = /^0x[0-9a-fA-F]{40}$/.test(token) ? shortAddr(token) : token.toUpperCase()
+    title = triggerCreateTitle(args)
+    detail = [shown, triggerConditionWord(args), chainWord(args)].filter(Boolean).join(' · ')
+  } else if (kind === 'trigger_list') {
+    detail = /(?:^|\s)--all(?:\s|$)/.test(args) ? 'all' : ''
+  } else if (isTriggerKind(kind)) {
+    // Every other trigger subcommand names one trigger: its id is the detail.
+    detail = triggerPositionals(args)[1] ?? ''
   } else if (kind === 'lp') {
     // `lp pool boar --chain base` → "pool boar · Base"; flags and their values
     // (`--budget-seconds 60`, `--wallet=0x…`) never reach the subject.
@@ -361,7 +469,7 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
   } else {
     detail = chainWord(args)
   }
-  return { kind, title: TITLES[kind], detail, command: command.trim() }
+  return { kind, title, detail, command: command.trim() }
 }
 
 export interface TradeOutcome {
@@ -390,6 +498,11 @@ export interface TradeOutcome {
    * `withLiveMandate`: the row's pill follows it instead of the recorded one.
    */
   mandateLive?: string | null
+  /** A trigger row: the trigger it names, and the status its result recorded (docs/triggers.md). */
+  triggerId?: string | null
+  triggerStatus?: string | null
+  /** The trigger's status as the live list has it now, set only by `withLiveTrigger`. */
+  triggerLive?: string | null
 }
 
 const EMPTY: TradeOutcome = {
@@ -618,9 +731,224 @@ export function dcaCallFromResult(text: string): TradeCall | null {
   return { kind, title: TITLES[kind], detail: '', command: '' }
 }
 
-/** Any card-announcing trade call recognised from its result: an LP read or a DCA. */
+/**
+ * The trigger card announcement `agentos trade trigger … --json` prints last,
+ * in the same three shapes as the DCA one (docs/triggers.md, "CLI").
+ */
+const TRIGGER_CARD_MARKER = new RegExp(
+  [
+    /publish_artifact\s+path=\S+\s+mime=application\/vnd\.agentos\.trigger\+json/.source,
+    /\[inline artifact published and already rendered for the user:\s*(?:\S*\/)?trigger-cards\/[^\s\]]+/
+      .source,
+    /\[generated artifact omitted:[^\]\n]*application\/vnd\.agentos\.trigger\+json/.source,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * A trigger call recognised by its result alone (the command was wrapped
+ * past recognition): the result announces a trigger card. `triggers` reads
+ * as the list.
+ */
+export function triggerCallFromResult(text: string): TradeCall | null {
+  if (!TRIGGER_CARD_MARKER.test(text)) return null
+  const list = /"kind"\s*:\s*"triggers"/.test(text) || /trigger-cards\/triggers-/.test(text)
+  const kind: TradeKind = list ? 'trigger_list' : 'trigger'
+  return { kind, title: TITLES[kind], detail: '', command: '' }
+}
+
+/** Any card-announcing trade call recognised from its result: an LP read, a DCA or a trigger. */
 export function cardCallFromResult(text: string): TradeCall | null {
-  return lpCallFromResult(text) ?? dcaCallFromResult(text)
+  return lpCallFromResult(text) ?? dcaCallFromResult(text) ?? triggerCallFromResult(text)
+}
+
+const TRIGGER_STATUS_WORDS: Record<string, string> = {
+  awaiting_approval: 'awaiting approval',
+  armed: 'armed',
+  triggered: 'triggered',
+  paused: 'paused',
+  done: 'done',
+  stopped: 'stopped',
+  rejected: 'rejected',
+  expired: 'expired',
+}
+
+/** "$3,790" from a thousand up, cents under. */
+function triggerUsd(value: number | null): string {
+  if (value === null) return ''
+  return Math.abs(value) >= 1000
+    ? `$${Math.round(value).toLocaleString('en-US')}`
+    : formatUsd(value)
+}
+
+/** One trigger as a row: "ETH · under $3,800" as the subject, state and price as the summary. */
+function triggerLine(tr: Dict): { detail: string; bits: string[] } {
+  const token = sym(tr.token)
+  const condition = isDict(tr.condition) ? tr.condition : null
+  const market = isDict(tr.market) ? tr.market : null
+  const label = condition ? str(condition.label) : null
+  const bits: string[] = []
+  const status = str(tr.status)
+  if (status) bits.push(TRIGGER_STATUS_WORDS[status] ?? status)
+  const action = isDict(tr.action) ? str(tr.action.label) : null
+  if (action) bits.push(action)
+  const price = market ? num(market.priceUsd) : null
+  if (price !== null) {
+    const dist = market ? num(market.distancePct) : null
+    const d =
+      dist === null || status !== 'armed'
+        ? ''
+        : dist === 0
+          ? ' · at the line'
+          : ` · ${dist < 0 ? '−' : '+'}${Math.abs(dist).toFixed(1)} %`
+    bits.push(`${token} ${triggerUsd(price)}${d}`)
+  }
+  return { detail: [token, label].filter(Boolean).join(' · '), bits }
+}
+
+/**
+ * A trigger read-out or write in one line, never its JSON. A trigger payload
+ * with 20 fires runs past the ~2,000 characters a stored tool result keeps,
+ * so a result that no longer parses is read by hand from the fields that
+ * come first (`kind`, `id`, `name`, `status`).
+ */
+function parseTriggerResult(call: TradeCall, text: string, data: unknown): TradeOutcome {
+  if (isDict(data) && isDict(data.error)) {
+    const message = str(data.error.message) ?? 'error'
+    return { ...EMPTY, summary: message, error: message }
+  }
+  const d = isDict(data) ? data : null
+  const kind = (d && str(d.kind)) ?? field(text, /"kind"\s*:\s*"(triggers?)"/)
+  if (!kind) {
+    const code = exitCodeOf(text)
+    const first =
+      text
+        .split('\n')
+        .find((l) => l.trim() && !/^\s*exit_code=/.test(l))
+        ?.slice(0, 140) ?? ''
+    if (/^\s*[{[]/.test(first)) {
+      const message = jsonString(text, 'message')
+      if (message) return { ...EMPTY, summary: message, error: message }
+    }
+    if (code !== null && code !== 0) {
+      const line = first || `exit ${code}`
+      return { ...EMPTY, summary: line, error: line }
+    }
+    return { ...EMPTY, summary: PROJECTION_MARKER.test(first) ? call.detail : '' }
+  }
+  if (kind === 'triggers') {
+    const rows = d && Array.isArray(d.triggers) ? d.triggers.filter(isDict) : null
+    const totals = d && isDict(d.totals) ? d.totals : null
+    const count = totals ? num(totals.count) : rows ? rows.length : null
+    const armed = totals
+      ? num(totals.armed)
+      : rows
+        ? rows.filter((tr) => tr.status === 'armed').length
+        : null
+    const pending = totals
+      ? (num(totals.awaiting) ?? 0)
+      : rows
+        ? rows.filter((tr) => tr.status === 'awaiting_approval').length
+        : 0
+    const fired = totals
+      ? (num(totals.triggered) ?? 0)
+      : rows
+        ? rows.filter((tr) => tr.status === 'triggered').length
+        : 0
+    const bits: string[] = []
+    if (count !== null) bits.push(count === 0 ? 'none yet' : `${armed ?? 0} armed`)
+    if (pending) bits.push(`${pending} awaiting approval`)
+    if (fired) bits.push(`${fired} triggered`)
+    return {
+      ...EMPTY,
+      detail: count !== null ? `${count} trigger${count === 1 ? '' : 's'}` : '',
+      summary: bits.join(' · '),
+      awaiting: pending > 0,
+    }
+  }
+  const tr = d && isDict(d.trigger) ? d.trigger : null
+  if (!tr) {
+    // Truncated: the trigger's first fields survive, the rest is gone.
+    const id = field(text, /"id"\s*:\s*"(trg_[0-9a-zA-Z]+)"/)
+    const name = field(text, /"trigger"\s*:\s*\{[^{}]*?"name"\s*:\s*"([^"]+)"/)
+    const status = field(text, /"trigger"\s*:\s*\{[^{}]*?"status"\s*:\s*"([a-z_]+)"/)
+    const bits = [status ? (TRIGGER_STATUS_WORDS[status] ?? status) : '', id ?? '']
+    return {
+      ...EMPTY,
+      ...(name ? { detail: name } : {}),
+      summary: bits.filter(Boolean).join(' · ') || 'result truncated',
+      awaiting: status === 'awaiting_approval',
+      triggerId: id ?? namedTrigger(call),
+      triggerStatus: status,
+    }
+  }
+  const line = triggerLine(tr)
+  const fire = d && isDict(d.fire) ? d.fire : null
+  const bits = [...line.bits]
+  let orderId: string | null = null
+  let txHash: string | null = null
+  let explorerUrl: string | null = null
+  let awaiting = tr.status === 'awaiting_approval'
+  if (fire) {
+    const status = str(fire.status)
+    const n = num(fire.n)
+    const word = status === 'parked' ? 'awaiting approval' : (status ?? '')
+    bits.unshift(
+      [n !== null ? `fire #${n}` : 'fire', word, str(fire.reason) ?? ''].filter(Boolean).join(' '),
+    )
+    orderId = str(fire.orderId)
+    txHash = str(fire.txHash)
+    explorerUrl = str(fire.explorerUrl)
+    if (status === 'parked') awaiting = true
+  }
+  const chain = isDict(tr.chain) ? num(tr.chain.id) : null
+  return {
+    ...EMPTY,
+    detail: line.detail || str(tr.name) || '',
+    summary: bits.filter(Boolean).join(' · '),
+    orderId,
+    txHash,
+    explorerUrl,
+    chainId: chain,
+    awaiting,
+    confirmed: Boolean(fire && fire.status === 'filled' && txHash),
+    error:
+      fire && (fire.status === 'failed' || fire.status === 'skipped')
+        ? (str(fire.reason) ?? str(fire.status) ?? 'failed')
+        : null,
+    triggerId: str(tr.id) ?? namedTrigger(call),
+    triggerStatus: str(tr.status),
+  }
+}
+
+/** The trigger id a `trade trigger <sub> <id>` command names, when it names one. */
+function namedTrigger(call: TradeCall): string | null {
+  return /^trg_[0-9a-zA-Z]+$/.test(call.detail) ? call.detail : null
+}
+
+/**
+ * A trigger row read against the live trigger list: once the list knows the
+ * trigger, the row's pill and status word follow it instead of the one the
+ * result recorded ("awaiting approval" on a Stop-loss row the user has since
+ * armed). A row that fronts a fire's order keeps the order's pill.
+ */
+export function withLiveTrigger(
+  outcome: TradeOutcome,
+  live: string | null | undefined,
+): TradeOutcome {
+  if (!live || !outcome.triggerId || outcome.orderId || outcome.error) return outcome
+  const recorded = outcome.triggerStatus ? TRIGGER_STATUS_WORDS[outcome.triggerStatus] : null
+  const now = TRIGGER_STATUS_WORDS[live] ?? live
+  let summary = outcome.summary
+  if (recorded && recorded !== now) {
+    const bits = summary.split(' · ')
+    const at = bits.indexOf(recorded)
+    if (at >= 0) {
+      bits[at] = now
+      summary = bits.join(' · ')
+    }
+  }
+  return { ...outcome, summary, awaiting: live === 'awaiting_approval', triggerLive: live }
 }
 
 const DCA_STATUS_WORDS: Record<string, string> = {
@@ -1062,6 +1390,17 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
             .join('\n'),
         )
     return parseDcaResult(call, text, bare)
+  }
+  if (isTriggerKind(call.kind)) {
+    const bare = isDict(data)
+      ? data
+      : parseJson(
+          text
+            .split('\n')
+            .filter((l) => !TRIGGER_CARD_MARKER.test(l))
+            .join('\n'),
+        )
+    return parseTriggerResult(call, text, bare)
   }
   if (!isDict(data)) {
     const code = exitCodeOf(text)

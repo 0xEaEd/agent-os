@@ -350,7 +350,9 @@ describe('desktop DCA card skin', () => {
     )?.[0]
 
   it('joins the artifact grid next to the LP group', () => {
-    expect(css).toMatch(/\.msg-artifact-lp-group,\s*\.msg-artifact-dca-group \{\s*display: grid;/)
+    expect(css).toMatch(
+      /\.msg-artifact-lp-group,\s*\.msg-artifact-dca-group,\s*\.msg-artifact-trigger-group \{\s*display: grid;/,
+    )
     expect(css).toMatch(/^\.msg-artifact-dca-group \{\s*max-width: min\(38rem, 100%\);/m)
   })
 
@@ -534,6 +536,156 @@ describe('desktop DCA card skin', () => {
 
   it('never changes the case of a token symbol', () => {
     for (const r of ['.dca-card__pair,', '.dca-card__name', '.dca-stat__symbol']) {
+      const block = css.match(new RegExp(`^\\${r}[^{]*\\{[\\s\\S]*?^\\}`, 'm'))?.[0]
+      expect(block, r).toBeTruthy()
+      expect(block, r).not.toMatch(/text-transform/)
+    }
+  })
+})
+
+// Trigger cards (frontend trigger.ts, docs/triggers.md "Rendering") are the
+// console's markup; the desktop draws them as desk instruments through the
+// `data-trigger-*` hooks. These pin the class inventory the contract names
+// and what makes the skin the desk's: a rail that follows the trigger's
+// state, the kind glyph drawn by CSS (never in the DOM), a price rail tinted
+// amber near its line, and actions keyed on `data-trigger-op`.
+describe('desktop trigger card skin', () => {
+  const rule = (selector: string): string | undefined =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+    )?.[0]
+
+  it('joins the artifact grid next to the DCA group', () => {
+    expect(css).toMatch(/^\.msg-artifact-trigger-group \{\s*max-width: min\(38rem, 100%\);/m)
+  })
+
+  it('draws a hairline plate with a status rail, not a border, and mono numerals', () => {
+    const card = rule('.trigger-card')
+    expect(card).toBeTruthy()
+    expect(card).toMatch(/--trigger-rail: var\(--dim\);/)
+    expect(card).toMatch(/box-shadow: inset 0 0 0 1px var\(--hairline\);/)
+    expect(card).not.toMatch(/\bborder:/)
+    expect(card).toMatch(/font-variant-numeric: tabular-nums;/)
+    expect(rule('.trigger-card::before')).toMatch(/background: var\(--trigger-rail\);/)
+    expect(css).toMatch(
+      /\.trigger-card__facts dd,\s*\.trigger-card__fact-value,\s*\.trigger-fires,\s*\.trigger-card__foot \{\s*font-family: var\(--font-mono\);/,
+    )
+  })
+
+  it('tones the rail and the pill from every status the contract names', () => {
+    const tones: Record<string, string> = {
+      awaiting_approval: 'warn',
+      armed: 'ok',
+      paused: 'muted-foreground',
+    }
+    for (const [status, tone] of Object.entries(tones)) {
+      expect(css, status).toMatch(
+        new RegExp(
+          `\\.trigger-card\\[data-trigger-status='${status}'\\] \\{\\s*--trigger-rail: var\\(--${tone}\\);`,
+        ),
+      )
+    }
+    for (const status of ['triggered', 'done']) {
+      expect(selectors, status).toContain(`.trigger-card[data-trigger-status='${status}']`)
+      expect(selectors, status).toContain(`.trigger-pill[data-status='${status}']`)
+    }
+    for (const status of ['stopped', 'rejected', 'expired']) {
+      expect(selectors, status).toContain(`.trigger-card[data-trigger-status='${status}']`)
+      expect(selectors, status).toContain(`.trigger-pill[data-status='${status}']`)
+    }
+    expect(css).toMatch(/\.trigger-pill\[data-status='armed'\] \{\s*--trigger-tone: var\(--ok\);/)
+  })
+
+  it('pulses awaiting and triggered, and holds still on reduced motion', () => {
+    expect(selectors).toContain(".trigger-card[data-trigger-status='awaiting_approval']::before")
+    expect(selectors).toContain(".trigger-card[data-trigger-status='triggered']::before")
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.trigger-card\[data-trigger-status='awaiting_approval'\]::before,[\s\S]*?animation: none;/,
+    )
+  })
+
+  it('draws the kind glyph from data-trigger-action, never an emoji', () => {
+    expect(rule(".trigger-card[data-trigger-action='sell'] .trigger-card__head::before")).toMatch(
+      /content: '▼';/,
+    )
+    expect(rule(".trigger-card[data-trigger-action='buy'] .trigger-card__head::before")).toMatch(
+      /content: '▲';/,
+    )
+    const alert = rule(".trigger-card[data-trigger-action='alert'] .trigger-card__head::before")
+    expect(alert).toMatch(/content: '.';/u)
+    expect(alert).not.toMatch(/\p{Extended_Pictographic}/u)
+  })
+
+  it('tints the price rail amber within 1 % of its line', () => {
+    const near = css.match(
+      /(\.trigger-gauge\[data-trigger-[^{]+)\{\s*--trigger-gauge-tone: var\(--warn\);/,
+    )
+    expect(near).toBeTruthy()
+    const list = near?.[1] ?? ''
+    for (const hook of [
+      "[data-trigger-dist='0']",
+      "[data-trigger-dist^='-0']",
+      "[data-trigger-dist^='0.']",
+      "[data-trigger-dist='1']",
+      "[data-trigger-dist='-1']",
+      '[data-trigger-near]',
+    ]) {
+      expect(list, hook).toContain(hook)
+    }
+  })
+
+  it('keys layout, busy and stale states on the card hooks', () => {
+    expect(selectors).toContain(".trigger-card[data-trigger-layout='wide'] .trigger-card__facts")
+    expect(selectors).toContain(".trigger-card[data-trigger-layout='narrow'] .trigger-card__facts")
+    expect(selectors).toContain(
+      '.trigger-card[data-trigger-busy] > :not(.trigger-actions):not(.trigger-card__foot)',
+    )
+    expect(css).toMatch(
+      /\.trigger-card\[data-trigger-stale\] \.trigger-actions \[data-trigger-op\],[^{]*\{[^}]*pointer-events: none;/,
+    )
+    // The footer's ↻ is how a stale card recovers: nothing may switch it off.
+    expect(
+      selectors.some((sel) => /data-trigger-stale\][^,]*\.trigger-card__foot (a|button)/.test(sel)),
+    ).toBe(false)
+    expect(selectors).toContain(".trigger-card[data-trigger-kind='triggers']")
+  })
+
+  it('styles every documented part of the card', () => {
+    for (const part of [
+      '.trigger-card__head',
+      '.trigger-card__hero',
+      '.trigger-card__now',
+      '.trigger-gauge',
+      '.trigger-card__facts',
+      '.trigger-fires',
+      '.trigger-actions',
+      '.trigger-actions__error',
+      '.trigger-card__warnings',
+      '.trigger-card__foot',
+      '.trigger-pill',
+    ]) {
+      expect(selectors, part).toContain(part)
+    }
+  })
+
+  it('makes Approve & arm the one filled control and spells out an armed Stop or Fire now', () => {
+    expect(rule(".msg-body .trigger-actions [data-trigger-op='approve']")).toMatch(
+      /background: var\(--primary\);/,
+    )
+    expect(rule('.msg-body .trigger-actions [data-trigger-op]')).toMatch(/cursor: default;/)
+    expect(rule('.msg-body .trigger-actions [data-trigger-op][data-trigger-confirm]')).toMatch(
+      /color: var\(--danger\);/,
+    )
+    expect(selectors).toContain(
+      ".msg-body .trigger-actions [data-trigger-op='fire'][data-trigger-confirm]",
+    )
+    expect(selectors).toContain(
+      '.msg-body .trigger-actions [data-trigger-op][data-trigger-pending]',
+    )
+  })
+
+  it('never changes the case of a token symbol in the sentence or the facts', () => {
+    for (const r of ['.trigger-card__hero', '.trigger-card__facts dd,']) {
       const block = css.match(new RegExp(`^\\${r}[^{]*\\{[\\s\\S]*?^\\}`, 'm'))?.[0]
       expect(block, r).toBeTruthy()
       expect(block, r).not.toMatch(/text-transform/)

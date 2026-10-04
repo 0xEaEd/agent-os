@@ -12,7 +12,8 @@ import { useConnection } from '@/stores/connection'
 import { t, type MessageKey } from '~/i18n'
 import { biometricGate, requireBiometric } from '~/lib/biometric-gate'
 import { errorText, QUOTE_REFRESH_MS } from '~/views/trading/logic'
-import { mandateTouchId, orderTouchId, vaultReason } from '~/views/trading/touch-id'
+import { answeredFire } from '~/views/trading/desk/trigger-logic'
+import { mandateTouchId, orderTouchId, triggerTouchId, vaultReason } from '~/views/trading/touch-id'
 import { CHAINS } from '~/views/trading/types'
 import type {
   AllowanceList,
@@ -37,6 +38,9 @@ import type {
   SearchToken,
   Token,
   TradingStatus,
+  Trigger,
+  TriggerListPayload,
+  TriggerPayload,
   Wallet,
   WalletStatus,
 } from '~/views/trading/types'
@@ -78,6 +82,8 @@ export const TRADING_KEYS = {
   network: ['trading', 'network'] as const,
   /** DCA mandates (docs/dca.md): the live ones, or every one ever made. */
   dca: (all = false) => ['trading', 'dca', all ? 'all' : 'live'] as const,
+  /** Price triggers (docs/triggers.md): the live ones, or every one ever made. */
+  trigger: (all = false) => ['trading', 'trigger', all ? 'all' : 'live'] as const,
 }
 
 /** Gateway events after which trading data is stale. */
@@ -86,6 +92,8 @@ export const TRADING_EVENTS = [
   'trading.approval.requested',
   'trading.order.finished',
   'trading.dca.changed',
+  'trading.trigger.changed',
+  'trading.trigger.fired',
   '_hello',
 ] as const
 
@@ -948,6 +956,169 @@ export function useMandateActions(): MandateActions {
     resume: (mandate) => act('resume', mandate),
     stop: (mandate, reason) => act('stop', mandate, reason ? { reason } : {}),
     run: (mandate) => act('run', mandate),
+    pending,
+    busy: mutation.isPending,
+  }
+}
+
+/* ── Price triggers (docs/triggers.md) ───────────────────────────────────── */
+
+const NO_TRIGGERS: Trigger[] = []
+
+/**
+ * The engine's price triggers: live ones (awaiting approval, armed,
+ * triggered, paused), or every one with `all`. `trading.changed` (emitted on
+ * every trigger change) and `trading.trigger.changed` / `.fired` (in
+ * TRADING_EVENTS) refresh it; the price and distance move with the engine's
+ * own checks, so a slow poll backs up the events.
+ */
+export function useTriggers(all = false, enabled = true) {
+  const rpc = useRpc()
+  const connected = useConnected()
+  const query = useQuery<TriggerListPayload>({
+    queryKey: TRADING_KEYS.trigger(all),
+    enabled: connected && enabled,
+    queryFn: async () => {
+      await rpc.waitForConnection()
+      return rpc.call<TriggerListPayload>('trading.trigger.list', all ? { all: true } : {})
+    },
+    // The engine re-reads the price every 30 s without an event per check.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    placeholderData: (prev) => prev,
+  })
+  const triggers = useMemo(
+    () => (Array.isArray(query.data?.triggers) ? query.data.triggers : NO_TRIGGERS),
+    [query.data],
+  )
+  return { ...query, triggers, totals: query.data?.totals ?? null }
+}
+
+export type TriggerAction = 'approve' | 'reject' | 'pause' | 'resume' | 'stop' | 'fire'
+
+/** Operator writes on one trigger. Every answer is the full, refreshed card payload. */
+export interface TriggerActions {
+  /** Asks for Touch ID first when Settings › Security says so; null when declined. */
+  approve: (trigger: Trigger) => Promise<TriggerPayload | null>
+  reject: (trigger: Trigger, reason?: string) => Promise<TriggerPayload | null>
+  pause: (trigger: Trigger) => Promise<TriggerPayload | null>
+  resume: (trigger: Trigger) => Promise<TriggerPayload | null>
+  stop: (trigger: Trigger, reason?: string) => Promise<TriggerPayload | null>
+  /** "Fire now": one fire at once, whatever the condition; the payload carries `fire`. */
+  fire: (trigger: Trigger) => Promise<TriggerPayload | null>
+  /** The trigger with a write in flight, or null. */
+  pending: string | null
+  busy: boolean
+}
+
+const TRIGGER_DONE_KEYS: Record<Exclude<TriggerAction, 'fire'>, MessageKey> = {
+  approve: 'trading.trigger.toast.approved',
+  reject: 'trading.trigger.toast.rejected',
+  pause: 'trading.trigger.toast.paused',
+  resume: 'trading.trigger.toast.resumed',
+  stop: 'trading.trigger.toast.stopped',
+}
+
+/**
+ * The "Fire now" answer, said as what the fire did: alerted, placed, filled,
+ * waiting for approval, skipped (and why), failed (and why). A skip is not a
+ * success and never toasts a green check.
+ */
+export function fireToast(res: TriggerPayload | null | undefined, trigger: Trigger): void {
+  const name = res?.trigger?.name || trigger.name
+  const id = `trigger-${trigger.id}`
+  const fire = answeredFire(res?.fire, res?.trigger)
+  const why = (key: MessageKey) => `${t(key)}${fire?.reason ? `: ${fire.reason}` : ''} · ${name}`
+  switch (fire?.status) {
+    case 'alerted':
+      toast.success(`${t('trading.trigger.toast.alerted')} · ${name}`, { id })
+      return
+    case 'filled':
+      toast.success(`${t('trading.trigger.toast.filled')} · ${name}`, { id })
+      return
+    case 'pending':
+      toast.success(`${t('trading.trigger.toast.placed')} · ${name}`, { id })
+      return
+    case 'parked':
+      toast.info(`${t('trading.trigger.toast.parked')} · ${name}`, { id })
+      return
+    case 'skipped':
+      toast.warning(why('trading.trigger.toast.skipped'), { id })
+      return
+    case 'failed':
+      toast.error(why('trading.trigger.toast.fireFailed'), { id })
+      return
+    case 'expired':
+    case 'rejected':
+      toast.warning(why('trading.trigger.toast.void'), { id })
+      return
+    default:
+      toast.info(`${t('trading.trigger.toast.noFire')} · ${name}`, { id })
+  }
+}
+
+/**
+ * The trigger controls the desk offers (the Missions rows, the approval
+ * card). Each write toasts its own outcome, keyed by the trigger so a second
+ * click replaces the first toast instead of stacking.
+ */
+export function useTriggerActions(): TriggerActions {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: ({
+      method,
+      params,
+    }: {
+      method: string
+      params: Record<string, unknown>
+      id: string
+    }) => rpc.call<TriggerPayload>(method, params),
+    onSettled: () => invalidateTrading(queryClient),
+  })
+  const { mutateAsync } = mutation
+  const act = useCallback(
+    async (
+      action: TriggerAction,
+      trigger: Trigger,
+      extra: Record<string, unknown> = {},
+    ): Promise<TriggerPayload | null> => {
+      try {
+        const res = await mutateAsync({
+          method: `trading.trigger.${action}`,
+          params: { triggerId: trigger.id, ...extra },
+          id: trigger.id,
+        })
+        if (action === 'fire') fireToast(res, trigger)
+        else
+          toast.success(`${t(TRIGGER_DONE_KEYS[action])} · ${res?.trigger?.name || trigger.name}`, {
+            id: `trigger-${trigger.id}`,
+          })
+        return res ?? null
+      } catch (err) {
+        toast.error(`${t('trading.trigger.toast.failed')}: ${errorText(err)}`, {
+          id: `trigger-${trigger.id}`,
+        })
+        return null
+      }
+    },
+    [mutateAsync],
+  )
+  const pending = mutation.isPending ? (mutation.variables?.id ?? null) : null
+  return {
+    // A trigger is a standing permission to trade when the market says so:
+    // with Touch ID on, the fingerprint comes first, and a declined prompt
+    // (already toasted) sends nothing.
+    approve: async (trigger) => {
+      const ask = triggerTouchId(trigger)
+      if (!(await biometricGate(ask.kind, ask.reason, `trigger:${trigger.id}`))) return null
+      return act('approve', trigger)
+    },
+    reject: (trigger, reason) => act('reject', trigger, reason ? { reason } : {}),
+    pause: (trigger) => act('pause', trigger),
+    resume: (trigger) => act('resume', trigger),
+    stop: (trigger, reason) => act('stop', trigger, reason ? { reason } : {}),
+    fire: (trigger) => act('fire', trigger),
     pending,
     busy: mutation.isPending,
   }

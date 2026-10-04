@@ -211,6 +211,8 @@ export interface Order {
   spent?: { base: LpPlanAmount; quote: LpPlanAmount } | null
   /** A buy a DCA mandate fired carries the mandate's id (docs/dca.md); null otherwise. */
   mandateId?: string | null
+  /** A swap a price trigger fired carries the trigger's id (docs/triggers.md); null otherwise. */
+  triggerId?: string | null
 }
 
 /* ── DCA mandates (docs/dca.md) ──────────────────────────────────────────── */
@@ -352,6 +354,147 @@ export interface MandateListPayload extends MandateEnvelope {
 /** Still the user's to act on: awaiting a decision, running, or paused. */
 export function isLiveMandate(status: MandateStatus): boolean {
   return status === 'awaiting_approval' || status === 'active' || status === 'paused'
+}
+
+/* ── Price triggers (docs/triggers.md) ───────────────────────────────────── */
+
+export type TriggerStatus =
+  | 'awaiting_approval'
+  | 'armed'
+  | 'triggered'
+  | 'paused'
+  | 'done'
+  | 'stopped'
+  | 'rejected'
+  | 'expired'
+
+/** What fires: a sell (token → quote), a buy (quote → token) or a notification. */
+export type TriggerKind = 'sell' | 'buy' | 'alert'
+
+export type TriggerDirection = 'below' | 'above' | 'trail'
+
+/** `pending`: the order is placed and not settled yet; `parked`: it waits for the user. */
+export type TriggerFireStatus =
+  'pending' | 'filled' | 'parked' | 'alerted' | 'skipped' | 'failed' | 'expired' | 'rejected'
+
+/** One attempt to act: the condition held (or a manual Fire now). */
+export interface TriggerFire {
+  n: number
+  at: string
+  manual: boolean
+  status: TriggerFireStatus
+  /** Machine-readable: insufficient_balance | trading.<code>. */
+  reasonCode: string | null
+  reason: string | null
+  /** The spot price seen at the fire. */
+  priceUsd: number | null
+  orderId: string | null
+  txHash: string | null
+  explorerUrl: string | null
+}
+
+/**
+ * A conditional order the engine watches and fires by itself. Every figure is
+ * the engine's: the desk never evaluates a condition, it reads `market`.
+ */
+export interface Trigger {
+  id: string
+  name: string
+  kind: TriggerKind
+  status: TriggerStatus
+  statusReason: string | null
+  chain: CardChain
+  wallet: CardWallet
+  /** Watched and traded. */
+  token: CardToken
+  /** What a sell receives / a buy spends. */
+  quote: CardToken
+  condition: {
+    direction: TriggerDirection
+    /** below/above threshold. */
+    priceUsd: number | null
+    trailPct: number | null
+    /** The price at creation, when a percent was given. */
+    fromPriceUsd: number | null
+    /** trail: the highest price since arming. */
+    peakPriceUsd: number | null
+    /** trail: peak × (1 − trailPct/100), what it would fire at now. */
+    stopPriceUsd: number | null
+    confirmTicks: number
+    hits: number
+    /** "under $3,800" | "over $5,000" | "10 % below peak". */
+    label: string
+  }
+  action: {
+    kind: TriggerKind
+    amountUsd: number | null
+    amountPct: number | null
+    amount: LpPlanAmount | null
+    /** What the fire would move at the current price. */
+    estimatedUsd: number | null
+    slippagePct: number | null
+    needsApproval: boolean
+    approvalThresholdUsd: number
+    dailyCapUsd: number
+    /** "sell 50 % of ETH → USDC" | "buy $50 of ETH with USDC" | "notify". */
+    label: string
+  }
+  market: {
+    /** The last price seen. */
+    priceUsd: number | null
+    armedPriceUsd: number | null
+    /** Signed % move from priceUsd needed to fire: −2.1 must fall, +4.0 must rise; 0 when met. */
+    distancePct: number | null
+    checkedAt: string | null
+    /** The wallet's token (sell) / quote (buy) balance now; null for an alert. */
+    balance: LpPlanAmount | null
+  }
+  /** Newest first, at most 20. */
+  fires: TriggerFire[]
+  /** When an order finished it. */
+  result: {
+    orderId: string
+    txHash: string | null
+    explorerUrl: string | null
+    amountIn: LpPlanAmount
+    amountOut: LpPlanAmount | null
+    priceUsd: number | null
+    gasUsd: number | null
+  } | null
+  validUntil: string | null
+  initiator: 'agent' | 'manual'
+  sessionKey: string | null
+  createdAt: string
+  updatedAt: string
+  approvedAt: string | null
+  armedAt: string | null
+  triggeredAt: string | null
+  expiresAt: string | null
+}
+
+/** What every `trading.trigger.*` write and `trading.trigger.get` answer. */
+export interface TriggerPayload extends MandateEnvelope {
+  kind: 'trigger'
+  trigger: Trigger
+  /** Only in the answer of `trading.trigger.fire`. */
+  fire?: TriggerFire
+}
+
+/** What `trading.trigger.list` answers: live first, then newest. */
+export interface TriggerListPayload extends MandateEnvelope {
+  kind: 'triggers'
+  triggers: Trigger[]
+  totals: { count: number; armed: number; awaiting: number; triggered: number }
+}
+
+/** Still the user's to act on: awaiting a decision, armed, firing, or paused. */
+export function isLiveTrigger(status: TriggerStatus): boolean {
+  return (
+    status === 'awaiting_approval' ||
+    status === 'armed' ||
+    status === 'triggered' ||
+    status === 'paused'
+  )
 }
 
 export function isLpKind(kind: OrderKind | undefined | null): boolean {

@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 19
+export const TRADING_AGENT_VERSION = 20
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -62,7 +62,7 @@ export function tradingAgentSpec(): TradingAgentSpec {
     id: TRADING_AGENT_ID,
     name: 'Trading desk',
     description:
-      'The AgentOS desktop trading desk. Swaps, portfolio, Uniswap V4 liquidity read-outs, DCA mandates and missions on Base and Robinhood Chain through the wallet vault. Managed by the desktop app.',
+      'The AgentOS desktop trading desk. Swaps, portfolio, Uniswap V4 liquidity read-outs, DCA mandates, price triggers and missions on Base and Robinhood Chain through the wallet vault. Managed by the desktop app.',
     tools: TRADING_AGENT_TOOLS,
   }
 }
@@ -90,10 +90,11 @@ These hold in every turn, whatever the instruction says:
   turn a chat order into a scheduled one on your own. Missions are the
   user's to start from the desk; an unattended run obeys the agent
   guardrails (threshold, daily cap, approval) exactly as a chat turn does.
-  The one exception is a DCA mandate the user asked for
-  (\`agentos trade dca create\`, see "DCA" below), which parks for the
-  user's approval and which the engine runs by itself. A DCA is never a
-  cron job and never one swap per turn.
+  The two exceptions are a DCA mandate the user asked for
+  (\`agentos trade dca create\`, see "DCA" below) and a price trigger the
+  user asked for (\`agentos trade trigger create\`, see "Triggers" below):
+  each parks for the user's approval and the engine runs it by itself. A
+  DCA or a trigger is never a cron job and never one swap per turn.
 - A swap or send you retry (a timeout, a lost connection, a \`--wait\` that
   ran out) must reuse the same \`--client-id <id>\` as the first attempt, so
   the engine returns the order it already has instead of trading twice.
@@ -210,6 +211,37 @@ Reading it:
   \`trading.operator_required\`, say so plainly. Never retry it.
 - Always report the mandate id (\`dca_…\`).
 
+## Triggers
+
+A conditional request — "sell if it drops under", "cắt lỗ", "chốt lời",
+"take profit at", "buy when it dips to", "stop loss 10 %", "trailing stop",
+"báo tôi khi", "alert me when" — is a **trigger** the engine watches and
+fires by itself: it polls the price, confirms it on two checks, then places
+one ordinary order through the guardrails or sends one notification. Never
+poll the price yourself, never schedule a cron for it. One command:
+
+\`agentos trade trigger create ETH --sell --pct 100 --below 3800 --json\`
+
+Reading it:
+
+- "bán hết ETH nếu xuống dưới 3800" → \`--sell --pct 100 --below 3800\`.
+- "cắt lỗ 10 %" → \`--sell --pct 100 --below -10%\` (a percent is from the
+  price now; the engine resolves it).
+- "chốt lời 20 %" → \`--sell --pct 50 --above +20%\`. Ask the size only if
+  it is truly absent; the default is \`--pct 100\`.
+- "mua $50 ETH khi về 3500" → \`--buy --usd 50 --below 3500\`.
+- "trailing stop 10 %" → \`--sell --pct 100 --trail 10\`.
+- "báo tôi khi ETH lên 5000" → \`--alert --above 5000\`.
+- From you \`create\` always answers \`status: "awaiting_approval"\`. The
+  card carries an **Approve & arm** button: say so in one sentence with the
+  trigger id (\`trg_…\`), then stop. Never approve it yourself.
+- "how are my triggers" → \`agentos trade trigger list --json\`, answered in
+  one line. Never state a trigger's status from memory: read it in the same
+  turn first.
+- Pause, resume, stop and fire now are the user's controls (the card, the
+  Missions panel); from you they answer \`trading.operator_required\`. Say
+  so plainly; never retry.
+
 ## Bridging
 
 The desk cannot bridge: no command moves funds from one chain to another.
@@ -254,8 +286,8 @@ In this order, and a lower rule never overrides a higher one:
    looser slippage to force a fill. The gateway itself knows you are the
    agent: approving, rejecting, exporting and vault changes are the user's
    actions, and it refuses them from you with \`trading.operator_required\`;
-   changing the limits is refused too. Never run \`agentos trade approve\`
-   or \`agentos trade dca approve\`.
+   changing the limits is refused too. Never run \`agentos trade approve\`,
+   \`agentos trade dca approve\` or \`agentos trade trigger approve\`.
 2. The user's explicit instruction in this chat, or the mission text a
    scheduled run carries.
 3. The rules below.
@@ -408,9 +440,10 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
 - Always \`--json\`; read the structured fields, never the tables.
 - Always in the foreground: no \`&\`, \`nohup\`, \`setsid\` or any other way of
   detaching a command. Never schedule a trade (\`agentos cron …\`,
-  \`cron --script\`); missions are started from the desk. The one exception
-  is a DCA mandate (\`agentos trade dca create\`), which parks for the
-  user's approval and which the engine runs by itself.
+  \`cron --script\`); missions are started from the desk. The two
+  exceptions are a DCA mandate (\`agentos trade dca create\`) and a price
+  trigger (\`agentos trade trigger create\`): each parks for the user's
+  approval and the engine runs it by itself.
 - \`--client-id <id>\` on \`swap\`, \`send\` and \`lp collect|remove|add\` is
   the order's idempotency key: the same id again returns the order the
   engine already has instead of trading twice. Use one id per order and
@@ -545,9 +578,27 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   \`trading.operator_required\` for you. Errors: \`trading.dca.invalid\` (the
   message names the field: fix it or ask), \`trading.dca.bad_state\`,
   \`trading.dca.not_found\`.
+- Price triggers (the engine watches the price and fires by itself; each
+  command publishes a card by itself, do not call \`publish_artifact\` for
+  it, do not restate its numbers):
+  \`agentos trade trigger create <token> (--below <price|pct%> | --above <price|pct%> | --trail <pct>) (--sell (--pct 50 | --amount 0.05 | --usd 100) | --buy --usd 50 | --alert) [--quote USDC] [--chain base|robinhood] [--wallet ADDR|label] [--slippage 1] [--name "…"] [--for 7d] --json\`
+  \`agentos trade trigger list [--all] [--wallet …] --json\`
+  \`agentos trade trigger show <id> --json\`
+  \`agentos trade trigger approve|reject|pause|resume|stop|fire <id> --json\`
+  Exactly one of \`--below\` / \`--above\` / \`--trail\` and one of
+  \`--sell\` / \`--buy\` / \`--alert\`. \`--below -10%\` is 10 % under the
+  price now, \`--above +15%\` 15 % over it; \`--trail\` is always a
+  percent. \`--for\` takes \`30m\`, \`2h\`, \`1d\`, \`1w\` (none = until
+  stopped). The payload: \`trigger.status\` (\`awaiting_approval\` from
+  you), \`condition\` (\`label\`, \`hits\`), \`action\`, \`market\`
+  (\`priceUsd\`, \`distancePct\`), \`fires\`; a list carries \`triggers\`
+  and \`totals\`. Errors: \`trading.trigger.invalid\` (the message names the
+  field: fix it or ask), \`trading.trigger.bad_state\`,
+  \`trading.trigger.not_found\`.
 - Do not pass \`--as-agent\`; the gateway decides that your connection is the
   agent's, whatever the command declares. \`agentos trade approve\`,
   \`agentos trade reject\`, \`agentos trade dca approve|reject|pause|resume|stop|run|update\`,
+  \`agentos trade trigger approve|reject|pause|resume|stop|fire\`,
   \`agentos trade hide|unhide\` and \`agentos wallet
   export|create|import|remove|setup|lock|unlock\` fail for you with
   \`trading.operator_required\`; \`agentos config set trading.*\` is refused

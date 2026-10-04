@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_NOTIFICATION_SETTINGS, type NotificationSettings } from '@shared/settings'
+import type { Trigger, TriggerFire, TriggerPayload } from '~/views/trading/types'
 import {
   decideDelivery,
   diffSessionRuns,
@@ -9,6 +11,7 @@ import {
   muteUntilFor,
   runKind,
   sessionKeyFromHash,
+  triggerFiredEvent,
   type DeliveryContext,
   type NotifyEvent,
   type RunTrack,
@@ -200,5 +203,133 @@ describe('formatting', () => {
     expect(excerpt('  a\n\n b  ')).toBe('a b')
     expect(excerpt('x'.repeat(200), 20)).toBe(`${'x'.repeat(19)}…`)
     expect(excerpt(null)).toBe('')
+  })
+})
+
+describe('trading.trigger.fired', () => {
+  const TRIGGER = (
+    JSON.parse(
+      readFileSync('src/renderer/src/views/trading/desk/__fixtures__/trigger/trigger.json', 'utf8'),
+    ) as TriggerPayload
+  ).trigger
+  const fire = (extra: Partial<TriggerFire> = {}): TriggerFire => ({
+    n: 2,
+    at: '2026-10-04T06:01:00Z',
+    manual: false,
+    status: 'pending',
+    reasonCode: null,
+    reason: null,
+    priceUsd: 3790,
+    orderId: 'ord_7',
+    txHash: null,
+    explorerUrl: null,
+    ...extra,
+  })
+  const alert: Trigger = {
+    ...TRIGGER,
+    id: 'trg_al',
+    name: 'Alert ETH under $3,800',
+    kind: 'alert',
+    action: {
+      ...TRIGGER.action,
+      kind: 'alert',
+      amountPct: null,
+      estimatedUsd: null,
+      label: 'notify',
+    },
+  }
+
+  it('says an alert as the news itself, a trade notification with no order', () => {
+    const ev = triggerFiredEvent(
+      { triggerId: alert.id, trigger: alert, fire: fire({ status: 'alerted', orderId: null }) },
+      true,
+    )
+    expect(ev).toEqual({
+      kind: 'trade',
+      title: 'ETH under $3,800',
+      subtitle: 'Alert · $3,790 now',
+      target: { type: 'trading' },
+    })
+  })
+
+  it('says a sell as what it is doing, pointing at the order it placed', () => {
+    const ev = triggerFiredEvent({ triggerId: TRIGGER.id, trigger: TRIGGER, fire: fire() }, true)
+    expect(ev).toEqual({
+      kind: 'trade',
+      title: 'Stop-loss ETH fired',
+      subtitle: 'selling 50 % of ETH at $3,790',
+      target: { type: 'trading', orderId: 'ord_7' },
+    })
+    // A parked fire is still news: the approval notification follows it.
+    expect(
+      triggerFiredEvent({ trigger: TRIGGER, fire: fire({ status: 'parked' }) }, true)?.kind,
+    ).toBe('trade')
+    const buy: Trigger = {
+      ...TRIGGER,
+      name: 'Buy ETH under $3,500',
+      kind: 'buy',
+      action: { ...TRIGGER.action, kind: 'buy', amountPct: null, amountUsd: 50 },
+    }
+    expect(
+      triggerFiredEvent({ trigger: buy, fire: fire({ priceUsd: 3488.2 }) }, true),
+    ).toMatchObject({
+      title: 'Buy ETH under $3,500 fired',
+      subtitle: 'buying $50 of ETH at $3,488',
+    })
+  })
+
+  it('says a skip or a failure as a failed trade, with the reason in the body', () => {
+    const skipped = triggerFiredEvent(
+      {
+        trigger: TRIGGER,
+        fire: fire({
+          status: 'skipped',
+          orderId: null,
+          reasonCode: 'insufficient_balance',
+          reason: 'paused: nothing to sell',
+        }),
+      },
+      true,
+    )
+    expect(skipped).toMatchObject({
+      kind: 'tradeFailed',
+      title: 'Stop-loss ETH skipped',
+      body: 'paused: nothing to sell',
+      target: { type: 'trading' },
+    })
+    const failed = triggerFiredEvent(
+      {
+        trigger: TRIGGER,
+        fire: fire({ status: 'failed', orderId: null, reasonCode: 'trading.quote_failed' }),
+      },
+      true,
+    )
+    expect(failed).toMatchObject({
+      kind: 'tradeFailed',
+      title: 'Stop-loss ETH could not fire',
+      body: 'trading.quote_failed',
+    })
+  })
+
+  it('keeps subtitles and reasons behind the preview switch, and drops a thin payload', () => {
+    const ev = triggerFiredEvent({ trigger: TRIGGER, fire: fire() }, false)
+    expect(ev?.title).toBe('Stop-loss ETH fired')
+    expect(ev?.subtitle).toBeUndefined()
+    const failed = triggerFiredEvent(
+      { trigger: TRIGGER, fire: fire({ status: 'failed', reason: 'no route' }) },
+      false,
+    )
+    expect(failed?.body).toBeUndefined()
+    expect(triggerFiredEvent({ triggerId: 'trg_1' }, true)).toBeNull()
+    expect(triggerFiredEvent(undefined, true)).toBeNull()
+  })
+
+  it('follows the trade switches like every other trade notification', () => {
+    const ok = triggerFiredEvent({ trigger: TRIGGER, fire: fire() }, true)!
+    const bad = triggerFiredEvent({ trigger: TRIGGER, fire: fire({ status: 'failed' }) }, true)!
+    expect(eventWanted(settings({ trades: 'all' }), ok)).toBe(true)
+    expect(eventWanted(settings({ trades: 'failures' }), ok)).toBe(false)
+    expect(eventWanted(settings({ trades: 'failures' }), bad)).toBe(true)
+    expect(eventWanted(settings({ trades: 'off' }), bad)).toBe(false)
   })
 })

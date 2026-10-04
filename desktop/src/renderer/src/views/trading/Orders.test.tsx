@@ -149,6 +149,33 @@ describe('Orders · approvals', () => {
     expect(screen.queryByTestId('order-approve')).toBeNull()
   })
 
+  it('names the trigger a fired swap belongs to, with its note and its id on hover', () => {
+    renderDesk(
+      <Orders
+        orders={[
+          order({
+            orderId: 't1',
+            status: 'confirmed',
+            note: 'Stop-loss ETH · fired at $3,790',
+            triggerId: 'trg_1a2b3c4d',
+            expiresAt: null,
+          }),
+        ]}
+        approvalsOnly={false}
+        deciding={null}
+        onDecide={vi.fn()}
+        showWallet={false}
+        highlight={null}
+      />,
+    )
+    const row = screen.getByTestId('order-row')
+    expect(row).toHaveTextContent('Stop-loss ETH · fired at $3,790')
+    const chip = screen.getByTestId('order-trigger')
+    expect(chip).toHaveTextContent('Trigger')
+    expect(chip).toHaveAttribute('title', 'trg_1a2b3c4d')
+    expect(screen.queryByTestId('order-dca')).toBeNull()
+  })
+
   it('shows what the receipt delivered once confirmed, and the estimate — marked — before', () => {
     renderDesk(
       <Orders

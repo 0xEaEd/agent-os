@@ -716,6 +716,70 @@
   white-space: nowrap;
   color: var(--muted-foreground);
 }
+/* Price triggers beside the mandates (docs/triggers.md). The tag says what
+   fires — a sell in red, a buy in green, an alert in info blue — and the state
+   word carries the engine's figures: price, distance, checks. Armed reads
+   green, near its line amber, triggered blue while its order is open. */
+.trd-mctl__row[data-kind='trigger'] {
+  gap: 4px;
+  padding-left: 4px;
+}
+.trd-mctl__row[data-kind='trigger'][data-state='awaiting_approval'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.trd-mctl__row[data-kind='trigger'] .trd-mctl__name {
+  margin-right: 0;
+}
+.trd-mctl__kind[data-action='sell'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.trd-mctl__kind[data-action='buy'] {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.trd-mctl__row[data-state='armed'] .trd-mctl__word,
+.trd-mstrip__item[data-state='armed'] .trd-mstrip__word {
+  color: var(--ok);
+}
+.trd-mctl__row[data-state='triggered'] .trd-mctl__word,
+.trd-mctl__row[data-state='done'] .trd-mctl__word,
+.trd-mstrip__item[data-state='triggered'] .trd-mstrip__word {
+  color: var(--info);
+}
+.trd-mctl__row[data-near] .trd-mctl__word,
+.trd-mstrip__item[data-near] .trd-mstrip__word {
+  color: var(--warn);
+}
+.trd-mstrip__item[data-state='armed'] .trd-mstrip__dot {
+  background: var(--ok);
+}
+.trd-mstrip__item[data-state='triggered'] .trd-mstrip__dot,
+.trd-mstrip__item[data-state='done'] .trd-mstrip__dot {
+  background: var(--info);
+}
+.trd-mstrip__item[data-near] .trd-mstrip__dot {
+  background: var(--warn);
+}
+.trd-mctl__row[data-kind='trigger'] .trd-mctl__runs {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Fire now, armed: spelled out in amber — it trades at once, it is not final. */
+.trd-mctl__row .trd-mctl__confirm[data-tone='fire'] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+/* The status strip's trigger chip: blue while one has fired, amber near a line. */
+.trd-strip__chip[data-state='fired'] {
+  color: var(--info);
+}
+.trd-strip__chip[data-state='near'] {
+  color: var(--warn);
+}
+.trd-strip__chip[data-kind='trigger'] {
+  flex-shrink: 2;
+}
 /* Stop is final: the second click is a word, in red, where the icon was. */
 .trd-mctl__row .trd-mctl__confirm {
   width: auto;
@@ -823,6 +887,81 @@
   color: var(--muted-foreground);
 }
 .trd-mandate__enforced::before {
+  content: '● ';
+  color: var(--ok);
+}
+/* A price trigger among the asks: the same card family, with a rail in the
+   colour of what it fires (red sell, green buy, blue alert) — one decision
+   here lets the engine trade later with nobody watching. */
+.trd-card.trd-trigger {
+  --trd-trigger-tone: var(--info);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--trd-trigger-tone) 45%, var(--border)),
+    inset 3px 0 0 var(--trd-trigger-tone);
+}
+.trd-card.trd-trigger[data-action='sell'] {
+  --trd-trigger-tone: var(--danger);
+}
+.trd-card.trd-trigger[data-action='buy'] {
+  --trd-trigger-tone: var(--ok);
+}
+.trd-trigger .trd-card__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--trd-trigger-tone);
+}
+.trd-trigger__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.trd-trigger__legs {
+  align-items: baseline;
+}
+.trd-trigger__hero {
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-trigger__now {
+  margin: 2px 0 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+/* Read before one click arms it: its facts are never cut short. */
+.trd-trigger .trd-card__fact {
+  align-items: baseline;
+}
+.trd-trigger .trd-card__fact dt {
+  flex-shrink: 0;
+}
+.trd-trigger .trd-card__fact dd {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.trd-trigger__warnings {
+  margin: 8px 0 0;
+  padding-left: 14px;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+.trd-trigger__enforced {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-trigger__enforced::before {
   content: '● ';
   color: var(--ok);
 }

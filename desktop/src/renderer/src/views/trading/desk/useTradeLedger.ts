@@ -6,16 +6,23 @@ import type { TranscriptEventSeams } from '@/views/chat/useTranscript'
 import { t, type MessageKey } from '~/i18n'
 import { TRADING_KEYS } from '~/stores/trading'
 import { providerMark } from '../ProviderMark'
-import { providerLabel, type MandateListPayload, type TradingStatus } from '../types'
+import {
+  providerLabel,
+  type MandateListPayload,
+  type TradingStatus,
+  type TriggerListPayload,
+} from '../types'
 import {
   commandFromToolInput,
   LEDGER_GROUP_MIN,
   cardCallFromResult,
   isDcaKind,
+  isTriggerKind,
   parseTradeCommand,
   parseTradeResult,
   txExplorerUrl,
   withLiveMandate,
+  withLiveTrigger,
   type TradeCall,
   type TradeOutcome,
 } from './ledger'
@@ -112,7 +119,7 @@ function glyphFor(call: TradeCall, outcome: TradeOutcome | null): string {
     case 'lp_add':
       return '◇'
     default:
-      return isDcaKind(call.kind) ? '↻' : '›'
+      return isDcaKind(call.kind) ? '↻' : isTriggerKind(call.kind) ? '⌖' : '›'
   }
 }
 
@@ -124,6 +131,17 @@ const MANDATE_STAMPS: Record<string, { key: MessageKey; tone: string }> = {
   stopped: { key: 'trading.dca.state.stopped', tone: 'muted' },
   rejected: { key: 'trading.dca.state.rejected', tone: 'muted' },
   expired: { key: 'trading.dca.state.expired', tone: 'muted' },
+}
+
+/** A trigger's live status as the pill on its ledger row: the word key and its tone. */
+const TRIGGER_STAMPS: Record<string, { key: MessageKey; tone: string }> = {
+  armed: { key: 'trading.trigger.state.armed', tone: 'ok' },
+  triggered: { key: 'trading.trigger.state.triggered', tone: 'ok' },
+  paused: { key: 'trading.trigger.state.paused', tone: 'muted' },
+  done: { key: 'trading.trigger.state.done', tone: 'ok' },
+  stopped: { key: 'trading.trigger.state.stopped', tone: 'muted' },
+  rejected: { key: 'trading.trigger.state.rejected', tone: 'muted' },
+  expired: { key: 'trading.trigger.state.expired', tone: 'muted' },
 }
 
 /** A mandate's live status by id, or undefined when no loaded list names it. */
@@ -252,6 +270,15 @@ function renderRow(
     const stamp = el('span', 'trd-ledger__stamp', t(mandateStamp.key))
     stamp.dataset.tone = mandateStamp.tone
     stamp.dataset.mandate = outcome?.mandateLive ?? ''
+    side.appendChild(stamp)
+  }
+  // A trigger row the same way: the trigger's state now, not the one recorded.
+  const triggerStamp =
+    !outcome?.awaiting && outcome?.triggerLive ? TRIGGER_STAMPS[outcome.triggerLive] : undefined
+  if (triggerStamp) {
+    const stamp = el('span', 'trd-ledger__stamp', t(triggerStamp.key))
+    stamp.dataset.tone = triggerStamp.tone
+    stamp.dataset.trigger = outcome?.triggerLive ?? ''
     side.appendChild(stamp)
   }
   if (outcome?.confirmed) {
@@ -417,11 +444,20 @@ export function useTradeLedger(
   // A DCA row's pill follows its mandate in the list the desk already holds
   // (every mandate when loaded, else the live ones), read at draw time.
   const mandateStatusOf = useRef<MandateStatusOf>(() => undefined)
+  const triggerStatusOf = useRef<MandateStatusOf>(() => undefined)
   useEffect(() => {
     mandateStatusOf.current = (mandateId) => {
       for (const all of [true, false]) {
         const list = queryClient.getQueryData<MandateListPayload>(TRADING_KEYS.dca(all))
         const found = list?.mandates?.find((m) => m.id === mandateId)
+        if (found) return found.status
+      }
+      return undefined
+    }
+    triggerStatusOf.current = (triggerId) => {
+      for (const all of [true, false]) {
+        const list = queryClient.getQueryData<TriggerListPayload>(TRADING_KEYS.trigger(all))
+        const found = list?.triggers?.find((tr) => tr.id === triggerId)
         if (found) return found.status
       }
       return undefined
@@ -455,6 +491,8 @@ export function useTradeLedger(
       }
       if (outcome?.mandateId)
         outcome = withLiveMandate(outcome, mandateStatusOf.current(outcome.mandateId))
+      if (outcome?.triggerId)
+        outcome = withLiveTrigger(outcome, triggerStatusOf.current(outcome.triggerId))
       let row = details.previousElementSibling as HTMLElement | null
       if (!row || !row.classList.contains(ROW_CLASS) || row.getAttribute(ROW_ATTR) !== id) {
         row = el('div', ROW_CLASS)
@@ -463,7 +501,7 @@ export function useTradeLedger(
         details.hidden = true
       }
       const measured = details.querySelector('.chat-tools-status')?.textContent?.trim() ?? ''
-      const signature = `${running}|${outcome?.detail ?? ''}|${outcome?.summary ?? ''}|${outcome?.status ?? ''}|${outcome?.awaiting ?? ''}|${outcome?.mandateLive ?? ''}|${measured}`
+      const signature = `${running}|${outcome?.detail ?? ''}|${outcome?.summary ?? ''}|${outcome?.status ?? ''}|${outcome?.awaiting ?? ''}|${outcome?.mandateLive ?? ''}|${outcome?.triggerLive ?? ''}|${measured}`
       if (row.dataset.sig !== signature) {
         row.dataset.sig = signature
         renderRow(
