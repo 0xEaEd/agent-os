@@ -234,8 +234,30 @@ def _name_segments(name: str) -> list[str]:
     return [segment.lower() for segment in _NAME_SPLIT_RE.split(name) if segment]
 
 
+#: Whole names a client reads a password from, which the segment rules
+#: cannot see. ``PGPASSWORD`` is one all-caps run with no separator and no
+#: case boundary, so it stays a single segment and ``password`` is never
+#: found inside it; ``MYSQL_PWD`` and ``REDISCLI_AUTH`` do split, but into
+#: ``pwd`` and ``auth``, neither of which is strong enough alone to be worth
+#: adding as a segment. All three are the documented variable for their
+#: client -- libpq, mysql and redis-cli -- and all three went through an
+#: ``env`` dump verbatim while ``DB_PASSWORD`` beside them was masked.
+#: ``.pgpass``, the file holding the same secret, has had a rule since
+#: #2620/#2721 (#3608).
+_CREDENTIAL_WHOLE_NAMES: frozenset[str] = frozenset(
+    {
+        "pgpassword",
+        "mysql_pwd",
+        "rediscli_auth",
+        "mongodb_password",
+    }
+)
+
+
 def _is_credential_name(name: str) -> bool:
     """Return whether *name* names a credential on a segment boundary."""
+    if name.strip().lower() in _CREDENTIAL_WHOLE_NAMES:
+        return True
     segments = _name_segments(name)
     if any(segment in _STRONG_NAME_SEGMENTS for segment in segments):
         return True
