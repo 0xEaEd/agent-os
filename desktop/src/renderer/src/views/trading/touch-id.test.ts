@@ -11,9 +11,11 @@ import {
   mandateTouchId,
   orderTouchId,
   requireMandateTouchId,
+  requireTriggerTouchId,
+  triggerTouchId,
   vaultReason,
 } from './touch-id'
-import type { Mandate, MandatePayload } from './types'
+import type { Mandate, MandatePayload, Trigger, TriggerPayload } from './types'
 
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: vi.fn() } }))
 
@@ -26,6 +28,12 @@ const MANDATE = (
 function mandate(extra: Partial<Mandate> = {}): Mandate {
   return { ...MANDATE, ...extra }
 }
+
+const TRIGGER = (
+  JSON.parse(
+    readFileSync('src/renderer/src/views/trading/desk/__fixtures__/trigger/trigger.json', 'utf8'),
+  ) as TriggerPayload
+).trigger
 
 describe('orderTouchId', () => {
   it('names a swap the way the card does, on its chain', () => {
@@ -99,6 +107,53 @@ describe('mandateTouchId', () => {
     expect(mandateTouchId(mandate({ budget: { ...MANDATE.budget, capUsd: 5_000 } })).kind).toBe(
       'approve-high',
     )
+  })
+})
+
+describe('triggerTouchId', () => {
+  it('names the trigger and what it does; high-risk from what one fire moves', () => {
+    const ask = triggerTouchId(TRIGGER)
+    expect(ask).toEqual({
+      kind: 'approve',
+      reason: 'arm the trigger “Stop-loss ETH”: sell 50 % of ETH when under $3,800, on Base',
+    })
+    const big = { ...TRIGGER, action: { ...TRIGGER.action, estimatedUsd: 900 } }
+    expect(triggerTouchId(big).kind).toBe('approve-high')
+    const unknown = { ...TRIGGER, action: { ...TRIGGER.action, estimatedUsd: null } }
+    expect(triggerTouchId(unknown).kind).toBe('approve-high')
+    // An alert moves nothing.
+    const alert: Trigger = {
+      ...TRIGGER,
+      kind: 'alert',
+      action: { ...TRIGGER.action, kind: 'alert', amountPct: null, estimatedUsd: null },
+    }
+    expect(triggerTouchId(alert).kind).toBe('approve')
+  })
+})
+
+describe('requireTriggerTouchId', () => {
+  beforeEach(() => {
+    resetBiometricGateForTests()
+    useSettings.setState({
+      loaded: true,
+      settings: { ...structuredClone(DEFAULT_SETTINGS), security: { touchId: 'all' } },
+    })
+  })
+
+  it('reads the trigger to name it, and asks as high-risk when it cannot', async () => {
+    const authenticate = vi
+      .spyOn(desktopApi().app, 'authenticate')
+      .mockResolvedValue({ ok: true } satisfies AuthResult)
+    const call = vi.fn(async () => ({ kind: 'trigger', trigger: TRIGGER }))
+    await requireTriggerTouchId(call, 'trg_1a2b3c4d')
+    expect(call).toHaveBeenCalledWith('trading.trigger.get', { triggerId: 'trg_1a2b3c4d' })
+    expect(authenticate.mock.calls[0]?.[0]).toMatch(/^arm the trigger “Stop-loss ETH”/)
+    const failing = vi.fn(async () => {
+      throw new Error('trading.trigger.not_found')
+    })
+    await requireTriggerTouchId(failing, 'trg_9')
+    expect(authenticate.mock.calls[1]?.[0]).toBe('arm the trigger trg_9')
+    authenticate.mockRestore()
   })
 })
 

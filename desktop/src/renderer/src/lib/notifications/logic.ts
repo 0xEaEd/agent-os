@@ -1,5 +1,8 @@
 import type { NotifyKind, NotifyTarget } from '@shared/notify'
 import type { NotificationSettings } from '@shared/settings'
+import { t } from '~/i18n'
+import { actionProgressive, conditionText, priceText } from '~/views/trading/desk/trigger-logic'
+import type { Trigger, TriggerFire } from '~/views/trading/types'
 
 /**
  * Every decision about notifications, as pure functions: whether an event
@@ -174,6 +177,68 @@ export function diffSessionRuns(
 
 export function runKind(status: string): 'reply' | 'replyFailed' {
   return status === 'failed' || status === 'timeout' ? 'replyFailed' : 'reply'
+}
+
+// ── Price triggers ──────────────────────────────────────────────────────────
+
+/** What `trading.trigger.fired` carries (docs/triggers.md, "Events"). */
+export interface TriggerFiredPayload {
+  triggerId?: string
+  trigger?: Trigger
+  fire?: TriggerFire
+}
+
+/**
+ * The notification one trigger fire posts, or null when the payload is too
+ * thin to say anything. An alert IS the news ("ETH under $3,800", "Alert ·
+ * $3,790 now"); a sell or buy says what it is doing ("Stop-loss ETH fired",
+ * "selling 50 % of ETH at $3,790") and the order's own approval / filled
+ * notifications follow as usual; a fire that skipped or failed is a
+ * `tradeFailed` with the engine's reason. Subtitles and reasons follow the
+ * preview switch like every other trade notification.
+ */
+export function triggerFiredEvent(
+  payload: TriggerFiredPayload | null | undefined,
+  preview: boolean,
+): NotifyEvent | null {
+  const tr = payload?.trigger
+  const fire = payload?.fire
+  if (!tr || !fire) return null
+  const price = priceText(fire.priceUsd ?? tr.market?.priceUsd ?? null)
+  const target: NotifyTarget = fire.orderId
+    ? { type: 'trading', orderId: fire.orderId }
+    : { type: 'trading' }
+  const fill = (key: Parameters<typeof t>[0], values: Record<string, string>) =>
+    t(key).replace(/\{(\w+)\}/g, (whole, k: string) => values[k] ?? whole)
+  if (fire.status === 'skipped' || fire.status === 'failed') {
+    const reason = excerpt(fire.reason || fire.reasonCode || '')
+    return {
+      kind: 'tradeFailed',
+      title: fill(
+        fire.status === 'skipped' ? 'notify.trigger.skipped.title' : 'notify.trigger.failed.title',
+        { name: tr.name },
+      ),
+      subtitle: preview ? `${tr.token.symbol} ${conditionText(tr)} · ${price}` : undefined,
+      body: preview && reason ? reason : undefined,
+      target,
+    }
+  }
+  if (tr.kind === 'alert' || fire.status === 'alerted') {
+    return {
+      kind: 'trade',
+      title: `${tr.token.symbol} ${conditionText(tr)}`,
+      subtitle: preview ? fill('notify.trigger.alert.subtitle', { price }) : undefined,
+      target,
+    }
+  }
+  return {
+    kind: 'trade',
+    title: fill('notify.trigger.fired.title', { name: tr.name }),
+    subtitle: preview
+      ? fill('notify.trigger.fired.subtitle', { action: actionProgressive(tr), price })
+      : undefined,
+    target,
+  }
 }
 
 // ── Do not disturb ──────────────────────────────────────────────────────────

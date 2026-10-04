@@ -6,9 +6,16 @@ import { useConnection } from '@/stores/connection'
 import type { RawJob, RawRun } from '@/views/cron/logic'
 import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
-import { useMandateActions, useMandates, type MandateActions } from '~/stores/trading'
+import {
+  useMandateActions,
+  useMandates,
+  useTriggerActions,
+  useTriggers,
+  type MandateActions,
+  type TriggerActions,
+} from '~/stores/trading'
 import { errorText } from '../logic'
-import type { Mandate } from '../types'
+import type { Mandate, Trigger } from '../types'
 import {
   isSessionMission,
   jobText,
@@ -20,6 +27,7 @@ import {
   type MissionForm,
 } from './desk-logic'
 import { deskMandates } from './mandate-logic'
+import { deskTriggers } from './trigger-logic'
 
 /**
  * Missions are cron jobs that post into the desk's chat. This hook reads
@@ -28,7 +36,8 @@ import { deskMandates } from './mandate-logic'
  * truth for every state word shown.
  *
  * DCA mandates (docs/dca.md) sit beside them: the engine runs those itself,
- * so the desk only lists them and forwards the user's controls.
+ * so the desk only lists them and forwards the user's controls. Price
+ * triggers (docs/triggers.md) are listed the same way.
  */
 
 const MISSIONS_KEY = ['trading', 'missions'] as const
@@ -103,6 +112,12 @@ export interface MissionsApi {
   awaitingMandates: Mandate[]
   /** The mandate controls (approve, pause, buy now, update …), toasting their own outcome. */
   mandate: MandateActions
+  /** This desk's price triggers: filed to the session or unfiled; live, or finished within the hour. */
+  triggers: Trigger[]
+  /** Every trigger awaiting the operator's approval, whichever chat proposed it. */
+  awaitingTriggers: Trigger[]
+  /** The trigger controls (approve, pause, fire now, stop …), toasting their own outcome. */
+  trigger: TriggerActions
 }
 
 export function useMissions(sessionKey: string, enabled = true): MissionsApi {
@@ -141,6 +156,18 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
   const awaitingMandates = useMemo(
     () => allMandates.mandates.filter((m) => m.status === 'awaiting_approval'),
     [allMandates.mandates],
+  )
+  // Triggers the same way: every one, so a fired or stopped trigger still
+  // says how it ended for an hour.
+  const allTriggers = useTriggers(true, enabled)
+  const triggerActions = useTriggerActions()
+  const triggers = useMemo(
+    () => deskTriggers(allTriggers.triggers, sessionKey, minute),
+    [allTriggers.triggers, sessionKey, minute],
+  )
+  const awaitingTriggers = useMemo(
+    () => allTriggers.triggers.filter((tr) => tr.status === 'awaiting_approval'),
+    [allTriggers.triggers],
   )
 
   const stopCompleted = useCallback(
@@ -292,6 +319,9 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
     mandates,
     awaitingMandates,
     mandate: mandateActions,
+    triggers,
+    awaitingTriggers,
+    trigger: triggerActions,
     loading: connected && query.isPending,
     running,
     busy: create.isPending || update.isPending || run.isPending || removeJob.isPending,
@@ -355,6 +385,8 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
       const active = missions.filter((job) => job.id && job.enabled !== false)
       // Only the mandates filed to this session: an unfiled one is the
       // operator's and stays on screen at the fresh desk too.
+      // Price triggers are left armed: a stop-loss guards the wallet, not
+      // this chat, and pausing one silently would be the dangerous default.
       const running = mandates.filter((m) => m.status === 'active' && m.sessionKey === sessionKey)
       if (active.length === 0 && running.length === 0) return true
       try {

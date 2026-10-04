@@ -424,6 +424,17 @@ function OrderRow({
               {t('trading.orders.dca')}
             </span>
           ) : null}
+          {order.triggerId ? (
+            // A swap a price trigger fired: the chip names the trigger it belongs to.
+            <span
+              className="trd-order__dca trd-order__trigger trd-mono"
+              title={order.triggerId}
+              data-trigger={order.triggerId}
+              data-testid="order-trigger"
+            >
+              {t('trading.orders.trigger')}
+            </span>
+          ) : null}
         </span>
         {showWallet ? (
           <span className="trd-order__fact">

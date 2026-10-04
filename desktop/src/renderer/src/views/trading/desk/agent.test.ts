@@ -220,10 +220,10 @@ describe('tradingAgentFiles · reading an order', () => {
     expect(agents).toContain('## DCA')
     // The hard rule keeps its words and names its one exception.
     expect(agents).toMatch(/Never create a cron job or `cron --script` job that trades/)
-    expect(agents).toMatch(/The one exception is a DCA mandate the user asked for/)
-    expect(agents).toMatch(/A DCA is never a\s+cron job and never one swap per turn/)
+    expect(agents).toMatch(/The two exceptions are a DCA mandate the user asked for/)
+    expect(agents).toMatch(/A\s+DCA or a trigger is never a cron job and never one swap per turn/)
     expect(tools).toMatch(
-      /Never schedule a trade \(`agentos cron …`,\s+`cron --script`\); missions are started from the desk\. The one exception\s+is a DCA mandate \(`agentos trade dca create`\), which parks for the\s+user's approval/,
+      /Never schedule a trade \(`agentos cron …`,\s+`cron --script`\); missions are started from the desk\. The two\s+exceptions are a DCA mandate \(`agentos trade dca create`\) and a price\s+trigger \(`agentos trade trigger create`\): each parks for the user's\s+approval/,
     )
     // The reading rules.
     expect(agents).toMatch(/"DCA \$10 ETH every day, max \$300" → `--usd 10 --every 1d --cap 300`/)
@@ -247,9 +247,81 @@ describe('tradingAgentFiles · reading an order', () => {
     ]) {
       expect(tools).toContain(cmd)
     }
-    // English only, whatever the user writes in.
+    // English only, whatever the user writes in — but for the quoted user
+    // phrases the reading rules translate (the triggers' Vietnamese examples).
     for (const name of ['AGENTS.md', 'TOOLS.md']) {
-      expect(files[name]).not.toMatch(/[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i)
+      expect(files[name]?.replace(/"[^"\n]*"/g, '""')).not.toMatch(
+        /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i,
+      )
+    }
+  })
+})
+
+describe('tradingAgentFiles · price triggers (v20)', () => {
+  const files = tradingAgentFiles()
+  const agents = files['AGENTS.md'] ?? ''
+  const tools = files['TOOLS.md'] ?? ''
+
+  it('reads a conditional request as an engine trigger, never a poll or a cron', () => {
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(20)
+    expect(agents).toContain('## Triggers')
+    for (const phrase of [
+      '"sell if it drops under"',
+      '"cắt lỗ"',
+      '"chốt lời"',
+      '"take profit at"',
+      '"buy when it dips to"',
+      '"stop loss 10 %"',
+      '"trailing stop"',
+      '"báo tôi khi"',
+      '"alert me when"',
+    ]) {
+      expect(agents, phrase).toContain(phrase)
+    }
+    expect(agents).toMatch(/Never\s+poll the price yourself, never schedule a cron for it/)
+    // The hard rule names the trigger as its second exception.
+    expect(agents).toMatch(/a price trigger the\s+user asked for \(`agentos trade trigger create`/)
+  })
+
+  it('maps each spoken rule to its flags', () => {
+    const rules: [string, string][] = [
+      ['"bán hết ETH nếu xuống dưới 3800"', '`--sell --pct 100 --below 3800`'],
+      ['"cắt lỗ 10 %"', '`--sell --pct 100 --below -10%`'],
+      ['"chốt lời 20 %"', '`--sell --pct 50 --above +20%`'],
+      ['"mua $50 ETH khi về 3500"', '`--buy --usd 50 --below 3500`'],
+      ['"trailing stop 10 %"', '`--sell --pct 100 --trail 10`'],
+      ['"báo tôi khi ETH lên 5000"', '`--alert --above 5000`'],
+    ]
+    for (const [said, flags] of rules) {
+      expect(agents, said).toContain(`${said} → ${flags}`)
+    }
+    expect(agents).toContain(
+      '`agentos trade trigger create ETH --sell --pct 100 --below 3800 --json`',
+    )
+    expect(agents).toMatch(/the default is `--pct 100`/)
+  })
+
+  it('reports the Approve & arm card with the id, and leaves the controls to the user', () => {
+    expect(agents).toMatch(/\*\*Approve & arm\*\*/)
+    expect(agents).toMatch(/trigger id \(`trg_…`\), then stop/)
+    expect(agents).toContain('`agentos trade trigger list --json`')
+    expect(agents).toMatch(/Never state a trigger's status from memory/)
+    expect(agents).toMatch(/`agentos trade trigger approve`/)
+    expect(agents).toMatch(/`trading\.operator_required`/)
+  })
+
+  it('carries every trigger command with the CLI’s own flags', () => {
+    for (const cmd of [
+      'agentos trade trigger create <token> (--below <price|pct%> | --above <price|pct%> | --trail <pct>) (--sell (--pct 50 | --amount 0.05 | --usd 100) | --buy --usd 50 | --alert) [--quote USDC] [--chain base|robinhood] [--wallet ADDR|label] [--slippage 1] [--name "…"] [--for 7d] --json',
+      'agentos trade trigger list [--all] [--wallet …] --json',
+      'agentos trade trigger show <id> --json',
+      'agentos trade trigger approve|reject|pause|resume|stop|fire <id> --json',
+      'agentos trade trigger approve|reject|pause|resume|stop|fire`,',
+      '`trading.trigger.invalid`',
+      '`trading.trigger.bad_state`',
+      '`trading.trigger.not_found`',
+    ]) {
+      expect(tools, cmd).toContain(cmd)
     }
   })
 })

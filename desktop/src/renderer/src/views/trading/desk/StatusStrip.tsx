@@ -2,13 +2,15 @@ import { LayoutPanelLeft, MessageSquare } from 'lucide-react'
 import type { RawJob } from '@/views/cron/logic'
 import { t } from '~/i18n'
 import { badgeText } from '../logic'
-import type { Mandate } from '../types'
+import type { Mandate, Trigger } from '../types'
 import { missionStatus, statusWord, type StatusWord } from './desk-logic'
 import { mandateChip, type MandateChip } from './mandate-logic'
 import { missionWord, useMandateClock } from './MissionControls'
+import { triggerChip, triggerChipText } from './trigger-logic'
 import type { DeskMode } from './mode-logic'
 
 const NO_MANDATES: Mandate[] = []
+const NO_TRIGGERS: Trigger[] = []
 
 /** "DCA · next 59 m", "DCA ×2 · next 12 m", "DCA · awaiting": the mandates in one chip. */
 export function mandateChipText(chip: MandateChip): string {
@@ -42,6 +44,7 @@ export function StatusStrip({
   missions = [],
   running = new Set(),
   mandates = NO_MANDATES,
+  triggers = NO_TRIGGERS,
   sessionPending = 0,
   globalPending = null,
   deskMode = false,
@@ -56,6 +59,8 @@ export function StatusStrip({
   running?: ReadonlySet<string>
   /** The desk's DCA mandates: summarised in one chip that takes one of the two mission slots. */
   mandates?: Mandate[]
+  /** The desk's price triggers: one chip ("Triggers ×2", "Trigger · near", "Trigger · fired"). */
+  triggers?: Trigger[]
   sessionPending?: number
   /** null while loading or errored. */
   globalPending?: number | null
@@ -72,7 +77,9 @@ export function StatusStrip({
   // Every live mandate in ONE chip, never a name and a progress each: the
   // strip is a single 42px row shared with the mode pill and the Desk toggle.
   const chip = trading ? mandateChip(mandates, now) : null
-  const shown = missions.slice(0, chip ? 1 : 2)
+  const trigger = trading ? triggerChip(triggers) : null
+  // Two slots on the left: each chip takes one from the cron missions.
+  const shown = missions.slice(0, Math.max(0, 2 - (chip ? 1 : 0) - (trigger ? 1 : 0)))
   return (
     <div className="trd-strip" data-mode={mode} data-testid="status-strip">
       <div className="trd-strip__left">
@@ -101,6 +108,17 @@ export function StatusStrip({
             data-testid="strip-mandates"
           >
             {mandateChipText(chip)}
+          </span>
+        ) : null}
+        {trigger ? (
+          <span
+            className="trd-strip__chip"
+            data-kind="trigger"
+            data-state={trigger.word}
+            title={triggerChipText(trigger)}
+            data-testid="strip-triggers"
+          >
+            {triggerChipText(trigger)}
           </span>
         ) : null}
       </div>
