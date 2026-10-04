@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { createRef } from 'react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useConnection } from '@/stores/connection'
 import type { UseSlashCommands } from '@/views/chat/useSlashCommands'
@@ -36,11 +36,12 @@ const rpc = {
 vi.mock('@/app/providers', () => ({ useRpc: () => rpc }))
 vi.mock('@/views/chat/RoutePicker', () => ({ RoutePicker: () => null }))
 
+const transcript = { send: vi.fn() }
 vi.mock('@/views/chat/useTranscript', () => ({
   useTranscript: () => ({
     containerRef: createRef(),
     routerFxDockRef: createRef(),
-    send: vi.fn(),
+    send: transcript.send,
     abort: vi.fn(),
     busy: false,
     routerFxEnabled: false,
@@ -100,6 +101,17 @@ function Where() {
   return <output data-testid="where">{pathname}</output>
 }
 
+// Stands in for the sidebar: open another session without leaving the route.
+const OTHER = 'agent:main:other-session'
+function OpenOther() {
+  const navigate = useNavigate()
+  return (
+    <button type="button" onClick={() => void navigate(`/sessions/${encodeURIComponent(OTHER)}`)}>
+      open other
+    </button>
+  )
+}
+
 function mount(desk: DeskProps | null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -112,6 +124,7 @@ function mount(desk: DeskProps | null) {
               <>
                 <ChatView desk={desk} />
                 <Where />
+                <OpenOther />
               </>
             }
           />
@@ -139,8 +152,17 @@ function pressNewChat() {
   act(() => shortcuts.get('mod+shift+o')!(event))
 }
 
+async function typeAndSend(text: string) {
+  const ta = screen.getByRole('textbox')
+  fireEvent.change(ta, { target: { value: text } })
+  await act(async () => {
+    fireEvent.keyDown(ta, { key: 'Enter' })
+  })
+}
+
 beforeEach(() => {
   slash.execute = null
+  transcript.send.mockClear()
   shortcuts.clear()
   rpc.call.mockClear()
   useConnection.getState().setState('connected')
@@ -159,6 +181,32 @@ describe('ChatView · new chat in Chat mode', () => {
     mount(null)
     pressNewChat()
     expect(where()).toBe('/sessions')
+  })
+})
+
+// #3612: the view stays mounted across sessions, so a new chat's `new_chat`
+// intent must not ride on the first send to a session that already exists —
+// one opened from the sidebar, or a project folder's New chat, which creates
+// its row before it navigates. The gateway rejects that as a conflict.
+describe('ChatView · new chat intent', () => {
+  it('rides on the first send from the keyless home', async () => {
+    mount(null)
+    pressNewChat()
+    expect(where()).toBe('/sessions')
+    await typeAndSend('hello')
+    expect(transcript.send).toHaveBeenCalledTimes(1)
+    expect(transcript.send).toHaveBeenCalledWith('hello', [], 'new_chat')
+  })
+
+  it('is dropped when another session opens before the first send', async () => {
+    mount(null)
+    pressNewChat()
+    expect(where()).toBe('/sessions')
+    fireEvent.click(screen.getByRole('button', { name: 'open other' }))
+    expect(where()).toBe(`/sessions/${encodeURIComponent(OTHER)}`)
+    await typeAndSend('hello')
+    expect(transcript.send).toHaveBeenCalledTimes(1)
+    expect(transcript.send).toHaveBeenCalledWith('hello', [], null)
   })
 })
 

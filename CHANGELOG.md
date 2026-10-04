@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Chat (desktop and web console): the first message to a session could fail
+  with "Send failed: session_key conflict", and sending it again worked.
+  New chat stamps a `new_chat` intent for the first send of its fresh key, but
+  the chat view stays mounted across sessions and nothing dropped the intent
+  on a switch. Opening another session before sending -- one from the
+  sidebar, or a project folder's New chat, which creates its row before it
+  navigates -- sent `new_chat` to an existing key, which the gateway rejects.
+  The intent is now bound to the new chat's own session and dropped when the
+  view moves to any other. (#3612)
 - Redaction: `PGPASSWORD`, `MYSQL_PWD` and `REDISCLI_AUTH` went through an
   `env` dump verbatim while `DB_PASSWORD` beside them was masked. Names are
   matched on segment boundaries, and these do not produce the segment the

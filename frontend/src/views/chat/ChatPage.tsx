@@ -337,6 +337,14 @@ export function ChatPage() {
   // the next send (e.g. 'new_chat'), and is carried through the pending queue
   // (chat.js:8523/8547/8612). A ref: it is not rendered, only read at send time.
   const pendingIntentRef = useRef<string | null>(null)
+  // The key the intent was set for. This page stays mounted across sessions,
+  // so switching away from the new chat before its first send (the session
+  // chip, a link) must drop `new_chat`, or the first send to the existing
+  // session is rejected as a session_key conflict (#3612).
+  const pendingIntentKeyRef = useRef('')
+  useEffect(() => {
+    if (sessionKey !== pendingIntentKeyRef.current) pendingIntentRef.current = null
+  }, [sessionKey])
 
   const onRenameSession = useCallback(
     (name: string) => {
@@ -402,6 +410,7 @@ export function ChatPage() {
     getIntent: () => pendingIntentRef.current,
     setIntent: (intent) => {
       pendingIntentRef.current = intent
+      pendingIntentKeyRef.current = sessionKey
     },
     sendDrainedHead: (text, atts, intent) => sendDrainedHeadRef.current(text, atts, intent),
     isStreaming: () => busy,
@@ -467,6 +476,7 @@ export function ChatPage() {
       if (action === 'new_chat') {
         const key = genSessionKey(sessionKey)
         pendingIntentRef.current = 'new_chat'
+        pendingIntentKeyRef.current = key
         switchToSession(key)
         toast.info('New chat session in the current agent: ' + key)
       }
