@@ -21,6 +21,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `trading.trigger.*` (create/get/list agent-callable, the rest
   operator-only). Contract: `docs/triggers.md` (#3615).
 
+## [2026.10.4] - 2026-10-04
+
+### Fixed
+- Chat (desktop and web console): the first message to a session could fail
+  with "Send failed: session_key conflict", and sending it again worked.
+  New chat stamps a `new_chat` intent for the first send of its fresh key, but
+  the chat view stays mounted across sessions and nothing dropped the intent
+  on a switch. Opening another session before sending -- one from the
+  sidebar, or a project folder's New chat, which creates its row before it
+  navigates -- sent `new_chat` to an existing key, which the gateway rejects.
+  The intent is now bound to the new chat's own session and dropped when the
+  view moves to any other. (#3612)
+- Redaction: `PGPASSWORD`, `MYSQL_PWD` and `REDISCLI_AUTH` went through an
+  `env` dump verbatim while `DB_PASSWORD` beside them was masked. Names are
+  matched on segment boundaries, and these do not produce the segment the
+  vocabulary holds: `PGPASSWORD` is one all-caps run with no separator and no
+  case boundary, so it stays a single segment and `password` is never found
+  inside it, while `MYSQL_PWD` and `REDISCLI_AUTH` split into `pwd` and
+  `auth`, neither strong enough alone to add as a segment. All three are the
+  documented password variable for their client -- libpq, mysql and
+  redis-cli -- and `env` is exactly the output the assignment pass is turned
+  on for. They are now matched as whole names. `PGPASSFILE`, which holds a
+  path rather than a secret, is deliberately not, and the file it names has
+  had a rule of its own since #2620/#2721. (#3608)
+- Redaction: a credential in a URL query string -- `?api_key=…`,
+  `&access_token=…`, `&password=…` -- was never masked, although the
+  *userinfo* of the same URL is (#3432). The name-driven pass recognises all
+  three names; what it could not do is reach them. `_ASSIGNMENT_RE` matches a
+  URL's own `scheme:` first, with the rest of the URL as its "value", and
+  since `https` is not a credential name the span is returned unchanged --
+  and consumed, so the query parameters inside are never examined. A pass of
+  its own now masks a credential-named query parameter before the assignment
+  pass runs, stopping its value at the next `&` so one parameter cannot
+  swallow the next. It is under the same gate as the assignment pass, so it
+  inherits that policy rather than widening it: off for source files and for
+  an arbitrary command's output. (#3607)
+- Browser tool: the newest-Node sort added with the PATH fallback (#3604) was
+  a no-op for fnm, so an older Node's `agent-browser` could win. `_version_key`
+  read the version from the directory above the leaf, which is right for nvm
+  (`.../versions/node/v24.16.0/bin`) and wrong for fnm
+  (`.../node-versions/v24.16.0/installation/bin`), where the parent of `bin`
+  is `installation` -- every fnm candidate keyed to `()`, so the sort had
+  nothing to order by and `glob` order decided. The version is now taken from
+  whichever path component parses as one, searched from the right, so both
+  layouts order newest first. (#3606)
+- Identity: a workspace bootstrap file (`AGENTS.md`, `SOUL.md`, …) saved with
+  a byte-order mark reached the system prompt as one. `identity.workspace`
+  read them as plain `utf-8` with `errors="replace"`, while the other two
+  readers of user-authored Markdown already honour a mark -- `SKILL.md` since
+  #2697 and knowledge-base ingest since #2670. PowerShell 5's `Set-Content
+  -Encoding UTF8` writes a UTF-8 BOM, which prepended `﻿` to the first
+  character; its `>` and `Out-File` write UTF-16, which decoded -- without
+  failing, because of `errors="replace"` -- into interleaved NULs and
+  replacement characters, so the agent was handed unreadable text where its
+  operating rules should be, at twice the length against the bootstrap
+  budget, crowding out the files after it. The rule now lives once, in
+  `agentos.text_encoding`, which `memory.ingest` also delegates to; the probe
+  reads four bytes rather than two, so UTF-32 is no longer read as UTF-16.
+  `errors="replace"` is kept, so a genuinely undecodable file still degrades
+  rather than failing a session. (#3587)
+- Browser: a gateway started by the desktop app, launchd or systemd now finds
+  an `agent-browser` installed with `npm install -g` under nvm, fnm, Volta,
+  pnpm, Bun or Homebrew. Those launchers pass a bare `PATH`, so the binary was
+  invisible and the tool reported "The browser engine is not available" on a
+  machine where it was installed. `browser.binary_path` still wins when set.
+- Browser: the tool is now hidden from the model when the engine is missing
+  or `browser.enabled = false`. The turn runner dropped the browser capability
+  when it built the tool surface, so the model was offered `browser` anyway and
+  spent a call on the "not available" error before falling back.
+
 ## [2026.10.3] - 2026-10-03
 
 ### Added

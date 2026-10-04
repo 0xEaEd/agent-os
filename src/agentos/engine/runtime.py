@@ -4156,6 +4156,7 @@ class TurnRunner:
             channel_backing=detected.channel_backing,
             image_generation=detected.image_generation,
             x_search=detected.x_search,
+            browser=detected.browser,
         )
         return resolve_runtime_tool_surface(ctx, capabilities=capabilities)
 

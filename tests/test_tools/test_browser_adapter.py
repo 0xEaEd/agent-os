@@ -347,24 +347,23 @@ class TestSessionRegistry:
         assert SUPERVISOR_REGISTRY.get("leaky") is None
         assert stopped == ["yes"]
 
-    def test_missing_binary_is_not_cached_forever(self, tmp_path: Path) -> None:
+    def test_missing_binary_is_not_cached_forever(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The doctor's own fix step is `npm install -g agent-browser`; caching
         the miss would leave the tool hidden until a restart."""
         import shutil as shutil_mod
 
-        real_which = shutil_mod.which
-        try:
-            shutil_mod.which = lambda _name: None  # type: ignore[assignment]
-            agent_browser.configure_browser(_config(binary_path=""))
-            assert agent_browser.resolve_binary() is None
-            # …operator installs it…
-            installed = tmp_path / "agent-browser"
-            installed.write_text("#!/bin/sh\nexit 0\n")
-            installed.chmod(installed.stat().st_mode | stat.S_IEXEC)
-            shutil_mod.which = lambda _name: str(installed)  # type: ignore[assignment]
-            assert agent_browser.resolve_binary() == str(installed)
-        finally:
-            shutil_mod.which = real_which  # type: ignore[assignment]
+        monkeypatch.setattr(agent_browser, "_fallback_bin_dirs", lambda: [])
+        monkeypatch.setattr(shutil_mod, "which", lambda _name, path=None: None)
+        agent_browser.configure_browser(_config(binary_path=""))
+        assert agent_browser.resolve_binary() is None
+        # …operator installs it…
+        installed = tmp_path / "agent-browser"
+        installed.write_text("#!/bin/sh\nexit 0\n")
+        installed.chmod(installed.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setattr(shutil_mod, "which", lambda _name, path=None: str(installed))
+        assert agent_browser.resolve_binary() == str(installed)
 
     def test_changing_cdp_port_drops_live_sessions(self, fake_engine: tuple[str, Path]) -> None:
         """A session captured its mode at creation; flipping the port would
@@ -408,19 +407,16 @@ class TestCommandExecution:
         assert result["data"]["title"] == "Fake Title"
 
     @pytest.mark.asyncio
-    async def test_missing_binary_returns_install_hint(self, tmp_path: Path) -> None:
-        agent_browser.configure_browser(_config(binary_path=str(tmp_path / "missing")))
-        # Force resolution to the missing path by clearing PATH lookup.
+    async def test_missing_binary_returns_install_hint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Force resolution to the missing path by clearing PATH and fallback lookup.
         import shutil
 
-        real_which = shutil.which
-        try:
-            shutil.which = lambda _name: None  # type: ignore[assignment]
-            agent_browser.reset_browser_runtime()
-            agent_browser.configure_browser(_config(binary_path=str(tmp_path / "missing")))
-            result = await agent_browser.run_command("sess", "snapshot")
-        finally:
-            shutil.which = real_which  # type: ignore[assignment]
+        monkeypatch.setattr(agent_browser, "_fallback_bin_dirs", lambda: [])
+        monkeypatch.setattr(shutil, "which", lambda _name, path=None: None)
+        agent_browser.configure_browser(_config(binary_path=str(tmp_path / "missing")))
+        result = await agent_browser.run_command("sess", "snapshot")
         assert result["success"] is False
         assert "agent-browser is not installed" in result["error"]
 

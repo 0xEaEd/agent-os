@@ -167,6 +167,17 @@ agent-browser install --with-deps
 
 `agentos doctor` reports whether the binary and Chromium are present.
 
+A gateway started by the desktop app, launchd or systemd does not inherit your
+shell's `PATH`, so AgentOS also looks in the usual npm global directories: the
+newest nvm and fnm Node versions, Volta, pnpm, Bun, Homebrew (`/opt/homebrew/bin`,
+`/usr/local/bin`) and `~/.npm-global/bin`. If your install lives somewhere else,
+set the path explicitly:
+
+```toml
+[browser]
+binary_path = "/path/to/agent-browser"   # output of `which agent-browser`
+```
+
 ### Headless Chromium Gets Blocked
 
 Some sites detect headless Chromium and serve CAPTCHAs or refuse to load.

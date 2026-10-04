@@ -22,6 +22,11 @@ agent-browser install --with-deps
 `agentos doctor` reports whether the binary and Chromium are present and prints
 this hint when they are missing.
 
+The binary is looked up on `PATH` first. A gateway launched by the desktop app,
+launchd or systemd gets a bare `PATH`, so AgentOS then checks the usual npm
+global directories (nvm, fnm, Volta, pnpm, Bun, Homebrew, `~/.npm-global/bin`).
+Set `binary_path` if yours lives anywhere else.
+
 ## Modes
 
 **Managed (default).** The engine launches its own headless Chromium. Nothing to
@@ -194,7 +199,7 @@ is available the browser still works; dialogs just aren't intercepted.
 [browser]
 enabled = true                # master switch; false hides the tool even if installed
 headless = true               # managed mode; false opens a visible window
-binary_path = ""              # optional explicit path to agent-browser
+binary_path = ""              # optional; default: PATH, then npm global dirs
 cdp_port = 0                  # 0 = managed. >0 = attach to your Chrome (localhost only)
 attach_confirmed = false      # must be true to let the agent drive your Chrome
 allowed_domains = []          # [] = open web (SSRF still blocks private ranges)

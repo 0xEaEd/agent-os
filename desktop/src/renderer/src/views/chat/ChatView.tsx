@@ -380,6 +380,14 @@ function ConnectedChat({
   const enterToSend = useSettings((s) => s.settings.general.enterToSend)
 
   const pendingIntentRef = useRef<string | null>(null)
+  // `new_chat` belongs to the keyless home's fresh key. This view stays
+  // mounted across sessions, so landing on a keyed one (a sidebar session, a
+  // project folder's New chat, which creates its row first) must drop it, or
+  // the first send there is rejected as a session_key conflict (#3612). The
+  // home's own first send consumes the intent before it gives the key a URL.
+  useEffect(() => {
+    if (paramKey) pendingIntentRef.current = null
+  }, [paramKey])
   const sendDrainedHeadRef = useRef<
     (text: string, atts: PendingAttachment[], intent: string | null) => void
   >(() => {})
