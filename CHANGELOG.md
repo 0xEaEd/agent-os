@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.10.4] - 2026-10-04
+
 ### Fixed
 - Chat (desktop and web console): the first message to a session could fail
   with "Send failed: session_key conflict", and sending it again worked.
