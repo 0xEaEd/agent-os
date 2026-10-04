@@ -14,6 +14,7 @@ import inspect
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable
+from decimal import Decimal
 from typing import Any
 
 from agentos.gateway.agent_surface import agent_binding
@@ -1321,6 +1322,297 @@ async def _trading_dca_update(params: dict | None, ctx: RpcContext) -> dict[str,
     service = _service(ctx)
     try:
         return await service.dca_update(mandate_id, **fields)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+# ── trading.trigger.* (docs/triggers.md) ────────────────────────────────────
+#
+# Same split as ``trading.dca.*``: an agent may create (it only proposes: an
+# agent-bound connection always gets ``awaiting_approval``), get and list; every
+# other write is the user's, so it is ``@_operator_only``. A malformed param is
+# ``trading.trigger.invalid`` naming the field. The structural rules (which
+# condition needs which number, which action takes which size) are checked
+# here; the engine checks the values against the market and the wallet.
+
+_TRIGGER_KINDS = ("sell", "buy", "alert")
+_TRIGGER_DIRECTIONS = ("below", "above", "trail")
+_TRIGGER_SIZES = ("amountUsd", "amountPct", "amount")
+_TRIGGER_MIN_VALID_SECONDS = 60
+
+
+def _trigger_invalid(message: str) -> RpcHandlerError:
+    return RpcHandlerError("trading.trigger.invalid", message)
+
+
+def _trigger_id(p: dict[str, Any]) -> str:
+    value = p.get("triggerId")
+    if not isinstance(value, str) or not value.strip():
+        raise _trigger_invalid("params.triggerId is required")
+    return value.strip()
+
+
+def _trigger_number(p: dict[str, Any], key: str) -> float | None:
+    try:
+        value = _number(p, key)
+    except ValueError as exc:
+        raise _trigger_invalid(str(exc)) from exc
+    if value is not None and (value != value or value in (float("inf"), float("-inf"))):
+        raise _trigger_invalid(f"params.{key} must be a finite number")
+    return value
+
+
+def _trigger_int(p: dict[str, Any], key: str) -> int | None:
+    """A whole number: an int, an integral float (``3600.0``) or a digit string."""
+    value = p.get(key)
+    if value is None or value == "":
+        return None
+    number = _trigger_number(p, key)
+    if number is None or number != int(number):
+        raise _trigger_invalid(f"params.{key} must be an integer")
+    return int(number)
+
+
+def _trigger_bool(p: dict[str, Any], key: str, default: bool) -> bool:
+    value = p.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise _trigger_invalid(f"params.{key} must be a boolean")
+    return value
+
+
+def _trigger_text(p: dict[str, Any], key: str) -> str | None:
+    """A free-text field a person reads (name, reason): sanitised like a note."""
+    try:
+        return _note(p, key)
+    except ValueError as exc:
+        raise _trigger_invalid(str(exc)) from exc
+
+
+def _trigger_str(p: dict[str, Any], key: str, *, required: bool = False) -> str | None:
+    try:
+        return _str(p, key, required=required)
+    except ValueError as exc:
+        raise _trigger_invalid(str(exc)) from exc
+
+
+def _trigger_choice(p: dict[str, Any], key: str, choices: tuple[str, ...]) -> str:
+    value = (_trigger_str(p, key, required=True) or "").lower()
+    if value not in choices:
+        raise _trigger_invalid(f"params.{key} must be one of {', '.join(choices)}")
+    return value
+
+
+def _trigger_price(p: dict[str, Any]) -> str | float | None:
+    """``price`` as given: ``"3800"``, ``"-10%"``, ``"+15%"`` or a number.
+
+    The engine resolves a percent against the price at creation, so the text
+    goes through untouched (stripped); a number must be finite.
+    """
+    value = p.get("price")
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise _trigger_invalid("params.price must be a string or a number")
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise _trigger_invalid("params.price must be a finite number")
+    return number
+
+
+def _trigger_amount(p: dict[str, Any]) -> str | None:
+    """``amount`` (token units, human): a string or a number, passed on as a string."""
+    value = p.get("amount")
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise _trigger_invalid("params.amount must be a string or a number")
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise _trigger_invalid("params.amount must be a finite number")
+    # ``1e-05`` would reach the engine as an exponent; give it plain digits.
+    return format(Decimal(str(value)), "f")
+
+
+def _trigger_valid_for(p: dict[str, Any]) -> int | None:
+    seconds = _trigger_int(p, "validForSeconds")
+    if seconds is not None and seconds < _TRIGGER_MIN_VALID_SECONDS:
+        raise _trigger_invalid(
+            f"params.validForSeconds must be at least {_TRIGGER_MIN_VALID_SECONDS}"
+        )
+    return seconds
+
+
+@_d.method("trading.trigger.create")
+async def _trading_trigger_create(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Create a price trigger. The operator's is ``armed`` at once; an agent's awaits approval.
+
+    ``initiator`` and ``sessionKey`` are decided by :func:`_initiator`: an
+    agent-bound connection is the agent and files under its bound chat
+    whatever it declares.
+    """
+    p = _params(params)
+    try:
+        chain = _chain(p)
+        initiator, session_key = _initiator(ctx, p)
+    except ValueError as exc:
+        raise _trigger_invalid(str(exc)) from exc
+    assert chain is not None
+    kind = _trigger_choice(p, "kind", _TRIGGER_KINDS)
+    token = _trigger_str(p, "token", required=True) or ""
+    direction = _trigger_choice(p, "direction", _TRIGGER_DIRECTIONS)
+    price = _trigger_price(p)
+    trail_pct = _trigger_number(p, "trailPct")
+    if direction == "trail":
+        if kind == "buy":
+            raise _trigger_invalid("params.kind buy cannot use direction trail")
+        if trail_pct is None:
+            raise _trigger_invalid("params.trailPct is required for direction trail")
+        if price is not None:
+            raise _trigger_invalid("params.price is not used with direction trail")
+    else:
+        if price is None:
+            raise _trigger_invalid(f"params.price is required for direction {direction}")
+        if trail_pct is not None:
+            raise _trigger_invalid(f"params.trailPct is not used with direction {direction}")
+    amount_usd = _trigger_number(p, "amountUsd")
+    amount_pct = _trigger_number(p, "amountPct")
+    amount = _trigger_amount(p)
+    given = [
+        key
+        for key, value in zip(_TRIGGER_SIZES, (amount_usd, amount_pct, amount), strict=True)
+        if value is not None
+    ]
+    if kind == "alert" and given:
+        raise _trigger_invalid(f"params.{given[0]} is not used by kind alert: it sends no order")
+    if kind == "buy" and (amount_usd is None or len(given) > 1):
+        raise _trigger_invalid("params.amountUsd is required for kind buy, and is its only size")
+    if kind == "sell" and len(given) != 1:
+        raise _trigger_invalid(
+            "kind sell takes exactly one size: params.amountPct, params.amount or params.amountUsd"
+        )
+    service = _service(ctx)
+    try:
+        return await service.trigger_create(
+            chain=chain,
+            kind=kind,
+            token=token,
+            quote=_trigger_str(p, "quote"),
+            direction=direction,
+            price=price,
+            trail_pct=trail_pct,
+            amount_usd=amount_usd,
+            amount_pct=amount_pct,
+            amount=amount,
+            wallet=_trigger_str(p, "wallet"),
+            slippage_pct=_trigger_number(p, "slippagePct"),
+            name=_trigger_text(p, "name"),
+            valid_for_seconds=_trigger_valid_for(p),
+            initiator=initiator,
+            session_key=session_key,
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.get")
+async def _trading_trigger_get(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """One trigger as a ``trigger`` card payload."""
+    trigger_id = _trigger_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.trigger_get(trigger_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.list")
+async def _trading_trigger_list(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Live triggers (every one with ``all``), optionally of one ``wallet``."""
+    p = _params(params)
+    include_all = _trigger_bool(p, "all", False)
+    wallet = _trigger_str(p, "wallet")
+    service = _service(ctx)
+    try:
+        return await service.trigger_list(all=include_all, wallet=wallet)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.approve")
+@_operator_only
+async def _trading_trigger_approve(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Approve a pending trigger: it is ``armed`` and checked from the next tick."""
+    trigger_id = _trigger_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.trigger_approve(trigger_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.reject")
+@_operator_only
+async def _trading_trigger_reject(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    p = _params(params)
+    trigger_id = _trigger_id(p)
+    service = _service(ctx)
+    try:
+        return await service.trigger_reject(trigger_id, _trigger_text(p, "reason"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.pause")
+@_operator_only
+async def _trading_trigger_pause(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    trigger_id = _trigger_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.trigger_pause(trigger_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.resume")
+@_operator_only
+async def _trading_trigger_resume(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    trigger_id = _trigger_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.trigger_resume(trigger_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.stop")
+@_operator_only
+async def _trading_trigger_stop(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Stop for good; an order of the trigger still awaiting approval is rejected."""
+    p = _params(params)
+    trigger_id = _trigger_id(p)
+    service = _service(ctx)
+    try:
+        return await service.trigger_stop(trigger_id, _trigger_text(p, "reason"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.fire")
+@_operator_only
+async def _trading_trigger_fire(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Fire now: act at once on an armed or paused trigger, whatever the price."""
+    p = _params(params)
+    trigger_id = _trigger_id(p)
+    wait = _trigger_bool(p, "wait", False)
+    service = _service(ctx)
+    try:
+        return await service.trigger_fire_now(trigger_id, wait=wait)
     except Exception as exc:
         raise _raise(exc) from exc
 

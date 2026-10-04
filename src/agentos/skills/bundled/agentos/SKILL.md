@@ -577,6 +577,9 @@ agentos trade lp add <token|TOKEN/QUOTE|poolId> --chain C [--quote Q] [--fee F] 
 agentos trade dca create <token> --usd X --every 30m|2h|1d|1w|<seconds> (--cap X | --runs N) [--max-price X] [--quote Q] [--chain C] [--wallet ADDR] [--slippage 1] [--name …] [--start now|next] --json   # DCA mandate the engine runs itself under a hard cap; from an agent ALWAYS awaiting_approval (user approves on the card / Missions panel); --json writes a dca-cards/ chat card
 agentos trade dca list [--all] [--wallet ADDR] --json / show <id> --json   # mandates: status, spent of cap, next buy, avg vs price now
 agentos trade dca approve|reject|pause|resume|stop|run|update <id> … --json   # the user's only (trading.operator_required for an agent); run = buy now [--wait]; update [--usd] [--cap] [--runs] [--every] [--max-price] [--name]; stop/reject take --reason
+agentos trade trigger create <token> (--below 3800|-10% | --above 5000|+15% | --trail 10) (--sell (--pct 50 | --amount 0.05 | --usd 100) | --buy --usd 50 | --alert) [--quote Q] [--chain C] [--wallet ADDR] [--slippage 1] [--name …] [--for 7d] --json   # price trigger (stop-loss, take-profit, trailing stop, buy the dip, alert) the engine watches and fires itself after 2 confirming checks; never poll the price or schedule a cron for it; from an agent ALWAYS awaiting_approval (user approves on the card); --json writes a trigger-cards/ chat card
+agentos trade trigger list [--all] [--wallet ADDR] --json / show <id> --json   # triggers: status, condition, price now and distance, checks, recent fires
+agentos trade trigger approve|reject|pause|resume|stop|fire <id> … --json   # the user's only (trading.operator_required for an agent); fire = fire now [--wait]; stop/reject take --reason
 agentos trade portfolio / history / limits <addr>
 agentos config set trading.uniswap_api_key <key>       # or Settings › Trading in the app
 agentos cron list / add / run <id> / runs
