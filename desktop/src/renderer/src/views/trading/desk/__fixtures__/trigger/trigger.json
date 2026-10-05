@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "kind": "trigger",
+  "fetchedAt": "2026-10-04T06:00:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "get",
+    "params": {
+      "triggerId": "trg_1a2b3c4d"
+    }
+  },
+  "trigger": {
+    "id": "trg_1a2b3c4d",
+    "name": "Stop-loss ETH",
+    "kind": "sell",
+    "status": "armed",
+    "statusReason": null,
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "label": "Main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x0000000000000000000000000000000000000000",
+      "symbol": "ETH",
+      "decimals": 18,
+      "priceUsd": 3881.6
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1
+    },
+    "condition": {
+      "direction": "below",
+      "priceUsd": 3800,
+      "trailPct": null,
+      "fromPriceUsd": null,
+      "peakPriceUsd": null,
+      "stopPriceUsd": null,
+      "confirmTicks": 2,
+      "hits": 0,
+      "label": "under $3,800"
+    },
+    "action": {
+      "kind": "sell",
+      "amountUsd": null,
+      "amountPct": 50,
+      "amount": null,
+      "estimatedUsd": 194.08,
+      "slippagePct": 1,
+      "needsApproval": true,
+      "approvalThresholdUsd": 100,
+      "dailyCapUsd": 1000,
+      "label": "sell 50 % of ETH → USDC"
+    },
+    "market": {
+      "priceUsd": 3881.6,
+      "armedPriceUsd": 3912.4,
+      "distancePct": -2.1,
+      "checkedAt": "2026-10-04T05:59:48Z",
+      "balance": {
+        "raw": "100000000000000000",
+        "human": "0.1",
+        "usd": 388.16
+      }
+    },
+    "fires": [
+      {
+        "n": 1,
+        "at": "2026-10-03T22:14:05Z",
+        "manual": false,
+        "status": "failed",
+        "reasonCode": "trading.quote_failed",
+        "reason": "trading.quote_failed: no route",
+        "priceUsd": 3796.2,
+        "orderId": null,
+        "txHash": null,
+        "explorerUrl": null
+      }
+    ],
+    "result": null,
+    "validUntil": null,
+    "initiator": "agent",
+    "sessionKey": "agent:trading:webchat:desk-test",
+    "createdAt": "2026-10-03T08:00:00Z",
+    "updatedAt": "2026-10-03T22:14:05Z",
+    "approvedAt": "2026-10-03T08:02:10Z",
+    "armedAt": "2026-10-03T08:02:10Z",
+    "triggeredAt": null,
+    "expiresAt": null
+  }
+}

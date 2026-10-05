@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const css = readFileSync('src/renderer/src/views/chat/chat.css', 'utf8')
@@ -350,7 +351,9 @@ describe('desktop DCA card skin', () => {
     )?.[0]
 
   it('joins the artifact grid next to the LP group', () => {
-    expect(css).toMatch(/\.msg-artifact-lp-group,\s*\.msg-artifact-dca-group \{\s*display: grid;/)
+    expect(css).toMatch(
+      /\.msg-artifact-lp-group,\s*\.msg-artifact-dca-group,\s*\.msg-artifact-trigger-group \{\s*display: grid;/,
+    )
     expect(css).toMatch(/^\.msg-artifact-dca-group \{\s*max-width: min\(38rem, 100%\);/m)
   })
 
@@ -538,5 +541,242 @@ describe('desktop DCA card skin', () => {
       expect(block, r).toBeTruthy()
       expect(block, r).not.toMatch(/text-transform/)
     }
+  })
+})
+
+// Trigger cards (frontend trigger.ts, docs/triggers.md "Rendering") are the
+// console's markup; the desktop draws them as desk instruments through the
+// `data-trigger-*` hooks. These pin the class inventory the contract names
+// and what makes the skin the desk's: a rail that follows the trigger's
+// state, the kind glyph drawn by CSS (never in the DOM), a price rail tinted
+// amber near its line, and actions keyed on `data-trigger-op`.
+describe('desktop trigger card skin', () => {
+  const rule = (selector: string): string | undefined =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+    )?.[0]
+
+  it('joins the artifact grid next to the DCA group', () => {
+    expect(css).toMatch(/^\.msg-artifact-trigger-group \{\s*max-width: min\(38rem, 100%\);/m)
+  })
+
+  it('draws a hairline plate with a status rail, not a border, and mono numerals', () => {
+    const card = rule('.trigger-card')
+    expect(card).toBeTruthy()
+    expect(card).toMatch(/--trigger-rail: var\(--dim\);/)
+    expect(card).toMatch(/box-shadow: inset 0 0 0 1px var\(--hairline\);/)
+    expect(card).not.toMatch(/\bborder:/)
+    expect(card).toMatch(/font-variant-numeric: tabular-nums;/)
+    expect(rule('.trigger-card::before')).toMatch(/background: var\(--trigger-rail\);/)
+    expect(css).toMatch(
+      /\.trigger-card__facts dd,\s*\.trigger-fact__value,\s*\.trigger-fires,\s*\.trigger-card__foot \{\s*font-family: var\(--font-mono\);/,
+    )
+  })
+
+  it('tones the rail and the pill from every status the contract names', () => {
+    const tones: Record<string, string> = {
+      awaiting_approval: 'warn',
+      armed: 'ok',
+      paused: 'muted-foreground',
+    }
+    for (const [status, tone] of Object.entries(tones)) {
+      expect(css, status).toMatch(
+        new RegExp(
+          `\\.trigger-card\\[data-trigger-status='${status}'\\] \\{\\s*--trigger-rail: var\\(--${tone}\\);`,
+        ),
+      )
+    }
+    for (const status of ['triggered', 'done']) {
+      expect(selectors, status).toContain(`.trigger-card[data-trigger-status='${status}']`)
+      expect(selectors, status).toContain(`.trigger-pill[data-status='${status}']`)
+    }
+    for (const status of ['stopped', 'rejected', 'expired']) {
+      expect(selectors, status).toContain(`.trigger-card[data-trigger-status='${status}']`)
+      expect(selectors, status).toContain(`.trigger-pill[data-status='${status}']`)
+    }
+    expect(css).toMatch(/\.trigger-pill\[data-status='armed'\] \{\s*--trigger-tone: var\(--ok\);/)
+  })
+
+  it('pulses awaiting and triggered, and holds still on reduced motion', () => {
+    expect(selectors).toContain(".trigger-card[data-trigger-status='awaiting_approval']::before")
+    expect(selectors).toContain(".trigger-card[data-trigger-status='triggered']::before")
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.trigger-card\[data-trigger-status='awaiting_approval'\]::before,[\s\S]*?animation: none;/,
+    )
+  })
+
+  it('draws the kind glyph from data-trigger-action, never an emoji', () => {
+    expect(rule(".trigger-card[data-trigger-action='sell'] .trigger-card__head::before")).toMatch(
+      /content: '▼';/,
+    )
+    expect(rule(".trigger-card[data-trigger-action='buy'] .trigger-card__head::before")).toMatch(
+      /content: '▲';/,
+    )
+    const alert = rule(".trigger-card[data-trigger-action='alert'] .trigger-card__head::before")
+    expect(alert).toMatch(/content: '.';/u)
+    expect(alert).not.toMatch(/\p{Extended_Pictographic}/u)
+  })
+
+  it('tints the price rail amber within 1 % of its line', () => {
+    const near = css.match(
+      /(\.trigger-gauge\[data-trigger-[^{]+)\{\s*--trigger-gauge-tone: var\(--warn\);/,
+    )
+    expect(near).toBeTruthy()
+    const list = near?.[1] ?? ''
+    // The renderer classifies the signed distance itself (trigger.ts
+    // `triggerGauge`): `near` within 1 % of the line, `met` once it is crossed.
+    for (const hook of ["[data-trigger-proximity='near']", "[data-trigger-proximity='met']"]) {
+      expect(list, hook).toContain(hook)
+    }
+  })
+
+  it('keys layout, busy and stale states on the card hooks', () => {
+    expect(selectors).toContain(".trigger-card[data-trigger-layout='wide'] .trigger-card__facts")
+    expect(selectors).toContain(".trigger-card[data-trigger-layout='narrow'] .trigger-card__facts")
+    expect(selectors).toContain(
+      '.trigger-card[data-trigger-busy] > :not(.trigger-actions):not(.trigger-card__foot)',
+    )
+    expect(css).toMatch(
+      /\.trigger-card\[data-trigger-stale\] \.trigger-actions \[data-trigger-op\],[^{]*\{[^}]*pointer-events: none;/,
+    )
+    // The footer's ↻ is how a stale card recovers: nothing may switch it off.
+    expect(
+      selectors.some((sel) => /data-trigger-stale\][^,]*\.trigger-card__foot (a|button)/.test(sel)),
+    ).toBe(false)
+    expect(selectors).toContain(".trigger-card[data-trigger-kind='triggers']")
+  })
+
+  it('styles every documented part of the card', () => {
+    for (const part of [
+      '.trigger-card__head',
+      '.trigger-card__hero',
+      '.trigger-card__now',
+      '.trigger-gauge',
+      '.trigger-card__facts',
+      '.trigger-fires',
+      '.trigger-actions',
+      '.trigger-actions__error',
+      '.trigger-card__warnings',
+      '.trigger-card__foot',
+      '.trigger-pill',
+    ]) {
+      expect(selectors, part).toContain(part)
+    }
+  })
+
+  it('makes Approve & arm the one filled control and spells out an armed Stop or Fire now', () => {
+    expect(rule(".msg-body .trigger-actions [data-trigger-op='approve']")).toMatch(
+      /background: var\(--primary\);/,
+    )
+    expect(rule('.msg-body .trigger-actions [data-trigger-op]')).toMatch(/cursor: default;/)
+    expect(rule('.msg-body .trigger-actions [data-trigger-op][data-trigger-confirm]')).toMatch(
+      /color: var\(--danger\);/,
+    )
+    expect(selectors).toContain(
+      ".msg-body .trigger-actions [data-trigger-op='fire'][data-trigger-confirm]",
+    )
+    expect(selectors).toContain(
+      '.msg-body .trigger-actions [data-trigger-op][data-trigger-pending]',
+    )
+  })
+
+  // A done fill's detail lost its "@ $1.00" to an ellipsis: the one figure
+  // that says what the trigger filled at.
+  it('wraps a fire’s detail rather than ellipsizing it', () => {
+    const detail = rule('.trigger-fire__detail')
+    expect(detail).toMatch(/white-space: normal;/)
+    expect(detail).toMatch(/min-width: 0;/)
+    expect(detail).not.toMatch(/text-overflow: ellipsis;/)
+    expect(detail).not.toMatch(/overflow: hidden;/)
+  })
+
+  it('never changes the case of a token symbol in the sentence or the facts', () => {
+    for (const r of ['.trigger-card__hero', '.trigger-card__facts dd,']) {
+      const block = css.match(new RegExp(`^\\${r}[^{]*\\{[\\s\\S]*?^\\}`, 'm'))?.[0]
+      expect(block, r).toBeTruthy()
+      expect(block, r).not.toMatch(/text-transform/)
+    }
+  })
+})
+
+// The shared renderer is the class inventory: every class it emits must be
+// drawn by the desk skin, or that part renders bare — the live desk once ran
+// "trên 0.5Base" together in the header, put a list row's status dot on a line
+// of its own and printed "↻refresh⧉copy id" as one word, all from rules that
+// were never written. Read the renderer itself so a class added there fails
+// here until the skin draws it.
+describe('desktop trigger skin covers the shared renderer', () => {
+  // Beside this file: views/chat → the repo root is six levels up. (jsdom
+  // gives `import.meta.url` an http scheme, so the path comes from __dirname.)
+  const renderer = readFileSync(
+    resolve(__dirname, '../../../../../../frontend/src/views/chat/transcript/trigger.ts'),
+    'utf8',
+  )
+  // Every quoted or template literal, split into class-shaped tokens: the
+  // `el(tag, 'a b')` class names, the SVG `class:` values and the selectors the
+  // mounter queries. `data-trigger-*` attribute names start with `data-` and
+  // a path like `trigger-cards/` ends in a slash, so neither counts.
+  const literals = renderer.match(/'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g) ?? []
+  const emitted = new Set(
+    literals.flatMap((lit) =>
+      [
+        ...lit.matchAll(
+          /(?<![\w-])(?:msg-artifact-trigger(?:(?:-{1,2}|__)[a-z0-9]+)*|trigger(?:(?:-{1,2}|__)[a-z0-9]+)+)(?![\w/-])/g,
+        ),
+      ].map((m) => m[0]),
+    ),
+  )
+  const drawn = (cls: string): boolean => {
+    const hook = new RegExp(`\\.${cls}(?![\\w-])`)
+    return selectors.some((sel) => hook.test(sel))
+  }
+
+  it('reads the inventory off the renderer', () => {
+    // A broken extraction must not pass by finding nothing to check.
+    expect(emitted.size).toBeGreaterThan(60)
+    for (const cls of [
+      'trigger-card__title',
+      'trigger-chain',
+      'trigger-pill__dot',
+      'trigger-row__dot',
+      'trigger-row__main',
+      'trigger-card__actions',
+      'trigger-card__action-glyph',
+      'trigger-sep',
+      'msg-artifact-trigger__body',
+    ]) {
+      expect(emitted, cls).toContain(cls)
+    }
+  })
+
+  it('has at least one rule for every class the renderer emits', () => {
+    const missing = [...emitted].filter((cls) => !drawn(cls))
+    expect(missing).toEqual([])
+  })
+
+  it('lays the list row out as a grid with the dot in its own column', () => {
+    const row = css.match(/^\.trigger-row \{[\s\S]*?^\}/m)?.[0]
+    expect(row).toMatch(/display: grid;/)
+    expect(row).toMatch(/grid-template-columns: max-content minmax\(0, 1fr\)/)
+    expect(css).toMatch(/^\.trigger-row__dot \{[^}]*width: 6px;/m)
+    // The old ::before dot was a flex item that wrapped onto its own line.
+    expect(selectors).not.toContain('.trigger-row::before')
+  })
+
+  it('spaces the header, the pill dot and the footer actions', () => {
+    expect(css).toMatch(/^\.trigger-card__title \{[^}]*display: flex;[^}]*gap: \d+px;/m)
+    expect(css).toMatch(/^\.trigger-pill__dot \{[^}]*background: currentColor;/m)
+    expect(css).toMatch(/^\.trigger-card__actions \{[^}]*gap: \d+px;/m)
+    expect(css).toMatch(/^\.msg-body \.trigger-card__action \{[^}]*gap: \d+px;/m)
+    // A list head holds only its title: it must not be pushed to the right.
+    expect(selectors).not.toContain('.trigger-card__head > :last-child')
+  })
+
+  it('colours a fire by the attribute the renderer stamps', () => {
+    expect(renderer).toMatch(/row\.dataset\.triggerFireStatus = /)
+    expect(selectors).toContain(
+      ".trigger-fire[data-trigger-fire-status='failed'] .trigger-fire__status",
+    )
+    expect(selectors.some((sel) => sel.includes('.trigger-fire[data-status='))).toBe(false)
   })
 })

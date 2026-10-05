@@ -1661,6 +1661,11 @@ tr:focus-within .trd-row__actions {
   color: var(--info);
   background: color-mix(in srgb, var(--info) 14%, transparent);
 }
+/* A swap a price trigger fired: the same chip, in amber. */
+.trd-order__trigger {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
 .trd-order__fact b {
   font-family: var(--font-mono);
   font-weight: 400;

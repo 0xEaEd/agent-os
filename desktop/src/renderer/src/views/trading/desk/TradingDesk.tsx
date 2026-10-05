@@ -306,6 +306,7 @@ export function useDeskFrame(input: {
         missions={missions.missions}
         running={missions.running}
         mandates={missions.mandates}
+        triggers={missions.triggers}
         sessionPending={sessionPending}
         globalPending={globalPending > 0 ? globalPending : null}
         deskMode={fullDesk}

@@ -32,7 +32,7 @@ available without `uv tool list` or `pip show`.
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
 | `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
-| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL; Uniswap V4 liquidity; DCA mandates. |
+| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL; Uniswap V4 liquidity; DCA mandates; price triggers (stop-loss, take-profit, trailing stop, buy-the-dip, alerts). |
 | `agentos skills` | List, search, view, install, update, publish, inspect, and tap skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
@@ -906,6 +906,12 @@ agentos trade dca approve <id> / reject <id> [--reason <text>] [--json] [--no-ca
 agentos trade dca pause <id> / resume <id> / stop <id> [--reason <text>] [--json] [--no-card]   # operator-only; stop is final
 agentos trade dca run <id> [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # buy now (operator-only); the next scheduled buy does not move
 agentos trade dca update <id> [--usd X] [--cap X] [--runs N] [--every 12h] [--max-price X] [--name <text>] [--json] [--no-card]   # operator-only; --runs 0 / --max-price 0 remove the limit
+agentos trade trigger create <token> (--below <price|pct%> | --above <price|pct%> | --trail <pct>) (--sell (--pct 50 | --amount 0.05 | --usd 100) | --buy --usd 50 | --alert) [--quote <token>] [--chain base|robinhood] [--wallet <addr|label>] [--slippage 1] [--name <text>] [--for 30m|2h|1d|1w|<seconds>] [--json] [--no-card]   # price trigger: the engine watches the price and fires once; from an agent it waits for approval; --quote defaults to the chain's USDC (the native coin when the token is USDC)
+agentos trade trigger list [--all] [--wallet <addr|label>] [--json] [--no-card]   # live triggers (awaiting approval, armed, triggered, paused); --all adds done/stopped/rejected/expired
+agentos trade trigger show <id> [--json] [--no-card]            # one trigger: condition, price now and distance, size, checks, recent fires, result
+agentos trade trigger approve <id> / reject <id> [--reason <text>] [--json] [--no-card]   # operator-only
+agentos trade trigger pause <id> / resume <id> / stop <id> [--reason <text>] [--json] [--no-card]   # operator-only; stop is final
+agentos trade trigger fire <id> [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # fire now whatever the price (operator-only)
 agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval|lp_collect|lp_remove|lp_add] [--limit N] [--hidden]
 agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
 agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
@@ -1173,6 +1179,43 @@ written to `dca-cards/<mandate|mandates>-<id|live|all>-<utc stamp>.json`
 without `--json` a mandate prints as a panel and `list` as a table. Input
 and state errors (`INVALID_ARGUMENT`, `trading.dca.invalid`,
 `trading.dca.bad_state`, `trading.dca.not_found`, `trading.invalid`,
+`trading.token_not_found`) exit 2; everything else exits 1; under `--json`
+every error is `{"error": …}` on stderr and writes no card.
+
+`trade trigger` manages **price triggers**: a conditional order the engine
+watches and fires by itself — `create ETH --sell --pct 50 --below 3800` sells
+half the wallet's ETH for USDC once ETH is at or under $3,800, `--buy --usd
+50 --below 3500` buys the dip, `--sell --pct 100 --trail 10` is a trailing
+stop 10 % under the highest price since arming, and `--alert --above 5000`
+only notifies you (gateway methods
+`trading.trigger.create|get|list|approve|reject|pause|resume|stop|fire`; the
+contract is [`triggers.md`](triggers.md)). Pass exactly one condition
+(`--below`, `--above`, `--trail`) and one action: `--sell` with exactly one
+size (`--pct` of the balance at fire time, a token `--amount`, or `--usd`),
+`--buy` with `--usd`, or `--alert` with none; a wrong combination exits 2
+before anything is sent. `--below`/`--above` take a USD price (`3800`) or a
+percent of the price now (`--below -10%` or `10%`, `--above +15%` or `15%`),
+resolved to a price when the trigger is created. The engine checks the price
+every tick (30 s) and fires only after the condition held on two checks in a
+row; an unknown price never fires. A sell or buy is one ordinary swap order
+(guardrails, approval threshold, daily cap, ledger) with the trigger's id and
+a `Stop-loss ETH · fired at $3,790` note; a fire that cannot act (nothing to
+sell, not enough USDC) pauses the trigger, and three failed fires in a row
+pause it too. `--for` (`30m`, `2h`, `1d`, `1w` or seconds, minimum 60) lets
+it expire unreached; without it the trigger stays until it fires or you stop
+it. A trigger created from an agent's shell always answers `status:
+"awaiting_approval"` and expires after 24 h without a decision; yours is
+`armed` at once. `create`, `list` and `show` are allowed from an agent;
+`approve`, `reject`, `pause`, `resume`, `stop` and `fire` are the user's and
+answer `trading.operator_required` to an agent. `fire --wait` waits for the
+order it placed and prints the trigger again once it settled. With `--json`
+the payload is the first line of stdout and, unless `--no-card`, it is
+written to `trigger-cards/<trigger|triggers>-<id|live|all>-<utc stamp>.json`
+(the 20 newest kept) and announced by the last line,
+`publish_artifact path=<file> mime=application/vnd.agentos.trigger+json`;
+without `--json` a trigger prints as a panel and `list` as a table. Input
+and state errors (`INVALID_ARGUMENT`, `trading.trigger.invalid`,
+`trading.trigger.bad_state`, `trading.trigger.not_found`, `trading.invalid`,
 `trading.token_not_found`) exit 2; everything else exits 1; under `--json`
 every error is `{"error": …}` on stderr and writes no card.
 

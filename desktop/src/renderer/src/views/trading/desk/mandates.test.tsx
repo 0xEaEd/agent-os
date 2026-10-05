@@ -208,7 +208,8 @@ describe('MandateCard', () => {
     expect(fact('first')).toBe('on approval')
     // Short enough to sit whole: "Sep 29 06:00", no comma, no AM/PM (any time zone).
     expect(fact('expires')).toMatch(/^Sep (28|29) \d{2}:\d{2}$/)
-    expect(card.querySelector(`[data-fact='expires'] dt`)).toHaveTextContent('Expires')
+    // The proposal's deadline, not the DCA's end: it says so.
+    expect(card.querySelector(`[data-fact='expires'] dt`)).toHaveTextContent('Decide by')
     expect(screen.getByTestId('mandate-needs-approval')).toBeInTheDocument()
     expect(screen.getByTestId('mandate-warnings')).toHaveTextContent(
       'Each buy of $150 is above the $100 approval threshold and will wait for you.',

@@ -33,6 +33,19 @@
   min-height: 0;
 }
 
+/* The transcript's box: the scrolling thread plus what is laid over it (the
+   loading line, the desk's empty hint). Those are positioned against this
+   box, not the stage — on the stage, the desk's hint ran down over the
+   approvals region and its cards. */
+.chat-transcript {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .chat-thread {
   flex: 1 1 auto;
   min-height: 0;
@@ -59,7 +72,7 @@
 
 .chat-history-loading {
   position: absolute;
-  inset: 0 0 6rem;
+  inset: 0;
   z-index: 1;
   display: flex;
   align-items: center;
@@ -81,8 +94,7 @@
 }
 
 /* Before the first send: hide the empty thread, centre the composer column. */
-.chat-desktop[data-docked='false'] .chat-thread,
-.chat-desktop[data-docked='false'] .chat-history-loading {
+.chat-desktop[data-docked='false'] .chat-transcript {
   display: none;
 }
 
@@ -1044,7 +1056,8 @@
 .msg-artifact-charts,
 .msg-artifact-cards-group,
 .msg-artifact-lp-group,
-.msg-artifact-dca-group {
+.msg-artifact-dca-group,
+.msg-artifact-trigger-group {
   display: grid;
   gap: 8px;
 }
@@ -3240,6 +3253,845 @@
   .dca-pill__dot,
   .msg-body .dca-action[data-dca-pending],
   .dca-card[data-dca-refreshing] .dca-card__refresh .dca-card__action-glyph {
+    animation: none;
+  }
+}
+
+/* Price trigger cards (docs/triggers.md, "Rendering"). The shared renderer
+   (frontend trigger.ts) emits `trigger-card*` classes and stamps
+   `data-trigger-kind` / `-action` / `-status` / `-chain` / `-layout` on
+   `.trigger-card`. Here it is a desk instrument, a sibling of the DCA plate:
+   hairline plate, a 3 px rail whose colour IS the trigger's state (amber
+   breathing while it waits for you, green armed, blue breathing while its
+   order is open, grey paused, blue done, faded when it is over), the price
+   rail drawn as a measuring instrument with the live dot and the line, every
+   figure in tabular mono. What fires is a glyph in the head drawn here from
+   `data-trigger-action` (▼ sell in red, ▲ buy in green, ◉ alert in blue): the
+   DOM carries no glyph and no emoji. Token symbols keep their case. */
+.msg-artifact-trigger-group {
+  max-width: min(38rem, 100%);
+}
+.msg-artifact-trigger {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.msg-artifact-trigger__body:empty {
+  display: none;
+}
+.msg-artifact-trigger__status {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.msg-artifact-trigger__status[hidden] {
+  display: none;
+}
+.trigger-card {
+  --trigger-rail: var(--dim);
+  --trigger-glyph: var(--info);
+  position: relative;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px 8px 16px;
+  border-radius: var(--radius);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--trigger-rail) 7%, transparent),
+      transparent 38%
+    ),
+    color-mix(in srgb, var(--elevated) 92%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+}
+.trigger-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  border-radius: var(--radius) 0 0 var(--radius);
+  background: var(--trigger-rail);
+}
+.trigger-card[data-trigger-status='awaiting_approval'] {
+  --trigger-rail: var(--warn);
+}
+.trigger-card[data-trigger-status='armed'] {
+  --trigger-rail: var(--ok);
+}
+.trigger-card[data-trigger-status='triggered'],
+.trigger-card[data-trigger-status='done'] {
+  --trigger-rail: var(--info);
+}
+.trigger-card[data-trigger-status='paused'] {
+  --trigger-rail: var(--muted-foreground);
+}
+.trigger-card[data-trigger-status='stopped'],
+.trigger-card[data-trigger-status='rejected'],
+.trigger-card[data-trigger-status='expired'],
+.trigger-card[data-trigger-kind='triggers'] {
+  --trigger-rail: var(--dim);
+}
+.trigger-card[data-trigger-status='stopped'] > :not(.trigger-card__foot),
+.trigger-card[data-trigger-status='rejected'] > :not(.trigger-card__foot),
+.trigger-card[data-trigger-status='expired'] > :not(.trigger-card__foot) {
+  opacity: 0.72;
+}
+/* Waiting on you, or its order in flight: the rail breathes until it settles. */
+.trigger-card[data-trigger-status='awaiting_approval']::before,
+.trigger-card[data-trigger-status='triggered']::before {
+  animation: trigger-rail-breathe 2.4s ease-in-out infinite;
+}
+@keyframes trigger-rail-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--trigger-rail) 45%, transparent);
+  }
+}
+.trigger-card[data-trigger-action='sell'] {
+  --trigger-glyph: var(--danger);
+}
+.trigger-card[data-trigger-action='buy'] {
+  --trigger-glyph: var(--ok);
+}
+.trigger-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+/* The pill parks at the end; a list head (title only) stays at the start. */
+.trigger-card__head > .trigger-pill {
+  margin-left: auto;
+}
+/* Name, then the chain as a quiet mono label: one line, the name ellipsizes. */
+.trigger-card__title {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* The renderer's glyph slot stays empty: the head's ::before draws the glyph. */
+.trigger-card__glyph {
+  display: none;
+}
+.trigger-card__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trigger-chain,
+.trigger-card__list-title,
+.trigger-fires__title {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trigger-card__count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.trigger-sep,
+.trigger-card__as-of {
+  color: var(--dim);
+}
+/* The kind glyph: drawn by the skin, never in the DOM. */
+.trigger-card[data-trigger-kind='trigger'] .trigger-card__head::before {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--trigger-glyph);
+}
+.trigger-card[data-trigger-action='sell'] .trigger-card__head::before {
+  content: '▼';
+}
+.trigger-card[data-trigger-action='buy'] .trigger-card__head::before {
+  content: '▲';
+}
+.trigger-card[data-trigger-action='alert'] .trigger-card__head::before {
+  content: '◉';
+}
+.trigger-pill {
+  --trigger-tone: var(--muted-foreground);
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--trigger-tone);
+  background: color-mix(in srgb, var(--trigger-tone) 12%, transparent);
+}
+.trigger-pill[data-status='awaiting_approval'] {
+  --trigger-tone: var(--warn);
+}
+.trigger-pill[data-status='armed'] {
+  --trigger-tone: var(--ok);
+}
+.trigger-pill[data-status='triggered'],
+.trigger-pill[data-status='done'] {
+  --trigger-tone: var(--info);
+}
+.trigger-pill[data-status='stopped'],
+.trigger-pill[data-status='rejected'],
+.trigger-pill[data-status='expired'] {
+  --trigger-tone: var(--dim);
+}
+.trigger-pill[data-status='awaiting_approval'],
+.trigger-pill[data-status='triggered'] {
+  animation: trigger-pill-pulse 1.6s ease-in-out infinite;
+}
+@keyframes trigger-pill-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+/* The dot sits inline in the pill, in the pill's own tone. */
+.trigger-pill__dot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+.trigger-pill__text {
+  line-height: 1;
+}
+/* The hero: the one sentence of the trigger, large; the live line under it. */
+.trigger-card__hero {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+.trigger-card__hero-line {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.trigger-card__now {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--muted-foreground);
+}
+/* "line set at −10 % from $3,780" and the engine's reason: quieter still. */
+.trigger-card__from,
+.trigger-card__reason {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--dim);
+}
+.trigger-card[data-trigger-status='paused'] .trigger-card__reason {
+  color: var(--warn);
+}
+/* The transcript's paragraph and list margins would stack on the grid gap. */
+.msg-body .trigger-card :is(p, ul, ol, h4) {
+  margin: 0;
+}
+/* The price rail: the live price a dot, the line a tick, both labelled in
+   mono. Tinted by distance: amber within 1 % of the line (the renderer
+   stamps the signed distance; the prefixes below are |d| ≤ 1). */
+.trigger-gauge {
+  --trigger-gauge-tone: var(--trigger-rail);
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+}
+.trigger-gauge[data-trigger-proximity='near'],
+.trigger-gauge[data-trigger-proximity='met'] {
+  --trigger-gauge-tone: var(--warn);
+}
+.trigger-gauge__svg {
+  display: block;
+  width: 100%;
+  height: 1.5rem;
+  overflow: visible;
+}
+.trigger-gauge line,
+.trigger-gauge rect {
+  stroke: var(--border);
+  fill: var(--hairline);
+  vector-effect: non-scaling-stroke;
+}
+.trigger-gauge circle {
+  fill: var(--trigger-gauge-tone);
+  stroke: var(--elevated);
+  stroke-width: 2;
+}
+.trigger-gauge text {
+  fill: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.trigger-gauge .trigger-gauge__line,
+.trigger-gauge [data-mark='line'],
+.trigger-gauge [data-mark='stop'] {
+  stroke: var(--trigger-glyph);
+  stroke-width: 2;
+}
+.trigger-gauge .trigger-gauge__peak,
+.trigger-gauge [data-mark='peak'] {
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 2 2;
+}
+.trigger-gauge .trigger-gauge__zone {
+  fill: color-mix(in srgb, var(--trigger-gauge-tone) 30%, transparent);
+  stroke: none;
+}
+.trigger-gauge .trigger-gauge__rail {
+  stroke: var(--border);
+  stroke-width: 2;
+}
+.trigger-gauge .trigger-gauge__now {
+  fill: var(--trigger-gauge-tone);
+}
+/* Labels hang on the marks: the renderer sets `left` and `data-align`, the
+   line (and peak) above the rail, the live price under it. */
+.trigger-gauge__labels {
+  position: relative;
+  height: 14px;
+}
+.trigger-gauge__label {
+  position: absolute;
+  top: 0;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  transform: translateX(-50%);
+}
+.trigger-gauge__label[data-align='start'] {
+  transform: none;
+}
+.trigger-gauge__label[data-align='end'] {
+  transform: translateX(-100%);
+}
+.trigger-gauge__label[data-mark='line'],
+.trigger-gauge__label[data-mark='stop'],
+.trigger-gauge__label[data-mark='now'] {
+  font-weight: 600;
+  color: var(--foreground);
+}
+/* Facts, not tiles: label left, figure right, a hairline under each. 2×2 by
+   default, four in a row wide, one per line narrow. */
+.trigger-card__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+  margin: 0;
+}
+.trigger-card[data-trigger-layout='wide'] .trigger-card__facts {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.trigger-card[data-trigger-layout='narrow'] .trigger-card__facts {
+  grid-template-columns: minmax(0, 1fr);
+}
+.trigger-fact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 8px;
+  min-width: 0;
+  min-height: 20px;
+  margin: 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.trigger-card__facts dt,
+.trigger-fact__label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trigger-card__facts dd,
+.trigger-fact__value,
+.trigger-fires,
+.trigger-card__foot {
+  font-family: var(--font-mono);
+}
+.trigger-card__facts dd,
+.trigger-fact__value {
+  margin: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Wide: four in a row, the label over its figure. */
+.trigger-card[data-trigger-layout='wide'] .trigger-fact {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding-bottom: 4px;
+}
+.trigger-fact[data-trigger-waits] .trigger-fact__value {
+  color: var(--warn);
+}
+.trigger-fact__value[data-trigger-no-value] {
+  color: var(--dim);
+}
+/* Fires: the trigger's ledger lines, at desk density. */
+.trigger-fires {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+}
+.msg-body .trigger-fires__list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trigger-fire {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  min-height: 22px;
+  margin: 0;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+.msg-body .trigger-fire + .trigger-fire {
+  margin-top: 0;
+}
+.trigger-fire__n {
+  flex-shrink: 0;
+  min-width: 2.4em;
+  color: var(--dim);
+}
+.trigger-fire__ago {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+.trigger-fire__status {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trigger-fire[data-trigger-fire-status='filled'] .trigger-fire__status,
+.trigger-fire[data-trigger-fire-status='alerted'] .trigger-fire__status {
+  color: var(--ok);
+}
+.trigger-fire[data-trigger-fire-status='parked'] .trigger-fire__status,
+.trigger-fire[data-trigger-fire-status='pending'] .trigger-fire__status {
+  color: var(--warn);
+}
+.trigger-fire[data-trigger-fire-status='failed'] .trigger-fire__status {
+  color: var(--danger);
+}
+.trigger-fire[data-trigger-fire-status='skipped'] .trigger-fire__status,
+.trigger-fire[data-trigger-fire-status='expired'] .trigger-fire__status,
+.trigger-fire[data-trigger-fire-status='rejected'] .trigger-fire__status {
+  color: var(--dim);
+}
+.trigger-fire__detail {
+  /* Wraps under itself rather than ellipsizing: cut at the end, a fill lost
+     its "@ $1.00" — the one figure that says what it filled at. */
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.trigger-fire__manual {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+/* Two classes: `.msg-body a` would otherwise underline the arrow in lime. */
+.msg-body .trigger-fire__link {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+.msg-body .trigger-fire__link:hover {
+  color: var(--foreground);
+}
+/* The list: one ruled row per trigger as a grid — the status dot in its own
+   column, the name, state, plan and price beside it, compact controls at the
+   end (under the text when the card is narrow). */
+.trigger-totals {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.msg-body .trigger-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trigger-row {
+  --trigger-rail: var(--dim);
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 4px 10px;
+  margin: 0;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 11px;
+}
+.msg-body .trigger-row + .trigger-row {
+  margin-top: 0;
+}
+.trigger-row[data-trigger-status='awaiting_approval'] {
+  --trigger-rail: var(--warn);
+}
+.trigger-row[data-trigger-status='armed'] {
+  --trigger-rail: var(--ok);
+}
+.trigger-row[data-trigger-status='triggered'],
+.trigger-row[data-trigger-status='done'] {
+  --trigger-rail: var(--info);
+}
+.trigger-row[data-trigger-status='paused'] {
+  --trigger-rail: var(--muted-foreground);
+}
+.trigger-row__dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--trigger-rail);
+}
+.trigger-row__main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.trigger-row__top {
+  display: flex;
+  align-items: baseline;
+  gap: 0 8px;
+  min-width: 0;
+}
+/* The trigger's name leads the row in the text face; the figures stay mono. */
+.trigger-row__name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.trigger-row__state {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--trigger-rail);
+}
+.trigger-row__plan,
+.trigger-row__now {
+  font-family: var(--font-mono);
+  color: var(--muted-foreground);
+}
+.trigger-row[data-trigger-proximity='near'] .trigger-row__now,
+.trigger-row[data-trigger-proximity='met'] .trigger-row__now {
+  color: var(--warn);
+}
+.trigger-row > .trigger-actions {
+  align-self: center;
+}
+.trigger-card[data-trigger-layout='narrow'] .trigger-row {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+.trigger-card[data-trigger-layout='narrow'] .trigger-row > .trigger-actions {
+  grid-column: 2;
+}
+.trigger-card__empty {
+  margin: 0;
+  padding: 8px 0;
+  color: var(--muted-foreground);
+}
+/* Actions (desk only: `canWrite`). Hairline ghost buttons like the DCA ones;
+   Approve & arm is the one filled control, Fire now amber, Stop and Reject
+   red. The armed second click is spelled out where the button was. */
+.trigger-actions {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.trigger-actions__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.msg-body .trigger-actions [data-trigger-op] {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--foreground);
+  text-decoration: none;
+  cursor: default;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+/* A list row's controls: one size down, like the DCA list's. */
+.trigger-actions--compact .trigger-actions__buttons {
+  gap: 4px;
+}
+.msg-body .trigger-action[data-trigger-compact] {
+  height: 20px;
+  padding: 0 7px;
+  font-size: 10.5px;
+}
+.msg-body .trigger-actions [data-trigger-op]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+.msg-body .trigger-actions [data-trigger-op]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.msg-body .trigger-actions [data-trigger-op='approve'] {
+  color: var(--primary-foreground);
+  background: var(--primary);
+  box-shadow: none;
+}
+.msg-body .trigger-actions [data-trigger-op='approve']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary) 86%, var(--foreground));
+}
+.msg-body .trigger-actions [data-trigger-op='fire'] {
+  color: var(--warn);
+}
+.msg-body .trigger-actions [data-trigger-op='stop'],
+.msg-body .trigger-actions [data-trigger-op='reject'] {
+  color: var(--danger);
+}
+.msg-body .trigger-actions [data-trigger-op][data-trigger-confirm] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.msg-body .trigger-actions [data-trigger-op='fire'][data-trigger-confirm] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.msg-body .trigger-actions [data-trigger-op][data-trigger-pending] {
+  animation: trigger-pill-pulse 1.2s ease-in-out infinite;
+}
+.msg-body .trigger-actions [data-trigger-op]:disabled {
+  color: var(--dim);
+  background: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hairline) 60%, transparent);
+}
+.trigger-card[data-trigger-busy] > :not(.trigger-actions):not(.trigger-card__foot) {
+  opacity: 0.55;
+  transition: opacity 160ms ease-out;
+}
+.trigger-actions__error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--danger);
+}
+.trigger-actions__error[hidden],
+.trigger-actions__error:empty {
+  display: none;
+}
+.trigger-card__warnings,
+.msg-body .trigger-card__warnings {
+  margin: 0;
+  padding-left: 14px;
+  font-size: 11px;
+  color: var(--warn);
+}
+.msg-body .trigger-card__warning + .trigger-card__warning {
+  margin-top: 2px;
+}
+.trigger-card__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.msg-body .trigger-card__foot a,
+.msg-body .trigger-card__foot button {
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  cursor: default;
+}
+.msg-body .trigger-card__foot a:hover,
+.msg-body .trigger-card__foot button:hover {
+  color: var(--foreground);
+}
+/* Footer: the id · wallet · as-of line ellipsizes; ↻ refresh and ⧉ copy id
+   sit apart at the end, each glyph spaced from its word. */
+.trigger-card__foot-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trigger-card__ago {
+  color: var(--muted-foreground);
+}
+.trigger-card__actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 2px;
+  margin-right: -4px;
+}
+.msg-body .trigger-card__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-compact);
+  white-space: nowrap;
+}
+.msg-body .trigger-card__action:hover {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.msg-body .trigger-card__action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trigger-card__action-glyph {
+  line-height: 1;
+}
+.trigger-card__action-label,
+.trigger-card__stale-text {
+  white-space: nowrap;
+}
+.msg-body .trigger-card__copy[data-trigger-copied='true'] {
+  color: var(--ok);
+}
+.msg-body .trigger-card__copy[data-trigger-copied='failed'] {
+  color: var(--danger);
+}
+.trigger-card[data-trigger-refreshing] > :not(.trigger-card__foot) {
+  opacity: 0.45;
+  transition: opacity 160ms ease-out;
+}
+.trigger-card[data-trigger-refreshing] .trigger-card__refresh .trigger-card__action-glyph {
+  display: inline-block;
+  animation: lp-refresh-spin 900ms linear infinite;
+}
+.trigger-card__refresh-error {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+/* "state may be stale · ↻": amber, its ↻ a dotted text button. */
+.trigger-card__stale {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--warn);
+}
+.msg-body .trigger-card__stale-refresh {
+  padding: 0 3px;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: default;
+}
+.msg-body .trigger-card__stale-refresh:hover,
+.msg-body .trigger-card__stale-refresh:focus-visible {
+  color: var(--foreground);
+}
+/* `.msg-body h4` would set the fires title at heading size. */
+.msg-body .trigger-fires__title {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+}
+/* Stale: the snapshot is drawn while the card re-reads; controls read as off
+   and cannot be pressed. The footer's ↻ stays live: it is the way back. */
+.trigger-card[data-trigger-stale] .trigger-actions [data-trigger-op],
+.msg-body .trigger-card[data-trigger-stale] .trigger-actions [data-trigger-op] {
+  opacity: 0.45;
+  filter: grayscale(1);
+  pointer-events: none;
+}
+.trigger-card[data-trigger-stale='failed'] .trigger-card__foot {
+  color: var(--warn);
+}
+@media (prefers-reduced-motion: reduce) {
+  .trigger-card[data-trigger-status='awaiting_approval']::before,
+  .trigger-card[data-trigger-status='triggered']::before,
+  .trigger-pill[data-status='awaiting_approval'],
+  .trigger-pill[data-status='triggered'],
+  .msg-body .trigger-actions [data-trigger-op][data-trigger-pending],
+  .trigger-card[data-trigger-refreshing] .trigger-card__refresh .trigger-card__action-glyph {
     animation: none;
   }
 }

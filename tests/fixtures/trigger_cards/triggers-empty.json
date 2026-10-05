@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "triggers",
+  "fetchedAt": "2026-09-20T09:00:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "list",
+    "params": {
+      "all": true
+    }
+  },
+  "triggers": [],
+  "totals": {
+    "count": 0,
+    "armed": 0,
+    "awaiting": 0,
+    "triggered": 0
+  }
+}

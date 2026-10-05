@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Trading: **price triggers** — `agentos trade trigger create ETH --sell --pct
+  50 --below 3800` is a stop-loss the engine watches and fires by itself;
+  `--above` makes a take-profit, `--trail 10` a trailing stop 10 % under the
+  peak since arming, `--buy --usd 50 --below 3500` buys the dip and `--alert`
+  only notifies you. Prices are absolute or a percent of the price now
+  (`--below -10%`, `--above +15%`), the condition must hold on two checks in
+  a row, and a fire is one ordinary swap order under the usual guardrails;
+  `--for 7d` lets it expire unreached. From an agent a trigger parks as
+  `awaiting_approval`; `trigger list|show|approve|reject|pause|resume|stop|fire`
+  round it out, and each `--json` command publishes an
+  `application/vnd.agentos.trigger+json` card. Gateway methods
+  `trading.trigger.*` (create/get/list agent-callable, the rest
+  operator-only). Contract: `docs/triggers.md` (#3615).
 - Desktop app: Settings › Environment, the Web UI's Environment screen in the
   app. It lists every variable the gateway, providers and skills read,
   grouped by category with set, missing and shadowed counts, a search and

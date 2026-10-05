@@ -87,6 +87,13 @@ export const notifications = {
   'notify.trade.failed.title': 'Swap failed',
   'notify.trade.expired.title': 'Swap approval lapsed',
   'notify.trade.rejected.title': 'Swap rejected',
+  // A price trigger fired (docs/triggers.md): an alert is the news itself; a
+  // sell or buy says what it is doing, and the order's own notifications follow.
+  'notify.trigger.alert.subtitle': 'Alert · {price} now',
+  'notify.trigger.fired.title': '{name} fired',
+  'notify.trigger.fired.subtitle': '{action} at {price}',
+  'notify.trigger.skipped.title': '{name} skipped',
+  'notify.trigger.failed.title': '{name} could not fire',
   'settings.notifications.gateway': 'The gateway stops on its own',
   'settings.notifications.gateway.help': 'A crash or a lost port, not a stop you asked for.',
 

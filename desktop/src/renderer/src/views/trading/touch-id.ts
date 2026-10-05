@@ -1,8 +1,9 @@
 import { requireBiometric, type GateKind } from '~/lib/biometric-gate'
 import { t } from '~/i18n'
 import { askRisk, HIGH_RISK_USD, orderKind, orderKindWord, orderLine } from './desk/desk-logic'
+import { heroText } from './desk/trigger-logic'
 import { chainName, formatUsd, shortAddress } from './logic'
-import type { Mandate, MandatePayload, Order } from './types'
+import type { Mandate, MandatePayload, Order, Trigger, TriggerPayload } from './types'
 
 /**
  * What the Touch ID sheet says, and which gate kind applies, for each action
@@ -72,6 +73,50 @@ export function mandateTouchId(mandate: Mandate): TouchIdAsk {
       chain: mandate.chain?.name || chainName(mandate.chain?.id ?? 0),
     }),
   }
+}
+
+/**
+ * A price trigger's approval: a standing permission to trade when the
+ * market says so. High-risk when what one fire moves reaches the card's
+ * high-risk line or is unknown; an alert moves nothing.
+ */
+export function triggerTouchId(trigger: Trigger): TouchIdAsk {
+  const moves = trigger.kind !== 'alert'
+  const est = trigger.action?.estimatedUsd ?? trigger.action?.amountUsd ?? null
+  return {
+    kind: moves && (est === null || est >= HIGH_RISK_USD) ? 'approve-high' : 'approve',
+    reason: fill(t('trading.touchId.reason.trigger'), {
+      name: `“${trigger.name}”`,
+      what: heroText(trigger),
+      chain: trigger.chain?.name || chainName(trigger.chain?.id ?? 0),
+    }),
+  }
+}
+
+/**
+ * Touch ID before `trading.trigger.approve` from a chat trigger card, which
+ * knows only the trigger id: the trigger is read first so the sheet can name
+ * it. Unreadable → treated as high-risk. Throws `TouchIdDeclined` (already
+ * toasted) when the prompt did not confirm.
+ */
+export async function requireTriggerTouchId(
+  call: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  triggerId: string,
+): Promise<void> {
+  let trigger: Trigger | null = null
+  try {
+    const res = (await call('trading.trigger.get', { triggerId })) as TriggerPayload | null
+    trigger = res?.trigger ?? null
+  } catch {
+    /* unreadable: the high-risk ask below */
+  }
+  const ask: TouchIdAsk = trigger
+    ? triggerTouchId(trigger)
+    : {
+        kind: 'approve-high',
+        reason: fill(t('trading.touchId.reason.triggerId'), { id: triggerId }),
+      }
+  await requireBiometric(ask.kind, ask.reason, `trigger:${triggerId}`)
 }
 
 /** "export the private key of Main (0x1234…abcd)" / "remove the wallet …". */

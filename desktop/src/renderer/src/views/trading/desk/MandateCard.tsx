@@ -116,9 +116,10 @@ export function MandateCard({
   if (m.guards.maxPriceUsd !== null && m.token.priceUsd === null) {
     notes.push(t('trading.dca.card.noPrice'))
   }
+  // `expiresAt` is the proposal's deadline (24 h to decide), not the DCA's end.
   const expires = expiry(m.expiresAt)
   if (expires) {
-    facts.push({ key: 'expires', label: t('trading.dca.card.fact.expires'), value: expires })
+    facts.push({ key: 'expires', label: t('trading.dca.card.fact.decideBy'), value: expires })
   }
 
   return (
