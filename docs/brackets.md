@@ -31,7 +31,7 @@ stop to break-even by itself.
 | word | meaning |
 |---|---|
 | **bracket** | the group: one name, one status, one card, two legs |
-| **leg** | one of the two triggers: the **take-profit** leg (`tp`, fires `above`) and the **stop-loss** leg (`sl`, fires `below` or `trail`) |
+| **leg** | one of the two triggers: the **take-profit** leg (`tp`, fires `above`) and the **stop-loss** leg (`sl`, fires `below` or `trail`). A range alert's legs are its **ceiling** (`tp`) and **floor** (`sl`): every leg word below reads so for `kind = alert` (`triggers.leg_word(leg, kind)`) |
 | **sibling** | the other leg |
 | **on hold** | a leg paused by the engine because its sibling is firing; it is released or stopped when the sibling's fire settles |
 | **line** | a leg's price: the take-profit line and the stop line (a trail's moves with the peak) |
@@ -395,15 +395,25 @@ Every hook below is **exact**: the desktop skins these selectors blind.
    signed distance for the skin to tint (near = amber).
 4. **Legs** `.bracket-legs`: two rows `.bracket-leg[data-leg=tp|sl][data-status=…]`:
    leg word `.bracket-leg__word` (*Take-profit* / *Stop-loss* / *Trailing
-   stop*), line `.bracket-leg__line` (`over $4,560`), state
-   `.bracket-leg__state` (`armed · 1 of 2 checks`, `on hold`, `stopped ·
-   take-profit filled`, `done · sold …`).
+   stop*; an alert's *Ceiling* / *Floor*), line `.bracket-leg__line` (`over
+   $4,560`), state `.bracket-leg__state` (`armed · 1 of 2 checks`, `on hold`,
+   `stopped · take-profit filled`, `done · sold …`). A leg that is over
+   (`done` / `stopped` / `rejected` / `expired`) has no distance: the
+   now-line says what happened (`take-profit filled · −9.8 % to stop`), the
+   list row prints `—` for it, it is never `data-trigger-nearest`, and
+   reward : risk is `—`.
 5. **Facts** `.trigger-card__facts` (2×2): *size* (`100 % · ≈ $189` / `50 %
-   at take-profit, 100 % at stop`), *balance*, *reward : risk* (`2.1 : 1`
-   with `.trigger-fact__rr`), *approval* (`automatic` / `waits for you · over
-   $100`); *valid until* joins when set.
+   at take-profit, 100 % at stop`; the `≈ $…` part sits on its own line in
+   `.trigger-fact__sub`, and a fact whose value is over 18 characters carries
+   `data-trigger-fact-span="2"` so the skin gives it two columns and nothing
+   ever overflows a column), *balance*, *reward : risk* (`2.1 : 1` with
+   `.trigger-fact__rr`), *on fire* (`trades at once` / `waits for you · over
+   $100`; absent on an alert, whose size already says `notify only`); *valid
+   until* joins when set.
 6. **Fires** `.trigger-fires`: both legs' fires merged, newest first, ≤ 5,
    each row prefixed with the leg word (`take-profit #1 · 2 m ago · filled …`).
+   Row actions on the `brackets` (and `triggers`) list card recount the
+   totals line from the rows after every swap.
 7. **Actions** `.trigger-actions` (only with `canWrite`): `awaiting_approval`:
    **Approve & arm** · Reject; `armed`: Pause · Sell now (alert: Notify now)
    · Stop; `paused`: Resume · Sell now · Stop; `triggered`: Stop; terminal:

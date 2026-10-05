@@ -421,7 +421,8 @@ Root `article.trigger-card[data-trigger-kind=trigger][data-trigger-action=sell|b
    carries the signed distance for the skin to tint (near = amber).
 4. **Facts** `.trigger-card__facts` (2×2): *size* (`50 % · ≈ $189` / `$50` /
    `—`), *wallet balance* (`0.1 ETH`), *valid until* (`GTC` / date),
-   *approval* (`automatic` / `waits for you · over $100`).
+   *on fire* (`trades at once` / `waits for you · over $100`; absent on an
+   alert).
 5. **Fires** `.trigger-fires`: last 5 as rows `#1 · 2 m ago · filled · $189
    → 0.05 ETH @ $3,788 · ↗`, `parked · awaiting approval`, `failed · <reason>`.
 6. **Actions** `.trigger-actions` (only when `ctx.canWrite`, desktop):
