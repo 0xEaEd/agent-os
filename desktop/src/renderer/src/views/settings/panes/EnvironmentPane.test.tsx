@@ -37,7 +37,7 @@ function row(patch: Partial<EnvVarRow> & { name: string }): EnvVarRow {
 }
 
 const LISTING: EnvListResponse = {
-  envFilePath: '/Users/me/.agentos/.env',
+  envFilePath: '/tmp/agentos-home/.agentos/.env',
   vars: [
     row({
       name: 'OPENAI_API_KEY',
@@ -220,7 +220,7 @@ describe('EnvironmentPane', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Where to get this' }))
     expect(openExternal).toHaveBeenCalledWith('https://platform.openai.com/api-keys')
     fireEvent.click(screen.getByRole('button', { name: 'Show in Finder' }))
-    expect(showItemInFolder).toHaveBeenCalledWith('/Users/me/.agentos/.env')
+    expect(showItemInFolder).toHaveBeenCalledWith('/tmp/agentos-home/.agentos/.env')
   })
 
   it('shows the load error with a retry', async () => {
