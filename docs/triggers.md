@@ -485,16 +485,16 @@ mono numerals, tinted status). `canWrite` is true only on the desktop desk.
 - **Orders** show `Stop-loss ETH · fired at $3,790` from the note; an
   order's `triggerId` links to the trigger.
 - **Desk prompt** (`agent.ts`, bump the version): a new **Triggers**
-  section. A conditional request — "sell if it drops under", "cắt lỗ",
-  "chốt lời", "take profit at", "buy when it dips to", "stop loss 10 %",
-  "trailing stop", "báo tôi khi", "alert me when" — is a trigger the engine
+  section. A conditional request — "sell if it drops under", "cut my loss",
+  "take profit at", "buy when it dips to", "stop loss 10 %",
+  "trailing stop", "tell me when", "alert me when" — is a trigger the engine
   watches; never poll the price yourself, never schedule a cron for it.
-  Reading rules: "bán hết ETH nếu xuống dưới 3800" → `trigger create ETH
-  --sell --pct 100 --below 3800 --json`; "cắt lỗ 10 %" → `--sell --pct 100
-  --below -10%`; "chốt lời 20 %" → `--sell --pct 50 --above +20%` (ask the
-  size only if truly absent, default 100 %); "mua $50 ETH khi về 3500" →
+  Reading rules: "sell all my ETH if it drops under 3800" → `trigger create ETH
+  --sell --pct 100 --below 3800 --json`; "stop loss 10 %" → `--sell --pct 100
+  --below -10%`; "take profit at +20 %" → `--sell --pct 50 --above +20%` (ask the
+  size only if truly absent, default 100 %); "buy $50 of ETH when it is back at 3500" →
   `--buy --usd 50 --below 3500`; "trailing stop 10 %" → `--sell --pct 100
-  --trail 10`; "báo tôi khi ETH lên 5000" → `--alert --above 5000`. From an
+  --trail 10`; "tell me when ETH reaches 5000" → `--alert --above 5000`. From an
   agent the result is `awaiting_approval`: report the card has **Approve &
   arm**, give the id (`trg_…`), stop. "how are my triggers" → `trigger list
   --json`, one line. Pause/stop/fire are the user's controls

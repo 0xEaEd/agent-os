@@ -474,11 +474,11 @@ faint; legs strip as two mono rows). `canWrite` is true only on the desk.
   `approve` / `fire` (`requireBracketTouchId`), beside the trigger one.
 - **Desk prompt** (`agent.ts`, bump `TRADING_AGENT_VERSION`): a
   **Brackets** section. A request for both an exit above and an exit below
-  on a position — "protect my ETH", "bảo vệ vị thế", "chốt lời 20 % cắt lỗ
-  10 %", "take profit at 4,500 and stop at 3,400", "sell half at +20 %, stop
-  at −10 %", "báo tôi nếu ETH ra khỏi 3,400–4,500" — is **one bracket**,
+  on a position — "protect my ETH", "protect the position", "take profit
+  20 %, stop loss 10 %", "take profit at 4,500 and stop at 3,400", "sell half
+  at +20 %, stop at −10 %", "tell me if ETH leaves 3,400–4,500" — is **one bracket**,
   never two triggers: `agentos trade protect ETH --tp +20% --sl -10% --json`
-  (default `--pct 100`); "chốt lời một nửa" → `--tp-pct 50`; "trailing" on
+  (default `--pct 100`); "take profit on half" → `--tp-pct 50`; "trailing" on
   the stop → `--trail 10`; a range alert → `--alert`. From an agent the
   result is `awaiting_approval`: report the card has one **Approve & arm**
   for both legs, give the id (`brk_…`), stop. A single-sided request stays a

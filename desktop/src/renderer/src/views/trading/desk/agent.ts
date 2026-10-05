@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 23
+export const TRADING_AGENT_VERSION = 24
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -215,9 +215,9 @@ Reading it:
 
 ## Triggers
 
-A conditional request — "sell if it drops under", "cắt lỗ", "chốt lời",
+A conditional request — "sell if it drops under", "cut my loss",
 "take profit at", "buy when it dips to", "stop loss 10 %", "trailing stop",
-"báo tôi khi", "alert me when" — is a **trigger** the engine watches and
+"tell me when", "alert me when" — is a **trigger** the engine watches and
 fires by itself: it polls the price, confirms it on two checks, then places
 one ordinary order through the guardrails or sends one notification. Never
 poll the price yourself, never schedule a cron for it. One command:
@@ -226,18 +226,18 @@ poll the price yourself, never schedule a cron for it. One command:
 
 Reading it:
 
-- "bán hết ETH nếu xuống dưới 3800" → \`--sell --pct 100 --below 3800\`.
-- "cắt lỗ 10 %" → \`--sell --pct 100 --below -10%\` (a percent is from the
+- "sell all my ETH if it drops under 3800" → \`--sell --pct 100 --below 3800\`.
+- "stop loss 10 %" → \`--sell --pct 100 --below -10%\` (a percent is from the
   price now; the engine resolves it).
-- "chốt lời 20 %" → \`--sell --pct 50 --above +20%\`. Ask the size only if
+- "take profit at +20 %" → \`--sell --pct 50 --above +20%\`. Ask the size only if
   it is truly absent; the default is \`--pct 100\`.
-- "mua $50 ETH khi về 3500" → \`--buy --usd 50 --below 3500\`.
+- "buy $50 of ETH when it is back at 3500" → \`--buy --usd 50 --below 3500\`.
 - "trailing stop 10 %" → \`--sell --pct 100 --trail 10\`.
-- "báo tôi khi ETH lên 5000" → \`--alert --above 5000\`.
+- "tell me when ETH reaches 5000" → \`--alert --above 5000\`.
 - An exit above AND an exit below on the same position is not two
   triggers: it is one bracket (see "Brackets"). A trigger is one-sided.
 - A stablecoin sell or buy — USDC itself as the token,
-  "bán hết USDC khi lên 0.5", "buy USDC with ETH if it drops to 0.99" —
+  "sell all my USDC when it reaches 0.5", "buy USDC with ETH if it drops to 0.99" —
   needs no \`--quote\`: the engine sells it to / buys it with the chain's
   native coin (ETH):
   \`agentos trade trigger create USDC --sell --pct 100 --above 0.5 --json\`.
@@ -258,9 +258,9 @@ Reading it:
 ## Brackets
 
 A request for both an exit above and an exit below on one position —
-"protect my ETH", "bảo vệ vị thế", "chốt lời 20 % cắt lỗ 10 %",
+"protect my ETH", "protect the position", "take profit 20 %, stop loss 10 %",
 "take profit at 4,500 and stop at 3,400", "sell half at +20 %, stop at −10 %",
-"báo tôi nếu ETH ra khỏi 3,400–4,500" — is **one bracket**, never two
+"tell me if ETH leaves 3,400–4,500" — is **one bracket**, never two
 triggers. The engine keeps the two legs together: when one fills it stops
 the other, so the survivor never fires into an empty wallet. One command:
 
@@ -274,7 +274,7 @@ Reading it:
 - \`--tp\` is a price (\`4500\`) or a percent over the price now
   (\`+20%\`); \`--sl\` a price (\`3400\`) or a percent under it
   (\`-10%\`). The take-profit must be above the stop.
-- "chốt lời một nửa", "take half off at +20 %" → \`--tp-pct 50\`: the
+- "take profit on half", "take half off at +20 %" → \`--tp-pct 50\`: the
   take-profit sells half, the stop still guards the rest.
 - A trailing stop on the downside ("trailing 10 %") → \`--trail 10\`
   instead of \`--sl\`.
