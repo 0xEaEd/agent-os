@@ -5,6 +5,7 @@ import { artifactCategory } from './artifacts'
 import {
   TRIGGER_ARTIFACT_MIME,
   TRIGGER_CONFIRM_MS,
+  TRIGGER_FACT_WIDE_CHARS,
   TRIGGER_RECENT_FIRES,
   bracketActionsFor,
   bracketChangedPayload,
@@ -12,7 +13,9 @@ import {
   bracketFires,
   bracketGauge,
   bracketHeroText,
+  bracketLegOverText,
   bracketLegStateText,
+  bracketLegWord,
   bracketNearest,
   bracketNowText,
   bracketRewardRisk,
@@ -25,8 +28,10 @@ import {
   buildTriggerCard,
   createTriggerMounter,
   formatSignedPct,
+  isBracketLegLive,
   normalizeBracket,
   normalizeTriggerPayload,
+  recountTotals,
   triggerReadMethod,
   triggerStatusLabel,
   type Bracket,
@@ -1080,7 +1085,320 @@ describe('bracket control → RPC → payload swap', () => {
       'stopped',
     )
     expect(host.querySelector('.trigger-card')).toHaveAttribute('data-trigger-kind', 'brackets')
+    // The header is recounted from the rows, never left at the snapshot's.
+    const after = recountTotals(
+      list.totals,
+      list.brackets.map((b) => (b.id === target.id ? { status: 'stopped' as const } : b)),
+    )
+    expect(host.querySelector('.trigger-totals')?.textContent ?? '').toBe(
+      [
+        after.armed ? `${after.armed} armed` : '',
+        after.awaiting ? `${after.awaiting} awaiting` : '',
+        after.triggered ? `${after.triggered} triggered` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    )
     mounter.destroyAll()
+  })
+
+  it('recounts the list header after a row action: "2 armed" becomes "1 armed"', async () => {
+    const list = payload<BracketListPayload>(fixture('brackets'))
+    const armed = list.brackets.filter((b) => b.status === 'armed')
+    const awaiting = list.brackets.filter((b) => b.status === 'awaiting_approval').length
+    expect(armed.length).toBeGreaterThan(0)
+    const target = armed[0]!
+    const call = vi.fn(() =>
+      Promise.resolve({
+        kind: 'bracket',
+        fetchedAt: '2026-10-05T09:16:00Z',
+        bracket: {
+          ...(fixture('brackets').brackets as Json[]).find((b) => b.id === target.id),
+          status: 'paused',
+          updatedAt: '2027-01-01T00:00:00Z',
+        },
+      }),
+    )
+    const { host, mounter } = mountWith(fixture('brackets'), call)
+    await flush()
+    const totals = (): string => host.querySelector('.trigger-totals')?.textContent ?? ''
+    expect(totals()).toContain(`${armed.length} armed`)
+    host
+      .querySelector<HTMLButtonElement>(
+        `.trigger-row[data-bracket-id="${target.id}"] [data-trigger-op="pause"]`,
+      )!
+      .click()
+    await flush()
+    expect(call).toHaveBeenCalledWith('trading.bracket.pause', { bracketId: target.id })
+    const want = [
+      armed.length > 1 ? `${armed.length - 1} armed` : '',
+      awaiting ? `${awaiting} awaiting` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    expect(totals()).toBe(want)
+    expect(host.querySelector('.trigger-card__count')).toHaveTextContent(String(list.totals.count))
+    // An event moves it the same way.
+    mounter.bracketChanged({
+      bracket: {
+        ...(fixture('brackets').brackets as Json[]).find((b) => b.id === target.id),
+        status: 'armed',
+        updatedAt: '2027-01-02T00:00:00Z',
+      },
+    })
+    expect(totals()).toContain(`${armed.length} armed`)
+    mounter.destroyAll()
+  })
+
+  it('recounts totals by status and keeps the engine count', () => {
+    const totals = { count: 3, armed: 2, awaiting: 1, triggered: 0 }
+    expect(
+      recountTotals(totals, [
+        { status: 'armed' },
+        { status: 'stopped' },
+        { status: 'triggered' },
+      ] as Array<{ status: TriggerStatus }>),
+    ).toEqual({ count: 3, armed: 1, awaiting: 0, triggered: 1 })
+  })
+})
+
+/* ── live-tester fixes (2026-10-05) ────────────────────────────────────── */
+
+/** brk_41996d3c after its partial take-profit: the take-profit leg done, the bracket armed. */
+function partialTp(market: Json = {}, patch: (raw: Json) => void = () => {}): Bracket {
+  return bracketWith(
+    'bracket-armed',
+    {
+      priceUsd: 1.000017,
+      upsidePct: null,
+      downsidePct: -90.0001699971,
+      rewardRisk: null,
+      nearest: 'sl',
+      checkedAt: new Date(NOW - 12_000).toISOString(),
+      ...market,
+    },
+    {
+      takeProfitUsd: 0.5,
+      stopLossUsd: 0.1,
+      takeProfitLabel: 'over $0.50',
+      stopLossLabel: 'under $0.10',
+      fromPriceUsd: null,
+    },
+    (raw) => {
+      raw.status = 'armed'
+      raw.fired = 'tp'
+      raw.statusReason = 'take-profit filled · stop-loss guards the rest'
+      const tp = leg(raw, 'takeProfit')
+      tp.status = 'done'
+      tp.statusReason = 'sold 0.000298 USDC at $1'
+      ;(tp.condition as Json).hits = 0
+      ;(leg(raw, 'stopLoss').condition as Json).hits = 0
+      patch(raw)
+    },
+  )
+}
+
+describe('a partial take-profit', () => {
+  it('derives no distance, no nearest and no reward : risk for the leg that is over', () => {
+    const b = partialTp()
+    expect(isBracketLegLive(b, 'tp')).toBe(false)
+    expect(isBracketLegLive(b, 'sl')).toBe(true)
+    // The price is over the filled take-profit line: still not "0 % to take-profit".
+    expect(bracketUpsidePct(b)).toBeNull()
+    expect(bracketUpsidePct(partialTp({ upsidePct: 0 }))).toBeNull()
+    expect(bracketDownsidePct(b)).toBeCloseTo(-90, 3)
+    expect(bracketNearest(b)).toBe('sl')
+    // An engine that still names the dead leg, or none, cannot point at it.
+    expect(bracketNearest(partialTp({ nearest: 'tp' }))).toBe('sl')
+    expect(bracketNearest(partialTp({ nearest: null }))).toBe('sl')
+    expect(bracketRewardRisk(b)).toBeNull()
+    expect(bracketRewardRisk(partialTp({ rewardRisk: 2 }))).toBeNull()
+    expect(bracketRewardRiskText(b)).toBe('—')
+    // Neither leg live: no nearest at all.
+    const over = partialTp({}, (raw) => {
+      leg(raw, 'stopLoss').status = 'stopped'
+    })
+    expect(bracketNearest(over)).toBeNull()
+    expect(bracketDownsidePct(over)).toBeNull()
+  })
+
+  it('reads "— / −90.0 %" on the list row and says what happened on the live line', () => {
+    const b = partialTp()
+    expect(bracketRowNowText(b)).toBe(`${b.token.symbol} $1.00 · — / −90.0 %`)
+    expect(bracketLegOverText(b, 'tp')).toBe('take-profit filled')
+    expect(bracketLegOverText(b, 'sl')).toBe('')
+    expect(bracketNowText(b, NOW)).toBe(
+      `${b.token.symbol} $1.00 · take-profit filled · −90.0 % to stop · checked 12 s ago`,
+    )
+    expect(bracketNowText(b, NOW)).not.toMatch(/at the take-profit|to take-profit/)
+    const stopped = partialTp({}, (raw) => {
+      leg(raw, 'takeProfit').status = 'stopped'
+    })
+    expect(bracketLegOverText(stopped, 'tp')).toBe('take-profit stopped')
+  })
+
+  it('stamps the nearest only for the live leg, on the card and on its row', () => {
+    const b = partialTp({ nearest: 'tp' })
+    const p: BracketOnePayload = { ...one('bracket-armed'), bracket: b }
+    const card = render(p)
+    expect(card.dataset.triggerNearest).toBe('sl')
+    expect(card.querySelector('[data-trigger-fact="rr"] .trigger-fact__value')).toHaveTextContent(
+      '—',
+    )
+    expect(Number(card.querySelector<HTMLElement>('.trigger-gauge')!.dataset.triggerDist)).toBe(-90)
+    const list: BracketListPayload = {
+      ...payload<BracketListPayload>(fixture('brackets')),
+      brackets: [b],
+    }
+    const row = render(list).querySelector<HTMLElement>('.trigger-row')!
+    expect(row.dataset.triggerNearest).toBe('sl')
+    expect(row.querySelector('.trigger-row__now')).toHaveTextContent('— / −90.0 %')
+  })
+})
+
+describe('a range alert bracket', () => {
+  it('names its legs the ceiling and the floor, never a take-profit or a stop', () => {
+    const p = one('bracket-alert')
+    const card = render(p)
+    expect(texts(card, '.bracket-leg__word')).toEqual(['Ceiling', 'Floor'])
+    const { lines } = p.bracket
+    const price = (n: number | null): string => `$${n!.toLocaleString('en-US')}`
+    expect(card.querySelector('.trigger-gauge__label[data-leg="sl"]')).toHaveTextContent(
+      `floor ${price(lines.stopLossUsd)}`,
+    )
+    expect(card.querySelector('.trigger-gauge__label[data-leg="tp"]')).toHaveTextContent(
+      `ceiling ${price(lines.takeProfitUsd)}`,
+    )
+    expect(card.querySelector('.trigger-gauge')!.getAttribute('aria-label')).toMatch(
+      /; floor \$[\d,.]+; ceiling \$[\d,.]+$/,
+    )
+    expect(card.querySelector('.trigger-card__now')?.textContent).toMatch(
+      /^\S+ \$[\d,.]+ · [+−][\d.]+ % to ceiling · [+−][\d.]+ % to floor/,
+    )
+    expect(card.textContent).not.toMatch(/take[- ]profit|stop-loss|\bstop\b/i)
+    expect(bracketLegWord('tp', 'alert')).toBe('ceiling')
+    expect(bracketLegWord('sl', 'alert')).toBe('floor')
+    expect(bracketLegWord('tp')).toBe('take-profit')
+  })
+
+  it('ends at the leg that alerted, its fires prefixed ceiling / floor', () => {
+    const done = payload<BracketOnePayload>(
+      withBracket('bracket-alert', (b) => {
+        b.status = 'done'
+        b.fired = 'tp'
+        b.statusReason = 'ceiling: alerted at $1'
+        b.updatedAt = '2026-12-31T00:00:00Z'
+        const tp = leg(b, 'takeProfit')
+        tp.status = 'done'
+        tp.fires = [
+          { n: 1, at: '2026-10-05T09:00:00Z', status: 'alerted', manual: false, priceUsd: 1 },
+        ]
+        const sl = leg(b, 'stopLoss')
+        sl.status = 'stopped'
+        sl.statusReason = 'range left over the top'
+      }),
+    )
+    expect(bracketNowText(done.bracket, NOW)).toBe('done · ceiling: alerted at $1.00')
+    const card = render(done)
+    expect(texts(card, '.trigger-fire__n')).toEqual(['ceiling #1'])
+    expect(card.textContent).not.toMatch(/take[- ]profit|stop-loss/i)
+    // Confirming and firing speak the same words.
+    const confirming = bracketWith('bracket-alert', {}, {}, (raw) => {
+      const tp = leg(raw, 'takeProfit')
+      tp.condition = { ...(tp.condition as Json), hits: 1, confirmTicks: 2 }
+      ;(leg(raw, 'stopLoss').condition as Json).hits = 0
+    })
+    expect(bracketNowText(confirming, NOW)).toContain('ceiling fires after 1 more check')
+    const firing = payload<BracketOnePayload>(
+      withBracket('bracket-alert', (b) => {
+        b.status = 'triggered'
+        leg(b, 'stopLoss').status = 'triggered'
+      }),
+    ).bracket
+    expect(bracketNowText(firing, NOW)).toBe('on hold · floor firing')
+  })
+})
+
+describe('the facts never overlap', () => {
+  const sizeCell = (card: HTMLElement): HTMLElement =>
+    card.querySelector<HTMLElement>('[data-trigger-fact="size"]')!
+
+  it('asks for two columns when a value is long, one when it is short', () => {
+    const split = payload<BracketOnePayload>(
+      withBracket('bracket-armed', (b) => {
+        b.action = { ...(b.action as Json), amountPct: 1, tpPct: 0.5, amount: null }
+      }),
+    )
+    const card = render(split)
+    expect(sizeCell(card).dataset.triggerFactSpan).toBe('2')
+    expect(sizeCell(card).querySelector('.trigger-fact__value')).toHaveTextContent(
+      '0.5 % at take-profit, 1 % at stop',
+    )
+    const plain = payload<BracketOnePayload>(
+      withBracket('bracket-armed', (b) => {
+        b.action = { ...(b.action as Json), amountPct: 100, tpPct: null, estimatedUsd: 189 }
+      }),
+    )
+    const short = sizeCell(render(plain))
+    expect(short.dataset.triggerFactSpan).toBeUndefined()
+    // The "≈ $…" is its own line; the value still reads as one phrase.
+    const value = short.querySelector<HTMLElement>('.trigger-fact__value')!
+    expect(value.textContent).toBe('100 % · ≈ $189')
+    expect(value.querySelector('.trigger-fact__sub')).toHaveTextContent('≈ $189')
+    expect(value.querySelector('.trigger-sep')).toHaveAttribute('aria-hidden', 'true')
+    expect(value.firstChild?.textContent).toBe('100 %')
+  })
+
+  it('splits a fill into what moved and its dollars', () => {
+    const done = payload<BracketOnePayload>(
+      withBracket('bracket-done', (b) => {
+        b.result = {
+          ...(b.result as Json),
+          amountIn: { raw: '105', human: '0.00000105', usd: 0.00286 },
+          amountOut: { raw: '2851', human: '0.002851', usd: 0.00285 },
+        }
+      }),
+    )
+    const cell = sizeCell(render(done))
+    const value = cell.querySelector<HTMLElement>('.trigger-fact__value')!
+    const main = value.firstChild?.textContent ?? ''
+    expect(main).toMatch(/ → 0\.002851 \S+$/)
+    expect([...main].length).toBeGreaterThan(TRIGGER_FACT_WIDE_CHARS)
+    expect(cell.dataset.triggerFactSpan).toBe('2')
+    expect(value.querySelector('.trigger-fact__sub')).toHaveTextContent('≈ $0.00286')
+    expect(value.textContent).toBe(bracketSizeText(done.bracket))
+  })
+
+  it('says what a fire does under "on fire", not "approval"', () => {
+    const waits = render(
+      payload<BracketOnePayload>(
+        withBracket('bracket-armed', (b) => {
+          b.action = { ...(b.action as Json), needsApproval: true, approvalThresholdUsd: 100 }
+        }),
+      ),
+    )
+    const cell = waits.querySelector<HTMLElement>('[data-trigger-fact="approval"]')!
+    expect(cell.querySelector('.trigger-fact__label')).toHaveTextContent('on fire')
+    expect(cell.querySelector('.trigger-fact__value')).toHaveTextContent(
+      'waits for you · over $100',
+    )
+    expect(cell.dataset.triggerWaits).toBe('true')
+    expect(cell.dataset.triggerFactSpan).toBe('2')
+    const auto = render(
+      payload<BracketOnePayload>(
+        withBracket('bracket-armed', (b) => {
+          b.action = { ...(b.action as Json), needsApproval: false }
+        }),
+      ),
+    )
+    const autoCell = auto.querySelector<HTMLElement>('[data-trigger-fact="approval"]')!
+    expect(autoCell.querySelector('.trigger-fact__value')).toHaveTextContent('trades at once')
+    expect(autoCell.dataset.triggerFactSpan).toBeUndefined()
+    expect(auto.textContent).not.toMatch(/automatic/)
+    // An alert places no order: no on-fire fact (its size already says "notify only").
+    const alert = render(one('bracket-alert'))
+    expect(alert.querySelector('[data-trigger-fact="approval"]')).toBeNull()
+    expect(alert.querySelector('.trigger-card__facts')?.textContent).not.toMatch(/on fire/)
   })
 })
 

@@ -1007,7 +1007,7 @@ describe('buildTriggerCard — trigger', () => {
     }
   })
 
-  it('draws an alert as notify only: no balance, no approval', () => {
+  it('draws an alert as notify only: no balance, no on-fire fact', () => {
     const p = one('trigger-alert')
     expect(p.trigger.kind).toBe('alert')
     const card = render(p)
@@ -1471,6 +1471,8 @@ describe('control → RPC → payload swap', () => {
     )
     const { host, mounter } = mountWith(fixture('triggers'), call)
     await flush()
+    const armedBefore = list.triggers.filter((tr) => tr.status === 'armed').length
+    expect(host.querySelector('.trigger-totals')?.textContent).toContain(`${armedBefore} armed`)
     host
       .querySelector<HTMLButtonElement>(
         `.trigger-row[data-trigger-id="${target.id}"] [data-trigger-op="pause"]`,
@@ -1482,6 +1484,11 @@ describe('control → RPC → payload swap', () => {
     expect(
       [...card.querySelectorAll<HTMLElement>('.trigger-row')].map((r) => r.dataset.triggerStatus),
     ).toEqual(list.triggers.map((tr) => (tr.id === target.id ? 'paused' : tr.status)))
+    // The header follows the rows: one armed fewer, the count unchanged.
+    const totals = card.querySelector('.trigger-totals')?.textContent ?? ''
+    if (armedBefore > 1) expect(totals).toContain(`${armedBefore - 1} armed`)
+    else expect(totals).not.toMatch(/armed/)
+    expect(card.querySelector('.trigger-card__count')).toHaveTextContent(String(list.totals.count))
     mounter.destroyAll()
   })
 

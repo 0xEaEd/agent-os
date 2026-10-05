@@ -88,6 +88,12 @@ export const TRIGGER_NEAR_PCT = 1
 
 /** The gauge's price axis reaches at least this far (a fraction of the line) past the data. */
 export const TRIGGER_GAUGE_MIN_PAD = 0.02
+/**
+ * A fact value longer than this many characters asks for two grid columns
+ * (`data-trigger-fact-span="2"` on its `.trigger-fact`): four facts in a row
+ * leave ~18 mono characters a column.
+ */
+export const TRIGGER_FACT_WIDE_CHARS = 18
 
 const HOUR_MS = 3_600_000
 
@@ -1243,8 +1249,14 @@ export function triggerGauge(trigger: Trigger): TriggerGauge | null {
 
 /* ── Pure helpers: brackets (docs/brackets.md) ──────────────────────────── */
 
-/** The leg as a bracket names it in a phrase: "take-profit", "stop-loss". */
-export function bracketLegWord(leg: BracketLeg): string {
+/**
+ * The leg as a bracket names it in a phrase: "take-profit", "stop-loss"; a
+ * range alert's (`kind` = `alert`, the bracket's or the leg's) "ceiling",
+ * "floor": nothing is sold, so there is no profit to take nor loss to stop.
+ */
+export function bracketLegWord(leg: BracketLeg, kind: string = 'sell'): string {
+  if (kind === 'alert')
+    return leg === 'tp' ? t('chat.bracketLegCeiling') : t('chat.bracketLegFloor')
   return leg === 'tp' ? t('chat.bracketLegTp') : t('chat.bracketLegSl')
 }
 
@@ -1257,10 +1269,49 @@ function bracketTrails(bracket: Bracket): boolean {
   return bracket.lines.trailPct !== null || bracket.stopLoss?.condition.direction === 'trail'
 }
 
-/** A leg row's title: "Take-profit", "Stop-loss", "Trailing stop". */
+/** A leg row's title: "Take-profit", "Stop-loss", "Trailing stop"; an alert's "Ceiling", "Floor". */
 export function bracketLegTitle(bracket: Bracket, leg: BracketLeg): string {
+  if (bracket.kind === 'alert') {
+    if (leg === 'tp') return t('chat.bracketLegTitleCeiling')
+    return bracketTrails(bracket)
+      ? t('chat.bracketLegTitleTrailFloor')
+      : t('chat.bracketLegTitleFloor')
+  }
   if (leg === 'tp') return t('chat.bracketLegTitleTp')
   return bracketTrails(bracket) ? t('chat.bracketLegTitleTrail') : t('chat.bracketLegTitleSl')
+}
+
+/**
+ * Whether a leg can still fire: not done, stopped, rejected or expired. A
+ * leg the payload left out counts as live (the bracket's status speaks for
+ * it). After a partial take-profit the take-profit leg is done while the
+ * bracket stays armed: it has no distance, it is never the nearest.
+ */
+export function isBracketLegLive(bracket: Bracket, leg: BracketLeg): boolean {
+  const trigger = bracketLegOf(bracket, leg)
+  return !trigger || !isTriggerTerminal(trigger.status)
+}
+
+/**
+ * What became of a leg that will not fire again, for the live line of a
+ * bracket still armed: "take-profit filled", "ceiling alerted", "stop-loss
+ * stopped"; '' for a live leg.
+ */
+export function bracketLegOverText(bracket: Bracket, leg: BracketLeg): string {
+  const trigger = bracketLegOf(bracket, leg)
+  if (!trigger || !isTriggerTerminal(trigger.status)) return ''
+  const word = bracketLegWord(leg, bracket.kind)
+  if (trigger.status === 'done') {
+    const alerted = bracket.kind === 'alert' || trigger.kind === 'alert'
+    return t(alerted ? 'chat.bracketLegOverAlerted' : 'chat.bracketLegOverFilled', { leg: word })
+  }
+  const state =
+    trigger.status === 'stopped'
+      ? t('chat.bracketLegStopped')
+      : trigger.status === 'rejected'
+        ? t('chat.bracketLegRejected')
+        : t('chat.bracketLegExpired')
+  return t('chat.bracketLegOver', { leg: word, state })
 }
 
 /** A leg's line in words: the engine's label, else "over $4,560" / "under $3,420" / "10 % below peak". */
@@ -1322,8 +1373,13 @@ export function formatSignedPct(value: number | null): string {
   return `${value > 0 ? '+' : '−'}${Math.abs(value).toFixed(1)} %`
 }
 
-/** % rise to the take-profit line: the engine's, else derived. 0 once met; null when unknown. */
+/**
+ * % rise to the take-profit line: the engine's, else derived. 0 once met;
+ * null when unknown, or when the take-profit leg is over (a partial
+ * take-profit filled it: it will not fire again).
+ */
 export function bracketUpsidePct(bracket: Bracket): number | null {
+  if (!isBracketLegLive(bracket, 'tp')) return null
   if (bracket.market.upsidePct !== null) return bracket.market.upsidePct
   const now = bracket.market.priceUsd
   const line = bracket.lines.takeProfitUsd
@@ -1331,8 +1387,9 @@ export function bracketUpsidePct(bracket: Bracket): number | null {
   return now >= line ? 0 : ((line - now) / now) * 100
 }
 
-/** % fall to the stop line (negative): the engine's, else derived. 0 once met; null when unknown. */
+/** % fall to the stop line (negative): the engine's, else derived. 0 once met; null when unknown or over. */
 export function bracketDownsidePct(bracket: Bracket): number | null {
+  if (!isBracketLegLive(bracket, 'sl')) return null
   if (bracket.market.downsidePct !== null) return bracket.market.downsidePct
   const now = bracket.market.priceUsd
   const line = bracket.lines.stopLossUsd
@@ -1340,8 +1397,17 @@ export function bracketDownsidePct(bracket: Bracket): number | null {
   return now <= line ? 0 : ((line - now) / now) * 100
 }
 
-/** The leg closer to firing: the engine's, else the smaller distance; null when unknown. */
+/**
+ * The leg closer to firing: the only live one when its twin is over, else
+ * the engine's, else the smaller distance; null when unknown or neither leg
+ * can fire.
+ */
 export function bracketNearest(bracket: Bracket): BracketLeg | null {
+  const tpLive = isBracketLegLive(bracket, 'tp')
+  const slLive = isBracketLegLive(bracket, 'sl')
+  if (!tpLive && !slLive) return null
+  if (!tpLive) return 'sl'
+  if (!slLive) return 'tp'
   if (bracket.market.nearest) return bracket.market.nearest
   const up = bracketUpsidePct(bracket)
   const down = bracketDownsidePct(bracket)
@@ -1356,8 +1422,9 @@ export function bracketDistancePct(bracket: Bracket): number | null {
   return nearest === 'tp' ? bracketUpsidePct(bracket) : bracketDownsidePct(bracket)
 }
 
-/** Reward over risk: the engine's, else upside / |downside|; null when either is 0 or unknown. */
+/** Reward over risk: the engine's, else upside / |downside|; null when either is 0, unknown or over. */
 export function bracketRewardRisk(bracket: Bracket): number | null {
+  if (!isBracketLegLive(bracket, 'tp') || !isBracketLegLive(bracket, 'sl')) return null
   if (bracket.market.rewardRisk !== null) return bracket.market.rewardRisk
   const up = bracketUpsidePct(bracket)
   const down = bracketDownsidePct(bracket)
@@ -1400,7 +1467,7 @@ function firingLeg(bracket: Bracket): BracketLeg {
 /** "done · take-profit: sold 0.05 ETH at $4,560", from the leg that filled. */
 function bracketDoneText(bracket: Bracket): string {
   const leg = bracket.fired
-  const word = leg ? bracketLegWord(leg) : ''
+  const word = leg ? bracketLegWord(leg, bracket.kind) : ''
   const { result } = bracket
   const head = t('chat.triggerNowDone')
   const tagged = (what: string): string =>
@@ -1449,22 +1516,32 @@ export function bracketNowText(bracket: Bracket, nowMs: number): string {
         const leg = bracketLegOf(bracket, confirming)!
         parts.push(
           tPlural('chat.bracketConfirming', leg.condition.confirmTicks - leg.condition.hits, {
-            leg: bracketLegWord(confirming),
+            leg: bracketLegWord(confirming, bracket.kind),
           }),
         )
       } else {
+        const alert = bracket.kind === 'alert'
         const up = bracketUpsidePct(bracket)
         const down = bracketDownsidePct(bracket)
-        if (up !== null) {
+        // A leg that is over says what became of it, never a distance.
+        const tpOver = bracketLegOverText(bracket, 'tp')
+        if (tpOver) parts.push(tpOver)
+        else if (up !== null) {
+          const pct = formatSignedPct(up)
           parts.push(
-            up === 0 ? t('chat.bracketAtTp') : t('chat.bracketToTp', { pct: formatSignedPct(up) }),
+            up === 0
+              ? t(alert ? 'chat.bracketAtCeiling' : 'chat.bracketAtTp')
+              : t(alert ? 'chat.bracketToCeiling' : 'chat.bracketToTp', { pct }),
           )
         }
-        if (down !== null) {
+        const slOver = bracketLegOverText(bracket, 'sl')
+        if (slOver) parts.push(slOver)
+        else if (down !== null) {
+          const pct = formatSignedPct(down)
           parts.push(
             down === 0
-              ? t('chat.bracketAtSl')
-              : t('chat.bracketToSl', { pct: formatSignedPct(down) }),
+              ? t(alert ? 'chat.bracketAtFloor' : 'chat.bracketAtSl')
+              : t(alert ? 'chat.bracketToFloor' : 'chat.bracketToSl', { pct }),
           )
         }
       }
@@ -1472,7 +1549,7 @@ export function bracketNowText(bracket: Bracket, nowMs: number): string {
       return parts.filter(Boolean).join(' · ')
     }
     case 'triggered': {
-      const leg = bracketLegWord(firingLeg(bracket))
+      const leg = bracketLegWord(firingLeg(bracket), bracket.kind)
       return bracket.kind === 'alert'
         ? t('chat.bracketNowFiring', { leg })
         : t('chat.bracketNowOrderOpen', { leg })
@@ -1571,10 +1648,16 @@ export function bracketFires(bracket: Bracket): BracketFireRow[] {
  * "notify only"; once finished with a fill, what the fill moved.
  */
 export function bracketSizeText(bracket: Bracket): string {
+  return joinSize(bracketSizeParts(bracket))
+}
+
+/** `bracketSizeText` in its two parts: what moves, and its "≈ $…" (its own line in the cell). */
+export function bracketSizeParts(bracket: Bracket): TriggerSizeParts {
   const { action } = bracket
-  if (bracket.kind === 'alert') return t('chat.triggerSizeNotify')
+  const only = (main: string): TriggerSizeParts => ({ main, approx: '' })
+  if (bracket.kind === 'alert') return only(t('chat.triggerSizeNotify'))
   if (isTriggerTerminal(bracket.status) && bracket.result) {
-    const moved = movedText(bracket.result, true, bracket.token, bracket.quote)
+    const moved = movedParts(bracket.result, true, bracket.token, bracket.quote)
     if (moved) return moved
   }
   const approx =
@@ -1583,20 +1666,20 @@ export function bracketSizeText(bracket: Bracket): string {
       : ''
   if (action.amountPct !== null) {
     if (action.tpPct !== null && action.tpPct < action.amountPct) {
-      return t('chat.bracketSizeSplit', {
-        tp: pctNumber(action.tpPct),
-        all: pctNumber(action.amountPct),
-      })
+      return only(
+        t('chat.bracketSizeSplit', {
+          tp: pctNumber(action.tpPct),
+          all: pctNumber(action.amountPct),
+        }),
+      )
     }
-    return [`${pctNumber(action.amountPct)} %`, approx].filter(Boolean).join(' · ')
+    return { main: `${pctNumber(action.amountPct)} %`, approx }
   }
   if (action.amount) {
-    return [`${formatTokenAmount(action.amount.human)} ${bracket.token.symbol}`, approx]
-      .filter(Boolean)
-      .join(' · ')
+    return { main: `${formatTokenAmount(action.amount.human)} ${bracket.token.symbol}`, approx }
   }
-  if (action.amountUsd !== null) return formatDcaUsd(action.amountUsd)
-  return NO_VALUE
+  if (action.amountUsd !== null) return only(formatDcaUsd(action.amountUsd))
+  return only(NO_VALUE)
 }
 
 /** A bracket's controls: the trigger's, per status. */
@@ -1994,10 +2077,40 @@ function gaugeNode(trigger: Trigger): HTMLElement | null {
 
 /* ── facts ── */
 
-function fact(key: string, label: string, value: string, noValue = false): HTMLElement {
+/** A size in two parts: what moves, and its dollar estimate ('' when none). */
+export interface TriggerSizeParts {
+  main: string
+  approx: string
+}
+
+function joinSize(parts: TriggerSizeParts): string {
+  return [parts.main, parts.approx].filter(Boolean).join(' · ')
+}
+
+/**
+ * One fact cell: label over value. A value never overlaps its neighbour: it
+ * wraps (CSS), and one longer than TRIGGER_FACT_WIDE_CHARS stamps
+ * `data-trigger-fact-span="2"` so a skin can give it two columns. A size's
+ * "≈ $…" is its own `.trigger-fact__sub` line inside the value (after a
+ * hidden " · ", so the value still reads as one phrase).
+ */
+function fact(
+  key: string,
+  label: string,
+  value: string | TriggerSizeParts,
+  noValue = false,
+): HTMLElement {
   const cell = el('div', 'trigger-fact')
   cell.dataset.triggerFact = key
-  const node = el('span', 'trigger-fact__value', value)
+  const parts = typeof value === 'string' ? { main: value, approx: '' } : value
+  const node = el('span', 'trigger-fact__value', parts.main)
+  if (parts.approx) {
+    node.append(
+      hidden(el('span', 'trigger-sep', ' · ')),
+      el('span', 'trigger-fact__sub', parts.approx),
+    )
+  }
+  if ([...parts.main].length > TRIGGER_FACT_WIDE_CHARS) cell.dataset.triggerFactSpan = '2'
   if (noValue) {
     node.dataset.triggerNoValue = 'true'
     node.title = t('chat.triggerNoPriceTitle')
@@ -2012,16 +2125,16 @@ export function isTriggerTerminal(status: TriggerStatus): boolean {
 }
 
 /**
- * What the fill moved: "0.02 WETH → 42.4 USDC · ≈ $42.4" (amountIn alone
- * when the out side is unknown); '' when there is no result to read.
+ * What the fill moved: "0.02 WETH → 42.4 USDC" and "≈ $42.4" (amountIn alone
+ * when the out side is unknown); null when there is no result to read.
  */
-function movedText(
+function movedParts(
   result: TriggerResult | null,
   sell: boolean,
   token: LpToken,
   quote: LpToken,
-): string {
-  if (!result?.amountIn?.human) return ''
+): TriggerSizeParts | null {
+  if (!result?.amountIn?.human) return null
   const symbolIn = sell ? token.symbol : quote.symbol
   const symbolOut = sell ? quote.symbol : token.symbol
   const amountIn = formatTokenAmount(result.amountIn.human)
@@ -2034,9 +2147,10 @@ function movedText(
       })
     : `${amountIn} ${symbolIn}`
   const usd = result.amountIn.usd ?? result.amountOut?.usd ?? null
-  return [moved, usd !== null ? t('chat.triggerApprox', { usd: formatDcaUsd(usd) }) : '']
-    .filter(Boolean)
-    .join(' · ')
+  return {
+    main: moved,
+    approx: usd !== null ? t('chat.triggerApprox', { usd: formatDcaUsd(usd) }) : '',
+  }
 }
 
 /**
@@ -2045,10 +2159,16 @@ function movedText(
  * would move now.
  */
 export function sizeText(trigger: Trigger): string {
+  return joinSize(sizeParts(trigger))
+}
+
+/** `sizeText` in its two parts: what moves, and its "≈ $…". */
+export function sizeParts(trigger: Trigger): TriggerSizeParts {
   const { action } = trigger
-  if (trigger.kind === 'alert') return t('chat.triggerSizeNotify')
+  const only = (main: string): TriggerSizeParts => ({ main, approx: '' })
+  if (trigger.kind === 'alert') return only(t('chat.triggerSizeNotify'))
   if (isTriggerTerminal(trigger.status)) {
-    const moved = movedText(trigger.result, trigger.kind !== 'buy', trigger.token, trigger.quote)
+    const moved = movedParts(trigger.result, trigger.kind !== 'buy', trigger.token, trigger.quote)
     if (moved) return moved
   }
   const approx =
@@ -2056,32 +2176,42 @@ export function sizeText(trigger: Trigger): string {
       ? t('chat.triggerApprox', { usd: formatDcaUsd(action.estimatedUsd) })
       : ''
   if (trigger.kind === 'sell') {
-    if (action.amountPct !== null) {
-      return [`${pctNumber(action.amountPct)} %`, approx].filter(Boolean).join(' · ')
-    }
+    if (action.amountPct !== null) return { main: `${pctNumber(action.amountPct)} %`, approx }
     if (action.amount) {
-      return [`${formatTokenAmount(action.amount.human)} ${trigger.token.symbol}`, approx]
-        .filter(Boolean)
-        .join(' · ')
+      return { main: `${formatTokenAmount(action.amount.human)} ${trigger.token.symbol}`, approx }
     }
-    return formatDcaUsd(action.amountUsd)
+    return only(formatDcaUsd(action.amountUsd))
   }
-  if (trigger.kind === 'buy') return formatDcaUsd(action.amountUsd)
-  return NO_VALUE
+  if (trigger.kind === 'buy') return only(formatDcaUsd(action.amountUsd))
+  return only(NO_VALUE)
 }
 
 /**
- * size · wallet balance · valid until · approval. The balance is the wallet
- * now, so a finished trigger (or an alert, which spends nothing) leaves it
- * out rather than show a figure that is not part of its story; an alert
- * places no order, so it has no approval either. An odd count lets the size
- * span the row (CSS).
+ * The "on fire" fact of a sell or a buy: what a fire does with its order (not
+ * the proposal, which the status pill speaks for): "trades at once", "waits
+ * for you · over $100". An alert places no order and has no such fact.
+ */
+export function onFireText(action: {
+  needsApproval: boolean
+  approvalThresholdUsd: number | null
+}): string {
+  return action.needsApproval
+    ? t('chat.triggerApprovalWaits', { usd: formatDcaUsd(action.approvalThresholdUsd) })
+    : t('chat.triggerOnFireTrades')
+}
+
+/**
+ * size · wallet balance · valid until · on fire (hook `approval`). The
+ * balance is the wallet now, so a finished trigger (or an alert, which spends
+ * nothing) leaves it out rather than show a figure that is not part of its
+ * story; an alert places no order, so it has no "on fire" either. An odd
+ * count lets the size span the row (CSS).
  */
 function factsSection(trigger: Trigger): HTMLElement {
   const facts = el('section', 'trigger-card__facts')
   const terminal = isTriggerTerminal(trigger.status)
   const size = sizeText(trigger)
-  const sizeCell = fact('size', t('chat.triggerFactSize'), size, size === NO_VALUE)
+  const sizeCell = fact('size', t('chat.triggerFactSize'), sizeParts(trigger), size === NO_VALUE)
   if (size !== NO_VALUE) sizeCell.title = size
   facts.append(sizeCell)
 
@@ -2106,12 +2236,8 @@ function factsSection(trigger: Trigger): HTMLElement {
   facts.append(validCell)
 
   if (trigger.kind !== 'alert') {
-    const approval = trigger.action.needsApproval
-      ? t('chat.triggerApprovalWaits', {
-          usd: formatDcaUsd(trigger.action.approvalThresholdUsd),
-        })
-      : t('chat.triggerApprovalAuto')
-    const approvalCell = fact('approval', t('chat.triggerFactApproval'), approval)
+    // The hook stays `approval`; the words say what a fire does.
+    const approvalCell = fact('approval', t('chat.triggerFactOnFire'), onFireText(trigger.action))
     // Only a trigger that can still fire has anything to wait for.
     if (trigger.action.needsApproval && !terminal) approvalCell.dataset.triggerWaits = 'true'
     facts.append(approvalCell)
@@ -2144,7 +2270,11 @@ function fireRow(
   if (fire.reasonCode) row.dataset.triggerReason = fire.reasonCode
   if (leg) row.dataset.leg = leg
   row.append(
-    el('span', 'trigger-fire__n', leg ? `${bracketLegWord(leg)} #${fire.n}` : `#${fire.n}`),
+    el(
+      'span',
+      'trigger-fire__n',
+      leg ? `${bracketLegWord(leg, trigger.kind)} #${fire.n}` : `#${fire.n}`,
+    ),
   )
   const ago = relativeTime(fire.at, nowMs)
   const time = el('time', 'trigger-fire__ago', ago || NO_VALUE)
@@ -2330,7 +2460,7 @@ function buildOne(payload: TriggerOnePayload, ctx: TriggerRenderContext): HTMLEl
       'p',
       'trigger-card__group',
       t('chat.bracketLegOfGroup', {
-        leg: bracketLegWord(trigger.bracket.leg),
+        leg: bracketLegWord(trigger.bracket.leg, trigger.kind),
         name: trigger.bracket.name,
         id: trigger.bracket.id,
       }),
@@ -2434,6 +2564,26 @@ function triggerRow(trigger: Trigger, ctx: TriggerRenderContext): HTMLElement {
   return row
 }
 
+/**
+ * A list's totals recounted from its rows by status: a row swapped in by a
+ * control's answer, an event or the live-state cache moves them, and the
+ * header must not keep saying "2 armed". `count` (the rows the read
+ * returned) stays the engine's.
+ */
+export function recountTotals(
+  totals: TriggerListPayload['totals'],
+  items: ReadonlyArray<{ status: TriggerStatus }>,
+): TriggerListPayload['totals'] {
+  const count = (status: TriggerStatus): number =>
+    items.filter((item) => item.status === status).length
+  return {
+    count: totals.count,
+    armed: count('armed'),
+    awaiting: count('awaiting_approval'),
+    triggered: count('triggered'),
+  }
+}
+
 function totalsText(totals: TriggerListPayload['totals']): string {
   const parts: string[] = []
   if (totals.armed > 0) parts.push(t('chat.triggerTotalsArmed', { count: String(totals.armed) }))
@@ -2486,6 +2636,8 @@ function bracketGaugeNode(bracket: Bracket): HTMLElement | null {
   const model = bracketGauge(bracket)
   if (!model) return null
   const { lines } = bracket
+  // A range alert's lines are its floor and its ceiling, not a stop and a take-profit.
+  const alert = bracket.kind === 'alert'
   const gauge = el('div', 'trigger-gauge')
   gauge.dataset.triggerGauge = 'range'
   if (!isTriggerTerminal(bracket.status)) {
@@ -2497,7 +2649,7 @@ function bracketGaugeNode(bracket: Bracket): HTMLElement | null {
   gauge.setAttribute('role', 'img')
   gauge.setAttribute(
     'aria-label',
-    t('chat.bracketGaugeLabel', {
+    t(alert ? 'chat.bracketGaugeLabelAlert' : 'chat.bracketGaugeLabel', {
       now: formatTriggerPrice(bracket.market.priceUsd),
       sl: formatTriggerPrice(lines.stopLossUsd),
       tp: formatTriggerPrice(lines.takeProfitUsd),
@@ -2558,12 +2710,16 @@ function bracketGaugeNode(bracket: Bracket): HTMLElement | null {
     label(
       'sl',
       model.sl,
-      t('chat.triggerGaugeStop', { price: formatTriggerPrice(lines.stopLossUsd) }),
+      t(alert ? 'chat.bracketGaugeFloor' : 'chat.triggerGaugeStop', {
+        price: formatTriggerPrice(lines.stopLossUsd),
+      }),
     ),
     label(
       'tp',
       model.tp,
-      t('chat.bracketGaugeTp', { price: formatTriggerPrice(lines.takeProfitUsd) }),
+      t(alert ? 'chat.bracketGaugeCeiling' : 'chat.bracketGaugeTp', {
+        price: formatTriggerPrice(lines.takeProfitUsd),
+      }),
     ),
   )
   gauge.prepend(top)
@@ -2606,15 +2762,21 @@ function bracketLegsNode(bracket: Bracket): HTMLElement {
 }
 
 /**
- * size · balance · reward : risk · approval, and valid until when set. The
- * balance and the reward : risk describe a bracket that can still fire; an
- * alert spends nothing, so it has neither balance nor approval.
+ * size · balance · reward : risk · on fire (hook `approval`), and valid
+ * until when set. The balance and the reward : risk describe a bracket that
+ * can still fire; an alert spends nothing, so it has neither balance nor
+ * "on fire".
  */
 function bracketFactsSection(bracket: Bracket): HTMLElement {
   const facts = el('section', 'trigger-card__facts')
   const terminal = isTriggerTerminal(bracket.status)
   const size = bracketSizeText(bracket)
-  const sizeCell = fact('size', t('chat.triggerFactSize'), size, size === NO_VALUE)
+  const sizeCell = fact(
+    'size',
+    t('chat.triggerFactSize'),
+    bracketSizeParts(bracket),
+    size === NO_VALUE,
+  )
   if (size !== NO_VALUE) sizeCell.title = bracket.action.label || size
   facts.append(sizeCell)
 
@@ -2640,14 +2802,9 @@ function bracketFactsSection(bracket: Bracket): HTMLElement {
   }
 
   if (bracket.kind !== 'alert') {
-    const approval = bracket.action.needsApproval
-      ? t('chat.triggerApprovalWaits', {
-          usd: formatDcaUsd(bracket.action.approvalThresholdUsd),
-        })
-      : t('chat.triggerApprovalAuto')
-    const cell = fact('approval', t('chat.triggerFactApproval'), approval)
-    if (bracket.action.needsApproval && !terminal) cell.dataset.triggerWaits = 'true'
-    facts.append(cell)
+    const onFire = fact('approval', t('chat.triggerFactOnFire'), onFireText(bracket.action))
+    if (bracket.action.needsApproval && !terminal) onFire.dataset.triggerWaits = 'true'
+    facts.append(onFire)
   }
 
   if (bracket.validUntil) {
@@ -2770,7 +2927,11 @@ export function bracketRowPlanText(bracket: Bracket): string {
   return `${what} · ${range}`
 }
 
-/** "ETH $3,790 · +20.3 % / −9.8 %" for a list row; what it is doing instead when firing. */
+/**
+ * "ETH $3,790 · +20.3 % / −9.8 %" for a list row; a leg that is over reads
+ * "—" ("— / −90.0 %" after a partial take-profit); what it is doing instead
+ * when firing.
+ */
 export function bracketRowNowText(bracket: Bracket): string {
   const now = bracket.market.priceUsd
   const parts: string[] = []
@@ -2781,13 +2942,19 @@ export function bracketRowNowText(bracket: Bracket): string {
     if (confirming && leg) {
       parts.push(
         tPlural('chat.bracketConfirming', leg.condition.confirmTicks - leg.condition.hits, {
-          leg: bracketLegWord(confirming),
+          leg: bracketLegWord(confirming, bracket.kind),
         }),
       )
     } else {
-      const up = formatSignedPct(bracketUpsidePct(bracket))
-      const down = formatSignedPct(bracketDownsidePct(bracket))
-      if (up || down) parts.push([up, down].filter(Boolean).join(' / '))
+      const side = (leg: BracketLeg): string =>
+        isBracketLegLive(bracket, leg)
+          ? formatSignedPct(leg === 'tp' ? bracketUpsidePct(bracket) : bracketDownsidePct(bracket))
+          : NO_VALUE
+      const up = side('tp')
+      const down = side('sl')
+      if ((up && up !== NO_VALUE) || (down && down !== NO_VALUE)) {
+        parts.push([up, down].filter(Boolean).join(' / '))
+      }
     }
   } else if (bracket.status === 'triggered') {
     parts.push(bracketNowText(bracket, 0))
@@ -3228,21 +3395,27 @@ export function createTriggerMounter(deps: TriggerMounterDeps) {
       }
       case 'triggers': {
         let live = snapshot.triggers.length > 0
+        let swapped = false
         const triggers = snapshot.triggers.map((tr) => {
           const known = hit(tr)
           if (!known) live = false
+          else swapped = true
           return known ? known.trigger : tr
         })
-        return { payload: { ...snapshot, triggers }, live }
+        const totals = swapped ? recountTotals(snapshot.totals, triggers) : snapshot.totals
+        return { payload: { ...snapshot, triggers, totals }, live }
       }
       case 'brackets': {
         let live = snapshot.brackets.length > 0
+        let swapped = false
         const brackets = snapshot.brackets.map((b) => {
           const known = hitBracket(b)
           if (!known) live = false
+          else swapped = true
           return known ? known.bracket : b
         })
-        return { payload: { ...snapshot, brackets }, live }
+        const totals = swapped ? recountTotals(snapshot.totals, brackets) : snapshot.totals
+        return { payload: { ...snapshot, brackets, totals }, live }
       }
     }
   }
@@ -3393,10 +3566,8 @@ export function createTriggerMounter(deps: TriggerMounterDeps) {
           : { ...shown, trigger, fire: null, fetchedAt: stamp }
         show(host, next)
       } else if (shown.triggers.some((tr) => tr.id === trigger.id)) {
-        show(host, {
-          ...shown,
-          triggers: shown.triggers.map((tr) => (tr.id === trigger.id ? trigger : tr)),
-        })
+        const triggers = shown.triggers.map((tr) => (tr.id === trigger.id ? trigger : tr))
+        show(host, { ...shown, triggers, totals: recountTotals(shown.totals, triggers) })
       }
     })
     scheduleClock()
@@ -3424,10 +3595,8 @@ export function createTriggerMounter(deps: TriggerMounterDeps) {
           : { ...shown, bracket, fire: null, fetchedAt: stamp }
         show(host, next)
       } else if (shown.kind === 'brackets' && shown.brackets.some((b) => b.id === bracket.id)) {
-        show(host, {
-          ...shown,
-          brackets: shown.brackets.map((b) => (b.id === bracket.id ? bracket : b)),
-        })
+        const brackets = shown.brackets.map((b) => (b.id === bracket.id ? bracket : b))
+        show(host, { ...shown, brackets, totals: recountTotals(shown.totals, brackets) })
       }
     })
     scheduleClock()
