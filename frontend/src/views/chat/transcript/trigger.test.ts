@@ -41,6 +41,7 @@ import {
   type TriggerPayload,
   type TriggerRenderContext,
   type TriggerStatus,
+  unbreakable,
 } from './trigger'
 
 // The engine writes its payloads here (regenerate with
@@ -619,7 +620,7 @@ describe('the live line', () => {
     const expiresAt = Date.parse(awaiting.expiresAt!)
     expect(expiresAt).toBeGreaterThan(fetchedAt)
     expect(nowText(awaiting, fetchedAt)).toBe(
-      `awaiting approval · proposal expires in ${formatCountdown(expiresAt - fetchedAt)}`,
+      `awaiting approval · proposal expires in ${unbreakable(formatCountdown(expiresAt - fetchedAt))}`,
     )
     // Past its expiry the engine has not swept it yet: the line says so, no countdown.
     expect(nowText(awaiting, expiresAt)).toBe('awaiting approval · proposal expiring')

@@ -41,6 +41,7 @@ import {
   type TriggerPayload,
   type TriggerRenderContext,
   type TriggerStatus,
+  unbreakable,
 } from './trigger'
 
 // docs/brackets.md is the contract. The engine writes these fixtures
@@ -1616,5 +1617,11 @@ describe('bracket CSS contract', () => {
     ]) {
       expect(css, hook).toContain(hook)
     }
+  })
+})
+
+describe('unbreakable', () => {
+  it('joins a countdown with non-breaking spaces so "m" never wraps alone', () => {
+    expect(unbreakable('23 h 53 m')).toBe('23\u00a0h\u00a053\u00a0m')
   })
 })

@@ -956,7 +956,7 @@ export function nowText(trigger: Trigger, nowMs: number): string {
       const head = t('chat.triggerNowAwaiting')
       if (left === null) return head
       if (left <= 0) return `${head} · ${t('chat.triggerProposalLapsing')}`
-      return `${head} · ${t('chat.triggerExpiresIn', { time: formatCountdown(left) })}`
+      return `${head} · ${t('chat.triggerExpiresIn', { time: unbreakable(formatCountdown(left)) })}`
     }
     case 'armed': {
       const ago = agoText(trigger.market.checkedAt, nowMs)
@@ -1501,7 +1501,7 @@ export function bracketNowText(bracket: Bracket, nowMs: number): string {
       const head = t('chat.triggerNowAwaiting')
       if (left === null) return head
       if (left <= 0) return `${head} · ${t('chat.triggerProposalLapsing')}`
-      return `${head} · ${t('chat.triggerExpiresIn', { time: formatCountdown(left) })}`
+      return `${head} · ${t('chat.triggerExpiresIn', { time: unbreakable(formatCountdown(left)) })}`
     }
     case 'armed': {
       const ago = agoText(bracket.market.checkedAt, nowMs)
@@ -3067,6 +3067,11 @@ export interface TriggerActions {
   call: TriggerCall
   /** A "Fire now" placed an order (the desk focuses it in the Book). */
   onOrder?: (orderId: string) => void
+}
+
+/** "23 h 53 m" with non-breaking spaces: a countdown never leaves its unit alone on the next line. */
+export function unbreakable(text: string): string {
+  return text.replace(/ /g, '\u00a0')
 }
 
 /**
