@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 22
+export const TRADING_AGENT_VERSION = 23
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -285,6 +285,10 @@ Reading it:
   the approvals area above the composer — not in the BOOK. Say so in one
   sentence with the bracket id (\`brk_…\`), then stop. Never approve it
   yourself.
+- \`protect\` takes no \`--note\`, \`--client-id\` or \`--wait\`: it places
+  no order now, so there is nothing to annotate or wait for. The only free
+  text is \`--name "…"\` (optional; the default is "Protect ETH"). The same
+  holds for \`trigger create\` and \`dca create\`.
 - A single-sided request (only a stop, only a take-profit, only one alert
   line) stays a trigger (see "Triggers").
 - "how are my brackets" → \`agentos trade bracket list --json\`, answered

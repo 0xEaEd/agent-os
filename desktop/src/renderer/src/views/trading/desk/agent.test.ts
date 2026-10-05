@@ -351,16 +351,16 @@ describe('tradingAgentFiles · where a trigger is approved, and USDC (v21)', () 
   })
 })
 
-describe('tradingAgentFiles · brackets (v22)', () => {
+describe('tradingAgentFiles · brackets (v22, v23: no --note)', () => {
   const files = tradingAgentFiles()
   const agents = files['AGENTS.md'] ?? ''
   const tools = files['TOOLS.md'] ?? ''
   const section = agents.slice(agents.indexOf('## Brackets'), agents.indexOf('## Bridging'))
 
   it('bumped the version and names brackets in the description', () => {
-    expect(TRADING_AGENT_VERSION).toBe(22)
+    expect(TRADING_AGENT_VERSION).toBe(23)
     expect(tradingAgentSpec().description).toMatch(/brackets \(take-profit \+ stop-loss as one\)/)
-    expect(agents).toContain('trading agent v22')
+    expect(agents).toContain('trading agent v23')
   })
 
   it('reads an exit above and an exit below on one position as ONE bracket, never two triggers', () => {
@@ -381,6 +381,10 @@ describe('tradingAgentFiles · brackets (v22)', () => {
     expect(section).toMatch(/"chốt lời một nửa".*→ `--tp-pct 50`/)
     expect(section).toMatch(/→ `--trail 10`/)
     expect(section).toMatch(/→ `--alert`/)
+    // Live 2026-10-05: the desk agent guessed `--note` from the swap examples
+    // and lost a tool call to "No such option '--note'".
+    expect(section).toMatch(/`protect` takes no `--note`, `--client-id` or `--wait`/)
+    expect(section).toContain('`--name "…"`')
     // The Triggers section hands the two-sided case over.
     const triggers = agents.slice(agents.indexOf('## Triggers'), agents.indexOf('## Brackets'))
     expect(triggers).toMatch(/it is one bracket \(see "Brackets"\)\. A trigger is one-sided\./)
