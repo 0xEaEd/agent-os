@@ -5656,7 +5656,8 @@ class TradingService:
             return
         raise TradingError(
             "trading.trigger.bad_state",
-            f"{row['trigger_id']} is the {triggers.leg_word(str(row.get('leg')))} leg of "
+            f"{row['trigger_id']} is the "
+            f"{triggers.leg_word(str(row.get('leg')), str(row['kind']))} leg of "
             f"bracket {group_id}: use trading.bracket.{action}",
             details={
                 "triggerId": row["trigger_id"],
@@ -7020,7 +7021,7 @@ class TradingService:
             now=now,
             expect_status="armed",
             status="paused",
-            status_reason=triggers.hold_reason(str(row.get("leg"))),
+            status_reason=triggers.hold_reason(str(row.get("leg")), str(row["kind"])),
         )
         if held is not None:
             await self._trigger_changed(held, bracket=False)

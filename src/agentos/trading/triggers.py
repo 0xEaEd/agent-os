@@ -783,8 +783,13 @@ def new_bracket_id() -> str:
     return BRACKET_ID_PREFIX + uuid.uuid4().hex[:8]
 
 
-def leg_word(leg: str) -> str:
-    """``"tp"`` → ``"take-profit"``, ``"sl"`` → ``"stop-loss"``."""
+def leg_word(leg: str, kind: str = "sell") -> str:
+    """``"tp"`` → ``"take-profit"``, ``"sl"`` → ``"stop-loss"``.
+
+    A range alert's legs are its ``"ceiling"`` and ``"floor"``.
+    """
+    if kind == "alert":
+        return "ceiling" if leg == "tp" else "floor"
     return "take-profit" if leg == "tp" else "stop-loss"
 
 
@@ -792,9 +797,9 @@ def sibling_leg(leg: str) -> str:
     return "sl" if leg == "tp" else "tp"
 
 
-def hold_reason(leg_name: str) -> str:
+def hold_reason(leg_name: str, kind: str = "sell") -> str:
     """``"on hold: take-profit fired"``; ``leg_name`` is the fired leg (``"tp"`` or a word)."""
-    word = leg_word(leg_name) if leg_name in LEGS else leg_name
+    word = leg_word(leg_name, kind) if leg_name in LEGS else leg_name
     return f"{OCO_HOLD}{word} fired"
 
 
@@ -870,6 +875,8 @@ def bracket_status(legs: Iterable[Mapping[str, Any]]) -> tuple[str, str | None]:
     are in different states. A filled partial take-profit whose stop-loss is
     armed again reads :data:`PARTIAL_TP_REASON`.
     """
+    legs = list(legs)
+    kind = next((str(leg.get("kind")) for leg in legs if leg.get("kind")), "sell")
     items = [(_leg_of(leg) or "", str(leg.get("status")), _reason_of(leg)) for leg in legs]
     items.sort(key=lambda item: LEGS.index(item[0]) if item[0] in LEGS else len(LEGS))
     if not items:
@@ -884,7 +891,14 @@ def bracket_status(legs: Iterable[Mapping[str, Any]]) -> tuple[str, str | None]:
         why = next((w for _, w in deciding if w is not None), None)
         return status, why
     leg, why = deciding[0]
-    return status, _join(leg_word(leg), status, why)
+    text = _join(leg_word(leg, kind), status, why)
+    # Both legs over, the other one by the user's hand (a stop after a partial
+    # take-profit): say so, or "Done · take-profit" reads as if it fired twice.
+    other = next(((lg, st, w) for lg, st, w in items if lg != leg), None)
+    if other is not None and status in TERMINAL_STATUSES and other[1] in TERMINAL_STATUSES:
+        if str(other[2] or "").startswith("user"):
+            text = f"{text} · {leg_word(other[0], kind)} {other[1]} by you"
+    return status, text
 
 
 def validate_bracket_terms(

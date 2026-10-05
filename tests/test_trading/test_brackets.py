@@ -913,3 +913,37 @@ async def test_card_fixtures_match_the_engine(world: World) -> None:
 )
 def test_human_keeps_a_dust_amount_visible(raw: int, decimals: int, text: str) -> None:
     assert triggers.human(raw, decimals) == text
+
+
+def test_range_alert_legs_are_the_ceiling_and_the_floor() -> None:
+    assert triggers.leg_word("tp", "alert") == "ceiling"
+    assert triggers.leg_word("sl", "alert") == "floor"
+    assert triggers.hold_reason("tp", "alert") == "on hold: ceiling fired"
+    tp = {"leg": "tp", "kind": "alert", "status": "done", "status_reason": "alerted at $1"}
+    sl = {
+        "leg": "sl",
+        "kind": "alert",
+        "status": "stopped",
+        "status_reason": "range left over the top",
+    }
+    assert triggers.bracket_status([tp, sl]) == ("done", "ceiling: alerted at $1")
+
+
+def test_a_sibling_stopped_by_the_user_is_named_in_the_reason() -> None:
+    tp = {
+        "leg": "tp",
+        "kind": "sell",
+        "status": "done",
+        "status_reason": "sold 1 USDC for 0.0004 ETH at $1",
+    }
+    sl = {"leg": "sl", "kind": "sell", "status": "stopped", "status_reason": "user"}
+    assert triggers.bracket_status([tp, sl]) == (
+        "done",
+        "take-profit: sold 1 USDC for 0.0004 ETH at $1 · stop-loss stopped by you",
+    )
+    # The ordinary one-cancels-the-other ending stays short.
+    sl["status_reason"] = "take-profit filled"
+    assert triggers.bracket_status([tp, sl]) == (
+        "done",
+        "take-profit: sold 1 USDC for 0.0004 ETH at $1",
+    )
