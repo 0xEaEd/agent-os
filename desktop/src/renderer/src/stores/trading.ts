@@ -115,6 +115,42 @@ export function invalidateTrading(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: ['trading'] })
 }
 
+const FINISHED_STATUSES: ReadonlySet<string> = new Set(['done', 'stopped', 'rejected', 'expired'])
+
+/**
+ * Writes one refreshed object (a trigger, a bracket) straight into its cached
+ * lists, before the invalidation refetches them. Every trigger and bracket
+ * write answers with the full object, yet the desk waited for a list read (5–8 s
+ * on a live engine) and a just-stopped bracket read "Armed" all along, its
+ * Stop offered again. A fetch already in flight is cancelled first: it may
+ * have started before the write and would land the old state over the new.
+ * The live list drops an object that has finished; a list that does not hold
+ * it is left to the refetch.
+ */
+export async function primeTradingList<T extends { id: string; status: string }>(
+  queryClient: QueryClient,
+  keyOf: (all?: boolean) => readonly unknown[],
+  field: 'triggers' | 'brackets',
+  item: T | null | undefined,
+): Promise<void> {
+  if (!item?.id) return
+  await queryClient.cancelQueries({ queryKey: keyOf().slice(0, 2) })
+  for (const all of [false, true]) {
+    queryClient.setQueryData<Record<string, unknown>>(keyOf(all), (prev) => {
+      const list = prev?.[field]
+      if (!prev || !Array.isArray(list)) return prev
+      const rows = list as T[]
+      const at = rows.findIndex((row) => row?.id === item.id)
+      if (at < 0) return prev
+      const next =
+        !all && FINISHED_STATUSES.has(item.status)
+          ? rows.filter((row) => row?.id !== item.id)
+          : rows.map((row, i) => (i === at ? item : row))
+      return { ...prev, [field]: next }
+    })
+  }
+}
+
 /**
  * Bind once from a mounted page: every trading event refetches whatever is
  * on screen (debounced, so a burst of order updates is one round).
@@ -1088,6 +1124,10 @@ export function useTriggerActions(): TriggerActions {
       params: Record<string, unknown>
       id: string
     }) => rpc.call<TriggerPayload>(method, params),
+    // The answer is the refreshed trigger: the Missions row shows it at once,
+    // then the sweep re-reads everything it moved.
+    onSuccess: (res) =>
+      primeTradingList(queryClient, TRADING_KEYS.trigger, 'triggers', res?.trigger),
     onSettled: () => invalidateTrading(queryClient),
   })
   const { mutateAsync } = mutation
@@ -1250,8 +1290,13 @@ export function useBracketActions(): BracketActions {
       params: Record<string, unknown>
       id: string
     }) => rpc.call<BracketPayload>(method, params),
-    // Both lists move — the bracket, and its legs behind every trigger read —
-    // and both keys sit under the `trading` prefix this sweeps.
+    // The answer is the refreshed bracket: the Missions row shows it at once
+    // (onSuccess is awaited before onSettled, so the sweep's refetch is not
+    // the one cancelled). Then both lists move — the bracket, and its legs
+    // behind every trigger read — and both keys sit under the `trading`
+    // prefix this sweeps.
+    onSuccess: (res) =>
+      primeTradingList(queryClient, TRADING_KEYS.bracket, 'brackets', res?.bracket),
     onSettled: () => invalidateTrading(queryClient),
   })
   const { mutateAsync } = mutation

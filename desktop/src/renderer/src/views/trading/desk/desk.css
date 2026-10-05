@@ -706,13 +706,15 @@
   color: var(--dim);
   cursor: pointer;
 }
-/* The last "+N more" in the band stays at its foot while the rows scroll: at
-   the band's cap it was cut off a few pixels short of legible. */
-.trd-mctl > .trd-mctl__more:not(:has(~ .trd-mctl__more)) {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
-  background: var(--elevated);
+/* A toggle is a line of its own in the band's flow, after the rows it
+   folds: never laid over a row. Sticky to the band's foot it sat on top of
+   the second bracket row whenever a docked proposal folded the band to two
+   rows. Its 26px line matches a row's, so the band's scroll stops on a whole
+   line rather than a few pixels into the toggle. */
+.trd-mctl > .trd-mctl__more {
+  flex: 0 0 100%;
+  min-height: 26px;
+  text-align: left;
 }
 .trd-mctl__more:hover {
   color: var(--foreground);
@@ -1033,6 +1035,14 @@
 .trd-trigger__enforced::before {
   content: '● ';
   color: var(--ok);
+}
+/* A bracket proposal says its explanation on one line (the whole sentence is
+   the tooltip): at a 1200×800 window it ran to three and was cut off
+   mid-sentence behind the region's scroll. */
+.trd-bracket .trd-trigger__enforced {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .trd-asks__stamp .trd-card {
   padding: 8px 14px;

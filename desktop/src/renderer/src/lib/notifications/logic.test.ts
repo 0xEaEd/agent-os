@@ -386,6 +386,16 @@ describe('trading.trigger.fired · a leg of a bracket', () => {
       subtitle: 'Alert · $4,561 now',
       target: { type: 'trading' },
     })
+    // A range alert's legs are its ceiling and floor, never a take-profit.
+    expect(
+      triggerFiredEvent(
+        {
+          trigger: alertLeg,
+          fire: fire({ status: 'failed', orderId: null, reason: 'price feed down' }),
+        },
+        true,
+      )?.title,
+    ).toBe('Watch ETH · ceiling could not fire')
   })
 
   it('names the leg on a skip or a failure too', () => {

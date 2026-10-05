@@ -608,9 +608,20 @@ function MandateRow({
   )
 }
 
-/** A two-click control: the first click arms it, the second (within STOP_ARM_MS) acts. */
-function useArm(): [boolean, (v: boolean) => void] {
+/**
+ * A two-click control: the first click arms it, the second (within
+ * STOP_ARM_MS) acts. `settle` is the row's state and its write in flight:
+ * when either moves (the write resolved, the engine's answer landed), the
+ * arm is dropped, so a row never offers "Stop — click again" for an act it
+ * has just done.
+ */
+function useArm(settle: string): [boolean, (v: boolean) => void] {
   const [armed, setArmed] = useState(false)
+  const [seen, setSeen] = useState(settle)
+  if (seen !== settle) {
+    setSeen(settle)
+    setArmed(false)
+  }
   useEffect(() => {
     if (!armed) return
     const id = window.setTimeout(() => setArmed(false), STOP_ARM_MS)
@@ -651,8 +662,9 @@ function TriggerRow({
   onFire?: (tr: Trigger) => void
   onStop?: (tr: Trigger) => void
 }) {
-  const [stopArmed, setStopArmed] = useArm()
-  const [fireArmed, setFireArmed] = useArm()
+  const settle = `${tr.status}:${busy}`
+  const [stopArmed, setStopArmed] = useArm(settle)
+  const [fireArmed, setFireArmed] = useArm(settle)
   const steerable = isSteerableTrigger(tr)
   const stoppable = steerable || tr.status === 'triggered'
   // The engine's statusReason on hover: "paused: nothing to sell", "alerted at $3,790".
@@ -815,8 +827,9 @@ function BracketRow({
   onFire?: (b: Bracket) => void
   onStop?: (b: Bracket) => void
 }) {
-  const [stopArmed, setStopArmed] = useArm()
-  const [fireArmed, setFireArmed] = useArm()
+  const settle = `${b.status}:${busy}`
+  const [stopArmed, setStopArmed] = useArm(settle)
+  const [fireArmed, setFireArmed] = useArm(settle)
   const steerable = isSteerableBracket(b)
   const stoppable = steerable || b.status === 'triggered'
   const reason = bracketTitle(b)
