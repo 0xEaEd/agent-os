@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "brackets",
+  "fetchedAt": "2026-10-05T09:03:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "list",
+    "params": {
+      "all": true
+    }
+  },
+  "brackets": [],
+  "totals": {
+    "count": 0,
+    "armed": 0,
+    "awaiting": 0,
+    "triggered": 0
+  }
+}

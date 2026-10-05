@@ -1,0 +1,236 @@
+{
+  "version": 1,
+  "kind": "bracket",
+  "fetchedAt": "2026-10-05T09:03:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "get",
+    "params": {
+      "bracketId": "brk_00000004"
+    }
+  },
+  "bracket": {
+    "id": "brk_00000004",
+    "name": "Watch WETH",
+    "kind": "alert",
+    "status": "armed",
+    "statusReason": null,
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+      "label": "Key main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "priceUsd": 2350.0
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1.0
+    },
+    "takeProfit": {
+      "id": "trg_00000010",
+      "name": "Alert WETH over $2,400",
+      "kind": "alert",
+      "status": "armed",
+      "statusReason": null,
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "wallet": {
+        "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+        "label": "Key main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18,
+        "priceUsd": 2350.0
+      },
+      "quote": {
+        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6,
+        "priceUsd": 1.0
+      },
+      "condition": {
+        "direction": "above",
+        "priceUsd": 2400.0,
+        "trailPct": null,
+        "fromPriceUsd": 2000.0,
+        "peakPriceUsd": null,
+        "stopPriceUsd": null,
+        "confirmTicks": 2,
+        "hits": 1,
+        "label": "over $2,400"
+      },
+      "action": {
+        "kind": "alert",
+        "amountUsd": null,
+        "amountPct": null,
+        "amount": null,
+        "estimatedUsd": null,
+        "slippagePct": null,
+        "needsApproval": false,
+        "approvalThresholdUsd": 100.0,
+        "dailyCapUsd": 1000.0,
+        "label": "notify"
+      },
+      "market": {
+        "priceUsd": 2350.0,
+        "armedPriceUsd": 2000.0,
+        "distancePct": 2.1,
+        "checkedAt": "2026-10-05T09:02:30Z",
+        "balance": null
+      },
+      "fires": [],
+      "result": null,
+      "validUntil": null,
+      "initiator": "manual",
+      "sessionKey": null,
+      "createdAt": "2026-10-05T09:00:00Z",
+      "updatedAt": "2026-10-05T09:02:30Z",
+      "approvedAt": "2026-10-05T09:00:00Z",
+      "armedAt": "2026-10-05T09:00:00Z",
+      "triggeredAt": null,
+      "expiresAt": null,
+      "bracket": {
+        "id": "brk_00000004",
+        "name": "Watch WETH",
+        "leg": "tp"
+      }
+    },
+    "stopLoss": {
+      "id": "trg_00000011",
+      "name": "Alert WETH under $1,800",
+      "kind": "alert",
+      "status": "armed",
+      "statusReason": null,
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "wallet": {
+        "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+        "label": "Key main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18,
+        "priceUsd": 2350.0
+      },
+      "quote": {
+        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6,
+        "priceUsd": 1.0
+      },
+      "condition": {
+        "direction": "below",
+        "priceUsd": 1800.0,
+        "trailPct": null,
+        "fromPriceUsd": 2000.0,
+        "peakPriceUsd": null,
+        "stopPriceUsd": null,
+        "confirmTicks": 2,
+        "hits": 0,
+        "label": "under $1,800"
+      },
+      "action": {
+        "kind": "alert",
+        "amountUsd": null,
+        "amountPct": null,
+        "amount": null,
+        "estimatedUsd": null,
+        "slippagePct": null,
+        "needsApproval": false,
+        "approvalThresholdUsd": 100.0,
+        "dailyCapUsd": 1000.0,
+        "label": "notify"
+      },
+      "market": {
+        "priceUsd": 2350.0,
+        "armedPriceUsd": 2000.0,
+        "distancePct": -23.4,
+        "checkedAt": "2026-10-05T09:02:30Z",
+        "balance": null
+      },
+      "fires": [],
+      "result": null,
+      "validUntil": null,
+      "initiator": "manual",
+      "sessionKey": null,
+      "createdAt": "2026-10-05T09:00:00Z",
+      "updatedAt": "2026-10-05T09:02:30Z",
+      "approvedAt": "2026-10-05T09:00:00Z",
+      "armedAt": "2026-10-05T09:00:00Z",
+      "triggeredAt": null,
+      "expiresAt": null,
+      "bracket": {
+        "id": "brk_00000004",
+        "name": "Watch WETH",
+        "leg": "sl"
+      }
+    },
+    "lines": {
+      "takeProfitUsd": 2400.0,
+      "stopLossUsd": 1800.0,
+      "trailPct": null,
+      "fromPriceUsd": null,
+      "takeProfitLabel": "over $2,400",
+      "stopLossLabel": "under $1,800"
+    },
+    "action": {
+      "kind": "alert",
+      "amountPct": null,
+      "amount": null,
+      "amountUsd": null,
+      "tpPct": null,
+      "estimatedUsd": null,
+      "slippagePct": null,
+      "needsApproval": false,
+      "approvalThresholdUsd": 100.0,
+      "dailyCapUsd": 1000.0,
+      "label": "notify"
+    },
+    "market": {
+      "priceUsd": 2350.0,
+      "armedPriceUsd": 2000.0,
+      "checkedAt": "2026-10-05T09:02:30Z",
+      "balance": null,
+      "upsidePct": 2.1,
+      "downsidePct": -23.4,
+      "positionPct": 91.7,
+      "rewardRisk": 0.1,
+      "nearest": "tp"
+    },
+    "fired": null,
+    "result": null,
+    "validUntil": null,
+    "initiator": "manual",
+    "sessionKey": null,
+    "createdAt": "2026-10-05T09:00:00Z",
+    "updatedAt": "2026-10-05T09:02:30Z",
+    "approvedAt": "2026-10-05T09:00:00Z",
+    "armedAt": "2026-10-05T09:00:00Z",
+    "expiresAt": null
+  }
+}

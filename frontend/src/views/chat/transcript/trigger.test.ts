@@ -2031,8 +2031,13 @@ describe('engine fixtures', () => {
           (b) => b.dataset.triggerOp,
         ),
       ).toEqual(triggerActionsFor(p!.trigger.status))
+    } else if (p!.kind === 'bracket') {
+      // docs/brackets.md; bracket.test.ts covers the card itself.
+      expect(card.dataset.triggerStatus).toBe((raw.bracket as Json).status)
+      expect(card.querySelectorAll('.bracket-leg')).toHaveLength(2)
     } else {
-      expect(card.querySelectorAll('.trigger-row')).toHaveLength((raw.triggers as unknown[]).length)
+      const rows = (raw.kind === 'brackets' ? raw.brackets : raw.triggers) as unknown[]
+      expect(card.querySelectorAll('.trigger-row')).toHaveLength(rows.length)
     }
   })
 })
