@@ -351,6 +351,73 @@ describe('tradingAgentFiles · where a trigger is approved, and USDC (v21)', () 
   })
 })
 
+describe('tradingAgentFiles · brackets (v22)', () => {
+  const files = tradingAgentFiles()
+  const agents = files['AGENTS.md'] ?? ''
+  const tools = files['TOOLS.md'] ?? ''
+  const section = agents.slice(agents.indexOf('## Brackets'), agents.indexOf('## Bridging'))
+
+  it('bumped the version and names brackets in the description', () => {
+    expect(TRADING_AGENT_VERSION).toBe(22)
+    expect(tradingAgentSpec().description).toMatch(/brackets \(take-profit \+ stop-loss as one\)/)
+    expect(agents).toContain('trading agent v22')
+  })
+
+  it('reads an exit above and an exit below on one position as ONE bracket, never two triggers', () => {
+    expect(section.startsWith('## Brackets')).toBe(true)
+    for (const phrase of [
+      '"protect my ETH"',
+      '"bảo vệ vị thế"',
+      '"chốt lời 20 % cắt lỗ 10 %"',
+      '"take profit at 4,500 and stop at 3,400"',
+      '"sell half at +20 %, stop at −10 %"',
+      '"báo tôi nếu ETH ra khỏi 3,400–4,500"',
+    ]) {
+      expect(section, phrase).toContain(phrase)
+    }
+    expect(section).toMatch(/is \*\*one bracket\*\*, never two\s+triggers/)
+    expect(section).toContain('`agentos trade protect ETH --tp +20% --sl -10% --json`')
+    expect(section).toMatch(/`--pct 100`/)
+    expect(section).toMatch(/"chốt lời một nửa".*→ `--tp-pct 50`/)
+    expect(section).toMatch(/→ `--trail 10`/)
+    expect(section).toMatch(/→ `--alert`/)
+    // The Triggers section hands the two-sided case over.
+    const triggers = agents.slice(agents.indexOf('## Triggers'), agents.indexOf('## Brackets'))
+    expect(triggers).toMatch(/it is one bracket \(see "Brackets"\)\. A trigger is one-sided\./)
+  })
+
+  it('parks from the agent: one Approve & arm for both legs, the brk_ id, then stop', () => {
+    expect(section).toMatch(/always answers `status: "awaiting_approval"`/)
+    expect(section).toMatch(/one \*\*Approve & arm\*\* button for both legs/)
+    expect(section).toMatch(/not in the BOOK/)
+    expect(section).toMatch(/bracket id \(`brk_…`\), then stop/)
+    expect(section).toMatch(/A single-sided request .* stays a trigger/s)
+    expect(section).toContain('`agentos trade bracket list --json`')
+    expect(section).toMatch(/Never state a bracket's status from memory/)
+    expect(agents).toMatch(/`agentos trade bracket approve`/)
+    // The hard rule's exception covers a bracket, by name.
+    expect(agents).toMatch(
+      /A\s+bracket \(`agentos trade protect`, see "Brackets"\) is two price triggers/,
+    )
+  })
+
+  it('carries every bracket command with the CLI’s own flags', () => {
+    for (const cmd of [
+      'agentos trade protect <token> --tp <price|pct%> (--sl <price|pct%> | --trail <pct>) [--pct 100 | --amount 0.05 | --usd 100] [--tp-pct 50] [--alert] [--quote USDC] [--chain base|robinhood] [--wallet ADDR|label] [--slippage 1] [--name "…"] [--for 7d] --json',
+      'agentos trade bracket list [--all] [--wallet …] --json',
+      'agentos trade bracket show <id> --json',
+      'agentos trade bracket approve|reject|pause|resume|stop <id> --json',
+      'agentos trade bracket fire <id> [--leg tp|sl] --json',
+      'agentos trade bracket approve|reject|pause|resume|stop|fire`,',
+      '`trading.bracket.invalid`',
+      '`trading.bracket.bad_state`',
+      '`trading.bracket.not_found`',
+    ]) {
+      expect(tools, cmd).toContain(cmd)
+    }
+  })
+})
+
 describe('syncTradingAgent', () => {
   function rpcWith(agents: Array<{ id: string }>) {
     const calls: Array<[string, Record<string, unknown>]> = []

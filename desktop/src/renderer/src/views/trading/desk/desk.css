@@ -784,6 +784,26 @@
   color: var(--ok);
   background: color-mix(in srgb, var(--ok) 14%, transparent);
 }
+/* A bracket (docs/brackets.md) is one row for both legs: its tag reads the
+   pair — red stop under green take-profit — and its rail the trigger's. */
+.trd-mctl__row[data-kind='bracket'] {
+  gap: 4px;
+  padding-left: 4px;
+}
+.trd-mctl__row[data-kind='bracket'][data-state='awaiting_approval'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.trd-mctl__row[data-kind='bracket'] .trd-mctl__name {
+  margin-right: 0;
+}
+.trd-mctl__kind[data-action='bracket'] {
+  color: var(--foreground);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ok) 18%, transparent) 50%,
+    color-mix(in srgb, var(--danger) 18%, transparent) 50%
+  );
+}
 .trd-mctl__row[data-state='armed'] .trd-mctl__word,
 .trd-mstrip__item[data-state='armed'] .trd-mstrip__word {
   color: var(--ok);
@@ -948,6 +968,11 @@
 }
 .trd-card.trd-trigger[data-action='buy'] {
   --trd-trigger-tone: var(--ok);
+}
+/* A bracket proposal: the trigger card family, its rail the warn of a
+   standing permission on both sides of the price. */
+.trd-card.trd-trigger.trd-bracket[data-action='sell'] {
+  --trd-trigger-tone: var(--warn);
 }
 .trd-trigger .trd-card__title {
   display: inline-flex;

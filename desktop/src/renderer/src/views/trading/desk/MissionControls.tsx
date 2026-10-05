@@ -3,7 +3,16 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { RawJob } from '@/views/cron/logic'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
-import type { Mandate, Trigger } from '../types'
+import type { Bracket, Mandate, Trigger } from '../types'
+import {
+  bracketFireKey,
+  bracketNear,
+  bracketPlanText,
+  bracketReason,
+  bracketRows,
+  bracketWord,
+  isSteerableBracket,
+} from './bracket-logic'
 import { missionStatus, type MissionState } from './desk-logic'
 import {
   mandateBuysText,
@@ -26,6 +35,7 @@ import {
 
 const NO_MANDATES: Mandate[] = []
 const NO_TRIGGERS: Trigger[] = []
+const NO_BRACKETS: Bracket[] = []
 const NO_IDS: ReadonlySet<string> = new Set()
 /** A second click on Stop within this long stops the mandate; after it, the button disarms. */
 const STOP_ARM_MS = 4000
@@ -220,6 +230,13 @@ export function MissionControls({
   onTriggerResume,
   onTriggerFire,
   onTriggerStop,
+  brackets = NO_BRACKETS,
+  askedBrackets = NO_IDS,
+  bracketBusy = null,
+  onBracketPause,
+  onBracketResume,
+  onBracketFire,
+  onBracketStop,
 }: {
   missions: RawJob[]
   running: ReadonlySet<string>
@@ -254,6 +271,16 @@ export function MissionControls({
   onTriggerResume?: (tr: Trigger) => void
   onTriggerFire?: (tr: Trigger) => void
   onTriggerStop?: (tr: Trigger) => void
+  /** Brackets (docs/brackets.md), one row each — never a row per leg — before the triggers. */
+  brackets?: Bracket[]
+  /** Pending brackets whose proposal card is already in the approvals region. */
+  askedBrackets?: ReadonlySet<string>
+  /** The bracket with a write in flight: its row is locked until it lands. */
+  bracketBusy?: string | null
+  onBracketPause?: (b: Bracket) => void
+  onBracketResume?: (b: Bracket) => void
+  onBracketFire?: (b: Bracket) => void
+  onBracketStop?: (b: Bracket) => void
 }) {
   const now = useMandateClock(mandates)
   const [showAll, setShowAll] = useState(false)
@@ -262,6 +289,11 @@ export function MissionControls({
   const triggerList = triggerRows(
     askedTriggers.size ? triggers.filter((tr) => !askedTriggers.has(tr.id)) : triggers,
     showAllTriggers,
+  )
+  const [showAllBrackets, setShowAllBrackets] = useState(false)
+  const bracketList = bracketRows(
+    askedBrackets.size ? brackets.filter((b) => !askedBrackets.has(b.id)) : brackets,
+    showAllBrackets,
   )
   return (
     <div className="trd-mctl" data-testid="mission-controls">
@@ -350,6 +382,25 @@ export function MissionControls({
       ))}
       {more > 0 ? (
         <MoreToggle more={more} showAll={showAll} onToggle={() => setShowAll((v) => !v)} />
+      ) : null}
+      {bracketList.rows.map((b) => (
+        <BracketRow
+          key={b.id}
+          bracket={b}
+          busy={bracketBusy === b.id}
+          onPause={onBracketPause}
+          onResume={onBracketResume}
+          onFire={onBracketFire}
+          onStop={onBracketStop}
+        />
+      ))}
+      {bracketList.more > 0 ? (
+        <MoreToggle
+          more={bracketList.more}
+          showAll={showAllBrackets}
+          onToggle={() => setShowAllBrackets((v) => !v)}
+          testId="bracket-more"
+        />
       ) : null}
       {triggerList.rows.map((tr) => (
         <TriggerRow
@@ -723,6 +774,168 @@ function TriggerRow({
                 setStopArmed(true)
               }}
               data-testid="trigger-stop"
+            >
+              <OctagonX className="size-3.5" strokeWidth={1.75} aria-hidden />
+            </Button>
+          )}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+/** "Paused by you" for the operator's own bare pause or stop; the engine's words otherwise. */
+function bracketTitle(b: Bracket): string | null {
+  const reason = bracketReason(b)
+  if (reason !== 'user') return reason
+  return b.status === 'paused'
+    ? t('trading.trigger.reason.pausedByYou')
+    : t('trading.trigger.reason.byYou')
+}
+
+/**
+ * One bracket among the missions (docs/brackets.md): a take-profit and a
+ * stop-loss on one position, steered as one thing. Its name, what it is doing
+ * ("Armed · ETH $3,790 · +20 % / −10 %"), its range, and the controls its
+ * state allows. Sell now (Notify now for a range alert) and Stop act on a
+ * second click, inline: one trades at once, the other is final.
+ */
+function BracketRow({
+  bracket: b,
+  busy,
+  onPause,
+  onResume,
+  onFire,
+  onStop,
+}: {
+  bracket: Bracket
+  busy: boolean
+  onPause?: (b: Bracket) => void
+  onResume?: (b: Bracket) => void
+  onFire?: (b: Bracket) => void
+  onStop?: (b: Bracket) => void
+}) {
+  const [stopArmed, setStopArmed] = useArm()
+  const [fireArmed, setFireArmed] = useArm()
+  const steerable = isSteerableBracket(b)
+  const stoppable = steerable || b.status === 'triggered'
+  const reason = bracketTitle(b)
+  const fireLabel = t(bracketFireKey(b))
+  const word = bracketWord(b)
+  return (
+    <div
+      className="trd-mctl__row"
+      data-kind="bracket"
+      data-action={b.kind}
+      data-state={b.status}
+      data-near={bracketNear(b) || undefined}
+      data-testid="bracket-row"
+      data-bracket={b.id}
+      title={reason ?? undefined}
+    >
+      <span className="trd-mctl__kind" data-action="bracket" aria-hidden>
+        {t(`trading.bracket.tag.${b.kind}`)}
+      </span>
+      <span className="trd-mctl__name" title={reason ? `${b.name} · ${reason}` : b.name}>
+        {b.name}
+      </span>
+      <span className="trd-mctl__word" data-testid="bracket-word" title={word}>
+        {word}
+      </span>
+      <span className="trd-mctl__runs trd-mono" data-testid="bracket-plan">
+        {bracketPlanText(b)}
+      </span>
+      {b.status === 'awaiting_approval' ? (
+        <span className="trd-mctl__hint">{t('trading.trigger.review')}</span>
+      ) : null}
+      {stoppable ? (
+        <span className="trd-mctl__ctl">
+          {steerable ? (
+            <>
+              {b.status === 'armed' ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={t('trading.trigger.pause')}
+                  title={t('trading.trigger.pause')}
+                  onClick={() => onPause?.(b)}
+                  data-testid="bracket-pause"
+                >
+                  <Pause className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={t('trading.trigger.resume')}
+                  title={t('trading.trigger.resume')}
+                  onClick={() => onResume?.(b)}
+                  data-testid="bracket-resume"
+                >
+                  <Play className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              )}
+              {fireArmed ? (
+                <button
+                  type="button"
+                  className="trd-mctl__confirm app-no-drag"
+                  data-tone="fire"
+                  disabled={busy}
+                  onClick={() => {
+                    setFireArmed(false)
+                    onFire?.(b)
+                  }}
+                  data-testid="bracket-fire"
+                  data-armed
+                >
+                  {`${fireLabel} ${t('trading.trigger.fireAgain')}`}
+                </button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={fireLabel}
+                  title={fireLabel}
+                  onClick={() => {
+                    setStopArmed(false)
+                    setFireArmed(true)
+                  }}
+                  data-testid="bracket-fire"
+                >
+                  <Zap className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              )}
+            </>
+          ) : null}
+          {stopArmed ? (
+            <button
+              type="button"
+              className="trd-mctl__confirm app-no-drag"
+              disabled={busy}
+              onClick={() => {
+                setStopArmed(false)
+                onStop?.(b)
+              }}
+              data-testid="bracket-stop"
+              data-armed
+            >
+              {t('trading.trigger.stopAgain')}
+            </button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              aria-label={t('trading.trigger.stop')}
+              title={t('trading.trigger.stop')}
+              onClick={() => {
+                setFireArmed(false)
+                setStopArmed(true)
+              }}
+              data-testid="bracket-stop"
             >
               <OctagonX className="size-3.5" strokeWidth={1.75} aria-hidden />
             </Button>

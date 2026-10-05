@@ -780,3 +780,99 @@ describe('desktop trigger skin covers the shared renderer', () => {
     expect(selectors.some((sel) => sel.includes('.trigger-fire[data-status='))).toBe(false)
   })
 })
+
+// Brackets (docs/brackets.md, "Rendering"): the shared renderer draws a
+// take-profit + stop-loss pair as a trigger card keyed `bracket`, and the
+// contract names every hook the desk must skin blind. These pin each of them,
+// and what makes the range gauge the desk's: a faint zone, a red-tinted stop
+// tick, a green-tinted take-profit tick, an amber dot near either line.
+describe('desktop bracket card skin', () => {
+  const rule = (selector: string): string | undefined =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+    )?.[0]
+
+  it('styles every hook the contract names', () => {
+    for (const sel of [
+      ".trigger-card[data-trigger-kind='bracket'] .trigger-card__head::before",
+      ".trigger-gauge[data-trigger-gauge='range']",
+      ".trigger-gauge[data-trigger-gauge='range'] .trigger-gauge__line",
+      ".trigger-gauge .trigger-gauge__tick[data-leg='sl']",
+      ".trigger-gauge .trigger-gauge__tick[data-leg='tp']",
+      ".trigger-gauge__zone[data-zone='bracket']",
+      '.trigger-gauge__dot',
+      ".trigger-gauge__label[data-leg='sl']",
+      ".trigger-gauge__label[data-leg='tp']",
+      ".trigger-gauge__label[data-leg='now']",
+      ".trigger-card[data-trigger-nearest='tp'] .trigger-gauge__tick[data-leg='tp']",
+      ".trigger-card[data-trigger-nearest='sl'] .trigger-gauge__tick[data-leg='sl']",
+      '.bracket-legs',
+      '.bracket-leg',
+      ".bracket-leg[data-leg='tp'] .bracket-leg__word",
+      ".bracket-leg[data-leg='sl'] .bracket-leg__word",
+      '.bracket-leg__word',
+      '.bracket-leg__line',
+      '.bracket-leg__state',
+      ".bracket-leg[data-status='armed']",
+      '.trigger-card__group',
+      '.trigger-fact__rr',
+      ".trigger-card[data-trigger-kind='brackets']",
+      '.trigger-row[data-bracket-id] .trigger-row__plan',
+    ]) {
+      expect(selectors, sel).toContain(sel)
+    }
+  })
+
+  it('tints the stop tick red, the take-profit tick green, and the zone faint', () => {
+    expect(rule(".trigger-gauge .trigger-gauge__tick[data-leg='sl']")).toMatch(/--danger/)
+    expect(rule(".trigger-gauge .trigger-gauge__tick[data-leg='tp']")).toMatch(/--ok/)
+    expect(css).toMatch(
+      /\.trigger-gauge__zone\[data-zone='bracket'\] \{\s*fill: color-mix\(in srgb, var\(--foreground\) \d+%, transparent\);/,
+    )
+    // The rail is the plain rail, not the trigger's coloured line.
+    expect(rule(".trigger-gauge[data-trigger-gauge='range'] .trigger-gauge__line")).toMatch(
+      /stroke: var\(--border\);/,
+    )
+  })
+
+  it('turns the dot amber within 1 % of either line, from data-trigger-dist', () => {
+    const near = css.match(
+      /(\.trigger-gauge\[data-trigger-gauge='range'\][^{]+)\{\s*--trigger-gauge-tone: var\(--warn\);/,
+    )
+    expect(near).toBeTruthy()
+    const list = near?.[1] ?? ''
+    for (const hook of [
+      "[data-trigger-dist^='0']",
+      "[data-trigger-dist^='-0']",
+      "[data-trigger-dist='1']",
+      "[data-trigger-dist='-1']",
+      "[data-trigger-proximity='near']",
+    ]) {
+      expect(list, hook).toContain(hook)
+    }
+    // Never "1.5" or "10": a bare `^='1'` prefix would tint far lines.
+    expect(list).not.toContain("[data-trigger-dist^='1']")
+  })
+
+  it('draws the ▼▲ pair for a sell bracket, never an emoji', () => {
+    const sell = rule(
+      ".trigger-card[data-trigger-kind='bracket'][data-trigger-action='sell'] .trigger-card__head::before",
+    )
+    expect(sell).toMatch(/content: '▼▲';/)
+    expect(sell).toMatch(/background-clip: text;/)
+    // Prettier wraps this selector after the attribute pair.
+    const alert = css.match(
+      /^\.trigger-card\[data-trigger-kind='bracket'\]\[data-trigger-action='alert'\]\s+\.trigger-card__head::before \{[^}]*\}/m,
+    )?.[0]
+    expect(alert).toMatch(/content: '.';/u)
+    expect(alert).not.toMatch(/\p{Extended_Pictographic}/u)
+  })
+
+  it('lays the legs strip out as two mono rows, ruled, the state ellipsizing', () => {
+    expect(rule('.bracket-legs')).toMatch(/font-family: var\(--font-mono\);/)
+    const leg = rule('.bracket-leg')
+    expect(leg).toMatch(/display: grid;/)
+    expect(leg).toMatch(/border-bottom: 1px solid var\(--hairline\);/)
+    expect(rule('.bracket-leg__state')).toMatch(/text-overflow: ellipsis;/)
+  })
+})

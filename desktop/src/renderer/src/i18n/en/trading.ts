@@ -1065,6 +1065,39 @@ export const trading = {
     'a {kind} of ≈{usd} is above the {threshold} approval threshold and will wait for you when it fires',
   'trading.trigger.warn.nothingToSell': '{wallet} holds no {token}',
 
+  // Brackets (docs/brackets.md): a take-profit and a stop-loss on one
+  // position, approved, steered and shown as one thing. The legs' own words
+  // (checks, order open) are the trigger's.
+  'trading.bracket.leg.tp': 'take-profit',
+  'trading.bracket.leg.sl': 'stop-loss',
+  'trading.bracket.tag.sell': 'Bracket',
+  'trading.bracket.tag.alert': 'Range',
+  'trading.bracket.word.legOrderOpen': '{leg} order open',
+  'trading.bracket.notifyNow': 'Notify now',
+  'trading.bracket.toast.approved': 'Bracket approved and armed',
+  'trading.bracket.toast.rejected': 'Bracket rejected',
+  'trading.bracket.toast.paused': 'Bracket paused',
+  'trading.bracket.toast.resumed': 'Bracket armed again',
+  'trading.bracket.toast.stopped': 'Bracket stopped',
+  'trading.bracket.toast.alerted': 'Alert sent',
+  'trading.bracket.toast.filled': 'Fired and filled',
+  'trading.bracket.toast.placed': 'Fired; order placed',
+  'trading.bracket.toast.parked': 'Fired; the order waits for your approval',
+  'trading.bracket.toast.skipped': 'Fire skipped',
+  'trading.bracket.toast.fireFailed': 'Fire failed',
+  'trading.bracket.toast.void': 'The order did not go through',
+  'trading.bracket.toast.noFire': 'Nothing fired',
+  'trading.bracket.toast.failed': 'Could not update the bracket',
+  'trading.bracket.card.title': 'Bracket proposal',
+  'trading.bracket.card.fact.takeProfit': 'Take profit',
+  'trading.bracket.card.fact.stopLoss': 'Stop',
+  'trading.bracket.card.fact.rewardRisk': 'Reward : risk',
+  'trading.bracket.card.bothLegs': 'One decision for both legs',
+  'trading.bracket.card.enforced':
+    'The engine watches both lines and confirms a cross on two checks in a row. When one leg fills, it stops the other. Every fire is an ordinary order through your limits.',
+  'trading.bracket.card.enforcedAlert':
+    'The engine watches both lines and confirms a cross on two checks in a row, then notifies you once and stops the other line. An alert places no order and moves no funds.',
+
   // Touch ID (Settings › Security). The reasons complete macOS's own
   // sentence in the sheet, "AgentOS is trying to …", so they start lowercase.
   'trading.touchId.reason.order': 'approve {what} on {chain}',
@@ -1073,6 +1106,10 @@ export const trading = {
   'trading.touchId.reason.mandateId': 'approve the DCA {id}',
   'trading.touchId.reason.trigger': 'arm the trigger {name}: {what}, on {chain}',
   'trading.touchId.reason.triggerId': 'arm the trigger {id}',
+  'trading.touchId.reason.bracket': 'arm the bracket {name}: {what}, on {chain}',
+  'trading.touchId.reason.bracketId': 'arm the bracket {id}',
+  'trading.touchId.reason.bracketFire': 'fire the bracket {name} now: {what}, on {chain}',
+  'trading.touchId.reason.bracketFireId': 'fire the bracket {id} now',
   'trading.touchId.reason.export': 'export the private key of {wallet}',
   'trading.touchId.reason.exportKeystore': 'export the keystore of {wallet}',
   'trading.touchId.reason.remove': 'remove the wallet {wallet}',

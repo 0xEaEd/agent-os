@@ -2,7 +2,7 @@ import { LayoutPanelLeft, MessageSquare } from 'lucide-react'
 import type { RawJob } from '@/views/cron/logic'
 import { t } from '~/i18n'
 import { badgeText } from '../logic'
-import type { Mandate, Trigger } from '../types'
+import type { Bracket, Mandate, Trigger } from '../types'
 import { missionStatus, statusWord, type StatusWord } from './desk-logic'
 import { mandateChip, type MandateChip } from './mandate-logic'
 import { missionWord, useMandateClock } from './MissionControls'
@@ -11,6 +11,7 @@ import type { DeskMode } from './mode-logic'
 
 const NO_MANDATES: Mandate[] = []
 const NO_TRIGGERS: Trigger[] = []
+const NO_BRACKETS: Bracket[] = []
 
 /** "DCA · next 59 m", "DCA ×2 · next 12 m", "DCA · awaiting": the mandates in one chip. */
 export function mandateChipText(chip: MandateChip): string {
@@ -45,6 +46,7 @@ export function StatusStrip({
   running = new Set(),
   mandates = NO_MANDATES,
   triggers = NO_TRIGGERS,
+  brackets = NO_BRACKETS,
   sessionPending = 0,
   globalPending = null,
   deskMode = false,
@@ -61,6 +63,8 @@ export function StatusStrip({
   mandates?: Mandate[]
   /** The desk's price triggers: one chip ("Triggers ×2", "Trigger · near", "Trigger · fired"). */
   triggers?: Trigger[]
+  /** The desk's brackets: counted into the trigger chip, once each (docs/brackets.md). */
+  brackets?: Bracket[]
   sessionPending?: number
   /** null while loading or errored. */
   globalPending?: number | null
@@ -77,7 +81,7 @@ export function StatusStrip({
   // Every live mandate in ONE chip, never a name and a progress each: the
   // strip is a single 42px row shared with the mode pill and the Desk toggle.
   const chip = trading ? mandateChip(mandates, now) : null
-  const trigger = trading ? triggerChip(triggers) : null
+  const trigger = trading ? triggerChip(triggers, brackets) : null
   // Two slots on the left: each chip takes one from the cron missions.
   const shown = missions.slice(0, Math.max(0, 2 - (chip ? 1 : 0) - (trigger ? 1 : 0)))
   return (

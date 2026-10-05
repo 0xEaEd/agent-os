@@ -49,7 +49,11 @@ import { useConfigSnapshot } from '~/views/settings/use-snapshot'
 import { ProjectChip } from './ProjectChip'
 import { useDeskInstruments, type DeskProps } from '~/views/trading/desk/useDeskInstruments'
 import { useTradeLedger } from '~/views/trading/desk/useTradeLedger'
-import { requireMandateTouchId, requireTriggerTouchId } from '~/views/trading/touch-id'
+import {
+  requireBracketTouchId,
+  requireMandateTouchId,
+  requireTriggerTouchId,
+} from '~/views/trading/touch-id'
 
 const NEW_CHAT_COMBO = 'mod+shift+o'
 const DEFAULT_AGENT_KEY = webchatSessionKey('main')
@@ -290,6 +294,14 @@ function ConnectedChat({
                 await requireTriggerTouchId(
                   (m, p) => rpc.call(m, p),
                   String(params.triggerId ?? ''),
+                )
+              // A bracket card's "Approve & arm" (one decision for both legs)
+              // and its "Sell now", which trades at once (docs/brackets.md).
+              if (method === 'trading.bracket.approve' || method === 'trading.bracket.fire')
+                await requireBracketTouchId(
+                  (m, p) => rpc.call(m, p),
+                  String(params.bracketId ?? ''),
+                  method === 'trading.bracket.fire' ? 'fire' : 'approve',
                 )
               return rpc.call(method, params)
             },
