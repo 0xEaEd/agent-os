@@ -1111,3 +1111,113 @@
 .prov-keylink:hover {
   text-decoration: underline;
 }
+
+/* ── Environment ─────────────────────────────────────────────────────────── */
+
+.env-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+.env-actions .mac-button {
+  white-space: nowrap;
+}
+.env-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.env-toolbar .mac-input {
+  min-width: 180px;
+  flex: 1;
+}
+.env-empty {
+  padding: 8px 2px;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.stg-card__head + .env-row > .stg-row {
+  border-top: 0;
+}
+.env-row__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.env-row__name > code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  word-break: break-all;
+  user-select: text;
+}
+.env-row__lock {
+  display: inline-flex;
+  color: var(--dim);
+}
+.env-row__source {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dim);
+}
+.env-row__shadow {
+  color: var(--warn);
+}
+.env-row .stg-row__control .stg-value {
+  max-width: 180px;
+}
+.stg-value[data-tone='primary'] {
+  color: var(--foreground);
+}
+.env-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px 12px;
+}
+.env-edit .mac-input {
+  flex: 1;
+  min-width: 0;
+}
+.env-tail {
+  display: flex;
+  width: 100%;
+  padding: 10px 18px 12px;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--primary);
+  text-align: left;
+}
+.env-tail:hover {
+  text-decoration: underline;
+}
+.env-tail:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.env-dialog {
+  width: 360px;
+  text-align: left;
+}
+.env-dialog__form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+.env-dialog__form > label {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.env-dialog__form .mac-input {
+  width: 100%;
+}
+.env-dialog .stg-error {
+  color: var(--danger);
+}
