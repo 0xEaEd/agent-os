@@ -12,6 +12,7 @@
   "trigger": {
     "id": "trg_00000001",
     "name": "Take-profit WETH",
+    "bracket": null,
     "kind": "sell",
     "status": "done",
     "statusReason": "sold 0.02 WETH for 42.4 USDC at $2,120",

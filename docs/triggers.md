@@ -19,8 +19,10 @@ same desk controls.
 This file is the contract between the engine, the gateway, the CLI, the
 shared renderer and the desktop. Change it before changing any of them.
 
-Chains: Base (8453) and Robinhood Chain (4663). Not in scope: OCO pairs,
-ladders, time-of-day conditions, conditions on anything but one token's USD
+Chains: Base (8453) and Robinhood Chain (4663). OCO pairs (a take-profit and
+a stop-loss on one position, one cancelling the other) are **brackets** and
+live in [`brackets.md`](brackets.md): two triggers of this file sharing a
+group. Not in scope here: ladders, time-of-day conditions, conditions on anything but one token's USD
 price, repeating alerts, LP-range alerts (follow-up).
 
 ## Vocabulary
@@ -123,6 +125,13 @@ create ──(operator)────────────► armed ──► t
   past it becomes `expired` (`"not reached by <date>"`).
 - Nothing is ever deleted. `list` shows live triggers
   (`awaiting_approval`, `armed`, `triggered`, `paused`) unless `--all`.
+  It never lists a bracket's legs (nor counts them in `totals`): a bracket
+  is listed by `trading.bracket.list` (`brackets.md`).
+- **A bracket's legs refuse leg-level writes**: `approve`, `reject`,
+  `pause`, `resume`, `stop` and `fire` on a leg answer
+  `trading.trigger.bad_state` (*"trg_… is the take-profit leg of bracket
+  brk_…: use trading.bracket.*"*); `get` works and shows the leg with its
+  `bracket` field.
 - **Update** is not in v1 (stop and create again).
 
 ### Relative prices
@@ -313,7 +322,8 @@ Trigger = {
   } | null,
   "validUntil": iso | null, "initiator": "agent" | "manual", "sessionKey": string | null,
   "createdAt": iso, "updatedAt": iso, "approvedAt": iso | null, "armedAt": iso | null,
-  "triggeredAt": iso | null, "expiresAt": iso | null
+  "triggeredAt": iso | null, "expiresAt": iso | null,
+  "bracket": { "id": "brk_1a2b3c4d", "name": "Protect ETH", "leg": "tp" | "sl" } | null   // set on a bracket's leg (brackets.md)
 }
 
 Fire = { "n": 1, "at": iso, "manual": false,
@@ -411,7 +421,8 @@ Root `article.trigger-card[data-trigger-kind=trigger][data-trigger-action=sell|b
    carries the signed distance for the skin to tint (near = amber).
 4. **Facts** `.trigger-card__facts` (2×2): *size* (`50 % · ≈ $189` / `$50` /
    `—`), *wallet balance* (`0.1 ETH`), *valid until* (`GTC` / date),
-   *approval* (`automatic` / `waits for you · over $100`).
+   *on fire* (`trades at once` / `waits for you · over $100`; absent on an
+   alert).
 5. **Fires** `.trigger-fires`: last 5 as rows `#1 · 2 m ago · filled · $189
    → 0.05 ETH @ $3,788 · ↗`, `parked · awaiting approval`, `failed · <reason>`.
 6. **Actions** `.trigger-actions` (only when `ctx.canWrite`, desktop):
@@ -475,16 +486,16 @@ mono numerals, tinted status). `canWrite` is true only on the desktop desk.
 - **Orders** show `Stop-loss ETH · fired at $3,790` from the note; an
   order's `triggerId` links to the trigger.
 - **Desk prompt** (`agent.ts`, bump the version): a new **Triggers**
-  section. A conditional request — "sell if it drops under", "cắt lỗ",
-  "chốt lời", "take profit at", "buy when it dips to", "stop loss 10 %",
-  "trailing stop", "báo tôi khi", "alert me when" — is a trigger the engine
+  section. A conditional request — "sell if it drops under", "cut my loss",
+  "take profit at", "buy when it dips to", "stop loss 10 %",
+  "trailing stop", "tell me when", "alert me when" — is a trigger the engine
   watches; never poll the price yourself, never schedule a cron for it.
-  Reading rules: "bán hết ETH nếu xuống dưới 3800" → `trigger create ETH
-  --sell --pct 100 --below 3800 --json`; "cắt lỗ 10 %" → `--sell --pct 100
-  --below -10%`; "chốt lời 20 %" → `--sell --pct 50 --above +20%` (ask the
-  size only if truly absent, default 100 %); "mua $50 ETH khi về 3500" →
+  Reading rules: "sell all my ETH if it drops under 3800" → `trigger create ETH
+  --sell --pct 100 --below 3800 --json`; "stop loss 10 %" → `--sell --pct 100
+  --below -10%`; "take profit at +20 %" → `--sell --pct 50 --above +20%` (ask the
+  size only if truly absent, default 100 %); "buy $50 of ETH when it is back at 3500" →
   `--buy --usd 50 --below 3500`; "trailing stop 10 %" → `--sell --pct 100
-  --trail 10`; "báo tôi khi ETH lên 5000" → `--alert --above 5000`. From an
+  --trail 10`; "tell me when ETH reaches 5000" → `--alert --above 5000`. From an
   agent the result is `awaiting_approval`: report the card has **Approve &
   arm**, give the id (`trg_…`), stop. "how are my triggers" → `trigger list
   --json`, one line. Pause/stop/fire are the user's controls

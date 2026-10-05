@@ -706,13 +706,15 @@
   color: var(--dim);
   cursor: pointer;
 }
-/* The last "+N more" in the band stays at its foot while the rows scroll: at
-   the band's cap it was cut off a few pixels short of legible. */
-.trd-mctl > .trd-mctl__more:not(:has(~ .trd-mctl__more)) {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
-  background: var(--elevated);
+/* A toggle is a line of its own in the band's flow, after the rows it
+   folds: never laid over a row. Sticky to the band's foot it sat on top of
+   the second bracket row whenever a docked proposal folded the band to two
+   rows. Its 26px line matches a row's, so the band's scroll stops on a whole
+   line rather than a few pixels into the toggle. */
+.trd-mctl > .trd-mctl__more {
+  flex: 0 0 100%;
+  min-height: 26px;
+  text-align: left;
 }
 .trd-mctl__more:hover {
   color: var(--foreground);
@@ -783,6 +785,26 @@
 .trd-mctl__kind[data-action='buy'] {
   color: var(--ok);
   background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+/* A bracket (docs/brackets.md) is one row for both legs: its tag reads the
+   pair — red stop under green take-profit — and its rail the trigger's. */
+.trd-mctl__row[data-kind='bracket'] {
+  gap: 4px;
+  padding-left: 4px;
+}
+.trd-mctl__row[data-kind='bracket'][data-state='awaiting_approval'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.trd-mctl__row[data-kind='bracket'] .trd-mctl__name {
+  margin-right: 0;
+}
+.trd-mctl__kind[data-action='bracket'] {
+  color: var(--foreground);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ok) 18%, transparent) 50%,
+    color-mix(in srgb, var(--danger) 18%, transparent) 50%
+  );
 }
 .trd-mctl__row[data-state='armed'] .trd-mctl__word,
 .trd-mstrip__item[data-state='armed'] .trd-mstrip__word {
@@ -949,6 +971,11 @@
 .trd-card.trd-trigger[data-action='buy'] {
   --trd-trigger-tone: var(--ok);
 }
+/* A bracket proposal: the trigger card family, its rail the warn of a
+   standing permission on both sides of the price. */
+.trd-card.trd-trigger.trd-bracket[data-action='sell'] {
+  --trd-trigger-tone: var(--warn);
+}
 .trd-trigger .trd-card__title {
   display: inline-flex;
   align-items: center;
@@ -1008,6 +1035,14 @@
 .trd-trigger__enforced::before {
   content: '● ';
   color: var(--ok);
+}
+/* A bracket proposal says its explanation on one line (the whole sentence is
+   the tooltip): at a 1200×800 window it ran to three and was cut off
+   mid-sentence behind the region's scroll. */
+.trd-bracket .trd-trigger__enforced {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .trd-asks__stamp .trd-card {
   padding: 8px 14px;

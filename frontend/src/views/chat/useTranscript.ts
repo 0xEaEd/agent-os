@@ -602,6 +602,14 @@ export function useTranscript(opts: {
       ),
     [rpc, triggerMounter],
   )
+  // And every bracket change (either leg, docs/brackets.md) the full bracket.
+  useEffect(
+    () =>
+      rpc.on('trading.bracket.changed', (payload: unknown) =>
+        triggerMounter.bracketChanged(payload),
+      ),
+    [rpc, triggerMounter],
+  )
 
   // One seam for both inline-artifact renderers. The downstream deps (stream.ts,
   // history.ts, artifacts.ts) call this whenever new rows land; keeping a single

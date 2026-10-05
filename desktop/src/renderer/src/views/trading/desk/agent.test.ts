@@ -247,12 +247,10 @@ describe('tradingAgentFiles · reading an order', () => {
     ]) {
       expect(tools).toContain(cmd)
     }
-    // English only, whatever the user writes in — but for the quoted user
-    // phrases the reading rules translate (the triggers' Vietnamese examples).
+    // English only, whatever the user writes in: the quoted example
+    // phrases included (Key, 2026-10-05: no Vietnamese in the prompt).
     for (const name of ['AGENTS.md', 'TOOLS.md']) {
-      expect(files[name]?.replace(/"[^"\n]*"/g, '""')).not.toMatch(
-        /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i,
-      )
+      expect(files[name]).not.toMatch(/[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i)
     }
   })
 })
@@ -267,13 +265,12 @@ describe('tradingAgentFiles · price triggers (v20)', () => {
     expect(agents).toContain('## Triggers')
     for (const phrase of [
       '"sell if it drops under"',
-      '"cắt lỗ"',
-      '"chốt lời"',
+      '"cut my loss"',
+      '"tell me when"',
       '"take profit at"',
       '"buy when it dips to"',
       '"stop loss 10 %"',
       '"trailing stop"',
-      '"báo tôi khi"',
       '"alert me when"',
     ]) {
       expect(agents, phrase).toContain(phrase)
@@ -285,12 +282,12 @@ describe('tradingAgentFiles · price triggers (v20)', () => {
 
   it('maps each spoken rule to its flags', () => {
     const rules: [string, string][] = [
-      ['"bán hết ETH nếu xuống dưới 3800"', '`--sell --pct 100 --below 3800`'],
-      ['"cắt lỗ 10 %"', '`--sell --pct 100 --below -10%`'],
-      ['"chốt lời 20 %"', '`--sell --pct 50 --above +20%`'],
-      ['"mua $50 ETH khi về 3500"', '`--buy --usd 50 --below 3500`'],
+      ['"sell all my ETH if it drops under 3800"', '`--sell --pct 100 --below 3800`'],
+      ['"stop loss 10 %"', '`--sell --pct 100 --below -10%`'],
+      ['"take profit at +20 %"', '`--sell --pct 50 --above +20%`'],
+      ['"buy $50 of ETH when it is back at 3500"', '`--buy --usd 50 --below 3500`'],
       ['"trailing stop 10 %"', '`--sell --pct 100 --trail 10`'],
-      ['"báo tôi khi ETH lên 5000"', '`--alert --above 5000`'],
+      ['"tell me when ETH reaches 5000"', '`--alert --above 5000`'],
     ]
     for (const [said, flags] of rules) {
       expect(agents, said).toContain(`${said} → ${flags}`)
@@ -348,6 +345,77 @@ describe('tradingAgentFiles · where a trigger is approved, and USDC (v21)', () 
       /`agentos trade trigger create USDC --sell --pct 100 --above 0\.5\s+--json`/,
     )
     expect(section).toMatch(/Never pass `--quote USDC` for a USDC trigger/)
+  })
+})
+
+describe('tradingAgentFiles · brackets (v22; v23: no --note; v24: English-only examples)', () => {
+  const files = tradingAgentFiles()
+  const agents = files['AGENTS.md'] ?? ''
+  const tools = files['TOOLS.md'] ?? ''
+  const section = agents.slice(agents.indexOf('## Brackets'), agents.indexOf('## Bridging'))
+
+  it('bumped the version and names brackets in the description', () => {
+    expect(TRADING_AGENT_VERSION).toBe(24)
+    expect(tradingAgentSpec().description).toMatch(/brackets \(take-profit \+ stop-loss as one\)/)
+    expect(agents).toContain('trading agent v24')
+  })
+
+  it('reads an exit above and an exit below on one position as ONE bracket, never two triggers', () => {
+    expect(section.startsWith('## Brackets')).toBe(true)
+    for (const phrase of [
+      '"protect my ETH"',
+      '"protect the position"',
+      '"take profit 20 %, stop loss 10 %"',
+      '"take profit at 4,500 and stop at 3,400"',
+      '"sell half at +20 %, stop at −10 %"',
+      '"tell me if ETH leaves 3,400–4,500"',
+    ]) {
+      expect(section, phrase).toContain(phrase)
+    }
+    expect(section).toMatch(/is \*\*one bracket\*\*, never two\s+triggers/)
+    expect(section).toContain('`agentos trade protect ETH --tp +20% --sl -10% --json`')
+    expect(section).toMatch(/`--pct 100`/)
+    expect(section).toMatch(/"take profit on half".*→ `--tp-pct 50`/)
+    expect(section).toMatch(/→ `--trail 10`/)
+    expect(section).toMatch(/→ `--alert`/)
+    // Live 2026-10-05: the desk agent guessed `--note` from the swap examples
+    // and lost a tool call to "No such option '--note'".
+    expect(section).toMatch(/`protect` takes no `--note`, `--client-id` or `--wait`/)
+    expect(section).toContain('`--name "…"`')
+    // The Triggers section hands the two-sided case over.
+    const triggers = agents.slice(agents.indexOf('## Triggers'), agents.indexOf('## Brackets'))
+    expect(triggers).toMatch(/it is one bracket \(see "Brackets"\)\. A trigger is one-sided\./)
+  })
+
+  it('parks from the agent: one Approve & arm for both legs, the brk_ id, then stop', () => {
+    expect(section).toMatch(/always answers `status: "awaiting_approval"`/)
+    expect(section).toMatch(/one \*\*Approve & arm\*\* button for both legs/)
+    expect(section).toMatch(/not in the BOOK/)
+    expect(section).toMatch(/bracket id \(`brk_…`\), then stop/)
+    expect(section).toMatch(/A single-sided request .* stays a trigger/s)
+    expect(section).toContain('`agentos trade bracket list --json`')
+    expect(section).toMatch(/Never state a bracket's status from memory/)
+    expect(agents).toMatch(/`agentos trade bracket approve`/)
+    // The hard rule's exception covers a bracket, by name.
+    expect(agents).toMatch(
+      /A\s+bracket \(`agentos trade protect`, see "Brackets"\) is two price triggers/,
+    )
+  })
+
+  it('carries every bracket command with the CLI’s own flags', () => {
+    for (const cmd of [
+      'agentos trade protect <token> --tp <price|pct%> (--sl <price|pct%> | --trail <pct>) [--pct 100 | --amount 0.05 | --usd 100] [--tp-pct 50] [--alert] [--quote USDC] [--chain base|robinhood] [--wallet ADDR|label] [--slippage 1] [--name "…"] [--for 7d] --json',
+      'agentos trade bracket list [--all] [--wallet …] --json',
+      'agentos trade bracket show <id> --json',
+      'agentos trade bracket approve|reject|pause|resume|stop <id> --json',
+      'agentos trade bracket fire <id> [--leg tp|sl] --json',
+      'agentos trade bracket approve|reject|pause|resume|stop|fire`,',
+      '`trading.bracket.invalid`',
+      '`trading.bracket.bad_state`',
+      '`trading.bracket.not_found`',
+    ]) {
+      expect(tools, cmd).toContain(cmd)
+    }
   })
 })
 

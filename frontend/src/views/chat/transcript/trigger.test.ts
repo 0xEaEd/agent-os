@@ -41,6 +41,7 @@ import {
   type TriggerPayload,
   type TriggerRenderContext,
   type TriggerStatus,
+  unbreakable,
 } from './trigger'
 
 // The engine writes its payloads here (regenerate with
@@ -619,7 +620,7 @@ describe('the live line', () => {
     const expiresAt = Date.parse(awaiting.expiresAt!)
     expect(expiresAt).toBeGreaterThan(fetchedAt)
     expect(nowText(awaiting, fetchedAt)).toBe(
-      `awaiting approval · proposal expires in ${formatCountdown(expiresAt - fetchedAt)}`,
+      `awaiting approval · proposal expires in ${unbreakable(formatCountdown(expiresAt - fetchedAt))}`,
     )
     // Past its expiry the engine has not swept it yet: the line says so, no countdown.
     expect(nowText(awaiting, expiresAt)).toBe('awaiting approval · proposal expiring')
@@ -1007,7 +1008,7 @@ describe('buildTriggerCard — trigger', () => {
     }
   })
 
-  it('draws an alert as notify only: no balance, no approval', () => {
+  it('draws an alert as notify only: no balance, no on-fire fact', () => {
     const p = one('trigger-alert')
     expect(p.trigger.kind).toBe('alert')
     const card = render(p)
@@ -1471,6 +1472,8 @@ describe('control → RPC → payload swap', () => {
     )
     const { host, mounter } = mountWith(fixture('triggers'), call)
     await flush()
+    const armedBefore = list.triggers.filter((tr) => tr.status === 'armed').length
+    expect(host.querySelector('.trigger-totals')?.textContent).toContain(`${armedBefore} armed`)
     host
       .querySelector<HTMLButtonElement>(
         `.trigger-row[data-trigger-id="${target.id}"] [data-trigger-op="pause"]`,
@@ -1482,6 +1485,11 @@ describe('control → RPC → payload swap', () => {
     expect(
       [...card.querySelectorAll<HTMLElement>('.trigger-row')].map((r) => r.dataset.triggerStatus),
     ).toEqual(list.triggers.map((tr) => (tr.id === target.id ? 'paused' : tr.status)))
+    // The header follows the rows: one armed fewer, the count unchanged.
+    const totals = card.querySelector('.trigger-totals')?.textContent ?? ''
+    if (armedBefore > 1) expect(totals).toContain(`${armedBefore - 1} armed`)
+    else expect(totals).not.toMatch(/armed/)
+    expect(card.querySelector('.trigger-card__count')).toHaveTextContent(String(list.totals.count))
     mounter.destroyAll()
   })
 
@@ -2031,8 +2039,13 @@ describe('engine fixtures', () => {
           (b) => b.dataset.triggerOp,
         ),
       ).toEqual(triggerActionsFor(p!.trigger.status))
+    } else if (p!.kind === 'bracket') {
+      // docs/brackets.md; bracket.test.ts covers the card itself.
+      expect(card.dataset.triggerStatus).toBe((raw.bracket as Json).status)
+      expect(card.querySelectorAll('.bracket-leg')).toHaveLength(2)
     } else {
-      expect(card.querySelectorAll('.trigger-row')).toHaveLength((raw.triggers as unknown[]).length)
+      const rows = (raw.kind === 'brackets' ? raw.brackets : raw.triggers) as unknown[]
+      expect(card.querySelectorAll('.trigger-row')).toHaveLength(rows.length)
     }
   })
 })

@@ -531,6 +531,19 @@ describe('trigger card CSS contract', () => {
     expect(block('.chat-surface .trigger-card__stale')).toMatch(/color: var\(--warn\);/)
   })
 
+  it('wraps a fact value inside its cell and gives a long one the row', () => {
+    const value = block('.chat-surface .trigger-fact__value') ?? ''
+    expect(value).toMatch(/min-width: 0;/)
+    expect(value).toMatch(/overflow-wrap: anywhere;/)
+    expect(value).not.toMatch(/white-space: nowrap;/)
+    expect(value).not.toMatch(/text-overflow: ellipsis;/)
+    expect(block(".chat-surface .trigger-fact[data-trigger-fact-span='2']")).toMatch(
+      /grid-column: 1 \/ -1;/,
+    )
+    expect(block('.chat-surface .trigger-fact__sub')).toMatch(/display: block;/)
+    expect(block('.chat-surface .trigger-fact__value > .trigger-sep')).toMatch(/display: none;/)
+  })
+
   it('shows controls with an armed confirm and an inline error, and keeps links out of the link colour', () => {
     expect(block(".chat-surface .trigger-action[data-trigger-tone='primary']")).toMatch(
       /background: var\(--primary\);/,
@@ -539,5 +552,64 @@ describe('trigger card CSS contract', () => {
     expect(block('.chat-surface .trigger-actions__error')).toMatch(/color: var\(--danger\);/)
     expect(block('.chat-surface .trigger-actions__error[hidden]')).toMatch(/display: none;/)
     expect(css).toContain('.chat-surface .msg-body .trigger-card a.trigger-fire__link {')
+  })
+})
+
+describe('bracket card CSS contract', () => {
+  const block = (selector: string): string | undefined =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[\\s\\S]*?^\\}`, 'm'),
+    )?.[0]
+
+  // docs/brackets.md, Rendering: the hooks the shared renderer emits for a
+  // bracket. A hook without a rule here renders bare on the web.
+  it('styles every bracket hook', () => {
+    for (const selector of [
+      '.chat-surface .trigger-card__group',
+      ".chat-surface .trigger-gauge[data-trigger-gauge='range'] .trigger-gauge__line",
+      ".chat-surface .trigger-gauge__zone[data-zone='bracket']",
+      '.chat-surface .trigger-gauge__tick',
+      ".chat-surface .trigger-gauge__tick[data-leg='sl']",
+      ".chat-surface .trigger-gauge__tick[data-leg='tp']",
+      '.chat-surface .trigger-gauge__dot',
+      ".chat-surface .trigger-gauge__label[data-leg='sl']",
+      ".chat-surface .trigger-gauge__label[data-leg='tp']",
+      ".chat-surface .trigger-gauge__label[data-leg='now']",
+      '.chat-surface .bracket-legs',
+      '.chat-surface .bracket-leg',
+      '.chat-surface .bracket-leg__word',
+      '.chat-surface .bracket-leg__line',
+      '.chat-surface .bracket-leg__state',
+      '.chat-surface .trigger-fact__rr',
+    ]) {
+      expect(block(selector), selector).toBeTruthy()
+    }
+  })
+
+  it('tints the stop tick red, the take-profit tick green, the zone faint', () => {
+    expect(block(".chat-surface .trigger-gauge__tick[data-leg='sl']")).toMatch(/var\(--danger\)/)
+    expect(block(".chat-surface .trigger-gauge__tick[data-leg='tp']")).toMatch(/var\(--ok\)/)
+    expect(block(".chat-surface .trigger-gauge__zone[data-zone='bracket']")).toMatch(
+      /fill: color-mix\(in srgb, var\(--foreground\) \d+%, transparent\);/,
+    )
+    expect(css).toMatch(
+      /\.trigger-gauge\[data-trigger-proximity='near'\] \.trigger-gauge__dot,[\s\S]*?fill: var\(--warn\);/,
+    )
+  })
+
+  it('lays the legs out as mono rows and keys them on the contract hooks', () => {
+    const leg = block('.chat-surface .bracket-leg')
+    expect(leg).toMatch(/display: grid;/)
+    expect(leg).toMatch(/font-family: var\(--font-mono\);/)
+    for (const hook of [
+      ".bracket-leg[data-status='armed']",
+      ".bracket-leg[data-leg='sl']",
+      ".bracket-leg[data-leg='tp']",
+      "[data-trigger-nearest='tp']",
+      "[data-trigger-nearest='sl']",
+      ".trigger-card[data-trigger-kind='bracket'][data-trigger-action='sell']",
+    ]) {
+      expect(css, hook).toContain(hook)
+    }
   })
 })

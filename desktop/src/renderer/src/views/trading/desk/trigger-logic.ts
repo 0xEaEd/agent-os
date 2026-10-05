@@ -1,6 +1,6 @@
 import { t, type MessageKey } from '~/i18n'
 import { formatAmount } from '../logic'
-import type { Trigger, TriggerFire, TriggerStatus } from '../types'
+import type { Bracket, Trigger, TriggerFire, TriggerStatus } from '../types'
 import { FINISHED_ROWS, FINISHED_VISIBLE_MS } from './mandate-logic'
 
 /**
@@ -60,9 +60,20 @@ export function priceText(value: number | null | undefined): string {
   return usdSmall.format(value)
 }
 
-/** "$189" for whole dollars, "$12.40" otherwise, "—" when unknown. */
+const usdTiny = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumSignificantDigits: 2,
+})
+
+/**
+ * "$189" for whole dollars, "$12.40" otherwise, "$0.0028" under a cent, "—"
+ * when unknown. A non-zero amount never reads "$0": a dust-sized bracket once
+ * said "≈ $0" on the desk while its chat card said "≈ $0.00275".
+ */
 export function usdText(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  if (value !== 0 && Math.abs(value) < 0.01) return usdTiny.format(value)
   return Math.abs(value - Math.round(value)) < 0.005 || Math.abs(value) >= 100
     ? usdWhole.format(Math.round(value))
     : usdCents.format(value)
@@ -94,6 +105,18 @@ export function isNear(tr: Pick<Trigger, 'status' | 'market'>): boolean {
     Number.isFinite(d) &&
     Math.abs(d) <= TRIGGER_NEAR_PCT
   )
+}
+
+/**
+ * An armed bracket within 1 % of either line (docs/brackets.md): the move left
+ * to the take-profit or to the stop. Lives here so the trigger chip can count
+ * a bracket without importing the bracket helpers back.
+ */
+export function isRangeNear(b: Pick<Bracket, 'status' | 'market'>): boolean {
+  if (b.status !== 'armed') return false
+  const close = (v: number | null | undefined) =>
+    typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= TRIGGER_NEAR_PCT
+  return close(b.market?.upsidePct) || close(b.market?.downsidePct)
 }
 
 /** "under $3,800", "over $5,000", "10 % below peak": the engine's label, else built. */
@@ -320,15 +343,25 @@ export interface TriggerChip {
   word: 'fired' | 'near' | 'awaiting' | 'armed' | 'paused'
 }
 
-/** The status strip's one trigger chip; null when none is live. */
-export function triggerChip(triggers: readonly Trigger[]): TriggerChip | null {
+/**
+ * The status strip's one trigger chip; null when none is live. A bracket
+ * (docs/brackets.md) counts once, never as its two legs: it is near when
+ * either line is within 1 %, fired while a leg's order is open.
+ */
+export function triggerChip(
+  triggers: readonly Trigger[],
+  brackets: readonly Pick<Bracket, 'status' | 'market'>[] = [],
+): TriggerChip | null {
   const live = triggers.filter((tr) => LIVE.has(tr.status))
-  if (live.length === 0) return null
-  const count = live.length
-  if (live.some((tr) => tr.status === 'triggered')) return { count, word: 'fired' }
-  if (live.some(isNear)) return { count, word: 'near' }
-  if (live.some((tr) => tr.status === 'awaiting_approval')) return { count, word: 'awaiting' }
-  if (live.some((tr) => tr.status === 'armed')) return { count, word: 'armed' }
+  const liveBrackets = brackets.filter((b) => LIVE.has(b.status))
+  const count = live.length + liveBrackets.length
+  if (count === 0) return null
+  const any = (status: TriggerStatus) =>
+    live.some((tr) => tr.status === status) || liveBrackets.some((b) => b.status === status)
+  if (any('triggered')) return { count, word: 'fired' }
+  if (live.some(isNear) || liveBrackets.some(isRangeNear)) return { count, word: 'near' }
+  if (any('awaiting_approval')) return { count, word: 'awaiting' }
+  if (any('armed')) return { count, word: 'armed' }
   return { count, word: 'paused' }
 }
 

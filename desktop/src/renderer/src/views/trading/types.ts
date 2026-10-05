@@ -473,6 +473,11 @@ export interface Trigger {
   armedAt: string | null
   triggeredAt: string | null
   expiresAt: string | null
+  /**
+   * Set when the trigger is one leg of a bracket (docs/brackets.md): its writes
+   * are refused, the bracket is acted on instead. Absent from older engines.
+   */
+  bracket?: { id: string; name: string; leg: BracketLeg } | null
 }
 
 /** What every `trading.trigger.*` write and `trading.trigger.get` answer. */
@@ -498,6 +503,102 @@ export function isLiveTrigger(status: TriggerStatus): boolean {
     status === 'triggered' ||
     status === 'paused'
   )
+}
+
+/* ── Brackets: take-profit + stop-loss as one OCO object (docs/brackets.md) ─ */
+
+/** The take-profit leg (fires above) or the stop-loss leg (fires below / trail). */
+export type BracketLeg = 'tp' | 'sl'
+
+/** A bracket sells the position, or (alert) tells the user the range was left. */
+export type BracketKind = 'sell' | 'alert'
+
+/**
+ * Two price triggers on one position that know about each other: when one
+ * fills, the other is stopped. The status is derived by the engine from the
+ * legs; the desk never re-derives it.
+ */
+export interface Bracket {
+  id: string
+  name: string
+  kind: BracketKind
+  status: TriggerStatus
+  statusReason: string | null
+  chain: CardChain
+  wallet: CardWallet
+  token: CardToken
+  quote: CardToken
+  /** The take-profit leg, a full trigger with `bracket` set. */
+  takeProfit: Trigger
+  /** The stop-loss leg. */
+  stopLoss: Trigger
+  lines: {
+    takeProfitUsd: number | null
+    /** The stop line now: the threshold, or a trail's peak × (1 − trailPct/100). */
+    stopLossUsd: number | null
+    trailPct: number | null
+    fromPriceUsd: number | null
+    /** "over $4,560". */
+    takeProfitLabel: string
+    /** "under $3,420" | "10 % below peak". */
+    stopLossLabel: string
+  }
+  action: {
+    kind: BracketKind
+    amountPct: number | null
+    amount: LpPlanAmount | null
+    amountUsd: number | null
+    /** The partial take-profit share, when under amountPct. */
+    tpPct: number | null
+    /** What the stop-loss leg would move now; terminal: what the filled leg moved. */
+    estimatedUsd: number | null
+    slippagePct: number | null
+    needsApproval: boolean
+    approvalThresholdUsd: number
+    dailyCapUsd: number
+    label: string
+  }
+  market: {
+    priceUsd: number | null
+    armedPriceUsd: number | null
+    checkedAt: string | null
+    balance: LpPlanAmount | null
+    /** % rise to the take-profit line; 0 when met. */
+    upsidePct: number | null
+    /** % fall to the stop line (negative); 0 when met. */
+    downsidePct: number | null
+    /** 0 = at the stop, 100 = at the take-profit, clamped. */
+    positionPct: number | null
+    rewardRisk: number | null
+    /** The leg closer to firing. */
+    nearest: BracketLeg | null
+  }
+  /** The leg whose fire ended (or, partial take-profit, advanced) the bracket. */
+  fired: BracketLeg | null
+  result: Trigger['result']
+  validUntil: string | null
+  initiator: 'agent' | 'manual'
+  sessionKey: string | null
+  createdAt: string
+  updatedAt: string
+  approvedAt: string | null
+  armedAt: string | null
+  expiresAt: string | null
+}
+
+/** What every `trading.bracket.*` write and `trading.bracket.get` answer. */
+export interface BracketPayload extends MandateEnvelope {
+  kind: 'bracket'
+  bracket: Bracket
+  /** Only in the answer of `trading.bracket.fire`. */
+  fire?: TriggerFire
+}
+
+/** What `trading.bracket.list` answers: live first, then newest. */
+export interface BracketListPayload extends MandateEnvelope {
+  kind: 'brackets'
+  brackets: Bracket[]
+  totals: { count: number; armed: number; awaiting: number; triggered: number }
 }
 
 export function isLpKind(kind: OrderKind | undefined | null): boolean {

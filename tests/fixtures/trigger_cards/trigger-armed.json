@@ -12,6 +12,7 @@
   "trigger": {
     "id": "trg_00000003",
     "name": "Stop-loss WETH",
+    "bracket": null,
     "kind": "sell",
     "status": "armed",
     "statusReason": null,

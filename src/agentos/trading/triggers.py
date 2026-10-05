@@ -13,6 +13,11 @@ every fire goes through.
 Times are epoch seconds (floats) everywhere except the payload, which carries
 ISO-8601 UTC strings. USD ``None`` means unknown, never ``0``. The LP card
 types (``Chain``, ``Token``, ``Amount``, ``Wallet``) come from :mod:`dca`.
+
+Brackets (``docs/brackets.md``) live here too: a take-profit and a stop-loss
+leg, two trigger rows sharing a ``group_id``, shown and driven as one thing.
+The helpers at the end derive the bracket's status from its legs and build
+its card from the two leg ``Trigger`` objects.
 """
 
 from __future__ import annotations
@@ -570,9 +575,13 @@ def trigger_json(
         else:
             balance = amount_json(int(balance_raw), quote_dec, quote_price)
     slippage = row.get("slippage_pct")
+    group_id = row.get("group_id")
     return {
         "id": row["trigger_id"],
         "name": row["name"],
+        "bracket": {"id": group_id, "name": row.get("group_name"), "leg": row.get("leg")}
+        if group_id
+        else None,
         "kind": kind,
         "status": status,
         "statusReason": row.get("status_reason"),
@@ -733,5 +742,512 @@ def triggers_payload(
 
 
 def human(raw: int, decimals: int) -> str:
-    """A token amount for a reason line: at most six places, no trailing zeros."""
-    return format_amount(int(raw), int(decimals), max_places=6)
+    """A token amount for a reason line: at most six places, no trailing zeros.
+
+    A dust amount that six places would print as ``0`` (``0.000298`` USDC
+    sold for ``1.1e-7`` ETH) keeps enough places to show its first three
+    significant digits instead: a reason line never says ``for 0 ETH``.
+    """
+    text = format_amount(int(raw), int(decimals), max_places=6)
+    if text != "0" or int(raw) <= 0:
+        return text
+    value = to_human(int(raw), int(decimals))
+    places = min(int(decimals), -value.adjusted() + 2)
+    return format_amount(int(raw), int(decimals), max_places=places)
+
+
+# ── brackets (docs/brackets.md) ────────────────────────────────────────────
+
+BRACKET_ID_PREFIX = "brk_"
+BRACKET_KINDS = ("sell", "alert")
+#: The two legs: take-profit (fires ``above``) and stop-loss (``below`` or ``trail``).
+LEGS = ("tp", "sl")
+#: ``statusReason`` prefix of a leg the engine paused because its sibling is firing.
+OCO_HOLD = "on hold: "
+#: The bracket's reason once a partial take-profit filled and the stop guards the rest.
+PARTIAL_TP_REASON = "take-profit filled · stop-loss guards the rest"
+#: Derived status precedence: the first one any leg has is the bracket's.
+BRACKET_PRECEDENCE = (
+    "triggered",
+    "awaiting_approval",
+    "armed",
+    "paused",
+    "done",
+    "stopped",
+    "rejected",
+    "expired",
+)
+
+
+def new_bracket_id() -> str:
+    return BRACKET_ID_PREFIX + uuid.uuid4().hex[:8]
+
+
+def leg_word(leg: str, kind: str = "sell") -> str:
+    """``"tp"`` → ``"take-profit"``, ``"sl"`` → ``"stop-loss"``.
+
+    A range alert's legs are its ``"ceiling"`` and ``"floor"``.
+    """
+    if kind == "alert":
+        return "ceiling" if leg == "tp" else "floor"
+    return "take-profit" if leg == "tp" else "stop-loss"
+
+
+def sibling_leg(leg: str) -> str:
+    return "sl" if leg == "tp" else "tp"
+
+
+def hold_reason(leg_name: str, kind: str = "sell") -> str:
+    """``"on hold: take-profit fired"``; ``leg_name`` is the fired leg (``"tp"`` or a word)."""
+    word = leg_word(leg_name, kind) if leg_name in LEGS else leg_name
+    return f"{OCO_HOLD}{word} fired"
+
+
+def is_on_hold(row: Mapping[str, Any]) -> bool:
+    """Whether a leg is paused by the engine for its sibling (not by the user, not by a failure)."""
+    reason_text = row.get("status_reason")
+    if reason_text is None:
+        reason_text = row.get("statusReason")
+    return str(row.get("status")) == "paused" and str(reason_text or "").startswith(OCO_HOLD)
+
+
+def oco_stopped_reason(kind: str, fired_leg: str) -> str:
+    """Why the sibling of a filled / alerted leg is stopped."""
+    if kind == "alert":
+        return "range left over the top" if fired_leg == "tp" else "range left under the floor"
+    return f"{leg_word(fired_leg)} filled"
+
+
+def bracket_default_name(kind: str, symbol: str) -> str:
+    """``"Protect ETH"`` (sell) / ``"Watch ETH"`` (alert)."""
+    return f"{'Watch' if kind == 'alert' else 'Protect'} {symbol or 'token'}"
+
+
+def release(direction: str, price: float | None, now: float) -> dict[str, Any]:
+    """The columns of a leg released from hold: armed again, re-confirming, a trail from now."""
+    fields: dict[str, Any] = {
+        "status": "armed",
+        "status_reason": None,
+        "hits": 0,
+        "bad_streak": 0,
+    }
+    if direction == "trail":
+        fields["peak_price_usd"] = price
+    if price is not None:
+        fields["last_price_usd"] = price
+        fields["last_checked_at"] = now
+    return fields
+
+
+def _leg_of(leg: Mapping[str, Any]) -> str | None:
+    """A leg's ``"tp"`` / ``"sl"`` from a ledger row or a ``Trigger`` payload object."""
+    if leg.get("leg") in LEGS:
+        return str(leg["leg"])
+    group = leg.get("bracket")
+    if isinstance(group, Mapping) and group.get("leg") in LEGS:
+        return str(group["leg"])
+    return None
+
+
+def _reason_of(leg: Mapping[str, Any]) -> str | None:
+    value = leg.get("status_reason") if "status_reason" in leg else leg.get("statusReason")
+    return str(value) if value is not None else None
+
+
+def _join(word: str, status: str, why: str | None) -> str:
+    """A leg-prefixed reason.
+
+    ``"take-profit: sold …"``, ``"stop-loss paused: nothing to sell"``, ``"take-profit armed"``.
+    """
+    if why is None:
+        return f"{word} {status.replace('_', ' ')}"
+    head = why.split(":", 1)[0].strip()
+    if head in STATUSES or head == status:
+        return f"{word} {why}"
+    return f"{word}: {why}"
+
+
+def bracket_status(legs: Iterable[Mapping[str, Any]]) -> tuple[str, str | None]:
+    """The bracket's ``(status, statusReason)`` from its legs (rows or ``Trigger`` objects).
+
+    The status is the first of :data:`BRACKET_PRECEDENCE` any leg has; the
+    reason is the deciding leg's, prefixed with its leg word when the two legs
+    are in different states. A filled partial take-profit whose stop-loss is
+    armed again reads :data:`PARTIAL_TP_REASON`.
+    """
+    legs = list(legs)
+    kind = next((str(leg.get("kind")) for leg in legs if leg.get("kind")), "sell")
+    items = [(_leg_of(leg) or "", str(leg.get("status")), _reason_of(leg)) for leg in legs]
+    items.sort(key=lambda item: LEGS.index(item[0]) if item[0] in LEGS else len(LEGS))
+    if not items:
+        return "expired", None
+    present = {status for _, status, _ in items}
+    status = next((s for s in BRACKET_PRECEDENCE if s in present), items[0][1])
+    by_leg = {leg: (st, why) for leg, st, why in items}
+    if by_leg.get("tp", ("", None))[0] == "done" and by_leg.get("sl", ("", None))[0] == "armed":
+        return status, PARTIAL_TP_REASON
+    deciding = [(leg, why) for leg, st, why in items if st == status]
+    if len(present) == 1:
+        why = next((w for _, w in deciding if w is not None), None)
+        return status, why
+    leg, why = deciding[0]
+    text = _join(leg_word(leg, kind), status, why)
+    # Both legs over, the other one by the user's hand (a stop after a partial
+    # take-profit): say so, or "Done · take-profit" reads as if it fired twice.
+    other = next(((lg, st, w) for lg, st, w in items if lg != leg), None)
+    if other is not None and status in TERMINAL_STATUSES and other[1] in TERMINAL_STATUSES:
+        if str(other[2] or "").startswith("user"):
+            text = f"{text} · {leg_word(other[0], kind)} {other[1]} by you"
+    return status, text
+
+
+def validate_bracket_terms(
+    *,
+    kind: str,
+    take_profit: str | float | None,
+    stop_loss: str | float | None,
+    trail_pct: float | None,
+    amount_usd: float | None,
+    amount_pct: float | None,
+    amount: str | None,
+    tp_pct: float | None,
+    valid_for_seconds: int | None,
+) -> str | None:
+    """The first thing wrong with a bracket's terms, or ``None``.
+
+    The caller defaults a sell's size to ``amount_pct = 100`` first when no
+    size was given. Line shapes are checked here; resolving a percent needs
+    the price now and happens in :func:`parse_price`.
+    """
+    if kind not in BRACKET_KINDS:
+        return "kind must be sell or alert"
+    if take_profit is None or (isinstance(take_profit, str) and not take_profit.strip()):
+        return "takeProfit is required"
+    if isinstance(stop_loss, str) and not stop_loss.strip():
+        stop_loss = None
+    if stop_loss is None and trail_pct is None:
+        return "one of stopLoss or trailPct is required"
+    if stop_loss is not None and trail_pct is not None:
+        return "stopLoss and trailPct exclude each other: give one"
+    try:
+        parse_price(take_profit, "above", 1.0)
+    except ValueError as exc:
+        return f"takeProfit: {exc}"
+    if stop_loss is not None:
+        try:
+            parse_price(stop_loss, "below", 1.0)
+        except ValueError as exc:
+            return f"stopLoss: {exc}"
+    elif finite(trail_pct) is None or not 0 < float(trail_pct or 0) < 100:
+        return "trailPct must be above 0 and under 100"
+    sizes = [s for s in (amount_usd, amount_pct, amount) if s is not None]
+    if kind == "alert":
+        if sizes or tp_pct is not None:
+            return "an alert takes no size"
+    else:
+        if not sizes:
+            return "a sell needs one size: amountPct, amount or amountUsd"
+        if len(sizes) > 1:
+            return "a bracket takes one size: amountPct, amount or amountUsd"
+    if amount_pct is not None and (finite(amount_pct) is None or not 0 < amount_pct <= 100):
+        return "amountPct must be above 0 and at most 100"
+    if amount_usd is not None and not _positive(amount_usd):
+        return "amountUsd must be greater than zero"
+    if amount is not None:
+        try:
+            value = Decimal(str(amount).strip())
+        except InvalidOperation:
+            return "amount must be a number"
+        if not value.is_finite() or value <= 0:
+            return "amount must be greater than zero"
+    if tp_pct is not None:
+        if amount_pct is None:
+            return "tpPct works with amountPct only"
+        if finite(tp_pct) is None or tp_pct <= 0:
+            return "tpPct must be above 0"
+        if tp_pct > amount_pct:
+            return f"tpPct must not exceed amountPct ({pct_text(amount_pct)} %)"
+    if valid_for_seconds is not None and int(valid_for_seconds) < MIN_VALID_FOR_S:
+        return f"validForSeconds must be at least {MIN_VALID_FOR_S}"
+    return None
+
+
+def bracket_lines_problem(take_profit_usd: float | None, stop_loss_usd: float | None) -> str | None:
+    """``"take-profit $3,000 must be above stop-loss $3,400"`` when the lines are the wrong way."""
+    if take_profit_usd is None or stop_loss_usd is None:
+        return None
+    if float(take_profit_usd) > float(stop_loss_usd):
+        return None
+    return (
+        f"take-profit {price_text(take_profit_usd)} must be above "
+        f"stop-loss {price_text(stop_loss_usd)}"
+    )
+
+
+def _distance_of(leg: Mapping[str, Any], price: float | None) -> float | None:
+    market = leg.get("market")
+    if isinstance(market, Mapping):
+        return finite(market.get("distancePct"))
+    now = price if price is not None else finite(leg.get("last_price_usd"))
+    return distance_pct(
+        str(leg.get("direction")),
+        now,
+        finite(leg.get("price_usd")),
+        finite(leg.get("trail_pct")),
+        finite(leg.get("peak_price_usd")),
+    )
+
+
+def nearest_leg(legs: Iterable[Mapping[str, Any]], price: float | None = None) -> str:
+    """The leg closer to firing: the smaller ``|distancePct|``; ``"sl"`` when it is unknown.
+
+    ``legs`` are ledger rows (the distance is computed at ``price``, else at
+    the row's last price) or ``Trigger`` objects (their ``market.distancePct``).
+    """
+    best: tuple[float, int, str] | None = None
+    for leg in legs:
+        name = _leg_of(leg)
+        if name is None:
+            continue
+        distance = _distance_of(leg, price)
+        if distance is None:
+            continue
+        key = (abs(distance), 0 if name == "sl" else 1, name)
+        if best is None or key < best:
+            best = key
+    return best[2] if best is not None else "sl"
+
+
+def bracket_action_label(
+    kind: str,
+    token_symbol: str,
+    quote_symbol: str,
+    *,
+    amount_usd: float | None,
+    amount_pct: float | None,
+    amount_human: str | None,
+    tp_pct: float | None,
+) -> str:
+    """``"sell 100 % of ETH → USDC"``, or a partial take-profit's
+    ``"sell 50 % of ETH at take-profit, 100 % at stop → USDC"``.
+    """
+    if kind == "sell" and tp_pct is not None and amount_pct is not None:
+        sym = token_symbol or "token"
+        return (
+            f"sell {pct_text(tp_pct)} % of {sym} at take-profit, "
+            f"{pct_text(amount_pct)} % at stop → {quote_symbol or 'quote'}"
+        )
+    return action_label(
+        kind,
+        token_symbol,
+        quote_symbol,
+        amount_usd=amount_usd,
+        amount_pct=amount_pct,
+        amount_human=amount_human,
+    )
+
+
+def _fired_leg(tp: Mapping[str, Any], sl: Mapping[str, Any]) -> str | None:
+    """The leg whose fire ended (or, a partial take-profit, advanced) the bracket."""
+    done = [(leg, name) for leg, name in ((tp, "tp"), (sl, "sl")) if leg.get("status") == "done"]
+    if not done:
+        return None
+    if len(done) == 1:
+        return done[0][1]
+    # Both filled (a partial take-profit, then the stop): the later one ended it.
+    return max(done, key=lambda d: (str(d[0].get("triggeredAt") or ""), d[1] == "sl"))[1]
+
+
+def _latest(*values: Any) -> Any:
+    known = [v for v in values if v is not None]
+    return max(known) if known else None
+
+
+def bracket_json(take_profit: Mapping[str, Any], stop_loss: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``Bracket`` object from its two leg ``Trigger`` objects (each with ``bracket`` set)."""
+    tp, sl = take_profit, stop_loss
+    group = tp.get("bracket") or sl.get("bracket") or {}
+    kind = str(tp["kind"])
+    status, status_reason = bracket_status([tp, sl])
+    live = status in LIVE_STATUSES
+    tp_live = tp["status"] in LIVE_STATUSES
+    sl_live = sl["status"] in LIVE_STATUSES
+    tp_cond, sl_cond = tp["condition"], sl["condition"]
+    tp_line = finite(tp_cond.get("priceUsd"))
+    trail = finite(sl_cond.get("trailPct"))
+    sl_line = finite(sl_cond.get("stopPriceUsd")) if trail is not None else None
+    if trail is None:
+        sl_line = finite(sl_cond.get("priceUsd"))
+    price = finite(tp["market"].get("priceUsd"))
+    if price is None:
+        price = finite(sl["market"].get("priceUsd"))
+    if trail is not None and sl_line is None and sl_live and price is not None:
+        # No peak yet (a proposal, or armed blind): the peak starts at the price now.
+        sl_line = stop_price(price, trail)
+    upside: float | None = None
+    downside: float | None = None
+    if price is not None and price > 0:
+        if tp_line is not None and tp_live:
+            upside = max(0.0, (tp_line - price) / price * 100.0)
+        if sl_line is not None and sl_live:
+            downside = min(0.0, (sl_line - price) / price * 100.0)
+    position: float | None = None
+    if live and price is not None and tp_line is not None and sl_line is not None:
+        span = tp_line - sl_line
+        if span > 0:
+            position = min(100.0, max(0.0, (price - sl_line) / span * 100.0))
+    reward_risk: float | None = None
+    if upside and downside:
+        reward_risk = round(upside / abs(downside), 1)
+    nearest: str | None = None
+    if live and price is not None:
+        gaps = {"tp": upside, "sl": downside}
+        known = {leg: abs(gap) for leg, gap in gaps.items() if gap is not None}
+        nearest = min(known, key=lambda leg: (known[leg], leg != "sl")) if known else None
+    fired = _fired_leg(tp, sl)
+    fired_leg = tp if fired == "tp" else sl if fired == "sl" else None
+    result = fired_leg.get("result") if fired_leg is not None else None
+    tp_action, sl_action = tp["action"], sl["action"]
+    amount_pct = finite(sl_action.get("amountPct"))
+    tp_share = finite(tp_action.get("amountPct"))
+    tp_pct = tp_share if tp_share is not None and amount_pct is not None else None
+    if tp_pct is not None and amount_pct is not None and tp_pct >= amount_pct:
+        tp_pct = None
+    estimate = finite(sl_action.get("estimatedUsd"))
+    if not live and fired_leg is not None:
+        estimate = finite(fired_leg["action"].get("estimatedUsd"))
+    threshold = float(sl_action.get("approvalThresholdUsd") or 0)
+    amount = sl_action.get("amount")
+    return {
+        "id": group.get("id"),
+        "name": group.get("name"),
+        "kind": kind,
+        "status": status,
+        "statusReason": status_reason,
+        "chain": tp["chain"],
+        "wallet": tp["wallet"],
+        "token": tp["token"],
+        "quote": tp["quote"],
+        "takeProfit": dict(tp),
+        "stopLoss": dict(sl),
+        "lines": {
+            "takeProfitUsd": tp_line,
+            "stopLossUsd": sl_line,
+            "trailPct": trail,
+            "fromPriceUsd": finite(tp_cond.get("fromPriceUsd"))
+            if tp_cond.get("fromPriceUsd") is not None
+            else finite(sl_cond.get("fromPriceUsd")),
+            "takeProfitLabel": tp_cond.get("label"),
+            "stopLossLabel": sl_cond.get("label"),
+        },
+        "action": {
+            "kind": kind,
+            "amountPct": amount_pct,
+            "amount": amount,
+            "amountUsd": finite(sl_action.get("amountUsd")),
+            "tpPct": tp_pct,
+            "estimatedUsd": estimate,
+            "slippagePct": finite(sl_action.get("slippagePct")),
+            "needsApproval": estimate is not None and estimate > threshold,
+            "approvalThresholdUsd": threshold,
+            "dailyCapUsd": float(sl_action.get("dailyCapUsd") or 0),
+            "label": bracket_action_label(
+                kind,
+                str(tp["token"].get("symbol") or ""),
+                str(tp["quote"].get("symbol") or ""),
+                amount_usd=finite(sl_action.get("amountUsd")),
+                amount_pct=amount_pct,
+                amount_human=amount.get("human") if isinstance(amount, Mapping) else None,
+                tp_pct=tp_pct,
+            ),
+        },
+        "market": {
+            "priceUsd": price,
+            "armedPriceUsd": finite(sl["market"].get("armedPriceUsd"))
+            if sl["market"].get("armedPriceUsd") is not None
+            else finite(tp["market"].get("armedPriceUsd")),
+            "checkedAt": _latest(tp["market"].get("checkedAt"), sl["market"].get("checkedAt")),
+            "balance": (sl["market"].get("balance") or tp["market"].get("balance"))
+            if kind == "sell" and live
+            else None,
+            "upsidePct": upside,
+            "downsidePct": downside,
+            "positionPct": position,
+            "rewardRisk": reward_risk,
+            "nearest": nearest,
+        },
+        "fired": fired,
+        "result": result,
+        "validUntil": tp.get("validUntil"),
+        "initiator": tp.get("initiator"),
+        "sessionKey": tp.get("sessionKey"),
+        "createdAt": tp.get("createdAt"),
+        "updatedAt": _latest(tp.get("updatedAt"), sl.get("updatedAt")),
+        "approvedAt": tp.get("approvedAt"),
+        "armedAt": _latest(tp.get("armedAt"), sl.get("armedAt")),
+        "expiresAt": tp.get("expiresAt"),
+    }
+
+
+def bracket_warnings(tp_warnings: Iterable[str], sl_warnings: Iterable[str]) -> list[str]:
+    """Both legs' warnings, prefixed with the leg word; one both legs share is said once."""
+    tp_list, sl_list = list(tp_warnings), list(sl_warnings)
+    out: list[str] = []
+    for text in tp_list:
+        out.append(text if text in sl_list else f"take-profit: {text}")
+    for text in sl_list:
+        if text not in tp_list:
+            out.append(f"stop-loss: {text}")
+    return list(dict.fromkeys(out))
+
+
+def bracket_payload(
+    bracket: dict[str, Any],
+    *,
+    fetched_at: float,
+    warnings: Iterable[str] = (),
+    fire: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """``kind = "bracket"``: one card; ``fire`` only in the answer to a fire-now."""
+    payload = envelope(
+        "bracket",
+        fetched_at=fetched_at,
+        warnings=warnings,
+        request={"kind": "get", "params": {"bracketId": bracket["id"]}},
+    )
+    payload["bracket"] = bracket
+    if fire is not None:
+        payload["fire"] = fire
+    cleaned: dict[str, Any] = clean(payload)
+    return cleaned
+
+
+def brackets_payload(
+    brackets: list[dict[str, Any]],
+    *,
+    fetched_at: float,
+    all: bool = False,
+    wallet: str | None = None,
+    warnings: Iterable[str] = (),
+) -> dict[str, Any]:
+    """``kind = "brackets"``: live ones first, then newest first, with totals."""
+    ordered = sorted(brackets, key=lambda b: str(b.get("createdAt") or ""), reverse=True)
+    ordered.sort(key=lambda b: b["status"] not in LIVE_STATUSES)
+    params: dict[str, Any] = {"all": bool(all)}
+    if wallet:
+        params["wallet"] = wallet
+    payload = envelope(
+        "brackets",
+        fetched_at=fetched_at,
+        warnings=warnings,
+        request={"kind": "list", "params": params},
+    )
+    payload["brackets"] = ordered
+    payload["totals"] = {
+        "count": len(ordered),
+        "armed": sum(1 for b in ordered if b["status"] == "armed"),
+        "awaiting": sum(1 for b in ordered if b["status"] == "awaiting_approval"),
+        "triggered": sum(1 for b in ordered if b["status"] == "triggered"),
+    }
+    cleaned: dict[str, Any] = clean(payload)
+    return cleaned

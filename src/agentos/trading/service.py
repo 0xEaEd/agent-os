@@ -5649,6 +5649,25 @@ class TradingService:
         )
 
     @staticmethod
+    def _trigger_refuse_leg(row: dict[str, Any], action: str) -> None:
+        """A bracket's leg is driven through its bracket (``docs/brackets.md``), never alone."""
+        group_id = row.get("group_id")
+        if not group_id:
+            return
+        raise TradingError(
+            "trading.trigger.bad_state",
+            f"{row['trigger_id']} is the "
+            f"{triggers.leg_word(str(row.get('leg')), str(row['kind']))} leg of "
+            f"bracket {group_id}: use trading.bracket.{action}",
+            details={
+                "triggerId": row["trigger_id"],
+                "status": row["status"],
+                "bracketId": group_id,
+                "leg": row.get("leg"),
+            },
+        )
+
+    @staticmethod
     def _trigger_invalid(message: str) -> TradingError:
         return TradingError("trading.trigger.invalid", message)
 
@@ -5867,6 +5886,7 @@ class TradingService:
     async def trigger_approve(self, trigger_id: str) -> dict[str, Any]:
         """Arm an agent's proposal; it is checked from the next tick."""
         row = self._trigger_row(trigger_id)
+        self._trigger_refuse_leg(row, "approve")
         if row["status"] != "awaiting_approval":
             raise self._trigger_bad_state(row, "approve")
         now = self._now()
@@ -5890,6 +5910,7 @@ class TradingService:
 
     async def trigger_reject(self, trigger_id: str, reason: str | None = None) -> dict[str, Any]:
         row = self._trigger_row(trigger_id)
+        self._trigger_refuse_leg(row, "reject")
         if row["status"] != "awaiting_approval":
             raise self._trigger_bad_state(row, "reject")
         updated = self.ledger.update_trigger(
@@ -5906,6 +5927,7 @@ class TradingService:
 
     async def trigger_pause(self, trigger_id: str) -> dict[str, Any]:
         row = self._trigger_row(trigger_id)
+        self._trigger_refuse_leg(row, "pause")
         if row["status"] != "armed":
             raise self._trigger_bad_state(row, "pause")
         updated = self.ledger.update_trigger(
@@ -5926,6 +5948,7 @@ class TradingService:
         so a trail's peak becomes the price now.
         """
         row = self._trigger_row(trigger_id)
+        self._trigger_refuse_leg(row, "resume")
         if row["status"] != "paused":
             raise self._trigger_bad_state(row, "resume")
         now = self._now()
@@ -5952,6 +5975,7 @@ class TradingService:
     async def trigger_stop(self, trigger_id: str, reason: str | None = None) -> dict[str, Any]:
         """Terminal. An order of the trigger still waiting for approval is rejected with it."""
         row = self._trigger_row(trigger_id)
+        self._trigger_refuse_leg(row, "stop")
         if row["status"] not in triggers.LIVE_STATUSES:
             raise self._trigger_bad_state(row, "stop")
         updated = self.ledger.update_trigger(
@@ -5973,6 +5997,7 @@ class TradingService:
     async def trigger_fire_now(self, trigger_id: str, *, wait: bool = False) -> dict[str, Any]:
         """Fire now: act at once on an armed or paused trigger, whatever the price."""
         row = self._trigger_row(trigger_id)
+        self._trigger_refuse_leg(row, "fire")
         if row["status"] not in ("armed", "paused"):
             raise self._trigger_bad_state(row, "fire")
         async with self._trigger_lock:
@@ -5998,16 +6023,16 @@ class TradingService:
             return
         async with self._trigger_lock:
             now = self._now()
-            for row in self.ledger.list_triggers(statuses=["awaiting_approval"]):
+            for row in self.ledger.list_triggers(statuses=["awaiting_approval"], legs="all"):
                 if row.get("expires_at") is not None and float(row["expires_at"]) <= now:
                     await self._trigger_expire(row, now, "no decision within 24 h")
-            for row in self.ledger.list_triggers(statuses=["armed", "paused"]):
+            for row in self.ledger.list_triggers(statuses=["armed", "paused"], legs="all"):
                 until = row.get("valid_until")
                 if until is not None and float(until) <= now:
                     await self._trigger_expire(row, now, triggers.not_reached_reason(float(until)))
             await self._trigger_reconcile(now)
             by_chain: dict[int, list[dict[str, Any]]] = {}
-            for row in self.ledger.list_triggers(statuses=["armed"]):
+            for row in self.ledger.list_triggers(statuses=["armed"], legs="all"):
                 by_chain.setdefault(int(row["chain_id"]), []).append(row)
             for chain_id, rows in by_chain.items():
                 chain = CHAINS.get(chain_id)
@@ -6097,7 +6122,7 @@ class TradingService:
                 )
         # A trigger left ``triggered`` with no open fire: the process died between
         # the claim and the fire row, or between a settled fire and its trigger.
-        for row in self.ledger.list_triggers(statuses=["triggered"]):
+        for row in self.ledger.list_triggers(statuses=["triggered"], legs="all"):
             if self.ledger.open_fires(str(row["trigger_id"])):
                 continue
             since = row.get("triggered_at") or row.get("updated_at") or now
@@ -6150,6 +6175,8 @@ class TradingService:
             if claimed is None:
                 return None
         row = claimed
+        if row.get("group_id"):
+            await self._bracket_hold_sibling(row, now)
         fire_id = self.ledger.insert_fire(
             {
                 "trigger_id": trigger_id,
@@ -6309,6 +6336,19 @@ class TradingService:
         return True
 
     async def _trigger_after_fire(
+        self, row: dict[str, Any], fire: dict[str, Any] | None, now: float
+    ) -> dict[str, Any] | None:
+        """Settle a ``triggered`` trigger after its fire; a bracket leg then settles its sibling.
+
+        See :meth:`_trigger_settle_row` for where the trigger goes and
+        :meth:`_bracket_after_fire` for the sibling (``docs/brackets.md``).
+        """
+        updated = await self._trigger_settle_row(row, fire, now)
+        if updated is not None and updated.get("group_id"):
+            await self._bracket_after_fire(updated, fire, now)
+        return updated
+
+    async def _trigger_settle_row(
         self, row: dict[str, Any], fire: dict[str, Any] | None, now: float
     ) -> dict[str, Any] | None:
         """Where a ``triggered`` trigger goes once its fire settled (``None``: it did not move).
@@ -6478,16 +6518,578 @@ class TradingService:
         )
         return trigger, warnings
 
-    async def _trigger_changed(self, row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-        """Announce a trigger's new state; returns what was announced."""
+    async def _trigger_changed(
+        self, row: dict[str, Any], *, bracket: bool = True
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Announce a trigger's new state; returns what was announced.
+
+        A bracket leg announces its bracket too, unless ``bracket=False``: the
+        caller moves both legs and announces the bracket once itself.
+        """
         trigger, warnings = await self._trigger_build(row)
         await self._emit("trading.changed", {"reason": "trigger", "triggerId": row["trigger_id"]})
         await self._emit("trading.trigger.changed", {"trigger": dca.clean(trigger)})
+        if bracket and row.get("group_id"):
+            await self._bracket_announce(str(row["group_id"]))
         return trigger, warnings
 
     async def _trigger_answer(self, row: dict[str, Any]) -> dict[str, Any]:
         trigger, warnings = await self._trigger_changed(row)
         return triggers.trigger_payload(trigger, fetched_at=self._now(), warnings=warnings)
+
+    # ── Brackets (docs/brackets.md) ────────────────────────────────────
+
+    @staticmethod
+    def _bracket_invalid(message: str) -> TradingError:
+        return TradingError("trading.bracket.invalid", message)
+
+    @classmethod
+    def _bracket_number(cls, value: Any, field_name: str) -> float:
+        try:
+            return cls._trigger_number(value, field_name)
+        except TradingError as exc:
+            raise cls._bracket_invalid(str(exc)) from None
+
+    def _bracket_legs(self, bracket_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The bracket's ``(take-profit, stop-loss)`` rows; ``not_found`` without both."""
+        group_id = str(bracket_id or "").strip()
+        by_leg = {row.get("leg"): row for row in self.ledger.group_triggers(group_id)}
+        if "tp" not in by_leg or "sl" not in by_leg:
+            raise TradingError("trading.bracket.not_found", f"no bracket {bracket_id!r}")
+        return by_leg["tp"], by_leg["sl"]
+
+    def _bracket_bad_state(self, bracket_id: str, action: str) -> TradingError:
+        """``bad_state`` naming the bracket's status now (re-read: a race may have moved it)."""
+        tp, sl = self._bracket_legs(bracket_id)
+        status, _ = triggers.bracket_status([tp, sl])
+        return TradingError(
+            "trading.bracket.bad_state",
+            f"cannot {action} bracket {tp['group_id']}: it is {status}",
+            details={
+                "bracketId": tp["group_id"],
+                "status": status,
+                "legs": {"tp": tp["status"], "sl": sl["status"]},
+            },
+        )
+
+    def _bracket_move(
+        self,
+        bracket_id: str,
+        action: str,
+        moves: list[tuple[dict[str, Any], str | list[str], dict[str, Any]]],
+        now: float,
+    ) -> None:
+        """Move legs together: compare-and-set each, one transaction; ``bad_state`` if one lost."""
+
+        class _LostError(Exception):
+            pass
+
+        try:
+            with self.ledger.transaction():
+                for row, expect, fields in moves:
+                    moved = self.ledger.update_trigger(
+                        str(row["trigger_id"]), now=now, expect_status=expect, **fields
+                    )
+                    if moved is None:
+                        raise _LostError
+        except _LostError:
+            raise self._bracket_bad_state(bracket_id, action) from None
+
+    def _bracket_sibling(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        group_id = row.get("group_id")
+        if not group_id:
+            return None
+        return next(
+            (
+                leg
+                for leg in self.ledger.group_triggers(str(group_id))
+                if leg["trigger_id"] != row["trigger_id"]
+            ),
+            None,
+        )
+
+    async def _bracket_build(
+        self, tp: dict[str, Any], sl: dict[str, Any], *, announce_legs: bool = False
+    ) -> tuple[dict[str, Any], list[str]]:
+        """The ``Bracket`` object and the card's warnings (both legs', prefixed)."""
+        if announce_legs:
+            tp_trigger, tp_warnings = await self._trigger_changed(tp, bracket=False)
+            sl_trigger, sl_warnings = await self._trigger_changed(sl, bracket=False)
+        else:
+            tp_trigger, tp_warnings = await self._trigger_build(tp)
+            sl_trigger, sl_warnings = await self._trigger_build(sl)
+        bracket = triggers.bracket_json(tp_trigger, sl_trigger)
+        return bracket, triggers.bracket_warnings(tp_warnings, sl_warnings)
+
+    async def _bracket_announce(
+        self, bracket_id: str, *, announce_legs: bool = False
+    ) -> tuple[dict[str, Any], list[str]] | None:
+        """Emit ``trading.changed {reason: "bracket"}`` and ``trading.bracket.changed`` once."""
+        try:
+            tp, sl = self._bracket_legs(bracket_id)
+        except TradingError:
+            return None
+        bracket, warnings = await self._bracket_build(tp, sl, announce_legs=announce_legs)
+        await self._emit("trading.changed", {"reason": "bracket", "bracketId": bracket["id"]})
+        await self._emit("trading.bracket.changed", {"bracket": dca.clean(bracket)})
+        return bracket, warnings
+
+    async def _bracket_answer(
+        self,
+        bracket_id: str,
+        *,
+        announce: bool = True,
+        fire: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """The ``bracket`` payload; with ``announce`` both legs and the bracket are announced."""
+        if announce:
+            built = await self._bracket_announce(bracket_id, announce_legs=True)
+            if built is None:
+                self._bracket_legs(bracket_id)  # raises not_found
+                raise AssertionError("unreachable")
+            bracket, warnings = built
+        else:
+            tp, sl = self._bracket_legs(bracket_id)
+            bracket, warnings = await self._bracket_build(tp, sl)
+        return triggers.bracket_payload(
+            bracket, fetched_at=self._now(), warnings=warnings, fire=fire
+        )
+
+    async def bracket_create(
+        self,
+        *,
+        chain: ChainSpec,
+        kind: str = "sell",
+        token: str,
+        quote: str | None = None,
+        take_profit: str | float | None,
+        stop_loss: str | float | None = None,
+        trail_pct: float | None = None,
+        amount_usd: float | None = None,
+        amount_pct: float | None = None,
+        amount: str | None = None,
+        tp_pct: float | None = None,
+        wallet: str | None = None,
+        slippage_pct: float | None = None,
+        name: str | None = None,
+        valid_for_seconds: int | None = None,
+        initiator: str,
+        session_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a bracket: two legs in one transaction, ``armed`` (agent: ``awaiting_approval``).
+
+        ``take_profit`` / ``stop_loss`` may be relative (``"+20%"``,
+        ``"-10%"``); they are resolved against the price now and stored
+        absolute. ``initiator`` comes from the RPC layer, never from params.
+        """
+        if not getattr(self.config, "enabled", True):
+            raise TradingError("trading.disabled", "Trading is disabled in config")
+        if initiator not in ("manual", "agent"):
+            raise TradingError("trading.invalid", "initiator must be 'manual' or 'agent'")
+        kind_ = str(kind or "sell").strip().lower()
+        for value, field_name in ((take_profit, "takeProfit"), (stop_loss, "stopLoss")):
+            if isinstance(value, bool):
+                raise self._bracket_invalid(f"{field_name} must be a number or a percent")
+        trail = None if trail_pct is None else self._bracket_number(trail_pct, "trailPct")
+        usd = None if amount_usd is None else self._bracket_number(amount_usd, "amountUsd")
+        pct = None if amount_pct is None else self._bracket_number(amount_pct, "amountPct")
+        tp_share = None if tp_pct is None else self._bracket_number(tp_pct, "tpPct")
+        amount_text = None if amount is None else str(amount).strip()
+        valid_for: int | None = None
+        if valid_for_seconds is not None:
+            valid_for = int(self._bracket_number(valid_for_seconds, "validForSeconds"))
+        if kind_ == "sell" and usd is None and pct is None and amount_text is None:
+            pct = 100.0  # "protect my ETH": the whole position
+        problem = triggers.validate_bracket_terms(
+            kind=kind_,
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            trail_pct=trail,
+            amount_usd=usd,
+            amount_pct=pct,
+            amount=amount_text,
+            tp_pct=tp_share,
+            valid_for_seconds=valid_for,
+        )
+        if problem:
+            raise self._bracket_invalid(problem)
+        if tp_share is not None and pct is not None and tp_share >= pct:
+            tp_share = None  # the whole size at take-profit too: not a partial one
+        slippage = (
+            None if slippage_pct is None else self._bracket_number(slippage_pct, "slippagePct")
+        )
+        if slippage is not None:
+            ceiling = self._agent_max_slippage()
+            if not 0 < slippage <= ceiling:
+                raise self._bracket_invalid(
+                    f"slippagePct must be above 0 and at most {ceiling:.2f}% "
+                    "(every fire runs under the agent's slippage ceiling)"
+                )
+        if isinstance(wallet, str) and wallet.strip().lower() == "all":
+            raise self._bracket_invalid("a bracket watches one wallet")
+        try:
+            record = self._wallets_for(wallet or None)[0]
+        except TradingError:
+            raise
+        except Exception as exc:
+            raise _err(exc) from exc
+        meta_token = await self._dca_token(chain, token)
+        quote_ref = (quote or "").strip()
+        if kind_ == "alert":
+            if quote_ref:
+                meta_quote = await self._dca_token(chain, quote_ref)
+            else:
+                meta_quote = (
+                    await self._dca_token(chain, chain.usdc) if chain.usdc else native_token(chain)
+                )
+            if meta_quote.address == meta_token.address:
+                meta_quote = native_token(chain)
+        else:
+            traded_quote = quote_ref or chain.usdc
+            if not traded_quote:
+                raise self._bracket_invalid(
+                    f"quote is required on {chain.name}: it has no canonical USDC"
+                )
+            meta_quote = await self._dca_token(chain, traded_quote)
+            if meta_quote.address == meta_token.address:
+                if quote_ref:
+                    raise self._bracket_invalid("token and quote are the same token")
+                meta_quote = native_token(chain)
+        current = await self._dca_price(chain, meta_token.address)
+        symbol = meta_token.symbol or "the token"
+        assert take_profit is not None  # validate_bracket_terms
+        try:
+            tp_usd, tp_from = triggers.parse_price(take_profit, "above", current, symbol=symbol)
+            sl_usd: float | None = None
+            sl_from: float | None = None
+            if stop_loss is not None and not (isinstance(stop_loss, str) and not stop_loss.strip()):
+                sl_usd, sl_from = triggers.parse_price(stop_loss, "below", current, symbol=symbol)
+        except ValueError as exc:
+            raise self._bracket_invalid(str(exc)) from None
+        sl_direction = "trail" if trail is not None else "below"
+        sl_line = sl_usd
+        if trail is not None and current is not None:
+            sl_line = triggers.stop_price(current, trail)
+        lines_problem = triggers.bracket_lines_problem(tp_usd, sl_line)
+        if lines_problem:
+            raise self._bracket_invalid(lines_problem)
+        amount_raw: str | None = None
+        if amount_text is not None:
+            try:
+                raw = to_raw(amount_text, meta_token.decimals)
+            except ValueError:
+                raise self._bracket_invalid("amount must be a number") from None
+            if raw <= 0:
+                raise self._bracket_invalid(f"amount is less than one unit of {symbol}")
+            amount_raw = str(raw)
+        label = " ".join(str(name or "").split())[: triggers.MAX_NAME_LENGTH]
+        label = label or triggers.bracket_default_name(kind_, meta_token.symbol)
+        now = self._now()
+        agent = initiator == "agent"
+        group_id = triggers.new_bracket_id()
+        base: dict[str, Any] = {
+            "kind": kind_,
+            "status": "awaiting_approval",
+            "status_reason": None,
+            "chain_id": chain.chain_id,
+            "wallet": record.key,
+            "token": meta_token.address,
+            "quote": meta_quote.address,
+            "amount_usd": usd,
+            "amount_raw": amount_raw,
+            "slippage_pct": slippage,
+            "confirm_ticks": triggers.CONFIRM_TICKS,
+            "valid_until": now + valid_for if valid_for is not None else None,
+            "initiator": initiator,
+            "session_key": session_key,
+            "created_at": now,
+            "updated_at": now,
+            "group_id": group_id,
+            "group_name": label,
+        }
+        legs: list[dict[str, Any]] = []
+        for leg, direction, price_usd, leg_trail, from_price, leg_pct in (
+            ("tp", "above", tp_usd, None, tp_from, tp_share if tp_share is not None else pct),
+            ("sl", sl_direction, sl_usd, trail, sl_from, pct),
+        ):
+            row = {
+                **base,
+                "trigger_id": triggers.new_trigger_id(),
+                "leg": leg,
+                "name": triggers.default_name(
+                    kind_, direction, meta_token.symbol, price_usd, leg_trail
+                ),
+                "direction": direction,
+                "price_usd": price_usd,
+                "trail_pct": leg_trail,
+                "from_price_usd": from_price,
+                "amount_pct": leg_pct,
+            }
+            if agent:
+                row["expires_at"] = now + triggers.PENDING_TTL
+                row["last_price_usd"] = current
+                row["last_checked_at"] = now if current is not None else None
+            else:
+                row.update(self._trigger_arming(direction, current, now))
+                row["approved_at"] = now
+            legs.append(row)
+        self.ledger.insert_triggers(legs)
+        log.info("trading.bracket_created", bracket=group_id, kind=kind_, status=legs[0]["status"])
+        return await self._bracket_answer(group_id)
+
+    async def bracket_get(self, bracket_id: str) -> dict[str, Any]:
+        return await self._bracket_answer(bracket_id, announce=False)
+
+    async def bracket_list(
+        self,
+        *,
+        all: bool = False,
+        wallet: str | None = None,
+    ) -> dict[str, Any]:
+        """Live brackets (any leg live; every one with ``all``), optionally of one wallet."""
+        key: str | None = None
+        if wallet:
+            try:
+                key = self._wallets_for(wallet)[0].key
+            except TradingError:
+                raise
+            except Exception as exc:
+                raise _err(exc) from exc
+        group_ids = self.ledger.list_groups(
+            statuses=None if all else sorted(triggers.LIVE_STATUSES), wallet=key
+        )
+        built: list[dict[str, Any]] = []
+        for group_id in group_ids:
+            try:
+                tp, sl = self._bracket_legs(group_id)
+            except TradingError:
+                continue  # never written half (one transaction); a list never fails for one
+            built.append((await self._bracket_build(tp, sl))[0])
+        return triggers.brackets_payload(built, fetched_at=self._now(), all=all, wallet=wallet)
+
+    async def bracket_approve(self, bracket_id: str) -> dict[str, Any]:
+        """Arm both legs of an agent's proposal at the price now."""
+        tp, sl = self._bracket_legs(bracket_id)
+        if tp["status"] != "awaiting_approval" or sl["status"] != "awaiting_approval":
+            raise self._bracket_bad_state(bracket_id, "approve")
+        now = self._now()
+        expires = tp.get("expires_at")
+        if expires is not None and float(expires) <= now:
+            for row in (tp, sl):
+                await self._trigger_expire(row, now, "no decision within 24 h")
+            raise self._bracket_bad_state(bracket_id, "approve")
+        chain = CHAINS[int(tp["chain_id"])]
+        current = await self._dca_price(chain, str(tp["token"]))
+        self._bracket_move(
+            bracket_id,
+            "approve",
+            [
+                (
+                    row,
+                    "awaiting_approval",
+                    {
+                        "status_reason": None,
+                        "approved_at": now,
+                        "expires_at": None,
+                        **self._trigger_arming(str(row["direction"]), current, now),
+                    },
+                )
+                for row in (tp, sl)
+            ],
+            now,
+        )
+        return await self._bracket_answer(bracket_id)
+
+    async def bracket_reject(self, bracket_id: str, reason: str | None = None) -> dict[str, Any]:
+        tp, sl = self._bracket_legs(bracket_id)
+        if tp["status"] != "awaiting_approval" or sl["status"] != "awaiting_approval":
+            raise self._bracket_bad_state(bracket_id, "reject")
+        why = self._dca_user_reason(reason)
+        fields = {"status": "rejected", "status_reason": why, "expires_at": None}
+        self._bracket_move(
+            bracket_id,
+            "reject",
+            [(row, "awaiting_approval", dict(fields)) for row in (tp, sl)],
+            self._now(),
+        )
+        return await self._bracket_answer(bracket_id)
+
+    async def bracket_pause(self, bracket_id: str) -> dict[str, Any]:
+        """Pause every armed leg; refused while a leg is firing."""
+        legs = self._bracket_legs(bracket_id)
+        armed = [row for row in legs if row["status"] == "armed"]
+        if not armed or any(row["status"] == "triggered" for row in legs):
+            raise self._bracket_bad_state(bracket_id, "pause")
+        self._bracket_move(
+            bracket_id,
+            "pause",
+            [(row, "armed", {"status": "paused", "status_reason": "user"}) for row in armed],
+            self._now(),
+        )
+        return await self._bracket_answer(bracket_id)
+
+    async def bracket_resume(self, bracket_id: str) -> dict[str, Any]:
+        """Re-arm every paused leg: hits, the failure streak and a trail's peak restart."""
+        legs = self._bracket_legs(bracket_id)
+        paused = [row for row in legs if row["status"] == "paused"]
+        if not paused or any(row["status"] == "triggered" for row in legs):
+            raise self._bracket_bad_state(bracket_id, "resume")
+        now = self._now()
+        chain = CHAINS[int(legs[0]["chain_id"])]
+        current: float | None = None
+        if any(row["direction"] == "trail" for row in paused):
+            current = await self._dca_price(chain, str(legs[0]["token"]))
+        moves: list[tuple[dict[str, Any], str | list[str], dict[str, Any]]] = []
+        for row in paused:
+            fields: dict[str, Any] = {
+                "status": "armed",
+                "status_reason": None,
+                "hits": 0,
+                "bad_streak": 0,
+            }
+            if row["direction"] == "trail":
+                fields["peak_price_usd"] = current
+                if current is not None:
+                    fields["last_price_usd"] = current
+                    fields["last_checked_at"] = now
+            moves.append((row, "paused", fields))
+        self._bracket_move(bracket_id, "resume", moves, now)
+        return await self._bracket_answer(bracket_id)
+
+    async def bracket_stop(self, bracket_id: str, reason: str | None = None) -> dict[str, Any]:
+        """Terminal for both legs; an order of either still waiting for approval is rejected."""
+        legs = self._bracket_legs(bracket_id)
+        live = [row for row in legs if row["status"] in triggers.LIVE_STATUSES]
+        if not live:
+            raise self._bracket_bad_state(bracket_id, "stop")
+        why = self._dca_user_reason(reason)
+        self._bracket_move(
+            bracket_id,
+            "stop",
+            [
+                (
+                    row,
+                    sorted(triggers.LIVE_STATUSES),
+                    {"status": "stopped", "status_reason": why, "expires_at": None},
+                )
+                for row in live
+            ],
+            self._now(),
+        )
+        for row in live:
+            for order in self.ledger.orders_for_trigger(str(row["trigger_id"])):
+                if order["status"] == "awaiting_approval":
+                    with contextlib.suppress(TradingError):
+                        await self.reject(str(order["order_id"]), "bracket stopped")
+        return await self._bracket_answer(bracket_id)
+
+    async def bracket_fire_now(
+        self, bracket_id: str, *, leg: str | None = None, wait: bool = False
+    ) -> dict[str, Any]:
+        """Fire one leg now (``leg``, else the nearest), whatever the price; the other holds."""
+        legs = self._bracket_legs(bracket_id)
+        if any(row["status"] == "triggered" for row in legs):
+            raise self._bracket_bad_state(bracket_id, "fire")
+        candidates = {str(row["leg"]): row for row in legs if row["status"] in ("armed", "paused")}
+        wanted: str | None = None
+        if leg is not None:
+            wanted = str(leg).strip().lower()
+            if wanted not in triggers.LEGS:
+                raise self._bracket_invalid("leg must be tp or sl")
+        if not candidates or (wanted is not None and wanted not in candidates):
+            raise self._bracket_bad_state(bracket_id, "fire")
+        chain = CHAINS[int(legs[0]["chain_id"])]
+        async with self._trigger_lock:
+            price = await self._dca_price(chain, str(legs[0]["token"]))
+            if wanted is None:
+                wanted = triggers.nearest_leg(list(candidates.values()), price)
+                if wanted not in candidates:
+                    wanted = next(iter(candidates))
+            fire_row = await self._trigger_fire(
+                str(candidates[wanted]["trigger_id"]), manual=True, price=price, wait=wait
+            )
+        fire = self._trigger_fire_json(fire_row) if fire_row is not None else None
+        return await self._bracket_answer(bracket_id, announce=False, fire=fire)
+
+    async def _bracket_hold_sibling(self, row: dict[str, Any], now: float) -> None:
+        """A leg was claimed: its armed sibling waits (``on hold``) until the fire settles."""
+        sibling = self._bracket_sibling(row)
+        if sibling is None or sibling["status"] != "armed":
+            return  # paused by the user or a failure: left alone
+        held = self.ledger.update_trigger(
+            str(sibling["trigger_id"]),
+            now=now,
+            expect_status="armed",
+            status="paused",
+            status_reason=triggers.hold_reason(str(row.get("leg")), str(row["kind"])),
+        )
+        if held is not None:
+            await self._trigger_changed(held, bracket=False)
+
+    async def _bracket_release(self, sibling: dict[str, Any], now: float) -> dict[str, Any] | None:
+        """Re-arm a leg on hold (never one the user paused); a trail's peak restarts now."""
+        if not triggers.is_on_hold(sibling):
+            return None
+        chain = CHAINS[int(sibling["chain_id"])]
+        price = await self._dca_price(chain, str(sibling["token"]))
+        return self.ledger.update_trigger(
+            str(sibling["trigger_id"]),
+            now=now,
+            expect_status="paused",
+            **triggers.release(str(sibling["direction"]), price, now),
+        )
+
+    async def _bracket_after_fire(
+        self, row: dict[str, Any], fire: dict[str, Any] | None, now: float
+    ) -> None:
+        """One cancels the other: settle the sibling of a leg whose fire just settled.
+
+        filled / alerted → the sibling is stopped (a filled partial take-profit
+        releases the stop-loss instead: it guards the rest); skipped → a
+        sibling on hold pauses the same way; anything else → a sibling on hold
+        is released.
+        """
+        sibling = self._bracket_sibling(row)
+        if sibling is None:
+            return
+        leg = str(row.get("leg"))
+        kind = str(row["kind"])
+        status = str(fire["status"]) if fire is not None else None
+        moved: dict[str, Any] | None = None
+        if row["status"] == "done":
+            tp_share = dca.finite(row.get("amount_pct"))
+            whole = dca.finite(sibling.get("amount_pct"))
+            partial = (
+                kind == "sell"
+                and leg == "tp"
+                and status == "filled"
+                and tp_share is not None
+                and whole is not None
+                and tp_share < whole
+            )
+            if partial:
+                moved = await self._bracket_release(sibling, now)
+            else:
+                moved = self.ledger.update_trigger(
+                    str(sibling["trigger_id"]),
+                    now=now,
+                    expect_status=sorted(triggers.LIVE_STATUSES),
+                    status="stopped",
+                    status_reason=triggers.oco_stopped_reason(kind, leg),
+                    expires_at=None,
+                )
+        elif status == "skipped":
+            if triggers.is_on_hold(sibling):
+                moved = self.ledger.update_trigger(
+                    str(sibling["trigger_id"]),
+                    now=now,
+                    expect_status="paused",
+                    status_reason=row.get("status_reason"),
+                )
+        else:
+            moved = await self._bracket_release(sibling, now)
+        if moved is not None:
+            await self._trigger_changed(moved, bracket=False)
 
 
 # ── module singleton ───────────────────────────────────────────────────────

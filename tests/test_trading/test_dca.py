@@ -794,7 +794,7 @@ def test_migration_v6_to_v7_keeps_orders_and_adds_mandates(tmp_path: Path) -> No
         version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
         conn.close()
-        assert version == SCHEMA_VERSION == 8
+        assert version == SCHEMA_VERSION == 9
         assert {"mandates", "mandate_runs", "idx_orders_mandate", "idx_mandates_status"} <= tables
     finally:
         migrated.close()

@@ -333,3 +333,80 @@ describe('trading.trigger.fired', () => {
     expect(eventWanted(settings({ trades: 'off' }), bad)).toBe(false)
   })
 })
+
+describe('trading.trigger.fired · a leg of a bracket', () => {
+  const BRACKET = (
+    JSON.parse(
+      readFileSync('src/renderer/src/views/trading/desk/__fixtures__/bracket/bracket.json', 'utf8'),
+    ) as { bracket: { takeProfit: Trigger; stopLoss: Trigger } }
+  ).bracket
+  const fire = (extra: Partial<TriggerFire> = {}): TriggerFire => ({
+    n: 1,
+    at: '2026-10-04T06:01:00Z',
+    manual: false,
+    status: 'pending',
+    reasonCode: null,
+    reason: null,
+    priceUsd: 4561,
+    orderId: 'ord_8',
+    txHash: null,
+    explorerUrl: null,
+    ...extra,
+  })
+
+  it('titles a sell leg with the bracket and the leg word', () => {
+    expect(triggerFiredEvent({ trigger: BRACKET.takeProfit, fire: fire() }, true)).toEqual({
+      kind: 'trade',
+      title: 'Protect ETH · take-profit fired',
+      subtitle: 'selling 100 % of ETH at $4,561',
+      target: { type: 'trading', orderId: 'ord_8' },
+    })
+    expect(
+      triggerFiredEvent({ trigger: BRACKET.stopLoss, fire: fire({ priceUsd: 3419 }) }, false)
+        ?.title,
+    ).toBe('Protect ETH · stop-loss fired')
+  })
+
+  it('titles a range alert leg with the bracket and the line it crossed', () => {
+    const alertLeg: Trigger = {
+      ...BRACKET.takeProfit,
+      kind: 'alert',
+      name: 'Alert ETH over $4,560',
+      action: { ...BRACKET.takeProfit.action, kind: 'alert', amountPct: null, label: 'notify' },
+      bracket: { id: 'brk_1a2b3c4d', name: 'Watch ETH', leg: 'tp' },
+    }
+    expect(
+      triggerFiredEvent(
+        { trigger: alertLeg, fire: fire({ status: 'alerted', orderId: null }) },
+        true,
+      ),
+    ).toEqual({
+      kind: 'trade',
+      title: 'Watch ETH · over $4,560',
+      subtitle: 'Alert · $4,561 now',
+      target: { type: 'trading' },
+    })
+    // A range alert's legs are its ceiling and floor, never a take-profit.
+    expect(
+      triggerFiredEvent(
+        {
+          trigger: alertLeg,
+          fire: fire({ status: 'failed', orderId: null, reason: 'price feed down' }),
+        },
+        true,
+      )?.title,
+    ).toBe('Watch ETH · ceiling could not fire')
+  })
+
+  it('names the leg on a skip or a failure too', () => {
+    expect(
+      triggerFiredEvent(
+        {
+          trigger: BRACKET.stopLoss,
+          fire: fire({ status: 'skipped', orderId: null, reason: 'paused: nothing to sell' }),
+        },
+        true,
+      ),
+    ).toMatchObject({ kind: 'tradeFailed', title: 'Protect ETH · stop-loss skipped' })
+  })
+})

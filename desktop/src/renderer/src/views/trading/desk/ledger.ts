@@ -51,6 +51,15 @@ export type TradeKind =
   | 'trigger_resume'
   | 'trigger_stop'
   | 'trigger_fire'
+  | 'bracket'
+  | 'bracket_list'
+  | 'bracket_create'
+  | 'bracket_approve'
+  | 'bracket_reject'
+  | 'bracket_pause'
+  | 'bracket_resume'
+  | 'bracket_stop'
+  | 'bracket_fire'
   | 'other'
 
 export interface TradeCall {
@@ -146,6 +155,48 @@ const TRIGGER_SUBS: Record<string, TradeKind> = {
 /** Every trigger row kind. */
 export function isTriggerKind(kind: TradeKind): boolean {
   return kind === 'trigger' || kind.startsWith('trigger_')
+}
+
+/**
+ * `trade bracket <sub>`: each subcommand is its own row kind; the creating
+ * verb is `trade protect` (docs/brackets.md, "CLI").
+ */
+const BRACKET_SUBS: Record<string, TradeKind> = {
+  list: 'bracket_list',
+  show: 'bracket',
+  approve: 'bracket_approve',
+  reject: 'bracket_reject',
+  pause: 'bracket_pause',
+  resume: 'bracket_resume',
+  stop: 'bracket_stop',
+  fire: 'bracket_fire',
+}
+
+/** Every bracket row kind (take-profit + stop-loss as one object). */
+export function isBracketKind(kind: TradeKind): boolean {
+  return kind === 'bracket' || kind.startsWith('bracket_')
+}
+
+/** One `trade protect` line: "+20 %" / "−10 %" for a percent, "$4,560" for a price. */
+function bracketLineWord(value: string, side: 'up' | 'down'): string {
+  const v = value.trim()
+  const pct = /^([-+−]?)(\d+(?:\.\d+)?)%$/.exec(v)
+  if (pct) return `${side === 'up' ? '+' : '−'}${pct[2]} %`
+  const n = Number(v.replace(/[$,]/g, ''))
+  if (!Number.isFinite(n) || n <= 0) return v
+  return n >= 1000
+    ? `$${Math.round(n).toLocaleString('en-US')}`
+    : `$${n.toLocaleString('en-US', { maximumFractionDigits: 6 })}`
+}
+
+/** "+20 % / −10 %", "$4,560 / $3,420", "+20 % / trail 10 %": the two lines of a `trade protect`. */
+function bracketLinesWord(args: string): string {
+  const tp = flag(args, 'tp')
+  const sl = flag(args, 'sl')
+  const trail = flag(args, 'trail')
+  const up = tp ? bracketLineWord(tp, 'up') : ''
+  const down = sl ? bracketLineWord(sl, 'down') : trail ? `trail ${trail.replace(/%$/, '')} %` : ''
+  return up || down ? `${up || '—'} / ${down || '—'}` : ''
 }
 
 /** `trade trigger create` flags that take no value (beside the shared ones). */
@@ -314,6 +365,15 @@ const TITLES: Record<TradeKind, string> = {
   trigger_resume: 'Resume trigger',
   trigger_stop: 'Stop trigger',
   trigger_fire: 'Fire now',
+  bracket: 'Bracket status',
+  bracket_list: 'Brackets',
+  bracket_create: 'Protect',
+  bracket_approve: 'Approve bracket',
+  bracket_reject: 'Reject bracket',
+  bracket_pause: 'Pause bracket',
+  bracket_resume: 'Resume bracket',
+  bracket_stop: 'Stop bracket',
+  bracket_fire: 'Fire now',
   other: 'Trade call',
 }
 
@@ -357,6 +417,10 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
       kind = DCA_SUBS[(lpPositionals(args)[0] ?? '').toLowerCase()] ?? 'dca'
     } else if (sub === 'trigger') {
       kind = TRIGGER_SUBS[(triggerPositionals(args)[0] ?? '').toLowerCase()] ?? 'trigger'
+    } else if (sub === 'protect') {
+      kind = 'bracket_create'
+    } else if (sub === 'bracket') {
+      kind = BRACKET_SUBS[(triggerPositionals(args)[0] ?? '').toLowerCase()] ?? 'bracket'
     }
   } else if (sub === 'balances') kind = 'balances'
   else kind = 'wallet'
@@ -460,6 +524,18 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
   } else if (isTriggerKind(kind)) {
     // Every other trigger subcommand names one trigger: its id is the detail.
     detail = triggerPositionals(args)[1] ?? ''
+  } else if (kind === 'bracket_create') {
+    // `protect ETH --tp +20% --sl -10%` → "Protect" · "ETH · +20 % / −10 %";
+    // a range alert (`--alert`) is a watch, not a protection.
+    const token = triggerPositionals(args)[0] ?? ''
+    const shown = /^0x[0-9a-fA-F]{40}$/.test(token) ? shortAddr(token) : token.toUpperCase()
+    if (/(?:^|\s)--alert(?:\s|=|$)/.test(args)) title = 'Watch'
+    detail = [shown, bracketLinesWord(args), chainWord(args)].filter(Boolean).join(' · ')
+  } else if (kind === 'bracket_list') {
+    detail = /(?:^|\s)--all(?:\s|$)/.test(args) ? 'all' : ''
+  } else if (isBracketKind(kind)) {
+    // Every other bracket subcommand names one bracket: its id is the detail.
+    detail = triggerPositionals(args)[1] ?? ''
   } else if (kind === 'lp') {
     // `lp pool boar --chain base` → "pool boar · Base"; flags and their values
     // (`--budget-seconds 60`, `--wallet=0x…`) never reach the subject.
@@ -498,7 +574,11 @@ export interface TradeOutcome {
    * `withLiveMandate`: the row's pill follows it instead of the recorded one.
    */
   mandateLive?: string | null
-  /** A trigger row: the trigger it names, and the status its result recorded (docs/triggers.md). */
+  /**
+   * A trigger row: the trigger it names, and the status its result recorded
+   * (docs/triggers.md). A bracket row (docs/brackets.md) carries its `brk_…`
+   * id here too: one status vocabulary, one pill.
+   */
   triggerId?: string | null
   triggerStatus?: string | null
   /** The trigger's status as the live list has it now, set only by `withLiveTrigger`. */
@@ -752,8 +832,18 @@ const TRIGGER_CARD_MARKER = new RegExp(
  */
 export function triggerCallFromResult(text: string): TradeCall | null {
   if (!TRIGGER_CARD_MARKER.test(text)) return null
+  // A bracket rides the trigger mime (docs/brackets.md): its envelope kind or
+  // its card file (`bracket-…` / `brackets-…`) says which.
+  const brackets = /"kind"\s*:\s*"brackets"/.test(text) || /trigger-cards\/brackets-/.test(text)
+  const bracket = /"kind"\s*:\s*"bracket"/.test(text) || /trigger-cards\/bracket-/.test(text)
   const list = /"kind"\s*:\s*"triggers"/.test(text) || /trigger-cards\/triggers-/.test(text)
-  const kind: TradeKind = list ? 'trigger_list' : 'trigger'
+  const kind: TradeKind = brackets
+    ? 'bracket_list'
+    : bracket
+      ? 'bracket'
+      : list
+        ? 'trigger_list'
+        : 'trigger'
   return { kind, title: TITLES[kind], detail: '', command: '' }
 }
 
@@ -919,6 +1009,134 @@ function parseTriggerResult(call: TradeCall, text: string, data: unknown): Trade
     triggerId: str(tr.id) ?? namedTrigger(call),
     triggerStatus: str(tr.status),
   }
+}
+
+/** "+20.3 % / −9.8 %": the moves left to the two lines of a bracket; '' when unknown. */
+function bracketMoves(market: Dict | null): string {
+  if (!market) return ''
+  const up = num(market.upsidePct)
+  const down = num(market.downsidePct)
+  if (up === null && down === null) return ''
+  const pct = (v: number | null, sign: '+' | '−') =>
+    v === null ? '—' : v === 0 ? '0 %' : `${sign}${Number(Math.abs(v).toFixed(1))} %`
+  return `${pct(up, '+')} / ${pct(down, '−')}`
+}
+
+/** One bracket as a row: "ETH · $3,420 – $4,560" as the subject, state and price as the summary. */
+function bracketLine(b: Dict): { detail: string; bits: string[] } {
+  const token = sym(b.token)
+  const lines = isDict(b.lines) ? b.lines : null
+  const market = isDict(b.market) ? b.market : null
+  const tp = lines ? num(lines.takeProfitUsd) : null
+  const sl = lines ? num(lines.stopLossUsd) : null
+  const range =
+    tp !== null || sl !== null ? `${triggerUsd(sl) || '—'} – ${triggerUsd(tp) || '—'}` : ''
+  const bits: string[] = []
+  const status = str(b.status)
+  if (status) bits.push(TRIGGER_STATUS_WORDS[status] ?? status)
+  const action = isDict(b.action) ? str(b.action.label) : null
+  if (action) bits.push(action)
+  const price = market ? num(market.priceUsd) : null
+  if (price !== null) {
+    const moves = status === 'armed' ? bracketMoves(market) : ''
+    bits.push(`${token} ${triggerUsd(price)}${moves ? ` · ${moves}` : ''}`)
+  }
+  return { detail: [token, range].filter(Boolean).join(' · '), bits }
+}
+
+/**
+ * A bracket read-out or write in one line, never its JSON. A bracket payload
+ * carries both legs in full, far past what a stored tool result keeps, so a
+ * cut result is read by hand from the fields that come first.
+ */
+function parseBracketResult(call: TradeCall, text: string, data: unknown): TradeOutcome {
+  if (isDict(data) && isDict(data.error)) {
+    const message = str(data.error.message) ?? 'error'
+    return { ...EMPTY, summary: message, error: message }
+  }
+  const d = isDict(data) ? data : null
+  const kind = (d && str(d.kind)) ?? field(text, /"kind"\s*:\s*"(brackets?)"/)
+  if (kind !== 'bracket' && kind !== 'brackets') {
+    // Not a bracket document: an error line, a projection, or nothing to say.
+    return parseTriggerResult(call, text, data)
+  }
+  if (kind === 'brackets') {
+    const rows = d && Array.isArray(d.brackets) ? d.brackets.filter(isDict) : null
+    const totals = d && isDict(d.totals) ? d.totals : null
+    const count = totals ? num(totals.count) : rows ? rows.length : null
+    const of = (key: string, status: string) =>
+      totals ? (num(totals[key]) ?? 0) : rows ? rows.filter((b) => b.status === status).length : 0
+    const armed = of('armed', 'armed')
+    const pending = of('awaiting', 'awaiting_approval')
+    const fired = of('triggered', 'triggered')
+    const bits: string[] = []
+    if (count !== null) bits.push(count === 0 ? 'none yet' : `${armed} armed`)
+    if (pending) bits.push(`${pending} awaiting approval`)
+    if (fired) bits.push(`${fired} triggered`)
+    return {
+      ...EMPTY,
+      detail: count !== null ? `${count} bracket${count === 1 ? '' : 's'}` : '',
+      summary: bits.join(' · '),
+      awaiting: pending > 0,
+    }
+  }
+  const b = d && isDict(d.bracket) ? d.bracket : null
+  if (!b) {
+    const id = field(text, /"id"\s*:\s*"(brk_[0-9a-zA-Z]+)"/)
+    const name = field(text, /"bracket"\s*:\s*\{[^{}]*?"name"\s*:\s*"([^"]+)"/)
+    const status = field(text, /"bracket"\s*:\s*\{[^{}]*?"status"\s*:\s*"([a-z_]+)"/)
+    const bits = [status ? (TRIGGER_STATUS_WORDS[status] ?? status) : '', id ?? '']
+    return {
+      ...EMPTY,
+      ...(name ? { detail: name } : {}),
+      summary: bits.filter(Boolean).join(' · ') || 'result truncated',
+      awaiting: status === 'awaiting_approval',
+      triggerId: id ?? namedBracket(call),
+      triggerStatus: status,
+    }
+  }
+  const line = bracketLine(b)
+  const fire = d && isDict(d.fire) ? d.fire : null
+  const bits = [...line.bits]
+  let awaiting = b.status === 'awaiting_approval'
+  let orderId: string | null = null
+  let txHash: string | null = null
+  let explorerUrl: string | null = null
+  if (fire) {
+    const status = str(fire.status)
+    const n = num(fire.n)
+    const word = status === 'parked' ? 'awaiting approval' : (status ?? '')
+    bits.unshift(
+      [n !== null ? `fire #${n}` : 'fire', word, str(fire.reason) ?? ''].filter(Boolean).join(' '),
+    )
+    orderId = str(fire.orderId)
+    txHash = str(fire.txHash)
+    explorerUrl = str(fire.explorerUrl)
+    if (status === 'parked') awaiting = true
+  }
+  const chain = isDict(b.chain) ? num(b.chain.id) : null
+  return {
+    ...EMPTY,
+    detail: line.detail || str(b.name) || '',
+    summary: bits.filter(Boolean).join(' · '),
+    orderId,
+    txHash,
+    explorerUrl,
+    chainId: chain,
+    awaiting,
+    confirmed: Boolean(fire && fire.status === 'filled' && txHash),
+    error:
+      fire && (fire.status === 'failed' || fire.status === 'skipped')
+        ? (str(fire.reason) ?? str(fire.status) ?? 'failed')
+        : null,
+    triggerId: str(b.id) ?? namedBracket(call),
+    triggerStatus: str(b.status),
+  }
+}
+
+/** The bracket id a `trade bracket <sub> <id>` command names, when it names one. */
+function namedBracket(call: TradeCall): string | null {
+  return /^brk_[0-9a-zA-Z]+$/.test(call.detail) ? call.detail : null
 }
 
 /** The trigger id a `trade trigger <sub> <id>` command names, when it names one. */
@@ -1391,7 +1609,7 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
         )
     return parseDcaResult(call, text, bare)
   }
-  if (isTriggerKind(call.kind)) {
+  if (isTriggerKind(call.kind) || isBracketKind(call.kind)) {
     const bare = isDict(data)
       ? data
       : parseJson(
@@ -1400,7 +1618,9 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
             .filter((l) => !TRIGGER_CARD_MARKER.test(l))
             .join('\n'),
         )
-    return parseTriggerResult(call, text, bare)
+    return isBracketKind(call.kind)
+      ? parseBracketResult(call, text, bare)
+      : parseTriggerResult(call, text, bare)
   }
   if (!isDict(data)) {
     const code = exitCodeOf(text)

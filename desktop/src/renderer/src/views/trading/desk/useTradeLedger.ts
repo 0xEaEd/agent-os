@@ -8,6 +8,7 @@ import { TRADING_KEYS } from '~/stores/trading'
 import { providerMark } from '../ProviderMark'
 import {
   providerLabel,
+  type BracketListPayload,
   type MandateListPayload,
   type TradingStatus,
   type TriggerListPayload,
@@ -16,6 +17,7 @@ import {
   commandFromToolInput,
   LEDGER_GROUP_MIN,
   cardCallFromResult,
+  isBracketKind,
   isDcaKind,
   isTriggerKind,
   parseTradeCommand,
@@ -119,7 +121,11 @@ function glyphFor(call: TradeCall, outcome: TradeOutcome | null): string {
     case 'lp_add':
       return '◇'
     default:
-      return isDcaKind(call.kind) ? '↻' : isTriggerKind(call.kind) ? '⌖' : '›'
+      return isDcaKind(call.kind)
+        ? '↻'
+        : isTriggerKind(call.kind) || isBracketKind(call.kind)
+          ? '⌖'
+          : '›'
   }
 }
 
@@ -455,6 +461,16 @@ export function useTradeLedger(
       return undefined
     }
     triggerStatusOf.current = (triggerId) => {
+      // A bracket row carries its `brk_…` id in the trigger slot (one status
+      // vocabulary): it follows the bracket list.
+      if (triggerId.startsWith('brk_')) {
+        for (const all of [true, false]) {
+          const list = queryClient.getQueryData<BracketListPayload>(TRADING_KEYS.bracket(all))
+          const found = list?.brackets?.find((b) => b.id === triggerId)
+          if (found) return found.status
+        }
+        return undefined
+      }
       for (const all of [true, false]) {
         const list = queryClient.getQueryData<TriggerListPayload>(TRADING_KEYS.trigger(all))
         const found = list?.triggers?.find((tr) => tr.id === triggerId)

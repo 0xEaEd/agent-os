@@ -32,7 +32,7 @@ available without `uv tool list` or `pip show`.
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
 | `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
-| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL; Uniswap V4 liquidity; DCA mandates; price triggers (stop-loss, take-profit, trailing stop, buy-the-dip, alerts). |
+| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL; Uniswap V4 liquidity; DCA mandates; price triggers (stop-loss, take-profit, trailing stop, buy-the-dip, alerts); brackets (take-profit + stop-loss on one position, one cancels the other). |
 | `agentos skills` | List, search, view, install, update, publish, inspect, and tap skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
@@ -912,6 +912,12 @@ agentos trade trigger show <id> [--json] [--no-card]            # one trigger: c
 agentos trade trigger approve <id> / reject <id> [--reason <text>] [--json] [--no-card]   # operator-only
 agentos trade trigger pause <id> / resume <id> / stop <id> [--reason <text>] [--json] [--no-card]   # operator-only; stop is final
 agentos trade trigger fire <id> [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # fire now whatever the price (operator-only)
+agentos trade protect <token> --tp <price|pct%> (--sl <price|pct%> | --trail <pct>) [--pct 100 | --amount 0.05 | --usd 100] [--tp-pct 50] [--alert] [--quote <token>] [--chain base|robinhood] [--wallet <addr|label>] [--slippage 1] [--name <text>] [--for 30m|2h|1d|1w|<seconds>] [--json] [--no-card]   # bracket: a take-profit and a stop-loss on one position, whichever fires first stops the other; default the whole position (--pct 100); from an agent it waits for one approval
+agentos trade bracket list [--all] [--wallet <addr|label>] [--json] [--no-card]   # live brackets (awaiting approval, armed, triggered, paused); --all adds done/stopped/rejected/expired
+agentos trade bracket show <id> [--json] [--no-card]            # one bracket: both lines with the price now between them, upside/downside, reward:risk, size, each leg's checks, fires, result
+agentos trade bracket approve <id> / reject <id> [--reason <text>] [--json] [--no-card]   # operator-only; acts on both legs
+agentos trade bracket pause <id> / resume <id> / stop <id> [--reason <text>] [--json] [--no-card]   # operator-only; both legs; stop is final
+agentos trade bracket fire <id> [--leg tp|sl] [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # fire one leg now (default the nearer one), the other goes on hold (operator-only)
 agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval|lp_collect|lp_remove|lp_add] [--limit N] [--hidden]
 agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
 agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
@@ -1216,6 +1222,42 @@ written to `trigger-cards/<trigger|triggers>-<id|live|all>-<utc stamp>.json`
 without `--json` a trigger prints as a panel and `list` as a table. Input
 and state errors (`INVALID_ARGUMENT`, `trading.trigger.invalid`,
 `trading.trigger.bad_state`, `trading.trigger.not_found`, `trading.invalid`,
+`trading.token_not_found`) exit 2; everything else exits 1; under `--json`
+every error is `{"error": …}` on stderr and writes no card.
+
+`trade protect` creates a **bracket**: a take-profit and a stop-loss on one
+position, whichever fires first stops the other (one cancels the other) —
+`protect ETH --tp +20% --sl -10%` sells all of the wallet's ETH for USDC once
+ETH is 20 % up or 10 % down, `--tp 4560 --sl 3420` uses prices, `--trail 10`
+makes the stop a trailing stop, `--tp-pct 50` takes profit on half and lets
+the stop guard the rest, and `--alert` is a range alert that only notifies
+you when the price leaves the range; `trade bracket list|show|approve|reject|
+pause|resume|stop|fire` manages one (gateway methods
+`trading.bracket.create|get|list|approve|reject|pause|resume|stop|fire`; the
+contract is [`brackets.md`](brackets.md)). `--tp` is required (a price, or
+`+20%`/`20%` over the price now) with exactly one of `--sl` (a price, or
+`-10%`/`10%` under it) or `--trail`; pass at most one size (`--pct`,
+`--amount`, `--usd`; none is `--pct 100`); `--tp-pct` needs `--pct` (or the
+default) and may not exceed it; `--alert` takes no size; a wrong combination,
+or a take-profit price not above the stop price, exits 2 before anything is
+sent. The two legs are ordinary price triggers with the trigger's checks
+(two ticks in a row, guardrails, approval threshold, daily cap); while one
+leg's order is open the other is on hold, a filled leg stops the other, and a
+failed fire releases it. A bracket created from an agent's shell always
+answers `status: "awaiting_approval"` and one approval arms both legs; yours
+is `armed` at once. `create` (`protect`), `list` and `show` are allowed from
+an agent; `approve`, `reject`, `pause`, `resume`, `stop` and `fire` are the
+user's and answer `trading.operator_required` to an agent. `fire` fires the
+`--leg` given or the nearer one; `fire --wait` waits for its order and prints
+the bracket again once it settled. The legs do not appear in `trade trigger
+list` and refuse the `trade trigger` writes. With `--json` the payload is the
+first line of stdout and, unless `--no-card`, it is written to
+`trigger-cards/<bracket|brackets>-<id|live|all>-<utc stamp>.json` (the 20
+newest trigger and bracket cards kept) and announced by the last line,
+`publish_artifact path=<file> mime=application/vnd.agentos.trigger+json`;
+without `--json` a bracket prints as a panel and `list` as a table. Input and
+state errors (`INVALID_ARGUMENT`, `trading.bracket.invalid`,
+`trading.bracket.bad_state`, `trading.bracket.not_found`, `trading.invalid`,
 `trading.token_not_found`) exit 2; everything else exits 1; under `--json`
 every error is `{"error": …}` on stderr and writes no card.
 

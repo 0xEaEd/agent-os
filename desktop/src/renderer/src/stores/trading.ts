@@ -12,12 +12,23 @@ import { useConnection } from '@/stores/connection'
 import { t, type MessageKey } from '~/i18n'
 import { biometricGate, requireBiometric } from '~/lib/biometric-gate'
 import { errorText, QUOTE_REFRESH_MS } from '~/views/trading/logic'
+import { answeredBracketFire } from '~/views/trading/desk/bracket-logic'
 import { answeredFire } from '~/views/trading/desk/trigger-logic'
-import { mandateTouchId, orderTouchId, triggerTouchId, vaultReason } from '~/views/trading/touch-id'
+import {
+  bracketTouchId,
+  mandateTouchId,
+  orderTouchId,
+  triggerTouchId,
+  vaultReason,
+} from '~/views/trading/touch-id'
 import { CHAINS } from '~/views/trading/types'
 import type {
   AllowanceList,
   Balance,
+  Bracket,
+  BracketLeg,
+  BracketListPayload,
+  BracketPayload,
   ChainRead,
   Chart,
   ChartRange,
@@ -84,6 +95,8 @@ export const TRADING_KEYS = {
   dca: (all = false) => ['trading', 'dca', all ? 'all' : 'live'] as const,
   /** Price triggers (docs/triggers.md): the live ones, or every one ever made. */
   trigger: (all = false) => ['trading', 'trigger', all ? 'all' : 'live'] as const,
+  /** Brackets (docs/brackets.md): the live ones, or every one ever made. */
+  bracket: (all = false) => ['trading', 'bracket', all ? 'all' : 'live'] as const,
 }
 
 /** Gateway events after which trading data is stale. */
@@ -94,11 +107,48 @@ export const TRADING_EVENTS = [
   'trading.dca.changed',
   'trading.trigger.changed',
   'trading.trigger.fired',
+  'trading.bracket.changed',
   '_hello',
 ] as const
 
 export function invalidateTrading(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: ['trading'] })
+}
+
+const FINISHED_STATUSES: ReadonlySet<string> = new Set(['done', 'stopped', 'rejected', 'expired'])
+
+/**
+ * Writes one refreshed object (a trigger, a bracket) straight into its cached
+ * lists, before the invalidation refetches them. Every trigger and bracket
+ * write answers with the full object, yet the desk waited for a list read (5–8 s
+ * on a live engine) and a just-stopped bracket read "Armed" all along, its
+ * Stop offered again. A fetch already in flight is cancelled first: it may
+ * have started before the write and would land the old state over the new.
+ * The live list drops an object that has finished; a list that does not hold
+ * it is left to the refetch.
+ */
+export async function primeTradingList<T extends { id: string; status: string }>(
+  queryClient: QueryClient,
+  keyOf: (all?: boolean) => readonly unknown[],
+  field: 'triggers' | 'brackets',
+  item: T | null | undefined,
+): Promise<void> {
+  if (!item?.id) return
+  await queryClient.cancelQueries({ queryKey: keyOf().slice(0, 2) })
+  for (const all of [false, true]) {
+    queryClient.setQueryData<Record<string, unknown>>(keyOf(all), (prev) => {
+      const list = prev?.[field]
+      if (!prev || !Array.isArray(list)) return prev
+      const rows = list as T[]
+      const at = rows.findIndex((row) => row?.id === item.id)
+      if (at < 0) return prev
+      const next =
+        !all && FINISHED_STATUSES.has(item.status)
+          ? rows.filter((row) => row?.id !== item.id)
+          : rows.map((row, i) => (i === at ? item : row))
+      return { ...prev, [field]: next }
+    })
+  }
 }
 
 /**
@@ -1074,6 +1124,10 @@ export function useTriggerActions(): TriggerActions {
       params: Record<string, unknown>
       id: string
     }) => rpc.call<TriggerPayload>(method, params),
+    // The answer is the refreshed trigger: the Missions row shows it at once,
+    // then the sweep re-reads everything it moved.
+    onSuccess: (res) =>
+      primeTradingList(queryClient, TRADING_KEYS.trigger, 'triggers', res?.trigger),
     onSettled: () => invalidateTrading(queryClient),
   })
   const { mutateAsync } = mutation
@@ -1119,6 +1173,178 @@ export function useTriggerActions(): TriggerActions {
     resume: (trigger) => act('resume', trigger),
     stop: (trigger, reason) => act('stop', trigger, reason ? { reason } : {}),
     fire: (trigger) => act('fire', trigger),
+    pending,
+    busy: mutation.isPending,
+  }
+}
+
+/* ── Brackets: take-profit + stop-loss as one object (docs/brackets.md) ──── */
+
+const NO_BRACKETS: Bracket[] = []
+
+/**
+ * The engine's brackets: live ones, or every one with `all`. A bracket's legs
+ * never appear in `trading.trigger.list`; this list is where they are seen.
+ * `trading.changed` and `trading.bracket.changed` (in TRADING_EVENTS) refresh
+ * it; the distances move with the engine's own checks, so a slow poll backs
+ * up the events as for triggers.
+ */
+export function useBrackets(all = false, enabled = true) {
+  const rpc = useRpc()
+  const connected = useConnected()
+  const query = useQuery<BracketListPayload>({
+    queryKey: TRADING_KEYS.bracket(all),
+    enabled: connected && enabled,
+    queryFn: async () => {
+      await rpc.waitForConnection()
+      return rpc.call<BracketListPayload>('trading.bracket.list', all ? { all: true } : {})
+    },
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    placeholderData: (prev) => prev,
+  })
+  const brackets = useMemo(
+    () => (Array.isArray(query.data?.brackets) ? query.data.brackets : NO_BRACKETS),
+    [query.data],
+  )
+  return { ...query, brackets, totals: query.data?.totals ?? null }
+}
+
+export type BracketAction = 'approve' | 'reject' | 'pause' | 'resume' | 'stop' | 'fire'
+
+/** Operator writes on one bracket: both legs at once. Every answer is the refreshed payload. */
+export interface BracketActions {
+  /** Asks for Touch ID first when Settings › Security says so; null when declined. */
+  approve: (bracket: Bracket) => Promise<BracketPayload | null>
+  reject: (bracket: Bracket, reason?: string) => Promise<BracketPayload | null>
+  pause: (bracket: Bracket) => Promise<BracketPayload | null>
+  resume: (bracket: Bracket) => Promise<BracketPayload | null>
+  stop: (bracket: Bracket, reason?: string) => Promise<BracketPayload | null>
+  /**
+   * "Sell now" / "Notify now": one leg fired at once, the given one or else
+   * the nearest (the engine picks); the sibling goes on hold. Asks for Touch
+   * ID like an approval: it trades at once.
+   */
+  fire: (bracket: Bracket, leg?: BracketLeg) => Promise<BracketPayload | null>
+  /** The bracket with a write in flight, or null. */
+  pending: string | null
+  busy: boolean
+}
+
+const BRACKET_DONE_KEYS: Record<Exclude<BracketAction, 'fire'>, MessageKey> = {
+  approve: 'trading.bracket.toast.approved',
+  reject: 'trading.bracket.toast.rejected',
+  pause: 'trading.bracket.toast.paused',
+  resume: 'trading.bracket.toast.resumed',
+  stop: 'trading.bracket.toast.stopped',
+}
+
+/** The Sell now answer, said as what the fire did; a skip never toasts a green check. */
+export function bracketFireToast(res: BracketPayload | null | undefined, bracket: Bracket): void {
+  const name = res?.bracket?.name || bracket.name
+  const id = `bracket-${bracket.id}`
+  const fire = answeredBracketFire(res?.fire, res?.bracket)
+  const why = (key: MessageKey) => `${t(key)}${fire?.reason ? `: ${fire.reason}` : ''} · ${name}`
+  switch (fire?.status) {
+    case 'alerted':
+      toast.success(`${t('trading.bracket.toast.alerted')} · ${name}`, { id })
+      return
+    case 'filled':
+      toast.success(`${t('trading.bracket.toast.filled')} · ${name}`, { id })
+      return
+    case 'pending':
+      toast.success(`${t('trading.bracket.toast.placed')} · ${name}`, { id })
+      return
+    case 'parked':
+      toast.info(`${t('trading.bracket.toast.parked')} · ${name}`, { id })
+      return
+    case 'skipped':
+      toast.warning(why('trading.bracket.toast.skipped'), { id })
+      return
+    case 'failed':
+      toast.error(why('trading.bracket.toast.fireFailed'), { id })
+      return
+    case 'expired':
+    case 'rejected':
+      toast.warning(why('trading.bracket.toast.void'), { id })
+      return
+    default:
+      toast.info(`${t('trading.bracket.toast.noFire')} · ${name}`, { id })
+  }
+}
+
+/**
+ * The bracket controls the desk offers (the Missions rows, the approval
+ * card). One write acts on both legs; each toasts its own outcome, keyed by
+ * the bracket so a second click replaces the first toast.
+ */
+export function useBracketActions(): BracketActions {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: ({
+      method,
+      params,
+    }: {
+      method: string
+      params: Record<string, unknown>
+      id: string
+    }) => rpc.call<BracketPayload>(method, params),
+    // The answer is the refreshed bracket: the Missions row shows it at once
+    // (onSuccess is awaited before onSettled, so the sweep's refetch is not
+    // the one cancelled). Then both lists move — the bracket, and its legs
+    // behind every trigger read — and both keys sit under the `trading`
+    // prefix this sweeps.
+    onSuccess: (res) =>
+      primeTradingList(queryClient, TRADING_KEYS.bracket, 'brackets', res?.bracket),
+    onSettled: () => invalidateTrading(queryClient),
+  })
+  const { mutateAsync } = mutation
+  const act = useCallback(
+    async (
+      action: BracketAction,
+      bracket: Bracket,
+      extra: Record<string, unknown> = {},
+    ): Promise<BracketPayload | null> => {
+      try {
+        const res = await mutateAsync({
+          method: `trading.bracket.${action}`,
+          params: { bracketId: bracket.id, ...extra },
+          id: bracket.id,
+        })
+        if (action === 'fire') bracketFireToast(res, bracket)
+        else
+          toast.success(`${t(BRACKET_DONE_KEYS[action])} · ${res?.bracket?.name || bracket.name}`, {
+            id: `bracket-${bracket.id}`,
+          })
+        return res ?? null
+      } catch (err) {
+        toast.error(`${t('trading.bracket.toast.failed')}: ${errorText(err)}`, {
+          id: `bracket-${bracket.id}`,
+        })
+        return null
+      }
+    },
+    [mutateAsync],
+  )
+  const pending = mutation.isPending ? (mutation.variables?.id ?? null) : null
+  return {
+    // One decision arms both legs: with Touch ID on, the fingerprint comes
+    // first, and a declined prompt (already toasted) sends nothing.
+    approve: async (bracket) => {
+      const ask = bracketTouchId(bracket)
+      if (!(await biometricGate(ask.kind, ask.reason, `bracket:${bracket.id}`))) return null
+      return act('approve', bracket)
+    },
+    reject: (bracket, reason) => act('reject', bracket, reason ? { reason } : {}),
+    pause: (bracket) => act('pause', bracket),
+    resume: (bracket) => act('resume', bracket),
+    stop: (bracket, reason) => act('stop', bracket, reason ? { reason } : {}),
+    fire: async (bracket, leg) => {
+      const ask = bracketTouchId(bracket, 'fire')
+      if (!(await biometricGate(ask.kind, ask.reason, `bracket:${bracket.id}`))) return null
+      return act('fire', bracket, leg ? { leg } : {})
+    },
     pending,
     busy: mutation.isPending,
   }

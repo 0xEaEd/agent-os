@@ -13,6 +13,7 @@
     {
       "id": "trg_00000006",
       "name": "Buy WETH under $1,840.50",
+      "bracket": null,
       "kind": "buy",
       "status": "awaiting_approval",
       "statusReason": null,
@@ -88,6 +89,7 @@
     {
       "id": "trg_00000005",
       "name": "Buy WETH under $1,800",
+      "bracket": null,
       "kind": "buy",
       "status": "paused",
       "statusReason": "user",
@@ -163,6 +165,7 @@
     {
       "id": "trg_00000004",
       "name": "Trim WETH",
+      "bracket": null,
       "kind": "sell",
       "status": "triggered",
       "statusReason": "fired by hand",
@@ -251,6 +254,7 @@
     {
       "id": "trg_00000003",
       "name": "Stop-loss WETH",
+      "bracket": null,
       "kind": "sell",
       "status": "armed",
       "statusReason": null,
@@ -326,6 +330,7 @@
     {
       "id": "trg_00000002",
       "name": "Alert WETH −5 % from peak",
+      "bracket": null,
       "kind": "alert",
       "status": "armed",
       "statusReason": null,
