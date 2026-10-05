@@ -3333,7 +3333,8 @@
 .trigger-card[data-trigger-status='stopped'],
 .trigger-card[data-trigger-status='rejected'],
 .trigger-card[data-trigger-status='expired'],
-.trigger-card[data-trigger-kind='triggers'] {
+.trigger-card[data-trigger-kind='triggers'],
+.trigger-card[data-trigger-kind='brackets'] {
   --trigger-rail: var(--dim);
 }
 .trigger-card[data-trigger-status='stopped'] > :not(.trigger-card__foot),
@@ -4084,6 +4085,206 @@
 }
 .trigger-card[data-trigger-stale='failed'] .trigger-card__foot {
   color: var(--warn);
+}
+/* Brackets (docs/brackets.md, "Rendering"): a take-profit and a stop-loss on
+   one position, drawn by the shared renderer as a trigger card keyed
+   `data-trigger-kind='bracket'` (and its list, `'brackets'`). The desk reads
+   it as one instrument with two limits: the range gauge is a faint zone
+   between a red-tinted stop tick and a green-tinted take-profit tick, the
+   live price a dot between them that turns amber within 1 % of either line;
+   the legs strip is two ruled mono rows, take-profit over stop-loss. The kind
+   glyph is the ▼▲ pair, split red and green by the skin — never in the DOM. */
+.trigger-card[data-trigger-kind='bracket'] .trigger-card__head::before {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--trigger-glyph);
+}
+.trigger-card[data-trigger-kind='bracket'][data-trigger-action='sell'] .trigger-card__head::before {
+  content: '▼▲';
+  letter-spacing: -0.1em;
+  background: linear-gradient(90deg, var(--danger) 50%, var(--ok) 50%);
+  background-clip: text;
+  color: transparent;
+}
+.trigger-card[data-trigger-kind='bracket'][data-trigger-action='alert']
+  .trigger-card__head::before {
+  content: '◉';
+}
+/* The range gauge: one rail, the span between the lines a faint zone, each
+   line a tick in its leg's colour, the price a dot. */
+.trigger-gauge[data-trigger-gauge='range'] {
+  --bracket-tp: var(--ok);
+  --bracket-sl: var(--danger);
+}
+.trigger-gauge[data-trigger-gauge='range'] .trigger-gauge__line {
+  stroke: var(--border);
+  stroke-width: 2;
+}
+.trigger-gauge[data-trigger-gauge='range'] .trigger-gauge__zone,
+.trigger-gauge__zone[data-zone='bracket'] {
+  fill: color-mix(in srgb, var(--foreground) 6%, transparent);
+  stroke: none;
+}
+.trigger-gauge__tick {
+  stroke-width: 2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.trigger-gauge .trigger-gauge__tick[data-leg='sl'] {
+  stroke: color-mix(in srgb, var(--bracket-sl, var(--danger)) 75%, var(--border));
+}
+.trigger-gauge .trigger-gauge__tick[data-leg='tp'] {
+  stroke: color-mix(in srgb, var(--bracket-tp, var(--ok)) 75%, var(--border));
+}
+/* The leg closer to firing draws its tick at full strength. */
+.trigger-card[data-trigger-nearest='sl'] .trigger-gauge__tick[data-leg='sl'] {
+  stroke: var(--danger);
+  stroke-width: 3;
+}
+.trigger-card[data-trigger-nearest='tp'] .trigger-gauge__tick[data-leg='tp'] {
+  stroke: var(--ok);
+  stroke-width: 3;
+}
+.trigger-gauge__dot,
+.trigger-gauge .trigger-gauge__dot {
+  fill: var(--trigger-gauge-tone);
+  stroke: var(--elevated);
+  stroke-width: 2;
+}
+/* Near: the nearest leg's signed distance within 1 % (the renderer stamps
+   `data-trigger-dist` on the root; these prefixes are |d| ≤ 1), or the
+   renderer's own proximity word. */
+.trigger-gauge[data-trigger-gauge='range'][data-trigger-proximity='near'],
+.trigger-gauge[data-trigger-gauge='range'][data-trigger-proximity='met'],
+.trigger-gauge[data-trigger-gauge='range'][data-trigger-dist^='0'],
+.trigger-gauge[data-trigger-gauge='range'][data-trigger-dist^='-0'],
+.trigger-gauge[data-trigger-gauge='range'][data-trigger-dist^='+0'],
+.trigger-gauge[data-trigger-gauge='range'][data-trigger-dist='1'],
+.trigger-gauge[data-trigger-gauge='range'][data-trigger-dist='-1'],
+.trigger-card[data-trigger-kind='bracket'][data-trigger-dist^='0'] .trigger-gauge,
+.trigger-card[data-trigger-kind='bracket'][data-trigger-dist^='-0'] .trigger-gauge,
+.trigger-card[data-trigger-kind='bracket'][data-trigger-dist^='+0'] .trigger-gauge,
+.trigger-card[data-trigger-kind='bracket'][data-trigger-dist='1'] .trigger-gauge,
+.trigger-card[data-trigger-kind='bracket'][data-trigger-dist='-1'] .trigger-gauge {
+  --trigger-gauge-tone: var(--warn);
+}
+.trigger-card[data-trigger-kind='bracket'][data-trigger-dist^='0'] .trigger-card__now,
+.trigger-card[data-trigger-kind='bracket'][data-trigger-dist^='-0'] .trigger-card__now,
+.trigger-card[data-trigger-kind='bracket'][data-trigger-dist^='+0'] .trigger-card__now {
+  color: var(--warn);
+}
+.trigger-gauge__label[data-leg='sl'] {
+  color: color-mix(in srgb, var(--danger) 80%, var(--foreground));
+}
+.trigger-gauge__label[data-leg='tp'] {
+  color: color-mix(in srgb, var(--ok) 80%, var(--foreground));
+}
+.trigger-gauge__label[data-leg='now'] {
+  font-weight: 600;
+  color: var(--foreground);
+}
+/* The legs strip: two ruled mono rows — leg word, line, state — the word
+   tinted by its leg, the state by the leg's own status. */
+.bracket-legs {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.bracket-leg {
+  --bracket-leg-tone: var(--muted-foreground);
+  display: grid;
+  grid-template-columns: 7.5em max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0 10px;
+  min-width: 0;
+  min-height: 22px;
+  margin: 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.msg-body .bracket-leg + .bracket-leg {
+  margin-top: 0;
+}
+.bracket-leg[data-status='armed'] {
+  --bracket-leg-tone: var(--ok);
+}
+.bracket-leg[data-status='triggered'],
+.bracket-leg[data-status='done'] {
+  --bracket-leg-tone: var(--info);
+}
+.bracket-leg[data-status='awaiting_approval'] {
+  --bracket-leg-tone: var(--warn);
+}
+.bracket-leg[data-status='paused'] {
+  --bracket-leg-tone: var(--muted-foreground);
+}
+.bracket-leg[data-status='stopped'],
+.bracket-leg[data-status='rejected'],
+.bracket-leg[data-status='expired'] {
+  --bracket-leg-tone: var(--dim);
+}
+.bracket-leg__word {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.bracket-leg[data-leg='tp'] .bracket-leg__word {
+  color: color-mix(in srgb, var(--ok) 80%, var(--foreground));
+}
+.bracket-leg[data-leg='sl'] .bracket-leg__word {
+  color: color-mix(in srgb, var(--danger) 80%, var(--foreground));
+}
+.bracket-leg__line {
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.bracket-leg__state {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--bracket-leg-tone);
+}
+.bracket-leg[data-status='stopped'] .bracket-leg__line,
+.bracket-leg[data-status='expired'] .bracket-leg__line {
+  color: var(--dim);
+  text-decoration: line-through;
+  text-decoration-color: var(--hairline);
+}
+.trigger-card[data-trigger-layout='narrow'] .bracket-leg {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+.trigger-card[data-trigger-layout='narrow'] .bracket-leg__state {
+  grid-column: 1 / -1;
+  text-align: left;
+}
+/* A leg's own card names its bracket under the head; it carries no actions. */
+.trigger-card__group {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--muted-foreground);
+}
+/* Reward : risk, the one fact read as a ratio: full strength, mono. */
+.trigger-fact__rr {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--foreground);
+}
+/* The brackets list: a row per bracket, its range and moves in mono. */
+.trigger-row[data-bracket-id] .trigger-row__plan,
+.trigger-row[data-bracket-id] .trigger-row__now {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 @media (prefers-reduced-motion: reduce) {
   .trigger-card[data-trigger-status='awaiting_approval']::before,

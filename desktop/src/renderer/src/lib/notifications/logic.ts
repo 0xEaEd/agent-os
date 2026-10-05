@@ -1,6 +1,7 @@
 import type { NotifyKind, NotifyTarget } from '@shared/notify'
 import type { NotificationSettings } from '@shared/settings'
 import { t } from '~/i18n'
+import { legWord } from '~/views/trading/desk/bracket-logic'
 import { actionProgressive, conditionText, priceText } from '~/views/trading/desk/trigger-logic'
 import type { Trigger, TriggerFire } from '~/views/trading/types'
 
@@ -181,7 +182,11 @@ export function runKind(status: string): 'reply' | 'replyFailed' {
 
 // ── Price triggers ──────────────────────────────────────────────────────────
 
-/** What `trading.trigger.fired` carries (docs/triggers.md, "Events"). */
+/**
+ * What `trading.trigger.fired` carries (docs/triggers.md, "Events"). A leg of
+ * a bracket fires the same event, its `trigger.bracket` set; the bracket's
+ * own `trading.bracket.changed` posts nothing (it only refreshes the desk).
+ */
 export interface TriggerFiredPayload {
   triggerId?: string
   trigger?: Trigger
@@ -210,13 +215,18 @@ export function triggerFiredEvent(
     : { type: 'trading' }
   const fill = (key: Parameters<typeof t>[0], values: Record<string, string>) =>
     t(key).replace(/\{(\w+)\}/g, (whole, k: string) => values[k] ?? whole)
+  // A leg of a bracket (docs/brackets.md) is named by its bracket and its leg:
+  // "Protect ETH · take-profit fired", "Watch ETH · over $4,560".
+  const group = tr.bracket ?? null
+  const leg = group && (group.leg === 'tp' || group.leg === 'sl') ? legWord(group.leg) : null
+  const name = group && leg ? `${group.name} · ${leg}` : tr.name
   if (fire.status === 'skipped' || fire.status === 'failed') {
     const reason = excerpt(fire.reason || fire.reasonCode || '')
     return {
       kind: 'tradeFailed',
       title: fill(
         fire.status === 'skipped' ? 'notify.trigger.skipped.title' : 'notify.trigger.failed.title',
-        { name: tr.name },
+        { name },
       ),
       subtitle: preview ? `${tr.token.symbol} ${conditionText(tr)} · ${price}` : undefined,
       body: preview && reason ? reason : undefined,
@@ -226,14 +236,20 @@ export function triggerFiredEvent(
   if (tr.kind === 'alert' || fire.status === 'alerted') {
     return {
       kind: 'trade',
-      title: `${tr.token.symbol} ${conditionText(tr)}`,
+      title:
+        group && leg
+          ? fill('notify.bracket.alert.title', { name: group.name, line: conditionText(tr) })
+          : `${tr.token.symbol} ${conditionText(tr)}`,
       subtitle: preview ? fill('notify.trigger.alert.subtitle', { price }) : undefined,
       target,
     }
   }
   return {
     kind: 'trade',
-    title: fill('notify.trigger.fired.title', { name: tr.name }),
+    title:
+      group && leg
+        ? fill('notify.bracket.fired.title', { name: group.name, leg })
+        : fill('notify.trigger.fired.title', { name: tr.name }),
     subtitle: preview
       ? fill('notify.trigger.fired.subtitle', { action: actionProgressive(tr), price })
       : undefined,

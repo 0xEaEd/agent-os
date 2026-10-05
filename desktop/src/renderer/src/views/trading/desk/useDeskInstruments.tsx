@@ -23,7 +23,7 @@ import { Notice } from '~/views/settings/parts'
 import { errorText, isAwaitingApproval, sameAddress } from '../logic'
 import { useSwitchProvider } from '../useSwitchProvider'
 import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
-import type { Limits, Mandate, Order, ProviderId, Trigger, Wallet } from '../types'
+import type { Bracket, Limits, Mandate, Order, ProviderId, Trigger, Wallet } from '../types'
 import { ApprovalsRegion } from './ApprovalsRegion'
 import { ComposerSeats } from './ComposerSeats'
 import {
@@ -56,6 +56,7 @@ const NO_RUNS: ReadonlySet<string> = new Set()
 const NO_ORDERS: ReadonlySet<string> = new Set()
 const NO_MANDATES: Mandate[] = []
 const NO_TRIGGERS: Trigger[] = []
+const NO_BRACKETS: Bracket[] = []
 /** A settled ask stays in the region this long as a stamp. */
 const STAMP_TTL_MS = 10 * 60_000
 
@@ -378,6 +379,12 @@ export function useDeskInstruments(
     () => new Set(awaitingTriggers.map((tr) => tr.id)),
     [awaitingTriggers],
   )
+  // A pending bracket's card sits there too: one decision for both legs.
+  const awaitingBrackets = desk?.missions.awaitingBrackets ?? NO_BRACKETS
+  const askedBrackets = useMemo(
+    () => new Set(awaitingBrackets.map((b) => b.id)),
+    [awaitingBrackets],
+  )
   // `pick` is the catalogue; `form` is one contract, with the preset it came
   // from (null for a blank contract, an edit, or the one-shot swap chip). A
   // DCA mandate being edited rides along as `mandate`.
@@ -448,7 +455,11 @@ export function useDeskInstruments(
   })
 
   return {
-    still: pendingOrders.length > 0 || awaitingMandates.length > 0 || awaitingTriggers.length > 0,
+    still:
+      pendingOrders.length > 0 ||
+      awaitingMandates.length > 0 ||
+      awaitingTriggers.length > 0 ||
+      awaitingBrackets.length > 0,
     placeholder,
     onFocusChange: setFocused,
     region: (
@@ -469,6 +480,10 @@ export function useDeskInstruments(
         triggerDeciding={missions.trigger.pending}
         onApproveTrigger={(tr) => void missions.trigger.approve(tr)}
         onRejectTrigger={(tr) => void missions.trigger.reject(tr)}
+        brackets={awaitingBrackets}
+        bracketDeciding={missions.bracket.pending}
+        onApproveBracket={(b) => void missions.bracket.approve(b)}
+        onRejectBracket={(b) => void missions.bracket.reject(b)}
       />
     ),
     dockAbove: (
@@ -498,7 +513,8 @@ export function useDeskInstruments(
       <div className="trd-seatstack">
         {missions.missions.length ||
         missions.mandates.length ||
-        missions.triggers.some((tr) => !askedTriggers.has(tr.id)) ? (
+        missions.triggers.some((tr) => !askedTriggers.has(tr.id)) ||
+        missions.brackets.some((b) => !askedBrackets.has(b.id)) ? (
           <MissionControls
             missions={missions.missions}
             running={missions.running}
@@ -538,6 +554,19 @@ export function useDeskInstruments(
               })
             }
             onTriggerStop={(tr) => void missions.trigger.stop(tr)}
+            brackets={missions.brackets}
+            askedBrackets={askedBrackets}
+            bracketBusy={missions.bracket.pending}
+            onBracketPause={(b) => void missions.bracket.pause(b)}
+            onBracketResume={(b) => void missions.bracket.resume(b)}
+            onBracketFire={(b) =>
+              void missions.bracket.fire(b).then((res) => {
+                // A Sell now whose order parks lands on its approval card here.
+                const orderId = res?.fire?.status === 'parked' ? res.fire.orderId : null
+                if (orderId) setFocusOrderId(orderId)
+              })
+            }
+            onBracketStop={(b) => void missions.bracket.stop(b)}
           />
         ) : null}
         <ComposerSeats

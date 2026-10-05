@@ -94,6 +94,10 @@ export const notifications = {
   'notify.trigger.fired.subtitle': '{action} at {price}',
   'notify.trigger.skipped.title': '{name} skipped',
   'notify.trigger.failed.title': '{name} could not fire',
+  // A leg of a bracket fired (docs/brackets.md): titled with the bracket and
+  // the leg; a range alert's leg says the line it crossed.
+  'notify.bracket.fired.title': '{name} · {leg} fired',
+  'notify.bracket.alert.title': '{name} · {line}',
   'settings.notifications.gateway': 'The gateway stops on its own',
   'settings.notifications.gateway.help': 'A crash or a lost port, not a stop you asked for.',
 
