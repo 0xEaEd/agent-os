@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Trading: **brackets** — `agentos trade protect ETH --tp +20% --sl -10%`
+  is a take-profit and a stop-loss on one position as one object: two price
+  triggers that know each other, so when one fills the engine stops the
+  other and nothing fires into an empty wallet. `--trail 10` makes the stop
+  trail, `--tp-pct 50` sells half at the take-profit and keeps the stop on
+  the rest, `--alert` watches a range and only notifies. One approval for
+  both legs, one card, one Missions row with Pause / Sell now / Stop;
+  `trade bracket list|show|approve|reject|pause|resume|stop|fire` round it
+  out. Gateway methods `trading.bracket.*`. Contract: `docs/brackets.md`
+  (#3618).
 - Trading: **price triggers** — `agentos trade trigger create ETH --sell --pct
   50 --below 3800` is a stop-loss the engine watches and fires by itself;
   `--above` makes a take-profit, `--trail 10` a trailing stop 10 % under the
