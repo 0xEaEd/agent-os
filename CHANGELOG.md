@@ -20,6 +20,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `application/vnd.agentos.trigger+json` card. Gateway methods
   `trading.trigger.*` (create/get/list agent-callable, the rest
   operator-only). Contract: `docs/triggers.md` (#3615).
+- Desktop app: Settings › Environment, the Web UI's Environment screen in the
+  app. It lists every variable the gateway, providers and skills read,
+  grouped by category with set, missing and shadowed counts, a search and
+  filters, and sets, replaces, imports, reveals (confirmed, auto-hidden after
+  30 seconds) and removes them through the same `env.*` RPCs. **Add
+  variable** stores a custom one in `~/.agentos/.env`.
 
 ## [2026.10.4] - 2026-10-04
 
