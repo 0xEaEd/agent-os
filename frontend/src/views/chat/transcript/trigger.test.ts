@@ -1007,7 +1007,7 @@ describe('buildTriggerCard — trigger', () => {
     }
   })
 
-  it('draws an alert as notify only: no balance, no approval', () => {
+  it('draws an alert as notify only: no balance, and on fire it notifies', () => {
     const p = one('trigger-alert')
     expect(p.trigger.kind).toBe('alert')
     const card = render(p)
@@ -1015,7 +1015,11 @@ describe('buildTriggerCard — trigger', () => {
       [...card.querySelectorAll<HTMLElement>('.trigger-card__facts .trigger-fact')].map(
         (n) => n.dataset.triggerFact,
       ),
-    ).toEqual(['size', 'valid'])
+    ).toEqual(['size', 'valid', 'approval'])
+    const onFire = card.querySelector<HTMLElement>('[data-trigger-fact="approval"]')!
+    expect(onFire.querySelector('.trigger-fact__label')).toHaveTextContent('on fire')
+    expect(onFire.querySelector('.trigger-fact__value')).toHaveTextContent('notifies')
+    expect(onFire.dataset.triggerWaits).toBeUndefined()
     const size = card.querySelector<HTMLElement>('[data-trigger-fact="size"] .trigger-fact__value')!
     expect(size.textContent).toBe('notify only')
     expect(size.dataset.triggerNoValue).toBeUndefined()
@@ -1041,7 +1045,7 @@ describe('buildTriggerCard — trigger', () => {
       expect(gauge.dataset.triggerProximity).toBeUndefined()
     }
     expect(card.querySelector('[data-trigger-fact="size"]')?.textContent).toContain('notify only')
-    expect(card.querySelector('[data-trigger-fact="approval"]')).toBeNull()
+    expect(card.querySelector('[data-trigger-fact="approval"]')).toHaveTextContent('notifies')
     expect(card.querySelector('[data-trigger-fact="balance"]')).toBeNull()
   })
 
@@ -1471,6 +1475,8 @@ describe('control → RPC → payload swap', () => {
     )
     const { host, mounter } = mountWith(fixture('triggers'), call)
     await flush()
+    const armedBefore = list.triggers.filter((tr) => tr.status === 'armed').length
+    expect(host.querySelector('.trigger-totals')?.textContent).toContain(`${armedBefore} armed`)
     host
       .querySelector<HTMLButtonElement>(
         `.trigger-row[data-trigger-id="${target.id}"] [data-trigger-op="pause"]`,
@@ -1482,6 +1488,11 @@ describe('control → RPC → payload swap', () => {
     expect(
       [...card.querySelectorAll<HTMLElement>('.trigger-row')].map((r) => r.dataset.triggerStatus),
     ).toEqual(list.triggers.map((tr) => (tr.id === target.id ? 'paused' : tr.status)))
+    // The header follows the rows: one armed fewer, the count unchanged.
+    const totals = card.querySelector('.trigger-totals')?.textContent ?? ''
+    if (armedBefore > 1) expect(totals).toContain(`${armedBefore - 1} armed`)
+    else expect(totals).not.toMatch(/armed/)
+    expect(card.querySelector('.trigger-card__count')).toHaveTextContent(String(list.totals.count))
     mounter.destroyAll()
   })
 

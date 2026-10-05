@@ -531,6 +531,19 @@ describe('trigger card CSS contract', () => {
     expect(block('.chat-surface .trigger-card__stale')).toMatch(/color: var\(--warn\);/)
   })
 
+  it('wraps a fact value inside its cell and gives a long one the row', () => {
+    const value = block('.chat-surface .trigger-fact__value') ?? ''
+    expect(value).toMatch(/min-width: 0;/)
+    expect(value).toMatch(/overflow-wrap: anywhere;/)
+    expect(value).not.toMatch(/white-space: nowrap;/)
+    expect(value).not.toMatch(/text-overflow: ellipsis;/)
+    expect(block(".chat-surface .trigger-fact[data-trigger-fact-span='2']")).toMatch(
+      /grid-column: 1 \/ -1;/,
+    )
+    expect(block('.chat-surface .trigger-fact__sub')).toMatch(/display: block;/)
+    expect(block('.chat-surface .trigger-fact__value > .trigger-sep')).toMatch(/display: none;/)
+  })
+
   it('shows controls with an armed confirm and an inline error, and keeps links out of the link colour', () => {
     expect(block(".chat-surface .trigger-action[data-trigger-tone='primary']")).toMatch(
       /background: var\(--primary\);/,
