@@ -3772,6 +3772,17 @@
   flex-shrink: 0;
   color: var(--primary);
 }
+/* A narrow card leaves the detail ~50 px beside its fixed siblings, so a fill
+   wrapped one word per line (seen live 2026-10-05): give it a line of its own. */
+.trigger-card[data-trigger-layout='narrow'] .trigger-fire {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.trigger-card[data-trigger-layout='narrow'] .trigger-fire__detail {
+  flex-basis: 100%;
+  order: 1;
+  padding-bottom: 4px;
+}
 /* Two classes: `.msg-body a` would otherwise underline the arrow in lime. */
 .msg-body .trigger-fire__link {
   flex-shrink: 0;

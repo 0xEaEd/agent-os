@@ -2942,6 +2942,16 @@
   overflow-wrap: anywhere;
 }
 
+/* Narrow card: the detail takes a line of its own instead of wrapping one word per line. */
+.chat-surface .trigger-card[data-trigger-layout='narrow'] .trigger-fire {
+  flex-wrap: wrap;
+}
+
+.chat-surface .trigger-card[data-trigger-layout='narrow'] .trigger-fire__detail {
+  flex-basis: 100%;
+  order: 1;
+}
+
 .chat-surface .trigger-fire__manual {
   padding: 0 0.3125rem;
   border: 1px solid var(--border);
