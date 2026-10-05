@@ -530,7 +530,6 @@ export const chat = defineNamespace('chat', {
   triggerSizeNotify: 'notify only',
   triggerGtc: 'GTC',
   triggerOnFireTrades: 'trades at once',
-  triggerOnFireNotifies: 'notifies',
   triggerApprovalWaits: 'waits for you · over {usd}',
   triggerNoPriceTitle: 'Not known for this trigger',
   triggerFiresTitle: 'Recent fires',

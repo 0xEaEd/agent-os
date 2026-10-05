@@ -735,7 +735,6 @@ describe('buildTriggerCard — bracket', () => {
     expect(facts(payload(inStatus('bracket-alert', 'armed', { validUntil: null })))).toEqual([
       'size',
       'rr',
-      'approval',
     ])
     expect(facts(payload(inStatus('bracket-done', 'done', { validUntil: null })))).toEqual([
       'size',
@@ -1396,10 +1395,10 @@ describe('the facts never overlap', () => {
     expect(autoCell.querySelector('.trigger-fact__value')).toHaveTextContent('trades at once')
     expect(autoCell.dataset.triggerFactSpan).toBeUndefined()
     expect(auto.textContent).not.toMatch(/automatic/)
+    // An alert places no order: no on-fire fact (its size already says "notify only").
     const alert = render(one('bracket-alert'))
-    expect(alert.querySelector('[data-trigger-fact="approval"]')).toHaveTextContent(
-      'on firenotifies',
-    )
+    expect(alert.querySelector('[data-trigger-fact="approval"]')).toBeNull()
+    expect(alert.querySelector('.trigger-card__facts')?.textContent).not.toMatch(/on fire/)
   })
 })
 

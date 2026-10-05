@@ -2187,15 +2187,14 @@ export function sizeParts(trigger: Trigger): TriggerSizeParts {
 }
 
 /**
- * The "on fire" fact: what a fire does with its order (not the proposal,
- * which the status pill speaks for): "trades at once", "waits for you · over
- * $100"; an alert "notifies".
+ * The "on fire" fact of a sell or a buy: what a fire does with its order (not
+ * the proposal, which the status pill speaks for): "trades at once", "waits
+ * for you · over $100". An alert places no order and has no such fact.
  */
-export function onFireText(
-  kind: string,
-  action: { needsApproval: boolean; approvalThresholdUsd: number | null },
-): string {
-  if (kind === 'alert') return t('chat.triggerOnFireNotifies')
+export function onFireText(action: {
+  needsApproval: boolean
+  approvalThresholdUsd: number | null
+}): string {
   return action.needsApproval
     ? t('chat.triggerApprovalWaits', { usd: formatDcaUsd(action.approvalThresholdUsd) })
     : t('chat.triggerOnFireTrades')
@@ -2205,8 +2204,8 @@ export function onFireText(
  * size · wallet balance · valid until · on fire (hook `approval`). The
  * balance is the wallet now, so a finished trigger (or an alert, which spends
  * nothing) leaves it out rather than show a figure that is not part of its
- * story; an alert's "on fire" reads "notifies". An odd count lets the size
- * span the row (CSS).
+ * story; an alert places no order, so it has no "on fire" either. An odd
+ * count lets the size span the row (CSS).
  */
 function factsSection(trigger: Trigger): HTMLElement {
   const facts = el('section', 'trigger-card__facts')
@@ -2236,17 +2235,13 @@ function factsSection(trigger: Trigger): HTMLElement {
   if (trigger.validUntil) validCell.title = formatWhen(trigger.validUntil, true)
   facts.append(validCell)
 
-  // The hook stays `approval`; the words say what a fire does.
-  const approvalCell = fact(
-    'approval',
-    t('chat.triggerFactOnFire'),
-    onFireText(trigger.kind, trigger.action),
-  )
-  // Only a trigger that can still fire has anything to wait for.
-  if (trigger.kind !== 'alert' && trigger.action.needsApproval && !terminal) {
-    approvalCell.dataset.triggerWaits = 'true'
+  if (trigger.kind !== 'alert') {
+    // The hook stays `approval`; the words say what a fire does.
+    const approvalCell = fact('approval', t('chat.triggerFactOnFire'), onFireText(trigger.action))
+    // Only a trigger that can still fire has anything to wait for.
+    if (trigger.action.needsApproval && !terminal) approvalCell.dataset.triggerWaits = 'true'
+    facts.append(approvalCell)
   }
-  facts.append(approvalCell)
   return facts
 }
 
@@ -2769,8 +2764,8 @@ function bracketLegsNode(bracket: Bracket): HTMLElement {
 /**
  * size · balance · reward : risk · on fire (hook `approval`), and valid
  * until when set. The balance and the reward : risk describe a bracket that
- * can still fire; an alert spends nothing, so it has no balance, and its "on
- * fire" reads "notifies".
+ * can still fire; an alert spends nothing, so it has neither balance nor
+ * "on fire".
  */
 function bracketFactsSection(bracket: Bracket): HTMLElement {
   const facts = el('section', 'trigger-card__facts')
@@ -2806,15 +2801,11 @@ function bracketFactsSection(bracket: Bracket): HTMLElement {
     facts.append(cell)
   }
 
-  const onFire = fact(
-    'approval',
-    t('chat.triggerFactOnFire'),
-    onFireText(bracket.kind, bracket.action),
-  )
-  if (bracket.kind !== 'alert' && bracket.action.needsApproval && !terminal) {
-    onFire.dataset.triggerWaits = 'true'
+  if (bracket.kind !== 'alert') {
+    const onFire = fact('approval', t('chat.triggerFactOnFire'), onFireText(bracket.action))
+    if (bracket.action.needsApproval && !terminal) onFire.dataset.triggerWaits = 'true'
+    facts.append(onFire)
   }
-  facts.append(onFire)
 
   if (bracket.validUntil) {
     const valid = formatWhen(bracket.validUntil, false)

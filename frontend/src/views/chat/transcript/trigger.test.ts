@@ -1007,7 +1007,7 @@ describe('buildTriggerCard — trigger', () => {
     }
   })
 
-  it('draws an alert as notify only: no balance, and on fire it notifies', () => {
+  it('draws an alert as notify only: no balance, no on-fire fact', () => {
     const p = one('trigger-alert')
     expect(p.trigger.kind).toBe('alert')
     const card = render(p)
@@ -1015,11 +1015,7 @@ describe('buildTriggerCard — trigger', () => {
       [...card.querySelectorAll<HTMLElement>('.trigger-card__facts .trigger-fact')].map(
         (n) => n.dataset.triggerFact,
       ),
-    ).toEqual(['size', 'valid', 'approval'])
-    const onFire = card.querySelector<HTMLElement>('[data-trigger-fact="approval"]')!
-    expect(onFire.querySelector('.trigger-fact__label')).toHaveTextContent('on fire')
-    expect(onFire.querySelector('.trigger-fact__value')).toHaveTextContent('notifies')
-    expect(onFire.dataset.triggerWaits).toBeUndefined()
+    ).toEqual(['size', 'valid'])
     const size = card.querySelector<HTMLElement>('[data-trigger-fact="size"] .trigger-fact__value')!
     expect(size.textContent).toBe('notify only')
     expect(size.dataset.triggerNoValue).toBeUndefined()
@@ -1045,7 +1041,7 @@ describe('buildTriggerCard — trigger', () => {
       expect(gauge.dataset.triggerProximity).toBeUndefined()
     }
     expect(card.querySelector('[data-trigger-fact="size"]')?.textContent).toContain('notify only')
-    expect(card.querySelector('[data-trigger-fact="approval"]')).toHaveTextContent('notifies')
+    expect(card.querySelector('[data-trigger-fact="approval"]')).toBeNull()
     expect(card.querySelector('[data-trigger-fact="balance"]')).toBeNull()
   })
 
