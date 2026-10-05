@@ -60,9 +60,20 @@ export function priceText(value: number | null | undefined): string {
   return usdSmall.format(value)
 }
 
-/** "$189" for whole dollars, "$12.40" otherwise, "—" when unknown. */
+const usdTiny = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumSignificantDigits: 2,
+})
+
+/**
+ * "$189" for whole dollars, "$12.40" otherwise, "$0.0028" under a cent, "—"
+ * when unknown. A non-zero amount never reads "$0": a dust-sized bracket once
+ * said "≈ $0" on the desk while its chat card said "≈ $0.00275".
+ */
 export function usdText(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  if (value !== 0 && Math.abs(value) < 0.01) return usdTiny.format(value)
   return Math.abs(value - Math.round(value)) < 0.005 || Math.abs(value) >= 100
     ? usdWhole.format(Math.round(value))
     : usdCents.format(value)

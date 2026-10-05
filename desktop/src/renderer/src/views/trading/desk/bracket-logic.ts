@@ -1,6 +1,13 @@
 import { t, type MessageKey } from '~/i18n'
 import { formatAmount } from '../logic'
-import type { Bracket, BracketLeg, Trigger, TriggerFire, TriggerStatus } from '../types'
+import type {
+  Bracket,
+  BracketKind,
+  BracketLeg,
+  Trigger,
+  TriggerFire,
+  TriggerStatus,
+} from '../types'
 import { FINISHED_ROWS, FINISHED_VISIBLE_MS } from './mandate-logic'
 import {
   isRangeNear,
@@ -42,19 +49,24 @@ export function bracketNear(b: Pick<Bracket, 'status' | 'market'>): boolean {
   return isRangeNear(b)
 }
 
-const LEG_KEYS: Record<BracketLeg, MessageKey> = {
-  tp: 'trading.bracket.leg.tp',
-  sl: 'trading.bracket.leg.sl',
+const LEG_KEYS: Record<BracketKind, Record<BracketLeg, MessageKey>> = {
+  sell: { tp: 'trading.bracket.leg.tp', sl: 'trading.bracket.leg.sl' },
+  // A range alert sells nothing: its legs are the range's two edges, as the
+  // engine's reasons say them ("ceiling: alerted at $1", "range left over the top").
+  alert: { tp: 'trading.bracket.leg.ceiling', sl: 'trading.bracket.leg.floor' },
 }
 
-/** "take-profit" / "stop-loss": the leg word, lowercase, as the engine's `leg_word`. */
-export function legWord(leg: BracketLeg): string {
-  return t(LEG_KEYS[leg])
+/**
+ * "take-profit" / "stop-loss" (a sell bracket), "ceiling" / "floor" (a range
+ * alert): the leg word, lowercase, as the engine's `leg_word`.
+ */
+export function legWord(leg: BracketLeg, kind: BracketKind = 'sell'): string {
+  return t((LEG_KEYS[kind] ?? LEG_KEYS.sell)[leg])
 }
 
-/** "Take-profit" / "Stop-loss": the leg word at the head of a phrase. */
-export function legTitle(leg: BracketLeg): string {
-  const word = legWord(leg)
+/** "Take-profit" / "Stop-loss" / "Ceiling" / "Floor": the leg word at the head of a phrase. */
+export function legTitle(leg: BracketLeg, kind: BracketKind = 'sell'): string {
+  const word = legWord(leg, kind)
   return word.charAt(0).toUpperCase() + word.slice(1)
 }
 
@@ -159,10 +171,10 @@ export function bracketSizeText(b: Pick<Bracket, 'action' | 'token'>): string {
   return est !== null && Number.isFinite(est) ? `${size} · ≈ ${usdText(est)}` : size
 }
 
-/** "2.1 : 1": reward against risk; '' when unknown. */
+/** "2.1 : 1", "2.0 : 1": reward against risk, one decimal as the chat card says it; '' when unknown. */
 export function rewardRiskText(b: Pick<Bracket, 'market'>): string {
   const rr = b.market?.rewardRisk
-  return typeof rr === 'number' && Number.isFinite(rr) ? `${Number(rr.toFixed(1))} : 1` : ''
+  return typeof rr === 'number' && Number.isFinite(rr) ? `${rr.toFixed(1)} : 1` : ''
 }
 
 /** The leg whose order is open (status `triggered`), or null. */
@@ -196,14 +208,14 @@ export function bracketWord(b: Bracket): string {
   if (b.status === 'triggered') {
     const leg = firingLeg(b) ?? b.fired
     return leg
-      ? `${state} · ${t('trading.bracket.word.legOrderOpen').replace('{leg}', legWord(leg))}`
+      ? `${state} · ${t('trading.bracket.word.legOrderOpen').replace('{leg}', legWord(leg, b.kind))}`
       : `${state} · ${t('trading.trigger.word.orderOpen')}`
   }
-  if (b.status === 'done') return b.fired ? `${state} · ${legWord(b.fired)}` : state
+  if (b.status === 'done') return b.fired ? `${state} · ${legWord(b.fired, b.kind)}` : state
   if (b.status !== 'armed') return state
   const checking = checkingLeg(b)
   if (checking) {
-    return `${legTitle(checking.leg)} · ${t('trading.trigger.word.checks')
+    return `${legTitle(checking.leg, b.kind)} · ${t('trading.trigger.word.checks')
       .replace('{hits}', String(checking.hits))
       .replace('{need}', String(checking.need))}`
   }
@@ -262,8 +274,8 @@ export function bracketNotes(b: Bracket, walletName: string): string[] {
   const tp = b.takeProfit ? triggerNotes(b.takeProfit, walletName) : []
   const sl = b.stopLoss ? triggerNotes(b.stopLoss, walletName) : []
   const notes: string[] = []
-  for (const note of tp) notes.push(sl.includes(note) ? note : `${legWord('tp')}: ${note}`)
-  for (const note of sl) if (!tp.includes(note)) notes.push(`${legWord('sl')}: ${note}`)
+  for (const note of tp) notes.push(sl.includes(note) ? note : `${legWord('tp', b.kind)}: ${note}`)
+  for (const note of sl) if (!tp.includes(note)) notes.push(`${legWord('sl', b.kind)}: ${note}`)
   return notes
 }
 

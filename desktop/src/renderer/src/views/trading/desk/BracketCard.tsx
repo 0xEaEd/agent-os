@@ -7,14 +7,11 @@ import { formatAmount, initiatorKey, sameAddress, shortAddress, walletLabel } fr
 import { Sym } from '../parts'
 import type { Bracket, Wallet } from '../types'
 import {
-  bracketActionText,
   bracketHeroText,
   bracketNotes,
   bracketSizeText,
   movesText,
   rewardRiskText,
-  stopLossText,
-  takeProfitText,
 } from './bracket-logic'
 import { priceText, usdText } from './trigger-logic'
 
@@ -97,15 +94,11 @@ export function BracketCard({
   const trades = b.kind !== 'alert'
   const Glyph = trades ? ChevronsUpDown : Bell
   const balance = b.market?.balance
-  const facts: { key: string; label: string; value: string; tone?: 'warn' }[] = [
-    { key: 'what', label: t('trading.trigger.card.fact.what'), value: bracketActionText(b) },
-    {
-      key: 'takeProfit',
-      label: t('trading.bracket.card.fact.takeProfit'),
-      value: takeProfitText(b),
-    },
-    { key: 'stopLoss', label: t('trading.bracket.card.fact.stopLoss'), value: stopLossText(b) },
-  ]
+  // The sentence above already says what it does and both lines, and the
+  // live line under it the price now: the table holds only what neither says.
+  // At a 1200×800 window the repeated rows pushed the card past the region's
+  // room and cut its explanation off mid-sentence.
+  const facts: { key: string; label: string; value: string; tone?: 'warn' }[] = []
   if (trades) {
     facts.push({
       key: 'size',
@@ -114,11 +107,6 @@ export function BracketCard({
       tone: b.action.needsApproval ? 'warn' : undefined,
     })
   }
-  facts.push({
-    key: 'now',
-    label: t('trading.trigger.card.fact.now'),
-    value: priceText(b.market?.priceUsd ?? b.token.priceUsd),
-  })
   const rr = rewardRiskText(b)
   if (trades && rr) {
     facts.push({ key: 'rewardRisk', label: t('trading.bracket.card.fact.rewardRisk'), value: rr })
@@ -158,6 +146,9 @@ export function BracketCard({
     facts.push({ key: 'expires', label: t('trading.trigger.card.fact.decideBy'), value: expires })
   }
   const notes = [...new Set([...warnings, ...bracketNotes(b, walletName(b, wallets))])]
+  const enforced = t(
+    trades ? 'trading.bracket.card.enforced' : 'trading.bracket.card.enforcedAlert',
+  )
 
   return (
     <article
@@ -215,8 +206,9 @@ export function BracketCard({
         </ul>
       ) : null}
 
-      <p className="trd-trigger__enforced" data-testid="bracket-enforced">
-        {t(trades ? 'trading.bracket.card.enforced' : 'trading.bracket.card.enforcedAlert')}
+      {/* One line; the whole sentence is its tooltip and its accessible text. */}
+      <p className="trd-trigger__enforced" data-testid="bracket-enforced" title={enforced}>
+        {enforced}
       </p>
 
       {b.statusReason ? (

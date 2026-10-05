@@ -216,9 +216,13 @@ export function triggerFiredEvent(
   const fill = (key: Parameters<typeof t>[0], values: Record<string, string>) =>
     t(key).replace(/\{(\w+)\}/g, (whole, k: string) => values[k] ?? whole)
   // A leg of a bracket (docs/brackets.md) is named by its bracket and its leg:
-  // "Protect ETH · take-profit fired", "Watch ETH · over $4,560".
+  // "Protect ETH · take-profit fired", "Watch ETH · over $4,560". A range
+  // alert's legs are its ceiling and floor, never a take-profit or a stop.
   const group = tr.bracket ?? null
-  const leg = group && (group.leg === 'tp' || group.leg === 'sl') ? legWord(group.leg) : null
+  const leg =
+    group && (group.leg === 'tp' || group.leg === 'sl')
+      ? legWord(group.leg, tr.kind === 'alert' ? 'alert' : 'sell')
+      : null
   const name = group && leg ? `${group.name} · ${leg}` : tr.name
   if (fire.status === 'skipped' || fire.status === 'failed') {
     const reason = excerpt(fire.reason || fire.reasonCode || '')

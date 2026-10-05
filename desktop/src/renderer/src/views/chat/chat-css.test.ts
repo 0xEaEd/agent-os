@@ -53,6 +53,20 @@ describe('desktop chat CSS geometry contract', () => {
     expect(dock).toMatch(/flex: none;/)
     expect(css).toMatch(/\.chat-jump-dock\[data-visible='false'\] \{[\s\S]*?visibility: hidden;/)
   })
+
+  // At the desk the transcript can sit at its ~11rem floor under a docked
+  // proposal; the floating pill then covered the header of the card the agent
+  // had just posted. There the dock takes a line while it shows.
+  it('gives the desk dock a line of its own while the pill shows, so it covers nothing', () => {
+    const open = css.match(
+      /^\.chat-desktop\[data-desk\] \.chat-jump-dock\[data-visible='true'\] \{[\s\S]*?^\}/m,
+    )?.[0]
+    expect(open).toMatch(/\bheight: (2[8-9]|[3-4]\d)px;/)
+    const pill = css.match(
+      /^\.chat-desktop\[data-desk\] \.chat-jump-dock \.chat-jump-to-latest \{[\s\S]*?^\}/m,
+    )?.[0]
+    expect(pill).toMatch(/position: static;/)
+  })
 })
 
 // Every selector in the stylesheet, one per entry of a selector list (commas
@@ -688,6 +702,32 @@ describe('desktop trigger card skin', () => {
     expect(detail).toMatch(/min-width: 0;/)
     expect(detail).not.toMatch(/text-overflow: ellipsis;/)
     expect(detail).not.toMatch(/overflow: hidden;/)
+  })
+
+  // A bracket's "0.5 % at take-profit, 1 % at stop" ran over the next fact
+  // in the four-column row: the figure wraps in its own cell, and a long one
+  // (the renderer marks it) takes two columns — one per line when narrow.
+  it('wraps a fact’s figure inside its cell, and lets a long fact span two columns', () => {
+    const value = css.match(
+      /^\.trigger-card__facts dd,\s*\.trigger-fact__value \{[\s\S]*?^\}/m,
+    )?.[0]
+    expect(value).toMatch(/min-width: 0;/)
+    expect(value).toMatch(/max-width: 100%;/)
+    expect(value).toMatch(/white-space: normal;/)
+    expect(value).toMatch(/overflow-wrap: anywhere;/)
+    expect(value).not.toMatch(/white-space: nowrap;|text-overflow: ellipsis;/)
+    expect(rule('.trigger-fact')).toMatch(/min-width: 0;/)
+    expect(rule(".trigger-fact[data-trigger-fact-span='2']")).toMatch(/grid-column: span 2;/)
+    expect(
+      rule(".trigger-card[data-trigger-layout='narrow'] .trigger-fact[data-trigger-fact-span='2']"),
+    ).toMatch(/grid-column: 1 \/ -1;/)
+    // The estimate is its own quieter line; the text-only " · " never shows.
+    expect(rule('.trigger-fact__sub')).toMatch(/display: block;/)
+    expect(rule('.trigger-fact__value > .trigger-sep')).toMatch(/display: none;/)
+  })
+
+  it('keeps the proposal countdown from orphaning its last unit', () => {
+    expect(rule('.trigger-card__now')).toMatch(/text-wrap: pretty;/)
   })
 
   it('never changes the case of a token symbol in the sentence or the facts', () => {

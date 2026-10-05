@@ -19,7 +19,9 @@ import {
   bracketWord,
   deskBrackets,
   isSteerableBracket,
+  legWord,
   movesText,
+  rewardRiskText,
 } from './bracket-logic'
 import { MissionControls } from './MissionControls'
 import { useMissions } from './missions'
@@ -190,6 +192,76 @@ describe('bracket logic', () => {
     expect(text([AWAITING], [])).toBe('Trigger · awaiting')
     expect(text([bracket({ status: 'done' })], [])).toBeNull()
   })
+
+  // The live desk said "Size 1 % · ≈ $0" where the chat card said "≈ $0.00275",
+  // and "2 : 1" where it said "2.0 : 1".
+  it('never says $0 for a dust-sized estimate, and gives reward : risk one decimal', () => {
+    const dust = bracket({
+      action: { ...PAYLOAD.bracket.action, amountPct: 1, estimatedUsd: 0.00275 },
+    })
+    expect(bracketSizeText(dust)).toBe('1 % · ≈ $0.0028')
+    expect(
+      bracketSizeText(bracket({ action: { ...PAYLOAD.bracket.action, estimatedUsd: 0 } })),
+    ).toBe('100 % · ≈ $0')
+    const rr = (rewardRisk: number) =>
+      rewardRiskText(bracket({ market: { ...PAYLOAD.bracket.market, rewardRisk } }))
+    expect(rr(2)).toBe('2.0 : 1')
+    expect(rr(2.06)).toBe('2.1 : 1')
+  })
+
+  // A range alert sells nothing: the engine names its legs the ceiling and
+  // the floor ("ceiling: alerted at $1", "range left over the top").
+  it('names a range alert’s legs the ceiling and the floor, never take-profit or stop-loss', () => {
+    expect(legWord('tp')).toBe('take-profit')
+    expect(legWord('sl', 'sell')).toBe('stop-loss')
+    expect(legWord('tp', 'alert')).toBe('ceiling')
+    expect(legWord('sl', 'alert')).toBe('floor')
+    const checking = {
+      ...ALERT,
+      takeProfit: {
+        ...PAYLOAD.bracket.takeProfit,
+        condition: { ...PAYLOAD.bracket.takeProfit.condition, hits: 1 },
+      },
+    }
+    expect(bracketWord(checking)).toBe('Ceiling · 1 of 2 checks')
+    expect(bracketWord({ ...ALERT, status: 'done', fired: 'tp' })).toBe('Done · ceiling')
+    expect(
+      bracketWord({
+        ...ALERT,
+        status: 'triggered',
+        stopLoss: { ...PAYLOAD.bracket.stopLoss, status: 'triggered' },
+      }),
+    ).toBe('Triggered · floor order open')
+    const crossed = {
+      ...ALERT,
+      takeProfit: {
+        ...PAYLOAD.bracket.takeProfit,
+        kind: 'alert' as const,
+        market: { ...PAYLOAD.bracket.takeProfit.market, priceUsd: 4700, distancePct: 0 },
+      },
+      stopLoss: {
+        ...PAYLOAD.bracket.stopLoss,
+        kind: 'alert' as const,
+        market: { ...PAYLOAD.bracket.stopLoss.market, priceUsd: 4700, distancePct: -27.2 },
+      },
+    }
+    const notes = bracketNotes(crossed, 'Main')
+    expect(notes.some((n) => n.startsWith('ceiling: '))).toBe(true)
+    expect(notes.join(' ')).not.toMatch(/take-profit|stop-loss/)
+  })
+
+  // After a partial take-profit the engine sends upsidePct null: the dead
+  // leg is "—", never a "0 %" or a "+0 %".
+  it('says a dead take-profit leg as "—", nothing derived from it', () => {
+    const rest = bracket({
+      market: { ...PAYLOAD.bracket.market, upsidePct: null, downsidePct: -90, rewardRisk: null },
+    })
+    expect(movesText(rest)).toBe('— / −90 %')
+    expect(bracketWord(rest)).toBe('Armed · ETH $3,800 · — / −90 %')
+    expect(bracketWord(rest)).not.toMatch(/\b0 %/)
+    expect(rewardRiskText(rest)).toBe('')
+    expect(bracketNear(rest)).toBe(false)
+  })
 })
 
 describe('BracketCard', () => {
@@ -219,10 +291,11 @@ describe('BracketCard', () => {
       'ETH $3,800 · +20 % / −10 % · awaiting approval',
     )
     const fact = (key: string) => card.querySelector(`[data-fact='${key}'] dd`)?.textContent
-    expect(fact('takeProfit')).toBe('over $4,560')
-    expect(fact('stopLoss')).toBe('under $3,420')
+    // The sentence says what it does and both lines, the live line the price:
+    // the table never repeats them.
+    for (const key of ['what', 'takeProfit', 'stopLoss', 'now']) expect(fact(key)).toBeUndefined()
     expect(fact('size')).toBe('100 % · ≈ $380')
-    expect(fact('rewardRisk')).toBe('2 : 1')
+    expect(fact('rewardRisk')).toBe('2.0 : 1')
     expect(fact('balance')).toBe('0.1 ETH')
     expect(fact('wallet')).toBe('Main · 0x1111…1111')
     expect(fact('validUntil')).toBe('until stopped')
@@ -231,9 +304,10 @@ describe('BracketCard', () => {
     expect(screen.getByTestId('bracket-both-legs')).toHaveTextContent('One decision for both legs')
     // The engine's warning and the card's own say the same once.
     expect(screen.getByTestId('bracket-warnings').querySelectorAll('li')).toHaveLength(1)
-    expect(screen.getByTestId('bracket-enforced')).toHaveTextContent(
-      'When one leg fills, it stops the other.',
-    )
+    // One line on the card; the whole sentence is its tooltip.
+    const enforced = screen.getByTestId('bracket-enforced')
+    expect(enforced).toHaveTextContent('When one leg fills, it stops the other.')
+    expect(enforced).toHaveAttribute('title', enforced.textContent)
     expect(screen.getByTestId('bracket-approve')).toHaveTextContent('Approve & arm')
     fireEvent.click(screen.getByTestId('bracket-approve'))
     expect(onApprove).toHaveBeenCalledWith(AWAITING)
@@ -427,6 +501,56 @@ describe('brackets among the missions', () => {
     expect(screen.getByTestId('bracket-stop')).toBeDisabled()
   })
 
+  // Live: "Stop — click again" came back on a row whose Stop had already
+  // gone through, the row still reading "Armed" until the list caught up.
+  it('drops an armed confirm when the row’s write lands or its state moves', () => {
+    const props = (b: Bracket, busy: string | null = null) => (
+      <MissionControls
+        missions={[]}
+        running={new Set()}
+        pendingApprovals={0}
+        busy={false}
+        onStart={vi.fn()}
+        onEdit={vi.fn()}
+        onRun={vi.fn()}
+        onSetEnabled={vi.fn()}
+        onRemove={vi.fn()}
+        showStart={false}
+        brackets={[b]}
+        bracketBusy={busy}
+        onBracketStop={vi.fn()}
+        onBracketFire={vi.fn()}
+      />
+    )
+    const { rerender } = renderDesk(props(bracket()))
+    fireEvent.click(screen.getByTestId('bracket-stop'))
+    expect(screen.getByTestId('bracket-stop')).toHaveTextContent('Stop — click again')
+    rerender(props(bracket(), 'brk_1a2b3c4d'))
+    expect(screen.getByTestId('bracket-stop')).not.toHaveTextContent('click again')
+    rerender(props(bracket()))
+    fireEvent.click(screen.getByTestId('bracket-fire'))
+    expect(screen.getByTestId('bracket-fire')).toHaveTextContent('click again')
+    rerender(props(bracket({ status: 'paused' })))
+    expect(screen.getByTestId('bracket-fire')).not.toHaveTextContent('click again')
+  })
+
+  // The toggle is its own line after the rows it folds (desk.css pins the
+  // geometry): never between two rows of the same kind.
+  it('puts "+N more" after the bracket rows it folds', () => {
+    const finished = ['a', 'b', 'c'].map((id) =>
+      bracket({ id, status: 'stopped', updatedAt: '2026-10-04T05:50:00Z' }),
+    )
+    controls([bracket(), ...finished])
+    const band = screen.getByTestId('mission-controls')
+    const kids = [...band.children]
+    const more = screen.getByTestId('bracket-more')
+    expect(more).toHaveTextContent('+1 more')
+    expect(more).toHaveClass('trd-mctl__more')
+    const rows = screen.getAllByTestId('bracket-row')
+    expect(rows).toHaveLength(3)
+    expect(kids.indexOf(more)).toBe(kids.indexOf(rows[rows.length - 1]!) + 1)
+  })
+
   it('counts a bracket into the status strip’s trigger chip', () => {
     renderDesk(
       <StatusStrip mode="trading" onSwitchMode={vi.fn()} triggers={[]} brackets={[near()]} />,
@@ -509,6 +633,39 @@ describe('useMissions · brackets', () => {
       expect(rpcCall).toHaveBeenCalledWith(method, { bracketId: 'brk_1a2b3c4d' })
       expect(toasts.success).toHaveBeenLastCalledWith(said, id)
     }
+  })
+
+  // Live: a stopped bracket read "Armed" for 5–8 s, a resumed one "Paused"
+  // for 3 s, while the list was read again. The write's answer is the
+  // refreshed bracket, and the row shows it at once.
+  it('shows a write’s answer on the row at once, without waiting for the list', async () => {
+    let held = false
+    rpcCall.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'trading.bracket.pause') {
+        held = true
+        return {
+          ...PAYLOAD,
+          bracket: { ...PAYLOAD.bracket, status: 'paused', statusReason: 'user' },
+        }
+      }
+      // Every list read after the write hangs: only the answer can move the row.
+      if (held && method === 'trading.bracket.list') return new Promise(() => {})
+      return answer(method, params)
+    })
+    const { result } = renderHook(() => useMissions(SESSION), { wrapper })
+    await waitFor(() => expect(result.current.brackets.length).toBeGreaterThan(0))
+    const b = result.current.brackets[0]!
+    expect(b.status).toBe('armed')
+    await act(async () => {
+      await result.current.bracket.pause(b)
+    })
+    await waitFor(() =>
+      expect(result.current.brackets.find((x) => x.id === b.id)?.status).toBe('paused'),
+    )
+    // …and the sweep still asked for the list again.
+    expect(rpcCall.mock.calls.filter(([m]) => m === 'trading.bracket.list').length).toBeGreaterThan(
+      1,
+    )
   })
 
   it('fires the nearest leg or the one given, and says what the fire did', async () => {

@@ -776,6 +776,31 @@ describe('useMissions · triggers', () => {
     expect(rpcCall).not.toHaveBeenCalledWith('trading.trigger.pause', expect.anything())
   })
 
+  it('shows a write’s answer on the row at once, without waiting for the list', async () => {
+    let held = false
+    rpcCall.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+      if (method === 'trading.trigger.pause') {
+        held = true
+        return {
+          ...PAYLOAD,
+          trigger: { ...PAYLOAD.trigger, status: 'paused', statusReason: 'user' },
+        }
+      }
+      if (held && method === 'trading.trigger.list') return new Promise(() => {})
+      return answer(method, params)
+    })
+    const { result } = renderHook(() => useMissions(SESSION), { wrapper })
+    await waitFor(() => expect(result.current.triggers.length).toBeGreaterThan(0))
+    const tr = result.current.triggers[0]!
+    expect(tr.status).toBe('armed')
+    await act(async () => {
+      await result.current.trigger.pause(tr)
+    })
+    await waitFor(() =>
+      expect(result.current.triggers.find((x) => x.id === tr.id)?.status).toBe('paused'),
+    )
+  })
+
   it('steers and toasts a trigger through trading.trigger.*', async () => {
     rpcCall.mockImplementation(async (method: string, params: Record<string, unknown>) =>
       answer(method, params),
@@ -958,12 +983,18 @@ describe('missions rows and the transcript floor · CSS contract', () => {
     )
   })
 
-  // The band's cap cut the collapsed "+8 more" off a few pixels short.
-  it('keeps the last "+N more" at the foot of the band, on a plate', () => {
-    const more = rule('.trd-mctl > .trd-mctl__more:not(:has(~ .trd-mctl__more))')
-    expect(more).toMatch(/position: sticky;/)
-    expect(more).toMatch(/bottom: 0;/)
-    expect(more).toMatch(/background: var\(--elevated\);/)
+  // Sticky to the band's foot, "+1 more" sat on top of the second bracket
+  // row while a docked proposal folded the band to two rows. It is a line of
+  // its own in the band's flow now, a row's height, laid over nothing.
+  it('puts "+N more" on a line of its own after its rows, never over one', () => {
+    for (const r of rules.filter((x) => x.selector.includes('.trd-mctl__more'))) {
+      expect(r.body, r.selector).not.toMatch(/position: (sticky|absolute|fixed);/)
+      expect(r.body, r.selector).not.toMatch(/margin(-top)?: -/)
+    }
+    const more = rule('.trd-mctl > .trd-mctl__more')
+    expect(more).toMatch(/flex: 0 0 100%;/)
+    const rowMin = /min-height: (\d+)px;/.exec(rule('.trd-mctl__row'))![1]
+    expect(more).toMatch(new RegExp(`min-height: ${rowMin}px;`))
   })
 })
 

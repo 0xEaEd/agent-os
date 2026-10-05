@@ -1070,6 +1070,9 @@ export const trading = {
   // (checks, order open) are the trigger's.
   'trading.bracket.leg.tp': 'take-profit',
   'trading.bracket.leg.sl': 'stop-loss',
+  // A range alert's legs: the edges of the range, never a sale.
+  'trading.bracket.leg.ceiling': 'ceiling',
+  'trading.bracket.leg.floor': 'floor',
   'trading.bracket.tag.sell': 'Bracket',
   'trading.bracket.tag.alert': 'Range',
   'trading.bracket.word.legOrderOpen': '{leg} order open',
