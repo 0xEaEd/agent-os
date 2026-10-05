@@ -3233,6 +3233,171 @@
   color: var(--muted-foreground);
 }
 
+/* Brackets (docs/brackets.md): a take-profit and a stop-loss on one position.
+   Same card, same tones; what is new is the range gauge (the stop tick at the
+   left, red-tinted; the take-profit tick at the right, green-tinted; the span
+   between them faint), the legs strip and the reward : risk fact. A leg's own
+   trigger card says whose leg it is in `.trigger-card__group`. */
+.chat-surface
+  .trigger-card[data-trigger-kind='bracket'][data-trigger-action='sell']
+  .trigger-card__glyph::before {
+  content: '▼▲';
+}
+
+.chat-surface .trigger-card__group {
+  flex-basis: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface .trigger-gauge[data-trigger-gauge='range'] .trigger-gauge__line {
+  stroke: var(--border);
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.chat-surface .trigger-gauge__zone[data-zone='bracket'] {
+  fill: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.chat-surface .trigger-gauge__tick {
+  stroke: var(--foreground);
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.chat-surface .trigger-gauge__tick[data-leg='sl'] {
+  stroke: color-mix(in srgb, var(--danger) 80%, var(--foreground));
+}
+
+.chat-surface .trigger-gauge__tick[data-leg='tp'] {
+  stroke: color-mix(in srgb, var(--ok) 80%, var(--foreground));
+}
+
+.chat-surface .trigger-gauge__dot {
+  fill: var(--foreground);
+  stroke: var(--card);
+  stroke-width: 2;
+}
+
+.chat-surface .trigger-gauge[data-trigger-proximity='near'] .trigger-gauge__dot,
+.chat-surface .trigger-gauge[data-trigger-proximity='met'] .trigger-gauge__dot {
+  fill: var(--warn);
+}
+
+.chat-surface .trigger-gauge__label[data-leg='sl'] {
+  color: color-mix(in srgb, var(--danger) 75%, var(--foreground));
+}
+
+.chat-surface .trigger-gauge__label[data-leg='tp'] {
+  color: color-mix(in srgb, var(--ok) 75%, var(--foreground));
+}
+
+.chat-surface .trigger-gauge__label[data-leg='now'] {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+/* The legs strip: two mono rows, word · line · state. */
+.chat-surface .bracket-legs {
+  display: grid;
+  gap: 0;
+  border-radius: var(--radius-control);
+  background: var(--background);
+}
+
+.chat-surface .bracket-leg {
+  --trigger-tone: var(--dim);
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr) minmax(0, auto);
+  align-items: baseline;
+  gap: 0 0.625rem;
+  padding: 0.375rem 0.625rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.chat-surface .bracket-leg + .bracket-leg {
+  border-top: 1px solid var(--hairline);
+}
+
+.chat-surface .bracket-leg[data-status='armed'] {
+  --trigger-tone: var(--ok);
+}
+
+.chat-surface .bracket-leg:is([data-status='awaiting_approval'], [data-hold]) {
+  --trigger-tone: var(--warn);
+}
+
+.chat-surface .bracket-leg:is([data-status='triggered'], [data-status='done']) {
+  --trigger-tone: var(--info);
+}
+
+.chat-surface .bracket-leg__word {
+  color: var(--muted-foreground);
+  font-weight: 600;
+}
+
+.chat-surface .bracket-leg[data-leg='sl'] .bracket-leg__word {
+  color: color-mix(in srgb, var(--danger) 75%, var(--foreground));
+}
+
+.chat-surface .bracket-leg[data-leg='tp'] .bracket-leg__word {
+  color: color-mix(in srgb, var(--ok) 75%, var(--foreground));
+}
+
+.chat-surface .bracket-leg__line {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-surface
+  .trigger-card[data-trigger-nearest='tp']
+  .bracket-leg[data-leg='tp']
+  .bracket-leg__line,
+.chat-surface
+  .trigger-card[data-trigger-nearest='sl']
+  .bracket-leg[data-leg='sl']
+  .bracket-leg__line {
+  font-weight: 600;
+}
+
+.chat-surface .bracket-leg__state {
+  min-width: 0;
+  color: var(--trigger-tone);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.chat-surface .bracket-leg[data-fired] .bracket-leg__state {
+  font-weight: 600;
+}
+
+.chat-surface .trigger-card[data-trigger-layout='narrow'] .bracket-leg {
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+}
+
+.chat-surface .trigger-card[data-trigger-layout='narrow'] .bracket-leg__state {
+  grid-column: 2;
+  text-align: left;
+}
+
+.chat-surface .trigger-fact__rr {
+  font-family: var(--font-mono);
+}
+
+/* A merged fire names its leg before its number. */
+.chat-surface .trigger-fire[data-leg] .trigger-fire__n {
+  min-width: 6.5rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .chat-surface .trigger-pill[data-status='awaiting_approval'] .trigger-pill__dot,
   .chat-surface .trigger-pill[data-status='triggered'] .trigger-pill__dot,
