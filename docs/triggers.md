@@ -19,8 +19,10 @@ same desk controls.
 This file is the contract between the engine, the gateway, the CLI, the
 shared renderer and the desktop. Change it before changing any of them.
 
-Chains: Base (8453) and Robinhood Chain (4663). Not in scope: OCO pairs,
-ladders, time-of-day conditions, conditions on anything but one token's USD
+Chains: Base (8453) and Robinhood Chain (4663). OCO pairs (a take-profit and
+a stop-loss on one position, one cancelling the other) are **brackets** and
+live in [`brackets.md`](brackets.md): two triggers of this file sharing a
+group. Not in scope here: ladders, time-of-day conditions, conditions on anything but one token's USD
 price, repeating alerts, LP-range alerts (follow-up).
 
 ## Vocabulary
@@ -123,6 +125,13 @@ create ──(operator)────────────► armed ──► t
   past it becomes `expired` (`"not reached by <date>"`).
 - Nothing is ever deleted. `list` shows live triggers
   (`awaiting_approval`, `armed`, `triggered`, `paused`) unless `--all`.
+  It never lists a bracket's legs (nor counts them in `totals`): a bracket
+  is listed by `trading.bracket.list` (`brackets.md`).
+- **A bracket's legs refuse leg-level writes**: `approve`, `reject`,
+  `pause`, `resume`, `stop` and `fire` on a leg answer
+  `trading.trigger.bad_state` (*"trg_… is the take-profit leg of bracket
+  brk_…: use trading.bracket.*"*); `get` works and shows the leg with its
+  `bracket` field.
 - **Update** is not in v1 (stop and create again).
 
 ### Relative prices
@@ -313,7 +322,8 @@ Trigger = {
   } | null,
   "validUntil": iso | null, "initiator": "agent" | "manual", "sessionKey": string | null,
   "createdAt": iso, "updatedAt": iso, "approvedAt": iso | null, "armedAt": iso | null,
-  "triggeredAt": iso | null, "expiresAt": iso | null
+  "triggeredAt": iso | null, "expiresAt": iso | null,
+  "bracket": { "id": "brk_1a2b3c4d", "name": "Protect ETH", "leg": "tp" | "sl" } | null   // set on a bracket's leg (brackets.md)
 }
 
 Fire = { "n": 1, "at": iso, "manual": false,

@@ -29,7 +29,7 @@ from agentos.trading.pnl import Lot
 
 log = structlog.get_logger(__name__)
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Version 6 repair: a native receipt booked as a separate deposit is matched
 # to its swap within this many seconds, and a phantom withdrawal to the swap
@@ -299,7 +299,12 @@ CREATE TABLE IF NOT EXISTS triggers (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     approved_at REAL,
-    expires_at REAL
+    expires_at REAL,
+    -- A bracket's leg (docs/brackets.md): the group, its name, 'tp' | 'sl'.
+    -- NULL for a plain trigger.
+    group_id TEXT,
+    group_name TEXT,
+    leg TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_triggers_status ON triggers (status, created_at DESC);
 
@@ -449,6 +454,13 @@ _TRIGGER_INDEX = (
     "CREATE INDEX IF NOT EXISTS idx_orders_trigger ON orders (trigger_id) "
     "WHERE trigger_id IS NOT NULL"
 )
+# Created after the version-9 migration has added ``triggers.group_id``.
+_GROUP_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_triggers_group ON triggers (group_id) "
+    "WHERE group_id IS NOT NULL"
+)
+#: ``list_triggers(legs=…)``: plain triggers only, bracket legs only, or both.
+TRIGGER_LEG_FILTERS = ("exclude", "only", "all")
 # A mandate run whose order is still open: waiting for the chain (pending)
 # or for the user (parked).
 RUN_OPEN_STATUSES = ("pending", "parked")
@@ -532,6 +544,8 @@ class Ledger:
                     self._add_order_mandate_column()
                 if version < 8:
                     self._add_order_trigger_column()
+                if version < 9:
+                    self._add_trigger_group_columns()
                 if version < SCHEMA_VERSION:
                     self._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
             self._conn.execute(_OPENING_INDEX)
@@ -539,6 +553,7 @@ class Ledger:
             self._conn.execute(_CLIENT_INDEX)
             self._conn.execute(_MANDATE_INDEX)
             self._conn.execute(_TRIGGER_INDEX)
+            self._conn.execute(_GROUP_INDEX)
             self._commit()
 
     def _add_token_columns(self) -> None:
@@ -581,6 +596,13 @@ class Ledger:
         have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(orders)")}
         if "trigger_id" not in have:
             self._conn.execute("ALTER TABLE orders ADD COLUMN trigger_id TEXT")
+
+    def _add_trigger_group_columns(self) -> None:
+        """Version 9: a trigger may be one leg of a bracket (``docs/brackets.md``)."""
+        have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(triggers)")}
+        for column in ("group_id", "group_name", "leg"):
+            if column not in have:
+                self._conn.execute(f"ALTER TABLE triggers ADD COLUMN {column} TEXT")  # noqa: S608
 
     def _add_full_synced_column(self) -> None:
         """Version 6: when the last full rebuild of a wallet/chain landed."""
@@ -1909,15 +1931,33 @@ class Ledger:
                 ).fetchone()
             )
 
+    def insert_triggers(self, rows: list[dict[str, Any]]) -> None:
+        """Insert several triggers (a bracket's two legs) in one transaction: all or none."""
+        with self.transaction():
+            for row in rows:
+                self.insert_trigger(row)
+
     def list_triggers(
         self,
         *,
         statuses: Iterable[str] | None = None,
         wallet: str | None = None,
+        legs: str = "exclude",
     ) -> list[dict[str, Any]]:
-        """Triggers, newest first."""
+        """Triggers, newest first.
+
+        ``legs``: ``"exclude"`` (the default) leaves bracket legs out, so a
+        plain trigger list never shows them; ``"only"`` lists legs alone;
+        ``"all"`` both (the checker and the expirers).
+        """
+        if legs not in TRIGGER_LEG_FILTERS:
+            raise ValueError(f"legs must be one of {', '.join(TRIGGER_LEG_FILTERS)}")
         clauses = ["1=1"]
         params: list[Any] = []
+        if legs == "exclude":
+            clauses.append("group_id IS NULL")
+        elif legs == "only":
+            clauses.append("group_id IS NOT NULL")
         if statuses is not None:
             wanted = list(statuses)
             if not wanted:
@@ -1935,6 +1975,44 @@ class Ledger:
                     params,
                 )
             )
+
+    def group_triggers(self, group_id: str) -> list[dict[str, Any]]:
+        """A bracket's legs, take-profit first."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM triggers WHERE group_id = ? "
+                    "ORDER BY CASE leg WHEN 'tp' THEN 0 WHEN 'sl' THEN 1 ELSE 2 END, rowid",
+                    (group_id,),
+                )
+            )
+
+    def list_groups(
+        self,
+        *,
+        statuses: Iterable[str] | None = None,
+        wallet: str | None = None,
+    ) -> list[str]:
+        """Bracket ids, newest first; with ``statuses``, those where any leg is in one."""
+        clauses = ["group_id IS NOT NULL"]
+        params: list[Any] = []
+        if statuses is not None:
+            wanted = list(statuses)
+            if not wanted:
+                return []
+            clauses.append(f"status IN ({', '.join('?' for _ in wanted)})")
+            params.extend(wanted)
+        if wallet:
+            clauses.append("wallet = ?")
+            params.append(wallet.lower())
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT group_id, MAX(created_at) AS created, MAX(rowid) AS seq "  # noqa: S608
+                f"FROM triggers WHERE {' AND '.join(clauses)} "
+                "GROUP BY group_id ORDER BY created DESC, seq DESC",
+                params,
+            ).fetchall()
+        return [str(r["group_id"]) for r in rows]
 
     def update_trigger(
         self,

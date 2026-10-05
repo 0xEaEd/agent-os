@@ -12,6 +12,7 @@
   "trigger": {
     "id": "trg_00000002",
     "name": "Alert WETH −5 % from peak",
+    "bracket": null,
     "kind": "alert",
     "status": "armed",
     "statusReason": null,
