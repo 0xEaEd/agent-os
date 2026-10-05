@@ -742,8 +742,18 @@ def triggers_payload(
 
 
 def human(raw: int, decimals: int) -> str:
-    """A token amount for a reason line: at most six places, no trailing zeros."""
-    return format_amount(int(raw), int(decimals), max_places=6)
+    """A token amount for a reason line: at most six places, no trailing zeros.
+
+    A dust amount that six places would print as ``0`` (``0.000298`` USDC
+    sold for ``1.1e-7`` ETH) keeps enough places to show its first three
+    significant digits instead: a reason line never says ``for 0 ETH``.
+    """
+    text = format_amount(int(raw), int(decimals), max_places=6)
+    if text != "0" or int(raw) <= 0:
+        return text
+    value = to_human(int(raw), int(decimals))
+    places = min(int(decimals), -value.adjusted() + 2)
+    return format_amount(int(raw), int(decimals), max_places=places)
 
 
 # ── brackets (docs/brackets.md) ────────────────────────────────────────────

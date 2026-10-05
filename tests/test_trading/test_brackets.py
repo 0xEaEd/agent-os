@@ -898,3 +898,18 @@ async def test_card_fixtures_match_the_engine(world: World) -> None:
     for name in BRACKET_FIXTURES:
         pinned = (FIXTURES / f"{name}.json").read_text(encoding="utf-8")
         assert pinned == _dump(payloads[name]), f"{name}.json is stale: regenerate it"
+
+
+@pytest.mark.parametrize(
+    ("raw", "decimals", "text"),
+    [
+        (10**18, 18, "1"),
+        (298, 6, "0.000298"),
+        (110_000_000_000, 18, "0.00000011"),  # 1.1e-7 ETH: never "for 0 ETH"
+        (123_456_789, 18, "0.000000000123"),
+        (1, 18, "0.000000000000000001"),
+        (0, 18, "0"),
+    ],
+)
+def test_human_keeps_a_dust_amount_visible(raw: int, decimals: int, text: str) -> None:
+    assert triggers.human(raw, decimals) == text
