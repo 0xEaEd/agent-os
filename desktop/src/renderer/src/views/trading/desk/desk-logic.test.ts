@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { order, WALLET } from '../test-utils'
 import {
   watchTabStrip,
@@ -886,6 +886,33 @@ describe('watchTabStrip', () => {
     // Detached: a scroll no longer touches the strip.
     scrollTo(0)
     expect(el.dataset.fade).toBe('start')
+  })
+
+  it('a resize that still overflows brings the selected tab back into view', () => {
+    // Labels are already off at 520 px and at 300 px, so only the width
+    // changes; History (selected) sits past the right edge afterwards.
+    const widths = { labelled: 520, icons: 260, client: 300 }
+    const { el } = strip(widths)
+    const selected = el.querySelector<HTMLElement>('[aria-selected="true"]')!
+    const into = vi.fn()
+    selected.scrollIntoView = into
+    let observe: (() => void) | null = null
+    const RO = class {
+      constructor(cb: () => void) {
+        observe = cb
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', RO)
+    const stop = watchTabStrip(el)
+    expect(el.dataset.labels).toBe('off')
+    into.mockClear()
+    widths.client = 200
+    observe!()
+    expect(into).toHaveBeenCalledTimes(1)
+    stop()
+    vi.unstubAllGlobals()
   })
 
   it('icons alone that fit: no words, no fade', () => {

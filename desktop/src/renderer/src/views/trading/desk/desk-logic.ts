@@ -1532,8 +1532,9 @@ export function watchTabStrip(el: HTMLElement): () => void {
     el.dataset.labels = 'on'
     const fits = el.scrollWidth <= el.clientWidth + 1
     el.dataset.labels = fits ? 'on' : 'off'
-    // The strip changed shape: the selected tab stays in view.
-    if (before !== el.dataset.labels) {
+    // The strip changed shape, or it still overflows after a resize (520 →
+    // 300 px with labels already off): the selected tab stays in view.
+    if (before !== el.dataset.labels || el.scrollWidth > el.clientWidth + 1) {
       el.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({
         block: 'nearest',
         inline: 'nearest',
