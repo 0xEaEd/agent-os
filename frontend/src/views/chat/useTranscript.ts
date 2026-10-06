@@ -14,6 +14,11 @@ import { createChartMounter, type ChartMounter } from './transcript/chart'
 import { createDcaMounter, type DcaActions, type DcaMounter } from './transcript/dca'
 import { createLpMounter, type LpActions, type LpMounter } from './transcript/lp'
 import {
+  createMarketsMounter,
+  type MarketsMounter,
+  type MarketsSwapHandler,
+} from './transcript/markets'
+import {
   createTriggerMounter,
   type TriggerActions,
   type TriggerMounter,
@@ -265,6 +270,13 @@ export function useTranscript(opts: {
    * desk passes it; without it the cards carry no `.trigger-actions`. Read live.
    */
   triggerActions?: TriggerActions | null
+  /**
+   * The Swap button on each markets card row (markets.ts, docs/markets.md):
+   * called with the row's `{ chainId, tokenIn, tokenOut }`. The desktop passes
+   * one that opens its swap panel; the web console passes none, so its cards
+   * carry no `.mk-swap`. Read live.
+   */
+  onMarketsSwap?: MarketsSwapHandler | null
 }): {
   containerRef: React.RefObject<HTMLDivElement | null>
   routerFxDockRef: React.RefObject<HTMLDivElement | null>
@@ -538,6 +550,22 @@ export function useTranscript(opts: {
       actions: () => lpActionsRef.current,
     }),
   )
+  // Markets cards (markets.ts): every pool a token trades in. Owns the "2m
+  // ago" clock, cleared on unmount. ↻, *Show lookalikes* and *Deeper* re-run
+  // `trading.markets` over this connection (agent-callable); the per-row Swap
+  // button exists only while the caller hands over `onMarketsSwap`.
+  const onMarketsSwapRef = useRef<MarketsSwapHandler | null>(opts.onMarketsSwap ?? null)
+  useEffect(() => {
+    onMarketsSwapRef.current = opts.onMarketsSwap ?? null
+  }, [opts.onMarketsSwap])
+  // eslint-disable-next-line react-hooks/refs -- the factory stores the getter and reads .current only later, inside click handlers and renders outside React's render
+  const [marketsMounter] = useState<MarketsMounter>(() =>
+    createMarketsMounter({
+      fetchPayload: fetchChartPayload,
+      call: (method, params) => rpc.call(method, params),
+      getOnSwap: () => onMarketsSwapRef.current,
+    }),
+  )
   // DCA mandate cards (dca.ts). Owns the countdown clock (1 s under an hour
   // to the next buy, 1 min above) and the copy / Stop-confirm resets, all
   // cleared on unmount. ↻ re-reads over this connection (`trading.dca.get` /
@@ -620,10 +648,11 @@ export function useTranscript(opts: {
       chartMounter.mountCharts(container)
       cardsMounter.mountCards(container)
       lpMounter.mountLp(container)
+      marketsMounter.mountMarkets(container)
       dcaMounter.mountDca(container)
       triggerMounter.mountTrigger(container)
     },
-    [chartMounter, cardsMounter, lpMounter, dcaMounter, triggerMounter],
+    [chartMounter, cardsMounter, lpMounter, marketsMounter, dcaMounter, triggerMounter],
   )
 
   useEffect(() => {
@@ -633,10 +662,11 @@ export function useTranscript(opts: {
       chartMounter.destroyAll()
       cardsMounter.destroyAll()
       lpMounter.destroyAll()
+      marketsMounter.destroyAll()
       dcaMounter.destroyAll()
       triggerMounter.destroyAll()
     }
-  }, [chartMounter, cardsMounter, lpMounter, dcaMounter, triggerMounter])
+  }, [chartMounter, cardsMounter, lpMounter, marketsMounter, dcaMounter, triggerMounter])
 
   // eslint-disable-next-line react-hooks/refs -- factory stores the refs and reads .current only later, inside methods invoked outside render (never at creation)
   const [controller] = useState<StreamController>(() =>
