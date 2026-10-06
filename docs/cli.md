@@ -1117,15 +1117,19 @@ token is the base — `NVDA/USDG`, `NVDA/WETH`). It is read-only and allowed
 from an agent (gateway method `trading.markets`), and it is the one `trade`
 command whose `--chain` defaults to **robinhood**. Pools come from
 GeckoTerminal (the only listing with both sides; 20 a page, 5 pages by
-default, 10 with `--deep`, read one at a time and cached for 120 s per
-token), enriched by DexScreener; for a Stock Token the card also carries the
+default, 10 with `--deep`, read in bursts of five and cached for 120 s per
+token — a cold read takes 20–60 s because GeckoTerminal's edge caches a
+page only after the first request, a warm one about a second), enriched by
+DexScreener; for a Stock Token the card also carries the
 Chainlink oracle price (`oracle`, with `stale`/`paused`) and each `base` row
 its premium against it. Rows under `--min-tvl` (default $10k) and
 **lookalikes** — a counterparty that borrows a Stock Token's symbol or name
 at another address — are dropped and counted (`--lookalikes` shows them,
 flagged). Each section is sorted by TVL; `viaUniswap` marks the pools the
 Uniswap route can use. A rate limit stops paging and the card says
-`partial`; no page at all is `trading.markets.unavailable`. Human output is
+`partial`; no page at all is `trading.markets.unavailable`. The counts line
+also says how many rows `--limit` cut (`· 12 more over the limit`), and
+`counts.pageCapHit` tells a client when `--deep` would show more. Human output is
 the token line (price, oracle, premium), one table per section
 (`PAIR DEX TVL VOL 24H PRICE IN <TOKEN> AGE FLAGS`, flags `uni`, `stock`,
 `lookalike`; the base section's ratio column is `IN QUOTE`, the token priced
