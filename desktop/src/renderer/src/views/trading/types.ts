@@ -16,6 +16,8 @@ export interface Token {
   logoUrl: string | null
   native: boolean
   verified: boolean
+  /** A Robinhood Stock Token (the engine's `stock_token`); older engines omit it. */
+  stockToken?: boolean
 }
 
 export interface SearchToken extends Token {
@@ -970,3 +972,102 @@ export const CHAINS: readonly {
   { id: 8453, key: 'base', name: 'Base', short: 'Base', abbr: 'BA' },
   { id: 4663, key: 'robinhood', name: 'Robinhood Chain', short: 'Robinhood', abbr: 'RH' },
 ]
+
+/* ── Markets (docs/markets.md, "Payload") ────────────────────────────────── */
+
+/** Which side of the pool the asked-about token is on: `quote` = it prices
+ *  the counterparty (AI/NVDA), `base` = it is priced in it (NVDA/USDG). */
+export type MarketsSide = 'quote' | 'base'
+
+export interface MarketsOracle {
+  usd: number
+  updatedAt: string
+  ageSeconds: number
+  stale: boolean
+  paused: boolean
+}
+
+/** The token the read is about. */
+export interface MarketsToken {
+  address: string
+  symbol: string
+  name: string
+  decimals: number
+  logoUrl: string | null
+  verified: boolean
+  stockToken: boolean
+  priceUsd: number | null
+  oracle: MarketsOracle | null
+}
+
+/** The other token in a pool. */
+export interface MarketsCounterparty {
+  address: string
+  symbol: string
+  name: string
+  decimals: number
+  logoUrl: string | null
+  verified: boolean
+  stockToken: boolean
+  lookalike: boolean
+}
+
+export interface MarketsPool {
+  /** GeckoTerminal's address; for a v4 pool the poolId. */
+  poolAddress: string
+  /** Counterparty first on quote rows, the token first on base rows. */
+  pair: string
+  side: MarketsSide
+  dex: { id: string; label: string; version: 'v2' | 'v3' | 'v4' | null }
+  launcher: string | null
+  viaUniswap: boolean
+  feePct: number | null
+  counterparty: MarketsCounterparty
+  tvlUsd: number | null
+  volume24hUsd: number | null
+  txns24h: { buys: number; sells: number } | null
+  /** quote rows: the counterparty's USD price; base rows: the token's. */
+  priceUsd: number | null
+  /** quote rows: the counterparty priced in the token; base rows: the token priced in the counterparty. */
+  priceInToken: number | null
+  change24hPct: number | null
+  /** base rows of a Stock Token only: the pool's price against the oracle. */
+  premiumPct: number | null
+  createdAt: string | null
+  url: string
+  /** What the Swap button prefills: sell the token, buy the counterparty. */
+  swap: { chainId: number; tokenIn: string; tokenOut: string }
+}
+
+export interface MarketsCounts {
+  scanned: number
+  shown: number
+  belowMinTvl: number
+  hiddenLookalikes: number
+  pages: number
+  pageCap: number
+}
+
+export interface MarketsParams {
+  target: string
+  chainId: number
+  side?: 'all' | MarketsSide
+  minTvlUsd?: number
+  limit?: number
+  lookalikes?: boolean
+  deep?: boolean
+}
+
+export interface MarketsPayload {
+  version: number
+  kind: 'markets'
+  chain: { id: number; key: string; name: string; explorer: string }
+  fetchedAt: string
+  /** Paging stopped early (rate limit / cap). */
+  partial: boolean
+  warnings: string[]
+  token: MarketsToken
+  counts: MarketsCounts
+  sections: { quote: MarketsPool[]; base: MarketsPool[] }
+  request: { kind: 'markets'; params: MarketsParams }
+}

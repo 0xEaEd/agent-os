@@ -2278,6 +2278,358 @@
   display: none;
 }
 
+/* Markets cards (docs/markets.md, "CSS hooks"). The shared renderer
+   (frontend markets.ts) emits `mk-*` classes and stamps `data-chain` /
+   `data-partial` on `.mk-card`, `data-side` on each section, `data-tone` on
+   the change, premium and oracle badge, `data-kind` on a flag and
+   `data-lookalike` on a row. The console draws its own card; here it is a
+   desk instrument, a sibling of the LP plate: hairline plate, a 3 px rail in
+   the chain's own colour (Robinhood green, Base blue), the two sections as
+   hairline-ruled ledgers under small-caps micro labels, every figure in
+   tabular mono, pills as quiet capsules. The layout only assumes the hooks,
+   not their nesting: a row is a wrapping flex line, so it holds whether the
+   renderer groups its cells or not. Symbols keep their case. */
+.mk-card {
+  --mk-rail: var(--info);
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(44rem, 100%);
+  padding: 10px 12px 8px 15px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--elevated) 92%, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--hairline),
+    inset 3px 0 0 var(--mk-rail);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+}
+.mk-card[data-chain='4663'] {
+  --mk-rail: #00c805;
+}
+.mk-card[data-chain='8453'] {
+  --mk-rail: #0052ff;
+}
+/* A read the source cut short: the rail goes amber, the badge says why. */
+.mk-card[data-partial='true'] {
+  --mk-rail: var(--warn);
+}
+.mk-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hairline);
+}
+.mk-logo {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  object-fit: cover;
+}
+.mk-symbol {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  unicode-bidi: isolate;
+}
+.mk-name {
+  min-width: 0;
+  max-width: 18rem;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.mk-chain,
+.mk-version,
+.mk-launcher,
+.mk-flag,
+.mk-partial,
+.mk-oracle-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.mk-chain {
+  color: var(--mk-rail);
+  background: color-mix(in srgb, var(--mk-rail) 12%, transparent);
+}
+.mk-price {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+.mk-oracle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.mk-oracle-badge {
+  --mk-tone: var(--warn);
+  color: var(--mk-tone);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mk-tone) 45%, transparent);
+}
+.mk-oracle-badge[data-tone='danger'] {
+  --mk-tone: var(--danger);
+}
+.mk-section {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.mk-section + .mk-section {
+  margin-top: 4px;
+}
+.mk-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 2px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.mk-section-count {
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  letter-spacing: 0;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.mk-empty {
+  margin: 0;
+  padding: 4px 0 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.mk-rows {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  min-width: 0;
+  min-height: 26px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.mk-row:last-child {
+  border-bottom-color: transparent;
+}
+.mk-row[data-lookalike='true'] {
+  margin-left: -6px;
+  padding-left: 4px;
+  box-shadow: inset 2px 0 0 var(--warn);
+  background: color-mix(in srgb, var(--warn) 5%, transparent);
+}
+.mk-pair {
+  min-width: 0;
+  flex: 1 1 8rem;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  unicode-bidi: isolate;
+}
+.mk-dex {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.mk-version {
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted-foreground);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.mk-launcher {
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+}
+.mk-tvl,
+.mk-vol,
+.mk-px,
+.mk-px-in,
+.mk-change,
+.mk-age,
+.mk-premium {
+  font-family: var(--font-mono);
+  text-align: right;
+  white-space: nowrap;
+}
+.mk-tvl {
+  min-width: 4.5rem;
+  font-weight: 600;
+}
+.mk-vol,
+.mk-px-in,
+.mk-age {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.mk-age {
+  min-width: 2.5rem;
+  color: var(--dim);
+}
+.mk-px {
+  font-size: 11.5px;
+}
+.mk-change,
+.mk-premium {
+  font-size: 11px;
+}
+.mk-change[data-tone='up'],
+.mk-premium[data-tone='up'] {
+  color: var(--ok);
+}
+.mk-change[data-tone='down'],
+.mk-premium[data-tone='down'] {
+  color: var(--danger);
+}
+.mk-change[data-tone='flat'],
+.mk-premium[data-tone='flat'] {
+  color: var(--muted-foreground);
+}
+.mk-flags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.mk-flag {
+  --mk-tone: var(--muted-foreground);
+  height: 15px;
+  padding: 0 5px;
+  color: var(--mk-tone);
+  background: color-mix(in srgb, var(--mk-tone) 12%, transparent);
+}
+.mk-flag[data-kind='uni'] {
+  --mk-tone: var(--primary);
+}
+.mk-flag[data-kind='stock'] {
+  --mk-tone: var(--ok);
+}
+.mk-flag[data-kind='lookalike'] {
+  --mk-tone: var(--warn);
+}
+/* Swap: an NSButton in miniature, the row's one action. */
+.mk-swap {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  box-shadow:
+    0 0.5px 0 color-mix(in srgb, #fff 6%, transparent) inset,
+    0 0 0 0.5px color-mix(in srgb, var(--foreground) 12%, transparent);
+  cursor: default;
+}
+.mk-swap:hover {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.mk-swap:active {
+  background: color-mix(in srgb, var(--primary) 26%, transparent);
+}
+.mk-swap:focus-visible,
+.mk-more:focus-visible,
+.mk-refresh:focus-visible,
+.mk-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.mk-more {
+  justify-self: start;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--primary);
+  cursor: default;
+}
+.mk-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--hairline);
+}
+.mk-counts {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.mk-partial {
+  color: var(--warn);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+/* Two classes: `.msg-body a` would otherwise underline the links. */
+.mk-foot .mk-link,
+.mk-foot .mk-refresh {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--muted-foreground);
+  cursor: default;
+}
+.mk-foot .mk-link:hover,
+.mk-foot .mk-refresh:hover {
+  color: var(--foreground);
+}
+.mk-foot .mk-refresh {
+  margin-left: auto;
+}
+
 /* DCA mandate cards (docs/dca.md). The shared renderer (frontend dca.ts)
    emits `dca-card*` classes and stamps `data-dca-kind` / `data-dca-status` /
    `data-dca-layout` / `data-dca-busy` on `.dca-card` (the `.msg-artifact-dca`
