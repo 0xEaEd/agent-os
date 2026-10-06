@@ -124,6 +124,9 @@ async def markets(service, *, chain, target, side="all", min_tvl_usd=10_000.0,
   first N pools"*. No pages at all (network, 5xx) →
   `trading.markets.unavailable`. `partial` is also set when the page cap
   stopped a read that had more pools (warning points at `deep`).
+  GeckoTerminal's limit bites earlier than its stated 30/min (a 429 after
+  ~11 requests in 90 s was seen): the first 429 inside a burst is retried
+  once after 15 s; a second 429 ends the read (`rateLimited: true`).
   An uncached page was measured at up to 18.5 s (`cf-cache-status: MISS`),
   so the per-page timeout is **60 s**, and a page that timed out inside a
   burst is retried **once** after the burst before the read gives up on it.
@@ -185,7 +188,8 @@ async def markets(service, *, chain, target, side="all", min_tvl_usd=10_000.0,
     "scanned": 100, "shown": 34, "belowMinTvl": 61, "hiddenLookalikes": 5,
     "limited": 0,                       // rows above the floor that `limit` cut (the counts line says "· 12 more over the limit")
     "pages": 5, "pageCap": 5,
-    "pageCapHit": false                 // the page cap, not `limit`, ended a read that had more pools: the only case *Deeper* is offered (and never when `deep`)
+    "pageCapHit": false,                // the page cap, not `limit`, ended a read that had more pools: *Deeper* is offered when true (and not yet `deep`)
+    "rateLimited": false                // a 429 cut the read short: *Deeper* (or *Read again*) is offered again even when `deep`, so the user can retry after a minute
   },
   "sections": {
     "quote": [ Pool, … ],                 // "Priced in NVDA" — empty array when side=base
@@ -213,7 +217,7 @@ async def markets(service, *, chain, target, side="all", min_tvl_usd=10_000.0,
   "priceUsd": 0.1131 | null,             // see "Prices" above
   "priceInToken": 0.000471 | null,
   "change24hPct": -3.2 | null,
-  "premiumPct": null,                    // base rows of a Stock Token only
+  "premiumPct": null,                    // base rows of a Stock Token only; rounded to 2 decimals, never negative zero (|x| < 0.005 → 0.0)
   "createdAt": "2026-07-25T00:52:36Z" | null,
   "url": "https://www.geckoterminal.com/robinhood/pools/0xcbdf…" ,
   "swap": { "chainId": 4663, "tokenIn": "0xd060…", "tokenOut": "0x2e8c…" }   // what the Swap button prefills: sell the token, buy the counterparty
@@ -258,7 +262,11 @@ say so in `--help`). Human output: the token line (symbol, price, oracle
 and premium when known), then one table per section with columns
 `PAIR  DEX  TVL  VOL 24H  PRICE  IN NVDA  AGE  FLAGS` (flags: `uni`,
 `lookalike`, `stock`), then one line of counts
-(*34 of 100 pools shown · 61 under $10k · 5 lookalikes hidden · partial*).
+(*34 of 100 pools shown · 61 under $10k · 5 lookalikes hidden · 12 more
+over the limit · partial*). Prices are printed with at most 6 significant
+digits and the table folds rather than truncates in an 80-column terminal.
+An ambiguous symbol lists its candidates (symbol, name, address) in human
+mode too.
 With `--json`: JSON on stdout, the card written to
 `markets-cards/markets-<symbol>-<utc stamp>.json` (20 newest kept) and the
 `publish_artifact path=… mime=application/vnd.agentos.markets+json` line,
@@ -294,6 +302,12 @@ Mounted by `createMarketsMounter` from `useTranscript.ts` beside
 
 Rows are capped at 40 per section with *+N more* that expands in place.
 
+Narrow cards (under ~480 px): the **pair column is never starved** — it
+keeps at least 9 characters before any other column shrinks; the Price
+column gives way first, then Vol and Age disappear (≤ 420 px), the venue
+pills wrap as a group under the pair, and "Uniswap" never breaks mid-word.
+A premium of ±0.0 % is shown as `0.0 %` with the flat tone.
+
 ### CSS hooks (verbatim; the desktop skins these, the web styles them)
 
 ```
@@ -326,7 +340,8 @@ Text and numbers use the renderer's existing money/percent formatters
   prefers the verified Stock Token; among several verified exact matches
   on the chain it prefers a Stock Token, then the highest liquidity, and
   shows which token it picked — it must never silently take the first
-  match), filters (*Min TVL* segmented
+  match; the *N matches* menu is wide enough to show each token's full
+  name, liquidity and short address), filters (*Min TVL* segmented
   `$1k / $10k / $100k`, *Lookalikes* toggle), the two sections as lists,
   the counts footer, *Deeper* control. Rows match the card's content but
   are built in the desktop's own markup and `.mac-*` / `trd-*` vocabulary
@@ -336,7 +351,9 @@ Text and numbers use the renderer's existing money/percent formatters
   error states are drawn. At the BOOK's minimum width (300 px) the tab
   icons keep their size (the bar scrolls or wraps, icons never shrink),
   the price-in-token cell wraps rather than truncating to "0.0…", and the
-  premium never overlaps the Age column.
+  premium never overlaps the Age column; pair text that must truncate does
+  so with an ellipsis, never mid-glyph; the tab strip shows it scrolls (an
+  edge fade) when tabs are hidden.
 - `useMarkets(params, enabled)` in `stores/trading.ts` → `rpc.call('trading.markets', …)`,
   `staleTime` 60 s, keyed by every param.
 - **Swap from anywhere**: `stores/trading-ui.ts` gains
