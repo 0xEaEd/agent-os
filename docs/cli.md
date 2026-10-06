@@ -899,6 +899,7 @@ agentos trade lp positions [--wallet <addr|label>]… [--chain base|robinhood]�
 agentos trade lp collect <tokenId> --chain base|robinhood [--allow-empty] [--note <text>] [--client-id <id>] [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # collect a vault position's fees; always waits for approval
 agentos trade lp remove <tokenId> --chain base|robinhood [--pct 100] [--slippage 1] [--note …] [--client-id …] [--wait …] [--json] [--no-card]   # take liquidity (and every fee) out; --pct 100 burns the NFT
 agentos trade lp add <token|TOKEN/QUOTE|poolId> --chain base|robinhood [--quote <token>] [--fee <tier>] (--usd X | --amount-base A [--amount-quote B]) [--range mcap:2M-10M|pct:20|above[:20]|below[:20]|full|ticks:LO:HI] [--to-position <tokenId>] [--wallet <addr|label>] [--slippage 1] [--note …] [--client-id …] [--wait …] [--json] [--no-card]   # mint a position (or top one up); default range pct:20
+agentos trade markets <token> [--chain base|robinhood] [--side all|quote|base] [--min-tvl 10000] [--limit 50] [--lookalikes] [--deep] [--json] [--no-card]   # every pool the token trades in, on every DEX: tokens priced in it, and it priced in others; default chain robinhood
 agentos trade dca create <token> --usd X --every 30m|2h|1d|1w|<seconds> (--cap X | --runs N | both) [--max-price X] [--quote <token>] [--chain base|robinhood] [--wallet <addr|label>] [--slippage 1] [--name <text>] [--start now|next] [--json] [--no-card]   # DCA mandate: the engine buys on schedule under a hard cap; from an agent it waits for approval
 agentos trade dca list [--all] [--wallet <addr|label>] [--json] [--no-card]   # live mandates (awaiting approval, active, paused); --all adds completed/stopped/rejected/expired
 agentos trade dca show <id> [--json] [--no-card]            # one mandate: schedule, progress, avg buy vs price now, recent runs
@@ -952,10 +953,15 @@ swap, reported back in the quote. **Uniswap** (`agentos trade provider
 uniswap`) is the fallback and needs a key: `agentos config set
 trading.uniswap_api_key <key>`, or Settings › Trading in the desktop app.
 
-29 of the 34 listed tokens on Robinhood Chain (the tokenised stocks — AAPL,
-TSLA, SPY and the rest) cannot be routed at all: the aggregator answers
-`trading.token_not_tradeable`, a legal refusal upstream that no retry, size,
-address or time of day changes. ETH, WETH and USDG trade normally there.
+The aggregator refuses the Robinhood Stock Tokens (the tokenised stocks —
+AAPL, TSLA, NVDA, SPY and the rest) for legal reasons
+(`trading.token_not_tradeable`), so when either side of a pair is a Stock
+Token the engine quotes and swaps it through **Uniswap** instead, provided a
+Uniswap API key is configured — `quote`, `swap`, DCA runs, trigger fires and
+bracket legs alike; the quote and the order record `provider: "uniswap"`.
+Without a key the refusal is kept and its message says to add one
+(`agentos config set trading.uniswap_api_key <key>`, or Settings › Trading
+in the desktop app). ETH, WETH and USDG trade normally there.
 Robinhood Chain has no native USD price feed yet, so `--usd` may be refused
 with `trading.unpriced` (size with `--amount`), and the bare symbol `USDC`
 resolves to unverified lookalikes there (`TOKEN_UNVERIFIED`): use an
@@ -1103,6 +1109,36 @@ on stderr, and input errors (`INVALID_ARGUMENT`, `trading.invalid`,
 `trading.lp.not_a_wallet`, `trading.lp.pool_key_unknown`) exit 2. The
 payload is specified in [`lp-cards.md`](lp-cards.md); every card also echoes
 `request: {kind, params}` — the `trading.lp.<kind>` call that re-reads it.
+
+`trade markets` lists **every pool a token trades in, on every DEX** the
+chain has, in two sections: *priced in NVDA* (the token is the pool's quote
+asset — `AI/NVDA` on Bankr, `ORBIO/NVDA` on Pons) and *NVDA priced in* (the
+token is the base — `NVDA/USDG`, `NVDA/WETH`). It is read-only and allowed
+from an agent (gateway method `trading.markets`), and it is the one `trade`
+command whose `--chain` defaults to **robinhood**. Pools come from
+GeckoTerminal (the only listing with both sides; 20 a page, 5 pages by
+default, 10 with `--deep`, read in bursts of five and cached for 120 s per
+token — a cold read takes 20–60 s because GeckoTerminal's edge caches a
+page only after the first request, a warm one about a second), enriched by
+DexScreener; for a Stock Token the card also carries the
+Chainlink oracle price (`oracle`, with `stale`/`paused`) and each `base` row
+its premium against it. Rows under `--min-tvl` (default $10k) and
+**lookalikes** — a counterparty that borrows a Stock Token's symbol or name
+at another address — are dropped and counted (`--lookalikes` shows them,
+flagged). Each section is sorted by TVL; `viaUniswap` marks the pools the
+Uniswap route can use. A rate limit stops paging and the card says
+`partial`; no page at all is `trading.markets.unavailable`. The counts line
+also says how many rows `--limit` cut (`· 12 more over the limit`), and
+`counts.pageCapHit` tells a client when `--deep` would show more. Human output is
+the token line (price, oracle, premium), one table per section
+(`PAIR DEX TVL VOL 24H PRICE IN <TOKEN> AGE FLAGS`, flags `uni`, `stock`,
+`lookalike`; the base section's ratio column is `IN QUOTE`, the token priced
+in each row's counterparty) and a counts line. With `--json` the payload goes to stdout, the
+card to `markets-cards/markets-<symbol>-<stamp>.json` (20 newest kept) with
+the `publish_artifact … mime=application/vnd.agentos.markets+json` line last
+on stdout, unless `--no-card`; errors are the `{"error": …}` envelope on
+stderr, exit 1, and write no card. The payload is specified in
+[`markets.md`](markets.md).
 
 `trade lp collect|remove|add` change a Uniswap V4 position of a vault wallet
 through the same order pipeline as a swap or a send (gateway methods

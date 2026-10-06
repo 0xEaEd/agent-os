@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { order, WALLET } from '../test-utils'
 import {
+  watchTabStrip,
   approvalFacts,
   askRisk,
   batchFacts,
@@ -843,5 +844,81 @@ describe('approval facts · addresses in full, expiry short', () => {
     expect(formatExpiryShort(later, now, 'en-US')).toMatch(/^2:15 PM \(UTC[+−]\d/)
     expect(formatExpiryShort(tomorrow, now, 'en-US')).toMatch(/^Sep 21, 2:15 PM \(UTC[+−]\d/)
     expect(formatExpiryShort(tomorrow, now, 'en-US')).not.toContain('2026')
+  })
+})
+
+// Live test 2026-10-06: at a 300 px BOOK nothing said the tab strip
+// scrolled, and at 520 px "History" was clipped mid-glyph by the pips.
+describe('watchTabStrip', () => {
+  function strip(widths: { labelled: number; icons: number; client: number }) {
+    const el = document.createElement('div')
+    el.innerHTML = '<button aria-selected="false"></button><button aria-selected="true"></button>'
+    let left = 0
+    Object.defineProperty(el, 'clientWidth', { get: () => widths.client })
+    Object.defineProperty(el, 'scrollWidth', {
+      get: () => (el.dataset.labels === 'off' ? widths.icons : widths.labelled),
+    })
+    Object.defineProperty(el, 'scrollLeft', {
+      get: () => left,
+      set: (v: number) => (left = v),
+    })
+    return { el, scrollTo: (v: number) => ((left = v), el.dispatchEvent(new Event('scroll'))) }
+  }
+
+  it('keeps the words while the tabs fit, with no fade', () => {
+    const { el } = strip({ labelled: 400, icons: 200, client: 420 })
+    const stop = watchTabStrip(el)
+    expect(el.dataset.labels).toBe('on')
+    expect(el.dataset.fade).toBeUndefined()
+    stop()
+  })
+
+  it('drops the words before a label clips, and fades the side that hides tabs', () => {
+    const { el, scrollTo } = strip({ labelled: 520, icons: 260, client: 200 })
+    const stop = watchTabStrip(el)
+    expect(el.dataset.labels).toBe('off')
+    expect(el.dataset.fade).toBe('end')
+    scrollTo(30)
+    expect(el.dataset.fade).toBe('both')
+    scrollTo(60)
+    expect(el.dataset.fade).toBe('start')
+    stop()
+    // Detached: a scroll no longer touches the strip.
+    scrollTo(0)
+    expect(el.dataset.fade).toBe('start')
+  })
+
+  it('a resize that still overflows brings the selected tab back into view', () => {
+    // Labels are already off at 520 px and at 300 px, so only the width
+    // changes; History (selected) sits past the right edge afterwards.
+    const widths = { labelled: 520, icons: 260, client: 300 }
+    const { el } = strip(widths)
+    const selected = el.querySelector<HTMLElement>('[aria-selected="true"]')!
+    const into = vi.fn()
+    selected.scrollIntoView = into
+    let observe: (() => void) | null = null
+    const RO = class {
+      constructor(cb: () => void) {
+        observe = cb
+      }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', RO)
+    const stop = watchTabStrip(el)
+    expect(el.dataset.labels).toBe('off')
+    into.mockClear()
+    widths.client = 200
+    observe!()
+    expect(into).toHaveBeenCalledTimes(1)
+    stop()
+    vi.unstubAllGlobals()
+  })
+
+  it('icons alone that fit: no words, no fade', () => {
+    const { el } = strip({ labelled: 520, icons: 250, client: 300 })
+    watchTabStrip(el)()
+    expect(el.dataset.labels).toBe('off')
+    expect(el.dataset.fade).toBeUndefined()
   })
 })

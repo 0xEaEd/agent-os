@@ -355,9 +355,9 @@ describe('tradingAgentFiles · brackets (v22; v23: no --note; v24: English-only 
   const section = agents.slice(agents.indexOf('## Brackets'), agents.indexOf('## Bridging'))
 
   it('bumped the version and names brackets in the description', () => {
-    expect(TRADING_AGENT_VERSION).toBe(24)
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(24)
     expect(tradingAgentSpec().description).toMatch(/brackets \(take-profit \+ stop-loss as one\)/)
-    expect(agents).toContain('trading agent v24')
+    expect(agents).toContain(`trading agent v${TRADING_AGENT_VERSION}`)
   })
 
   it('reads an exit above and an exit below on one position as ONE bracket, never two triggers', () => {
@@ -415,6 +415,104 @@ describe('tradingAgentFiles · brackets (v22; v23: no --note; v24: English-only 
       '`trading.bracket.not_found`',
     ]) {
       expect(tools, cmd).toContain(cmd)
+    }
+  })
+})
+
+describe('tradingAgentFiles · markets (v25)', () => {
+  const files = tradingAgentFiles()
+  const agents = files['AGENTS.md'] ?? ''
+  const tools = files['TOOLS.md'] ?? ''
+  const phrases = [
+    '"pairs of X"',
+    '"what trades against X"',
+    '"markets for X"',
+    '"tokens priced in X"',
+    '"pools of X on every DEX"',
+  ]
+
+  it('bumped the version and names markets in the description', () => {
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(26)
+    expect(agents).toContain(`trading agent v${TRADING_AGENT_VERSION}`)
+    expect(tradingAgentSpec().description).toMatch(/markets \(every pool a token trades in/)
+  })
+
+  it('runs `agentos trade markets` through the shell tool the allowlist already admits', () => {
+    // The allowlist names tools, not command lines: `trade markets` is one
+    // more `agentos trade …` run through exec_command, like `trade lp`.
+    expect(tradingAgentSpec().tools.allow).toContain('exec_command')
+    expect(tools).toContain('agentos trade markets')
+  })
+
+  it('maps every market question to one markets command, and leaves one pool to lp pool', () => {
+    for (const file of [agents, tools]) {
+      for (const phrase of phrases) expect(file, phrase).toContain(phrase)
+      expect(file).toContain('`agentos trade markets X --chain robinhood --json`')
+      expect(file).toMatch(/A liquidity question about ONE pool[^.]*stays\s+`lp pool`/)
+    }
+    expect(agents).toMatch(/The card it\s+publishes is the answer/)
+  })
+
+  // Live test 2026-10-06: "show me the AI/NVDA pool" got `pool_key_unknown`
+  // from `lp pool` (a Bankr pool), and the agent published NVDA/USDG's card
+  // instead — a different pool, presented as the answer.
+  it('answers a launchpad pool lp pool cannot key with the markets card of its quote token', () => {
+    for (const file of [agents, tools]) {
+      expect(file).toContain('`trading.lp.pool_key_unknown`')
+      expect(file).toMatch(
+        /`trading\.lp\.pool_key_unknown` is answered\s+with\s+`agentos trade markets <quote token> --chain robinhood --json`/,
+      )
+      expect(file).toMatch(/Never publish a\s+different\s+pool's card in its place/)
+    }
+  })
+
+  it('carries the command with the CLI’s own flags, its default chain and its errors', () => {
+    expect(tools).toContain(
+      'agentos trade markets <token> [--chain base|robinhood] [--side all|quote|base] [--min-tvl 10000] [--limit 50] [--lookalikes] [--deep] --json',
+    )
+    expect(tools).toMatch(/default chain is robinhood/)
+    expect(tools).toMatch(/do not call `publish_artifact` for\s+it/)
+    expect(tools).toMatch(/`partial: true` means the source rate-limited the read/)
+    for (const code of [
+      '`trading.markets.unavailable`',
+      '`trading.not_found`',
+      '`trading.invalid`',
+    ]) {
+      expect(tools, code).toContain(code)
+    }
+  })
+
+  it('no longer calls Stock Tokens untradeable: they route through Uniswap', () => {
+    expect(agents).toMatch(/Stock Tokens \(AAPL, TSLA, NVDA …\) route through\s+Uniswap/)
+    expect(agents).not.toMatch(/the venue refuses them for legal reasons/)
+    expect(tools).toMatch(/the message says to add a Uniswap key/)
+  })
+
+  it('stays English only', () => {
+    for (const file of [agents, tools]) {
+      expect(file).not.toMatch(/[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i)
+    }
+  })
+})
+
+// Live test 2026-10-06 (second round): summarising NVDA's card, the agent
+// called USDG and WETH NVDA's "quote-side markets" — the pools where NVDA is
+// bought and sold, shown under *NVDA priced in*.
+describe('tradingAgentFiles · naming the markets sections (v27)', () => {
+  const files = tradingAgentFiles()
+  const agents = files['AGENTS.md'] ?? ''
+  const tools = files['TOOLS.md'] ?? ''
+
+  it('bumped the version', () => {
+    expect(TRADING_AGENT_VERSION).toBe(27)
+    expect(agents).toContain('trading agent v27')
+  })
+
+  it('says which section is which, and never calls USDG/WETH quote-side markets', () => {
+    for (const file of [agents, tools]) {
+      expect(file).toMatch(/\*X priced in\*\)? (?:are|is)?[^.]*?X itself is bought\s+and\s+sold/)
+      expect(file).toMatch(/\*Priced in X\*\)?[^.]*?other tokens quoted in X/)
+      expect(file).toMatch(/Never call USDG or\s+WETH\s+"quote-side markets" of X\./)
     }
   })
 })

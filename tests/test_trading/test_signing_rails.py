@@ -102,11 +102,41 @@ class TestPinnedSwapTargets:
 
     def test_uniswap_targets_are_pinned_per_chain(self) -> None:
         provider = UniswapProvider(client=None)  # type: ignore[arg-type]
-        assert UNIVERSAL_ROUTERS == {8453: UNIVERSAL_ROUTER}
+        # Every Universal Router version the Trading API sends to, verified
+        # against Uniswap/universal-router deploy-addresses (docs/markets.md).
+        assert UNIVERSAL_ROUTERS == {
+            8453: frozenset(
+                {
+                    "0x6ff5693b99212da76ad316178a184ab56d299b43",  # v2.0
+                    "0xd6145b2d3f379919e8cdeda7b97e37c4b2ca9c40",  # v2.1.2
+                }
+            ),
+            4663: frozenset(
+                {
+                    "0x8876789976decbfcbbbe364623c63652db8c0904",  # v2.1.1
+                    "0x204faca1764b154221e35c0d20abb3c525710498",  # v2.1.2
+                }
+            ),
+        }
+        assert UNIVERSAL_ROUTER in UNIVERSAL_ROUTERS[8453]
         assert provider.trusted_targets(BASE, None) == frozenset(  # type: ignore[arg-type]
-            {UNIVERSAL_ROUTER, PROXY_SPENDER.lower(), ROUTER}
+            {
+                UNIVERSAL_ROUTER,
+                "0xd6145b2d3f379919e8cdeda7b97e37c4b2ca9c40",
+                PROXY_SPENDER.lower(),
+                ROUTER,
+            }
         )
-        # Nothing is pinned for Robinhood Chain: an empty set, which refuses.
+        robinhood = provider.trusted_targets(ROBINHOOD, None)  # type: ignore[arg-type]
+        assert "0x204faca1764b154221e35c0d20abb3c525710498" in robinhood
+        assert robinhood == UNIVERSAL_ROUTERS[4663] | {PROXY_SPENDER.lower()}
+
+    def test_a_chain_with_no_router_entry_gets_an_empty_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delitem(UNIVERSAL_ROUTERS, ROBINHOOD.chain_id)
+        provider = UniswapProvider(client=None)  # type: ignore[arg-type]
+        # Refuse, never guess: not even the proxy is trusted.
         assert provider.trusted_targets(ROBINHOOD, None) == frozenset()  # type: ignore[arg-type]
 
     async def test_uniswap_on_a_chain_without_a_pinned_router_is_refused(
@@ -114,7 +144,9 @@ class TestPinnedSwapTargets:
         funded_service: TradingService,
         robinhood_chain: FakeChain,
         fake_uniswap: FakeUniswap,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.delitem(UNIVERSAL_ROUTERS, ROBINHOOD.chain_id)
         service = funded_service
         service.config.provider = "uniswap"
         wallet = service.test_wallet  # type: ignore[attr-defined]

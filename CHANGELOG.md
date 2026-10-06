@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- Trading: **markets** — `agentos trade markets NVDA` lists every pool a
+  token trades in, on every DEX the chain has, in two sections: tokens
+  *priced in NVDA* (the Bankr, Pons and long.xyz launches that use a Stock
+  Token as their quote asset, `AI/NVDA`) and *NVDA priced in* USDG or WETH.
+  Each row has TVL, 24 h volume, price, price in the token, age, launcher and
+  a `uni` flag for pools the Uniswap route can use; a Stock Token's card
+  carries its Chainlink oracle price and each base pool's premium against
+  it. Lookalikes that borrow a Stock Token's name are hidden and counted
+  (`--lookalikes` shows them), `--min-tvl` sets the floor, `--deep` reads
+  200 pools instead of 100. Defaults to Robinhood Chain; read-only and open
+  to agents. Gateway method `trading.markets`. Contract: `docs/markets.md`.
 - Trading: **brackets** — `agentos trade protect ETH --tp +20% --sl -10%`
   is a take-profit and a stop-loss on one position as one object: two price
   triggers that know each other, so when one fills the engine stops the

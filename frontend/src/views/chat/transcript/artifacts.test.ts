@@ -32,6 +32,7 @@ import {
 } from './artifacts'
 import { CHART_ARTIFACT_MIME } from './chart'
 import { DCA_ARTIFACT_MIME } from './dca'
+import { MARKETS_ARTIFACT_MIME } from './markets'
 import { TRIGGER_ARTIFACT_MIME } from './trigger'
 import { LP_ARTIFACT_MIME } from './lp'
 
@@ -160,6 +161,7 @@ describe('artifactCategoryLabel (parity chat.js:7551)', () => {
     expect(artifactCategoryLabel('lp')).toBe('lp')
     expect(artifactCategoryLabel('dca')).toBe('dca')
     expect(artifactCategoryLabel('trigger')).toBe('trigger')
+    expect(artifactCategoryLabel('markets')).toBe('markets')
   })
   it('defaults unknown / visual / file categories to "file"', () => {
     expect(artifactCategoryLabel('visual')).toBe('file')
@@ -649,5 +651,48 @@ describe('artifactSizeLabel / artifactSummary', () => {
     expect(chip?.querySelector('.msg-file-chip__meta')?.textContent).toBe(
       'application/octet-stream · 5 KB',
     )
+  })
+})
+
+/* ── markets card placeholder + mounter handoff (AgentOS-native) ────────── */
+
+const MARKETS_ARTIFACT: Artifact = {
+  id: 'mk-1',
+  name: 'markets-NVDA-20261006T041200Z.json',
+  mime: MARKETS_ARTIFACT_MIME,
+  download_url: '/api/v1/artifacts/mk-1',
+}
+
+describe('createArtifactRenderer markets artifacts', () => {
+  it('classifies the markets mime as "markets" and nothing near it', () => {
+    expect(artifactCategory(MARKETS_ARTIFACT)).toBe('markets')
+    expect(
+      artifactCategory({ mime: `${MARKETS_ARTIFACT_MIME}; charset=utf-8`, name: 'x' } as never),
+    ).toBe('markets')
+    expect(
+      artifactCategory({ mime: 'application/vnd.agentos.market+json', name: 'x.json' } as never),
+    ).not.toBe('markets')
+  })
+
+  it('renders a mount placeholder in its own group, never a download target', () => {
+    const { deps } = chartRendererDeps()
+    const container = document.createElement('div')
+    container.innerHTML = createArtifactRenderer(deps).renderArtifacts([
+      MARKETS_ARTIFACT,
+      TRIGGER_ARTIFACT,
+    ])
+    const host = container.querySelector<HTMLElement>('[data-markets-src]')
+    expect(host?.classList.contains('msg-artifact-markets')).toBe(true)
+    expect(host?.dataset.marketsSrc).toBe(
+      '/api/v1/artifacts/mk-1?sessionKey=agent%3Amain%3Awebchat%3Atest&token=tok',
+    )
+    expect(host?.dataset.artifactCategory).toBe('markets')
+    expect(host?.querySelector('.msg-artifact-markets__body')).not.toBeNull()
+    expect(host?.querySelector('.msg-artifact-markets__status')).toHaveTextContent(
+      'Loading markets…',
+    )
+    expect(container.querySelector('.msg-artifact-markets-group [data-markets-src]')).toBe(host)
+    expect(container.querySelector('.msg-artifact-markets-group [data-trigger-src]')).toBeNull()
+    expect(container.querySelector('[data-artifact-download]')).toBeNull()
   })
 })

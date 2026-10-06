@@ -38,6 +38,8 @@ import type {
   Mandate,
   MandateListPayload,
   MandatePayload,
+  MarketsParams,
+  MarketsPayload,
   NetworkStatus,
   Order,
   OrderKind,
@@ -818,9 +820,51 @@ export function useTokenSearch(first: number, query: string) {
     // survives, so an exact symbol match still comes first.
     () => [...rows].sort((a, b) => Number(b.chainId === first) - Number(a.chainId === first)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [stamps, first],
+    [stamps, first, debounced],
   )
   return { isFetching, tokens, debounced }
+}
+
+/* ── Markets (docs/markets.md) ───────────────────────────────────────────── */
+
+/**
+ * The query key of one Markets read: every param, with the engine's defaults
+ * filled in so `{}` and `{ side: 'all' }` share an entry. Deliberately outside
+ * the `trading` prefix: `trading.changed` fires on every order, and a refetch
+ * per order would spend GeckoTerminal's 30 requests a minute on nothing new.
+ */
+export function marketsKey(p: MarketsParams) {
+  return [
+    'trading-markets',
+    p.chainId,
+    p.target.trim().toLowerCase(),
+    p.side ?? 'all',
+    p.minTvlUsd ?? 10_000,
+    p.limit ?? 50,
+    Boolean(p.lookalikes),
+    Boolean(p.deep),
+  ] as const
+}
+
+/**
+ * Every pool a token trades in, on every DEX of the chain (`trading.markets`).
+ * A minute fresh: the engine caches the source pages for two, so a refetch
+ * inside that is free and outside it is one rate-limited call.
+ */
+export function useMarkets(params: MarketsParams, enabled = true) {
+  const rpc = useRpc()
+  const connected = useConnected()
+  return useQuery<MarketsPayload>({
+    queryKey: marketsKey(params),
+    enabled: connected && enabled && params.target.trim().length > 0,
+    queryFn: async () => {
+      await rpc.waitForConnection()
+      return rpc.call<MarketsPayload>('trading.markets', { ...params })
+    },
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
 }
 
 /* ── DCA mandates (docs/dca.md) ──────────────────────────────────────────── */

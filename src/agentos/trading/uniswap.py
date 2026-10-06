@@ -24,15 +24,29 @@ DecisionOrigin = Literal["human_mediated", "autonomous"]
 
 BASE_URL = "https://trade-api.gateway.uniswap.org/v1"
 PROXY_SPENDER = "0x0000000085E102724e78eCd2F45DC9cA239Affad"
-#: The Universal Router a Trading API swap may be sent ``to``, per chain,
+#: The Universal Routers a Trading API swap may be sent ``to``, per chain,
 #: lowercase. Pinned here rather than read from the response: the service
 #: refuses to sign a swap whose target is not in this table (or the proxy
 #: above), so a chain without an entry cannot swap through Uniswap at all
-#: until someone verifies its router and adds it. Only addresses already
-#: known to this repo (see ``decode.KNOWN_SPENDERS``) are listed; Robinhood
-#: Chain (4663) has none pinned and is therefore refused.
-UNIVERSAL_ROUTERS: dict[int, str] = {
-    8453: "0x6ff5693b99212da76ad316178a184ab56d299b43",
+#: until someone verifies its routers and adds them. A chain holds a set
+#: because the Trading API moves between router versions: since 2026-10 it
+#: sends swaps to v2.1.2 on both chains. Sources: ``Uniswap/universal-router``
+#: ``deploy-addresses/base.json`` and ``robinhood.json``; on Robinhood Chain
+#: ``/v1/swap`` answered ``to = 0x204F...`` on 2026-10-06 and both 4663
+#: addresses hold code.
+UNIVERSAL_ROUTERS: dict[int, frozenset[str]] = {
+    8453: frozenset(
+        {
+            "0x6ff5693b99212da76ad316178a184ab56d299b43",  # v2.0
+            "0xd6145b2d3f379919e8cdeda7b97e37c4b2ca9c40",  # v2.1.2
+        }
+    ),
+    4663: frozenset(
+        {
+            "0x8876789976decbfcbbbe364623c63652db8c0904",  # v2.1.1
+            "0x204faca1764b154221e35c0d20abb3c525710498",  # v2.1.2
+        }
+    ),
 }
 CLASSIC_PROTOCOLS = ["V2", "V3", "V4"]
 ACCEPTED_ROUTINGS = frozenset({"CLASSIC", "WRAP", "UNWRAP"})

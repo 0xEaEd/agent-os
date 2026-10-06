@@ -2278,6 +2278,656 @@
   display: none;
 }
 
+/* Markets cards (docs/markets.md, "CSS hooks"). The shared renderer
+   (frontend markets.ts, `MARKETS_DOM` there is the nesting) emits the `mk-*`
+   hooks plus structural classes — `.mk-cols`/`.mk-col--*` (the column head),
+   `.mk-market`/`.mk-venue` (the pair cell), `.mk-pricing` (the price cell),
+   `.mk-meta`/`.mk-ago`/`.mk-actions`/`.mk-error` (the footer) and
+   `.mk-warnings` — and stamps `data-chain` / `data-partial` /
+   `data-refreshing` on `.mk-card`, `data-side` on each section, `data-tone`
+   on the change, premium and oracle badge, `data-kind` on a flag and
+   `data-lookalike` on a row. The console draws its own card; here it is a
+   desk instrument, a sibling of the LP plate: hairline plate, a 3 px rail in
+   the chain's own colour (Robinhood green, Base blue), and each section an
+   NSTableView in miniature — a small-caps column head over hairline-ruled
+   rows on ONE grid template, so every row's columns line up with the head
+   and with each other. The price cell stacks USD, the price in the other
+   token and the premium on their own lines; none of them runs into the
+   next column. Every figure in tabular mono; symbols keep their case. The
+   host is the size container. The pair column is never starved: its track
+   is `minmax(9ch, 1fr)` at every width, and the Price track is the one
+   with give (`minmax(…)`), so a squeezed card takes width from the price
+   (whose figures wrap) before the pair loses a character. Under 640 px the
+   Swap button moves under the 24h figure, on the venue's line; at 420 px
+   and under, Vol and Age go. */
+.msg-artifact-markets-group {
+  display: grid;
+  gap: 8px;
+  max-width: min(46rem, 100%);
+}
+.msg-artifact-markets {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  container: mk-card / inline-size;
+}
+.msg-artifact-markets__body {
+  min-width: 0;
+}
+.msg-artifact-markets__body:empty {
+  display: none;
+}
+.msg-artifact-markets__status {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.msg-artifact-markets__status[hidden] {
+  display: none;
+}
+.mk-card {
+  --mk-rail: var(--info);
+  /* pair · TVL · Vol 24h · Price · 24h · Age (· Swap). The pair keeps 9ch
+     before anything shrinks; the Price track gives way first. */
+  --mk-cols: minmax(9ch, 1fr) 4.5rem 4.5rem minmax(4.5rem, 6.75rem) 3.75rem 2.75rem;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px 8px 15px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--elevated) 92%, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--hairline),
+    inset 3px 0 0 var(--mk-rail);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  /* The message's `overflow-wrap: anywhere` split "Uniswap" into "Unisw/ap"
+     in a narrow column: in the card a word breaks only at a space. The
+     price in the other token opts back in (a long figure may wrap). */
+  overflow-wrap: normal;
+  word-break: normal;
+  color: var(--foreground);
+  transition: opacity 160ms ease-out;
+}
+/* The Swap column exists only when the desktop passed `onSwap`. */
+.mk-section:has(.mk-swap) {
+  --mk-cols: minmax(9ch, 1fr) 4.5rem 4.5rem minmax(4.5rem, 6.75rem) 3.75rem 2.75rem 3.25rem;
+}
+.mk-card[data-chain='4663'] {
+  --mk-rail: #00c805;
+}
+.mk-card[data-chain='8453'] {
+  --mk-rail: #0052ff;
+}
+/* A read the source cut short: the rail goes amber, the badge says why. */
+.mk-card[data-partial='true'] {
+  --mk-rail: var(--warn);
+}
+/* Re-reading: the old figures stay, dimmed, until the new ones land. */
+.mk-card[data-refreshing='true'] {
+  opacity: 0.6;
+}
+.mk-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hairline);
+}
+.mk-logo {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  object-fit: cover;
+}
+.mk-symbol {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  unicode-bidi: isolate;
+}
+.mk-name {
+  min-width: 0;
+  max-width: 18rem;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.mk-chain,
+.mk-version,
+.mk-launcher,
+.mk-flag,
+.mk-partial,
+.mk-oracle-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.mk-chain {
+  color: var(--mk-rail);
+  background: color-mix(in srgb, var(--mk-rail) 12%, transparent);
+}
+.mk-price {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+.mk-oracle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.mk-oracle-badge {
+  --mk-tone: var(--warn);
+  color: var(--mk-tone);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mk-tone) 45%, transparent);
+}
+.mk-oracle-badge[data-tone='danger'] {
+  --mk-tone: var(--danger);
+}
+.mk-section {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.mk-section + .mk-section {
+  margin-top: 4px;
+}
+/* The transcript's prose rules (`.msg-body :is(ul, ol)`, `li + li`,
+   `:is(h3, h4)`, `p`) out-rank a single hook class: the card's lists, title
+   and empty line are scoped to `.mk-card` so they keep the skin's geometry
+   (an unscoped `.mk-rows` was indented 1.3em under its own column head). */
+.mk-card .mk-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.mk-section-count {
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  letter-spacing: 0;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.mk-card .mk-empty {
+  margin: 0;
+  padding: 4px 0 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+/* The column head and every row share one template: the columns line up. */
+.mk-cols,
+.mk-row {
+  display: grid;
+  grid-template-columns: var(--mk-cols);
+  column-gap: 10px;
+  min-width: 0;
+}
+.mk-cols {
+  align-items: end;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--hairline);
+}
+.mk-col {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--dim);
+}
+/* Text left, figures right: each head over its cells' alignment. */
+.mk-col--pair {
+  text-align: left;
+}
+.mk-col--tvl,
+.mk-col--vol,
+.mk-col--px,
+.mk-col--change,
+.mk-col--age {
+  text-align: right;
+}
+.mk-card .mk-rows {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mk-card li + li {
+  margin-top: 0;
+}
+/* Cells sit on the pair's baseline, like a table row's text. */
+.mk-row {
+  align-items: baseline;
+  min-height: 30px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.mk-row:last-child {
+  border-bottom-color: transparent;
+}
+.mk-row:hover {
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+.mk-row[data-lookalike='true'] {
+  margin-left: -6px;
+  padding-left: 6px;
+  box-shadow: inset 2px 0 0 var(--warn);
+  background: color-mix(in srgb, var(--warn) 5%, transparent);
+}
+/* The pair cell: pair (and the counterparty's name) on the first line, the
+   venue under it. */
+.mk-market {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 1px 6px;
+}
+.mk-pair {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  unicode-bidi: isolate;
+}
+.msg-body .mk-pair {
+  color: var(--foreground);
+  text-decoration: none;
+}
+.msg-body a.mk-pair:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--hairline);
+}
+.mk-cp-name {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+}
+.mk-venue {
+  display: flex;
+  min-width: 0;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 5px;
+}
+.mk-dex {
+  min-width: 0;
+  font-size: 11px;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: none;
+  color: var(--muted-foreground);
+}
+.mk-version {
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted-foreground);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.mk-launcher {
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+}
+.mk-tvl,
+.mk-vol,
+.mk-change,
+.mk-age {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mk-tvl {
+  font-weight: 600;
+}
+.mk-vol {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.mk-age {
+  font-size: 11px;
+  color: var(--dim);
+}
+/* The price cell: USD, then the price in the other token, then (base rows
+   of a Stock Token) the premium — three lines, right-aligned, so the USD
+   figure never runs into the in-token one. A long symbol wraps; nothing is
+   cut to "…". */
+.mk-pricing {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: var(--font-mono);
+  text-align: right;
+}
+.mk-px {
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.mk-px-in {
+  max-width: 100%;
+  font-size: 10.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  color: var(--muted-foreground);
+}
+.mk-premium {
+  max-width: 100%;
+  font-size: 10px;
+  line-height: 1.35;
+}
+.mk-change {
+  font-size: 11px;
+}
+.mk-change[data-tone='up'],
+.mk-premium[data-tone='up'] {
+  color: var(--ok);
+}
+.mk-change[data-tone='down'],
+.mk-premium[data-tone='down'] {
+  color: var(--danger);
+}
+.mk-change[data-tone='flat'],
+.mk-premium[data-tone='flat'] {
+  color: var(--muted-foreground);
+}
+.mk-flags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+/* The venue line is one group: the DEX with its version pill, then the
+   launcher and the flags, wrapping between pills, never inside one. */
+.mk-venue > * {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+.mk-flag {
+  --mk-tone: var(--muted-foreground);
+  height: 15px;
+  padding: 0 5px;
+  color: var(--mk-tone);
+  background: color-mix(in srgb, var(--mk-tone) 12%, transparent);
+}
+.mk-flag[data-kind='uni'] {
+  --mk-tone: var(--primary);
+}
+.mk-flag[data-kind='stock'] {
+  --mk-tone: var(--ok);
+}
+.mk-flag[data-kind='lookalike'] {
+  --mk-tone: var(--warn);
+}
+/* Swap: an NSButton in miniature, the row's one action. */
+.mk-swap {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  justify-content: center;
+  justify-self: end;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  box-shadow:
+    0 0.5px 0 color-mix(in srgb, #fff 6%, transparent) inset,
+    0 0 0 0.5px color-mix(in srgb, var(--foreground) 12%, transparent);
+  cursor: default;
+}
+.mk-swap:hover {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.mk-swap:active {
+  background: color-mix(in srgb, var(--primary) 26%, transparent);
+}
+.mk-swap:focus-visible,
+.mk-more:focus-visible,
+.mk-refresh:focus-visible,
+.mk-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.mk-more {
+  justify-self: start;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--primary);
+  cursor: default;
+}
+.mk-card .mk-warnings {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mk-warning {
+  position: relative;
+  padding-left: 12px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.mk-warning::before {
+  content: '';
+  position: absolute;
+  top: 0.55em;
+  left: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.mk-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--hairline);
+}
+.mk-meta {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.mk-counts,
+.mk-ago {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.mk-partial {
+  color: var(--warn);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.mk-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+/* Two classes: `.msg-body a` would otherwise underline the links. */
+.mk-foot .mk-link,
+.mk-foot .mk-refresh {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--muted-foreground);
+  cursor: default;
+}
+.mk-foot .mk-link {
+  color: var(--primary);
+}
+.mk-foot .mk-link:hover,
+.mk-foot .mk-refresh:hover {
+  color: var(--foreground);
+}
+.mk-foot button:disabled {
+  opacity: 0.5;
+}
+.mk-error {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--danger);
+}
+/* Under 640 px the seven columns no longer fit beside a readable pair: the
+   figures tighten, and Swap leaves its column for the row's second line,
+   under the 24h figure (the pair and the price span both lines). */
+@container mk-card (max-width: 640px) {
+  .mk-card,
+  .mk-section:has(.mk-swap) {
+    --mk-cols: minmax(9ch, 1fr) 3.25rem 3.25rem minmax(4rem, 5.25rem) 3.25rem 2.25rem;
+  }
+  .mk-cols,
+  .mk-row {
+    column-gap: 8px;
+  }
+  .mk-market,
+  .mk-pricing {
+    grid-row: 1 / span 2;
+  }
+  .mk-tvl,
+  .mk-vol,
+  .mk-change,
+  .mk-age {
+    grid-row: 1;
+  }
+  .mk-swap {
+    grid-row: 2;
+    grid-column: 5;
+    align-self: start;
+    margin-top: 3px;
+  }
+}
+/* Narrow (a chat column beside the BOOK, the desk transcript): Vol and Age
+   go; the pair keeps at least 9ch and the price column gives way first —
+   its figures wrap and step down a size rather than push the pair. */
+@container mk-card (max-width: 420px) {
+  .mk-card,
+  .mk-section:has(.mk-swap) {
+    --mk-cols: minmax(9ch, 1fr) 3.25rem minmax(3.75rem, 5.25rem) 3.25rem;
+  }
+  .mk-card {
+    padding-right: 10px;
+  }
+  .mk-col--vol,
+  .mk-col--age,
+  .mk-vol,
+  .mk-age {
+    display: none;
+  }
+  .mk-swap {
+    grid-column: 4;
+  }
+  .mk-px {
+    font-size: 11px;
+  }
+  .mk-px-in {
+    font-size: 10px;
+  }
+  .mk-name {
+    max-width: 10rem;
+  }
+}
+/* Narrower still (a squeezed desk transcript): the figures tighten again,
+   the pair still keeps its 9ch. */
+@container mk-card (max-width: 340px) {
+  .mk-card,
+  .mk-section:has(.mk-swap) {
+    --mk-cols: minmax(9ch, 1fr) 3rem minmax(3.5rem, 4.75rem) 3rem;
+  }
+  .mk-cols,
+  .mk-row {
+    column-gap: 6px;
+  }
+  .mk-tvl,
+  .mk-change {
+    font-size: 11px;
+  }
+  .mk-swap {
+    padding: 0 6px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mk-card {
+    transition: none;
+  }
+}
+
 /* DCA mandate cards (docs/dca.md). The shared renderer (frontend dca.ts)
    emits `dca-card*` classes and stamps `data-dca-kind` / `data-dca-status` /
    `data-dca-layout` / `data-dca-busy` on `.dca-card` (the `.msg-artifact-dca`

@@ -29,6 +29,7 @@ import { usePendingQueue, type PendingComposerBridge } from '@/views/chat/usePen
 import { useRoutePin } from '@/views/chat/useRoutePin'
 import { useSlashCommands } from '@/views/chat/useSlashCommands'
 import type { LpActions } from '@/views/chat/transcript/lp'
+import type { MarketsSwapHandler } from '@/views/chat/transcript/markets'
 import { useTranscript } from '@/views/chat/useTranscript'
 import { t as tw } from '@/i18n'
 import '@/i18n/en/chat'
@@ -40,6 +41,7 @@ import { rememberLastSession } from '~/lib/last-session'
 import { useQuickAskSend } from '~/lib/use-quick-ask'
 import { ease, spring } from '~/lib/motion'
 import { useGateway } from '~/stores/gateway'
+import { useTradingUi } from '~/stores/trading-ui'
 import { useLive } from '~/stores/live'
 import { useQuickAsk } from '~/stores/quick-ask'
 import { useSettings } from '~/stores/settings'
@@ -49,6 +51,7 @@ import { useConfigSnapshot } from '~/views/settings/use-snapshot'
 import { ProjectChip } from './ProjectChip'
 import { useDeskInstruments, type DeskProps } from '~/views/trading/desk/useDeskInstruments'
 import { useTradeLedger } from '~/views/trading/desk/useTradeLedger'
+import type { Token } from '~/views/trading/types'
 import {
   requireBracketTouchId,
   requireMandateTouchId,
@@ -314,6 +317,35 @@ function ConnectedChat({
     [atDesk, rpc],
   )
 
+  // A markets card's Swap (docs/markets.md) fills the desk's ticket: the card
+  // names two addresses, the ticket wants tokens, so both are resolved over
+  // this connection first. A plain chat has no ticket, so no button there.
+  const requestSwap = useTradingUi((s) => s.requestSwap)
+  const onMarketsSwap = useMemo<MarketsSwapHandler | null>(
+    () =>
+      atDesk
+        ? (swap) => {
+            const resolve = (address: string) =>
+              rpc.call<{ token: Token }>('trading.tokens.resolve', {
+                chainId: swap.chainId,
+                address,
+              })
+            void Promise.all([resolve(swap.tokenIn), resolve(swap.tokenOut)])
+              .then(([tokenIn, tokenOut]) =>
+                requestSwap({
+                  chainId: swap.chainId,
+                  tokenIn: tokenIn.token,
+                  tokenOut: tokenOut.token,
+                }),
+              )
+              .catch(() => {
+                /* an unknown token: the ticket stays as it is */
+              })
+          }
+        : null,
+    [atDesk, rpc, requestSwap],
+  )
+
   const {
     containerRef,
     routerFxDockRef,
@@ -342,6 +374,7 @@ function ConnectedChat({
     lpActions,
     dcaActions: lpActions,
     triggerActions: lpActions,
+    onMarketsSwap,
   })
   const attachments = useAttachments()
   useEffect(() => {

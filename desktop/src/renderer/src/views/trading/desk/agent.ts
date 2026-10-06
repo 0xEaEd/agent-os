@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 24
+export const TRADING_AGENT_VERSION = 27
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -62,7 +62,7 @@ export function tradingAgentSpec(): TradingAgentSpec {
     id: TRADING_AGENT_ID,
     name: 'Trading desk',
     description:
-      'The AgentOS desktop trading desk. Swaps, portfolio, Uniswap V4 liquidity read-outs, DCA mandates, price triggers, brackets (take-profit + stop-loss as one) and missions on Base and Robinhood Chain through the wallet vault. Managed by the desktop app.',
+      'The AgentOS desktop trading desk. Swaps, portfolio, Uniswap V4 liquidity read-outs, markets (every pool a token trades in, on every DEX), DCA mandates, price triggers, brackets (take-profit + stop-loss as one) and missions on Base and Robinhood Chain through the wallet vault. Managed by the desktop app.',
     tools: TRADING_AGENT_TOOLS,
   }
 }
@@ -129,6 +129,22 @@ only when none applies.
   does 0x… hold" → \`lp positions --wallet 0x…\`; a position id →
   \`lp position\`. \`trading.lp.not_a_wallet\` means the address was a
   token: run \`lp pool\` with it instead of answering.
+- Market questions about one token across every DEX are read with
+  \`agentos trade markets\` (TOOLS.md):
+  "pairs of X", "what trades against X", "markets for X",
+  "tokens priced in X", "pools of X on every DEX" →
+  \`agentos trade markets X --chain robinhood --json\`. The card it
+  publishes is the answer. Name its two sections as the card does: pools
+  in *X priced in* are where X itself is bought and sold (NVDA/USDG,
+  NVDA/WETH: USDG and WETH are what X trades for); pools in *Priced in X*
+  are other tokens quoted in X (AI/NVDA). Never call USDG or WETH
+  "quote-side markets" of X. A liquidity question about ONE pool ("how deep
+  is X", "pool X") stays \`lp pool\`. A launchpad pool (Bankr, Pons; "show
+  me the AI/NVDA pool") that \`lp pool\` answers with
+  \`trading.lp.pool_key_unknown\` is answered with
+  \`agentos trade markets <quote token> --chain robinhood --json\` (NVDA
+  for AI/NVDA): its card has that pool's row. Never publish a different
+  pool's card in its place.
 - The card the command publishes IS the answer. Write at most two short
   sentences, and only what the card cannot say by itself: what needs
   attention (out of range and by how much, fees worth collecting, a
@@ -155,10 +171,12 @@ only when none applies.
   refused there (\`trading.unpriced\`). Never pass the bare symbol \`USDC\` on
   Robinhood — it resolves to unverified lookalikes; use ETH or an address
   from \`agentos trade tokens --chain robinhood … --json\` with
-  \`verified: true\`. Most Stock Tokens (AAPL, TSLA, NVDA …) answer
-  \`trading.token_not_tradeable\`: the venue refuses them for legal reasons.
-  That is final for this token: do not retry, do not retry by address; tell
-  the user and stop.
+  \`verified: true\`. Stock Tokens (AAPL, TSLA, NVDA …) route through
+  Uniswap: the engine picks that provider for them by itself when a Uniswap
+  key is configured. Without one they answer
+  \`trading.token_not_tradeable\` and the message says to add the key: pass
+  that on. It is final for this token:
+  do not retry, do not retry by address; tell the user and stop.
 - Tokens: \`ETH\`, \`USDC\`, \`WETH\`, \`USDG\` go straight into \`--in\`/\`--out\`
   on Base: the CLI resolves a unique verified symbol and refuses
   (\`TOKEN_AMBIGUOUS\`, \`TOKEN_UNVERIFIED\`) when it cannot. An address goes
@@ -568,7 +586,9 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   do not call \`publish_artifact\` for it, do not describe the numbers the
   card already shows):
   \`agentos trade lp pool <token|poolId> --chain base|robinhood --json\`
-  (reserves, TVL, price, mcap, fee, launcher, \`safety.locked\`);
+  (reserves, TVL, price, mcap, fee, launcher, \`safety.locked\`;
+  \`trading.lp.pool_key_unknown\` on a launchpad pool means: answer with
+  the markets card of its quote token, see Markets below);
   \`agentos trade lp ranges <token|poolId> --chain base|robinhood --json\`
   (liquidity per range with mcap bands; \`scan.truncated\` means the chart
   is partial — say so);
@@ -589,6 +609,31 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   the \`wallet-trading\` skill or any file before an lp command: this list
   is complete. Do not announce the read ("I'm checking…"): run the command,
   then answer.
+- Markets (every pool one token trades in, on every DEX of the chain; the
+  command publishes a card by itself, do not call \`publish_artifact\` for
+  it, do not restate its rows):
+  \`agentos trade markets <token> [--chain base|robinhood] [--side all|quote|base] [--min-tvl 10000] [--limit 50] [--lookalikes] [--deep] --json\`
+  The default chain is robinhood, the only \`trade\` command with that
+  default.
+  "pairs of X", "what trades against X", "markets for X",
+  "tokens priced in X", "pools of X on every DEX" →
+  \`agentos trade markets X --chain robinhood --json\`. \`sections.quote\`
+  (*Priced in X*) are other tokens quoted in X (AI/NVDA);
+  \`sections.base\` (*X priced in*) are the pools where X itself is bought
+  and sold, against USDG, WETH and the like (NVDA/USDG). Never call USDG or
+  WETH "quote-side markets" of X.
+  \`partial: true\` means the source rate-limited the read: say so once,
+  never rerun it in a loop. \`counts.hiddenLookalikes\` counts tokens that
+  copy a listed company's symbol or name; rerun with \`--lookalikes\` only
+  if the user asks for them. A liquidity question about ONE pool stays
+  \`lp pool\`. A launchpad pool (Bankr, Pons; "show me the AI/NVDA pool")
+  that \`lp pool\` answers with \`trading.lp.pool_key_unknown\` is answered
+  with \`agentos trade markets <quote token> --chain robinhood --json\`
+  (NVDA for AI/NVDA): its card has that pool's row. Never publish a
+  different pool's card in its place. Errors: \`trading.markets.unavailable\` (the source could
+  not be read: say so, do not retry now), \`trading.not_found\`,
+  \`trading.invalid\` (an ambiguous symbol: show \`details.candidates\`,
+  let the user pick).
 - Liquidity orders (Uniswap V4, through the vault):
   \`agentos trade lp collect <tokenId> --chain base|robinhood --note '<the user’s words>' --client-id <id> --wait --wait-seconds 600 --json\`
   \`agentos trade lp remove <tokenId> --chain base|robinhood [--pct 100] [--slippage 1] --note … --client-id <id> --wait --wait-seconds 600 --json\`
@@ -691,7 +736,8 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   once after 30 s with the SAME --client-id, then report.
   \`trading.unpriced\` — the engine has no USD price for --in; size with
   \`--amount\` instead of \`--usd\`.
-  \`trading.token_not_tradeable\` — the venue refuses this token; final,
+  \`trading.token_not_tradeable\` — the venue refuses this token (for a
+  Stock Token the message says to add a Uniswap key: pass that on); final,
   no retry, not by address either.
   \`trading.quote_expired\` / \`trading.price_moved\` — quote again; send
   once more with the SAME --client-id only if the user's instruction
