@@ -3126,6 +3126,73 @@ button:disabled > .trd-hero__spin {
   display: grid;
   padding: 8px 0;
 }
+/* A first read pages an uncached source and can take a minute: say so. */
+.trd-mk__slow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 14px 8px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+/* Which token the typed symbol was taken to mean, under the search. */
+.trd-mk__picked {
+  position: relative;
+  padding: 6px 12px 6px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+.trd-mk__showing {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 4px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-mk__showname {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.trd-mk__showaddr {
+  font-size: 11px;
+  color: var(--dim);
+}
+.trd-mk__matches {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: var(--radius-control);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--primary);
+}
+.trd-mk__matches:hover,
+.trd-mk__matches[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-mk__matches[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+.trd-mk__matches:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-mk__matchwrap {
+  position: relative;
+  margin-left: auto;
+}
+/* The house menu, wide enough for a name and the liquidity beside it. */
+.trd-mk__matchwrap .mac-menu {
+  max-width: min(340px, calc(100cqi - 24px));
+}
 .trd-mk__skelrow {
   display: flex;
   align-items: center;
@@ -3308,6 +3375,17 @@ button:disabled > .trd-hero__spin {
   padding: 0 1px;
   color: var(--dim);
 }
+/* A lookalike, or a counterparty wearing the token's own symbol: its name
+   after the pair tells two "GME/GME" rows apart. */
+.trd-mk__cpname {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+}
 .trd-mk__venue {
   display: flex;
   min-width: 0;
@@ -3360,20 +3438,26 @@ button:disabled > .trd-hero__spin {
   font-size: 11px;
   color: var(--muted-foreground);
 }
+/* USD, the price in the other token, and the premium. In the BOOK the
+   first two share a line when they fit and wrap when they do not; the
+   in-token figure breaks rather than truncating to "0.0…". The premium is
+   always a line of its own. */
 .trd-mk__px {
   display: flex;
   min-width: 0;
   grid-area: px;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px;
-  overflow: hidden;
+  gap: 0 6px;
   font-size: 11px;
+}
+.trd-mk__usd {
   white-space: nowrap;
 }
-.trd-mk__px small {
-  overflow: hidden;
+.trd-mk__in {
+  min-width: 0;
   font-size: 10.5px;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
   color: var(--dim);
 }
 .trd-mk__chg {
@@ -3392,8 +3476,9 @@ button:disabled > .trd-hero__spin {
   color: var(--muted-foreground);
 }
 .trd-mk__premium {
-  display: block;
+  flex-basis: 100%;
   font-size: 9.5px;
+  white-space: nowrap;
   color: var(--muted-foreground);
 }
 .trd-mk__age {
@@ -3448,6 +3533,9 @@ button:disabled > .trd-hero__spin {
   font-size: 11px;
   color: var(--dim);
 }
+.trd-mk__deeper {
+  margin-left: auto;
+}
 .trd-mk__board > .trd-warnings {
   margin: 0 14px 12px;
 }
@@ -3481,9 +3569,14 @@ button:disabled > .trd-hero__spin {
   }
   .trd-mk__px {
     flex-direction: column;
+    flex-wrap: nowrap;
     align-items: flex-end;
     gap: 0;
     font-size: 12px;
+    text-align: right;
+  }
+  .trd-mk__premium {
+    flex-basis: auto;
   }
   .trd-mk__chg,
   .trd-mk__vol,

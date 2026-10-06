@@ -8,6 +8,7 @@ import { formatPrice, formatUsd } from './logic'
 import {
   NATIVE_ADDRESS,
   type MarketsCounterparty,
+  type MarketsCounts,
   type MarketsPayload,
   type MarketsPool,
   type MarketsToken,
@@ -145,16 +146,38 @@ export interface MarketsTarget {
   target: string
   /** The resolved token, for the head line before the read lands. */
   token: SearchToken | null
+  /**
+   * Every verified exact match the pick was made among, the pick first: the
+   * "Showing … · 3 matches" list the user can choose another from. Empty for
+   * an address or when nothing verified matched.
+   */
+  candidates: SearchToken[]
+}
+
+/**
+ * Verified exact matches, best first: a Stock Token, then the deepest
+ * liquidity (unknown last). The order is stable, so the engine's own ranking
+ * breaks ties.
+ */
+export function rankMatches(rows: readonly SearchToken[]): SearchToken[] {
+  return [...rows].sort(
+    (a, b) =>
+      Number(isStockToken(b)) - Number(isStockToken(a)) ||
+      (b.liquidityUsd ?? -Infinity) - (a.liquidityUsd ?? -Infinity),
+  )
 }
 
 /**
  * Which token a typed query means. An address is taken as given on `chain`.
- * A symbol is looked up on both chains (`results` from `useTokenSearch`):
+ * A symbol is looked up on both chains (`results` from `useTokenSearch`); only
+ * verified exact matches count, ranked by `rankMatches` (a Stock Token, then
+ * the highest liquidity) — never simply the first one the search returned:
+ * "AI" on Robinhood Chain is several tokens, and the deep one is meant.
  *
  * - With no chain chosen in the tab, a verified Stock Token of that symbol
  *   wins wherever it lives (NVDA typed on Base means Robinhood Chain's
- *   NVDA), then a verified match on the desk's chain, then on any chain.
- * - With a chain chosen, only that chain's verified match is taken.
+ *   NVDA), then the best match on the desk's chain, then on any chain.
+ * - With a chain chosen, only that chain's matches are taken.
  *
  * Nothing verified → the symbol goes to the engine as typed, on `chain`; it
  * applies its own Stock-Token-first rule and answers ambiguity itself.
@@ -166,17 +189,77 @@ export function pickMarketsTarget(
   explicitChain: boolean,
 ): MarketsTarget {
   const q = query.trim()
-  if (ADDRESS_RE.test(q)) return { chainId: chain, target: q, token: null }
+  if (ADDRESS_RE.test(q)) return { chainId: chain, target: q, token: null, candidates: [] }
   const sym = q.toLowerCase()
   const exact = results.filter((r) => r.verified && r.symbol.toLowerCase() === sym)
-  const onChain = exact.filter((r) => r.chainId === chain)
-  const stockFirst = (rows: SearchToken[]) =>
-    [...rows].sort((a, b) => Number(isStockToken(b)) - Number(isStockToken(a)))
+  const onChain = rankMatches(exact.filter((r) => r.chainId === chain))
   const pick = explicitChain
-    ? stockFirst(onChain)[0]
-    : (exact.find((r) => isStockToken(r)) ?? stockFirst(onChain)[0] ?? exact[0])
-  if (!pick) return { chainId: chain, target: q, token: null }
-  return { chainId: pick.chainId, target: pick.address, token: pick }
+    ? onChain[0]
+    : (rankMatches(exact.filter((r) => isStockToken(r)))[0] ?? onChain[0] ?? rankMatches(exact)[0])
+  if (!pick) return { chainId: chain, target: q, token: null, candidates: [] }
+  // The pick first, then the rest of its chain, then the other chain's.
+  const pool = explicitChain ? onChain : rankMatches(exact)
+  const rest = pool
+    .filter((r) => r !== pick)
+    .sort((a, b) => Number(b.chainId === pick.chainId) - Number(a.chainId === pick.chainId))
+  return { chainId: pick.chainId, target: pick.address, token: pick, candidates: [pick, ...rest] }
+}
+
+/** The pool's counterparty is the chain's native coin (the zero address). */
+export function isNativeCounterparty(cp: Pick<MarketsCounterparty, 'address' | 'native'>): boolean {
+  return cp.native === true || cp.address.toLowerCase() === NATIVE_ADDRESS
+}
+
+/** The counterparty's symbol as a row prints it: the native coin is ETH, never "0x000…". */
+export function counterpartySymbol(
+  cp: Pick<MarketsCounterparty, 'address' | 'native' | 'symbol'>,
+): string {
+  return isNativeCounterparty(cp) ? 'ETH' : cp.symbol
+}
+
+/**
+ * A row's two symbols, counterparty first on quote rows and the token first
+ * on base rows. The engine's `pair` is used as sent, except when the
+ * counterparty is the native coin: then the pair is rebuilt so it reads ETH
+ * whatever an older engine put there.
+ */
+export function rowPair(
+  pool: Pick<MarketsPool, 'pair' | 'side' | 'counterparty'>,
+  tokenSymbol: string,
+): [string, string] {
+  if (!isNativeCounterparty(pool.counterparty) && pool.pair) return pairParts(pool.pair)
+  const other = counterpartySymbol(pool.counterparty)
+  return pool.side === 'quote' ? [other, tokenSymbol] : [tokenSymbol, other]
+}
+
+/**
+ * Whether a row prints the counterparty's name after the pair: a lookalike
+ * (two "GME/GME" rows must be told apart) or any counterparty wearing the
+ * token's own symbol.
+ */
+export function showsCounterpartyName(
+  pool: Pick<MarketsPool, 'counterparty'>,
+  tokenSymbol: string,
+): boolean {
+  const cp = pool.counterparty
+  if (!cp.name || isNativeCounterparty(cp)) return false
+  return cp.lookalike || cp.symbol.trim().toLowerCase() === tokenSymbol.trim().toLowerCase()
+}
+
+/** The launcher pill would only repeat the DEX label (Bankr on Bankr). */
+export function launcherRepeatsDex(pool: Pick<MarketsPool, 'launcher' | 'dex'>): boolean {
+  if (!pool.launcher) return false
+  const label = pool.dex.label || dexIdLabel(pool.dex.id)
+  return pool.launcher.trim().toLowerCase() === label.trim().toLowerCase()
+}
+
+/**
+ * Deeper is offered only when the page cap — not `limit` — ended a read that
+ * had more pools, and the read was not already deep. A limit-cut read has
+ * nothing more for a deeper read to find.
+ */
+export function offersDeeper(counts: Pick<MarketsCounts, 'pageCapHit'>, deep: boolean): boolean {
+  return counts.pageCapHit === true && !deep
 }
 
 function asToken(
@@ -184,13 +267,13 @@ function asToken(
   t: Pick<
     MarketsToken | MarketsCounterparty,
     'address' | 'symbol' | 'name' | 'decimals' | 'logoUrl' | 'verified' | 'stockToken'
-  >,
+  > & { native?: boolean },
 ): Token {
-  const native = t.address.toLowerCase() === NATIVE_ADDRESS
+  const native = isNativeCounterparty(t)
   return {
     chainId,
     address: t.address,
-    symbol: t.symbol,
+    symbol: native ? 'ETH' : t.symbol,
     name: t.name,
     decimals: t.decimals,
     logoUrl: t.logoUrl,

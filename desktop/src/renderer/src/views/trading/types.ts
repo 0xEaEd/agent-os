@@ -1010,6 +1010,8 @@ export interface MarketsCounterparty {
   verified: boolean
   stockToken: boolean
   lookalike: boolean
+  /** The chain's native coin (the zero address): the engine names it ETH. */
+  native?: boolean
 }
 
 export interface MarketsPool {
@@ -1044,8 +1046,12 @@ export interface MarketsCounts {
   shown: number
   belowMinTvl: number
   hiddenLookalikes: number
+  /** Rows above the floor that `limit` cut ("· 12 more over the limit"); older engines omit it. */
+  limited?: number
   pages: number
   pageCap: number
+  /** The page cap, not `limit`, ended a read that had more pools: the only case Deeper is offered. */
+  pageCapHit?: boolean
 }
 
 export interface MarketsParams {

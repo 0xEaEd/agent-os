@@ -1144,6 +1144,11 @@ export const trading = {
     'Type a symbol or paste an address, then press Return. On Robinhood Chain a Stock Token such as NVDA is also the price hundreds of other tokens are quoted in.',
   'trading.markets.resolving': 'Looking up {query}…',
   'trading.markets.loading': 'Reading pools…',
+  'trading.markets.loading.slow': 'A first read of a token can take up to a minute.',
+  'trading.markets.showing': 'Showing {name}',
+  'trading.markets.matches': '{count} matches',
+  'trading.markets.matches.label': 'Tokens with this symbol',
+  'trading.markets.liquidity': 'Liquidity',
   'trading.markets.error.title': 'Could not read the markets',
   'trading.markets.price': 'Price',
   'trading.markets.oracle': 'Oracle',
@@ -1194,5 +1199,6 @@ export const trading = {
   'trading.markets.counts.shown': '{shown} of {scanned} pools shown',
   'trading.markets.counts.below': '{count} under {tvl}',
   'trading.markets.counts.lookalikes': '{count} lookalikes hidden',
+  'trading.markets.counts.limited': '{count} more over the limit',
   'trading.markets.counts.pages': 'pages {pages} of {cap}',
 } as const

@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 25
+export const TRADING_AGENT_VERSION = 26
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -135,7 +135,12 @@ only when none applies.
   "tokens priced in X", "pools of X on every DEX" →
   \`agentos trade markets X --chain robinhood --json\`. The card it
   publishes is the answer. A liquidity question about ONE pool ("how deep
-  is X", "pool X") stays \`lp pool\`.
+  is X", "pool X") stays \`lp pool\`. A launchpad pool (Bankr, Pons; "show
+  me the AI/NVDA pool") that \`lp pool\` answers with
+  \`trading.lp.pool_key_unknown\` is answered with
+  \`agentos trade markets <quote token> --chain robinhood --json\` (NVDA
+  for AI/NVDA): its card has that pool's row. Never publish a different
+  pool's card in its place.
 - The card the command publishes IS the answer. Write at most two short
   sentences, and only what the card cannot say by itself: what needs
   attention (out of range and by how much, fees worth collecting, a
@@ -577,7 +582,9 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   do not call \`publish_artifact\` for it, do not describe the numbers the
   card already shows):
   \`agentos trade lp pool <token|poolId> --chain base|robinhood --json\`
-  (reserves, TVL, price, mcap, fee, launcher, \`safety.locked\`);
+  (reserves, TVL, price, mcap, fee, launcher, \`safety.locked\`;
+  \`trading.lp.pool_key_unknown\` on a launchpad pool means: answer with
+  the markets card of its quote token, see Markets below);
   \`agentos trade lp ranges <token|poolId> --chain base|robinhood --json\`
   (liquidity per range with mcap bands; \`scan.truncated\` means the chart
   is partial — say so);
@@ -612,7 +619,11 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   never rerun it in a loop. \`counts.hiddenLookalikes\` counts tokens that
   copy a listed company's symbol or name; rerun with \`--lookalikes\` only
   if the user asks for them. A liquidity question about ONE pool stays
-  \`lp pool\`. Errors: \`trading.markets.unavailable\` (the source could
+  \`lp pool\`. A launchpad pool (Bankr, Pons; "show me the AI/NVDA pool")
+  that \`lp pool\` answers with \`trading.lp.pool_key_unknown\` is answered
+  with \`agentos trade markets <quote token> --chain robinhood --json\`
+  (NVDA for AI/NVDA): its card has that pool's row. Never publish a
+  different pool's card in its place. Errors: \`trading.markets.unavailable\` (the source could
   not be read: say so, do not retry now), \`trading.not_found\`,
   \`trading.invalid\` (an ambiguous symbol: show \`details.candidates\`,
   let the user pick).

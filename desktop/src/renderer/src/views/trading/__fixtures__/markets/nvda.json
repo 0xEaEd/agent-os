@@ -32,8 +32,10 @@
     "shown": 5,
     "belowMinTvl": 61,
     "hiddenLookalikes": 5,
+    "limited": 0,
     "pages": 5,
-    "pageCap": 5
+    "pageCap": 5,
+    "pageCapHit": true
   },
   "sections": {
     "quote": [

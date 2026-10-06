@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  ChevronDown,
   ExternalLink,
   Layers,
   RotateCw,
@@ -8,6 +9,7 @@ import {
   TriangleAlert,
 } from 'lucide-react'
 import { useState } from 'react'
+import { Menu, MenuItem } from '~/components/menu/PopMenu'
 import { Button } from '~/components/ui/button'
 import { Switch } from '~/components/ui/switch'
 import { t } from '~/i18n'
@@ -17,21 +19,26 @@ import { useNow } from '~/lib/use-now'
 import { useMarkets, useTokenSearch } from '~/stores/trading'
 import { useTradingUi } from '~/stores/trading-ui'
 import { ChainBadge, ChainMark } from './ChainMark'
-import { formatPct, formatPrice, pnlTone } from './logic'
+import { formatPct, formatPrice, pnlTone, shortAddress } from './logic'
 import {
   ADDRESS_RE,
   dexLabel,
   feeLabel,
   formatPoolPrice,
   formatRatio,
+  counterpartySymbol,
   formatUsdShort,
+  isNativeCounterparty,
+  launcherRepeatsDex,
   MIN_TVL_STEPS,
-  pairParts,
+  offersDeeper,
   pickMarketsTarget,
   poolAge,
   poolSwapTokens,
   ROBINHOOD_CHAIN,
+  rowPair,
   SECTION_CAP,
+  showsCounterpartyName,
   tvlStepLabel,
   type MarketsTarget,
 } from './markets-logic'
@@ -44,6 +51,7 @@ import {
   type MarketsPool,
   type MarketsSide,
   type MarketsToken,
+  type SearchToken,
   type Token,
 } from './types'
 
@@ -76,16 +84,29 @@ export function Markets({ deskChain = null }: { deskChain?: ChainId | null }) {
   const committed = view.query.trim()
   const explicit = view.chainId !== null
   const chain = view.chainId ?? deskChain ?? ROBINHOOD_CHAIN
-  const needsLookup = committed.length > 0 && !view.address && !ADDRESS_RE.test(committed)
-  const search = useTokenSearch(chain, needsLookup ? committed : '')
+  // A symbol is always looked up, even once a token is pinned by address (a
+  // Holdings row, or a match picked from the list): the list of the symbol's
+  // other matches stays on offer.
+  const isSymbol = committed.length > 0 && !ADDRESS_RE.test(committed)
+  const search = useTokenSearch(chain, isSymbol ? committed : '')
   const settled =
-    !needsLookup || committed.length < 2 || (search.debounced === committed && !search.isFetching)
+    !isSymbol || committed.length < 2 || (search.debounced === committed && !search.isFetching)
+  const picked =
+    isSymbol && settled ? pickMarketsTarget(committed, search.tokens, chain, explicit) : null
   const resolved: MarketsTarget | null = !committed
     ? null
     : view.address
-      ? { chainId: chain, target: view.address, token: null }
+      ? {
+          chainId: chain,
+          target: view.address,
+          token:
+            picked?.candidates.find(
+              (c) => c.chainId === chain && c.address.toLowerCase() === view.address!.toLowerCase(),
+            ) ?? null,
+          candidates: picked?.candidates ?? [],
+        }
       : settled
-        ? pickMarketsTarget(committed, search.tokens, chain, explicit)
+        ? (picked ?? pickMarketsTarget(committed, [], chain, explicit))
         : null
 
   const markets = useMarkets(
@@ -107,7 +128,8 @@ export function Markets({ deskChain = null }: { deskChain?: ChainId | null }) {
       if (resolved) void markets.refetch()
       return
     }
-    setView({ query, address: null })
+    // A new token is a new read: Deeper is per read, offered again if needed.
+    setView({ query, address: null, deep: false })
   }
 
   return (
@@ -131,7 +153,7 @@ export function Markets({ deskChain = null }: { deskChain?: ChainId | null }) {
             data-testid="markets-search"
             onChange={(e) => setDraft(e.target.value)}
           />
-          {(needsLookup && !settled) || markets.isFetching ? <Spinner /> : null}
+          {(isSymbol && !settled) || markets.isFetching ? <Spinner /> : null}
         </label>
         <div
           role="radiogroup"
@@ -150,7 +172,7 @@ export function Markets({ deskChain = null }: { deskChain?: ChainId | null }) {
                 title={c.name}
                 className="mac-segment app-no-drag"
                 data-testid={`markets-chain-${c.id}`}
-                onClick={() => setView({ chainId: c.id, address: null })}
+                onClick={() => setView({ chainId: c.id, address: null, deep: false })}
               >
                 <ChainMark chainId={c.id} />
                 <span className="trd-mk__chainword">{c.short}</span>
@@ -189,17 +211,6 @@ export function Markets({ deskChain = null }: { deskChain?: ChainId | null }) {
           />
           <span>{t('trading.markets.lookalikes')}</span>
         </label>
-        <button
-          type="button"
-          className="trd-chip app-no-drag"
-          aria-pressed={view.deep}
-          title={t('trading.markets.deep.help')}
-          data-testid="markets-deep"
-          onClick={() => setView({ deep: !view.deep })}
-        >
-          <Layers className="size-3" strokeWidth={2} aria-hidden />
-          <span className="trd-chip__label">{t('trading.markets.deep')}</span>
-        </button>
         <Button
           variant="ghost"
           size="icon"
@@ -218,6 +229,16 @@ export function Markets({ deskChain = null }: { deskChain?: ChainId | null }) {
           />
         </Button>
       </div>
+
+      {resolved && isSymbol && (resolved.token || data) ? (
+        <Picked
+          token={resolved.token}
+          fallback={data?.token ?? null}
+          fallbackChain={data?.chain.id ?? shownChain}
+          candidates={resolved.candidates}
+          onPick={(c) => setView({ address: c.address, chainId: c.chainId, deep: false })}
+        />
+      ) : null}
 
       {!committed ? (
         <div className="trd-empty" data-testid="markets-prompt">
@@ -242,6 +263,8 @@ export function Markets({ deskChain = null }: { deskChain?: ChainId | null }) {
           now={now}
           minTvlUsd={view.minTvlUsd}
           refreshing={markets.isFetching}
+          deep={view.deep}
+          onDeeper={() => setView({ deep: true })}
           onSwap={(pool) => requestSwap(poolSwapTokens(data, pool))}
         />
       )}
@@ -249,10 +272,84 @@ export function Markets({ deskChain = null }: { deskChain?: ChainId | null }) {
   )
 }
 
+/**
+ * Which token the typed symbol was taken to mean — "Showing Artificial Inu ·
+ * 0x2e8c…1e18" — and, when the symbol is several verified tokens, the list of
+ * them to choose another from. A symbol is never resolved silently.
+ */
+function Picked({
+  token,
+  fallback,
+  fallbackChain,
+  candidates,
+  onPick,
+}: {
+  token: SearchToken | null
+  fallback: MarketsToken | null
+  fallbackChain: number
+  candidates: SearchToken[]
+  onPick: (match: SearchToken) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const shown = token ?? fallback
+  if (!shown) return null
+  const chainId = token?.chainId ?? fallbackChain
+  const name = shown.name || shown.symbol
+  const isShown = (c: SearchToken) =>
+    c.chainId === chainId && c.address.toLowerCase() === shown.address.toLowerCase()
+  return (
+    <div className="trd-mk__picked" data-testid="markets-picked">
+      <div className="trd-mk__showing">
+        <span className="trd-mk__showname">{fill(t('trading.markets.showing'), { name })}</span>
+        <span aria-hidden> · </span>
+        <span className="trd-num trd-mk__showaddr" title={shown.address}>
+          {shortAddress(shown.address)}
+        </span>
+        {candidates.length > 1 ? (
+          <span className="trd-mk__matchwrap">
+            <button
+              type="button"
+              className="trd-mk__matches app-no-drag"
+              aria-expanded={open}
+              aria-haspopup="menu"
+              data-testid="markets-matches"
+              onClick={() => setOpen((o) => !o)}
+            >
+              {fill(t('trading.markets.matches'), { count: candidates.length })}
+              <ChevronDown className="size-3" strokeWidth={2} aria-hidden />
+            </button>
+            {open ? (
+              <Menu label={t('trading.markets.matches.label')} onClose={() => setOpen(false)}>
+                {candidates.map((c) => (
+                  <MenuItem
+                    key={`${c.chainId}:${c.address}`}
+                    mark={<TokenLogo token={c} size={14} />}
+                    label={c.name ? `${c.symbol} · ${c.name}` : c.symbol}
+                    aside={`${formatUsdShort(c.liquidityUsd)} · ${shortAddress(c.address)}`}
+                    checked={isShown(c)}
+                    onSelect={() => {
+                      if (!isShown(c)) onPick(c)
+                    }}
+                  />
+                ))}
+              </Menu>
+            ) : null}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 function MarketsSkeleton() {
   return (
     <div className="trd-mk__skeleton" data-testid="markets-loading" aria-busy="true">
-      <span className="sr-only">{t('trading.markets.loading')}</span>
+      <p className="trd-mk__slow" role="status">
+        <Spinner />
+        <span>
+          {t('trading.markets.loading')} {t('trading.markets.loading.slow')}
+        </span>
+      </p>
       {[0, 1, 2, 3, 4].map((i) => (
         <div key={i} className="trd-mk__skelrow">
           <Skeleton width={i % 2 ? 96 : 120} />
@@ -269,12 +366,16 @@ function Board({
   now,
   minTvlUsd,
   refreshing,
+  deep,
+  onDeeper,
   onSwap,
 }: {
   data: MarketsPayload
   now: number
   minTvlUsd: number
   refreshing: boolean
+  deep: boolean
+  onDeeper: () => void
   onSwap: (pool: MarketsPool) => void
 }) {
   const tvl = tvlStepLabel(data.request?.params?.minTvlUsd ?? minTvlUsd)
@@ -312,6 +413,9 @@ function Board({
             c.hiddenLookalikes > 0
               ? fill(t('trading.markets.counts.lookalikes'), { count: c.hiddenLookalikes })
               : null,
+            (c.limited ?? 0) > 0
+              ? fill(t('trading.markets.counts.limited'), { count: c.limited ?? 0 })
+              : null,
           ]
             .filter(Boolean)
             .join(' · ')}
@@ -326,6 +430,19 @@ function Board({
             <TriangleAlert className="size-2.5" strokeWidth={2.25} aria-hidden />
             {t('trading.markets.partial')}
           </span>
+        ) : null}
+        {offersDeeper(c, deep || data.request?.params?.deep === true) ? (
+          <button
+            type="button"
+            className="trd-chip trd-mk__deeper app-no-drag"
+            title={t('trading.markets.deep.help')}
+            disabled={refreshing}
+            data-testid="markets-deep"
+            onClick={onDeeper}
+          >
+            <Layers className="size-3" strokeWidth={2} aria-hidden />
+            <span className="trd-chip__label">{t('trading.markets.deep')}</span>
+          </button>
         ) : null}
       </footer>
       <QuoteWarnings warnings={data.warnings} />
@@ -472,20 +589,22 @@ function Row({
   now: number
   onSwap: (pool: MarketsPool) => void
 }) {
-  const [first, second] = pairParts(pool.pair)
+  const [first, second] = rowPair(pool, token.symbol)
   const cp = pool.counterparty
+  const native = isNativeCounterparty(cp)
   const fee = feeLabel(pool.feePct)
   const logo: Token = {
     chainId: pool.swap.chainId,
     address: cp.address,
-    symbol: cp.symbol,
+    symbol: native ? 'ETH' : cp.symbol,
     name: cp.name,
     decimals: cp.decimals,
     logoUrl: cp.logoUrl,
-    native: false,
-    verified: cp.verified,
+    native,
+    verified: native || cp.verified,
   }
   const symbol = token.symbol
+  const named = showsCounterpartyName(pool, symbol)
   const legs = poolSwapTokens({ token }, pool)
   const swapLabel = fill(t('trading.markets.swap.label'), {
     from: legs.tokenIn.symbol,
@@ -493,7 +612,7 @@ function Row({
   })
   // A launchpad's own DEX (Bankr on Bankr) needs no second word for it: the
   // venue itself wears the launcher's tint.
-  const launchedHere = pool.launcher !== null && pool.launcher === pool.dex.label
+  const launchedHere = launcherRepeatsDex(pool)
   const launchedTitle = pool.launcher
     ? fill(t('trading.markets.launcher'), { name: pool.launcher })
     : undefined
@@ -511,6 +630,11 @@ function Row({
           <span className="trd-mk__slash">/</span>
           <Sym symbol={second} className="trd-mk__second" />
         </span>
+        {named ? (
+          <span className="trd-mk__cpname" data-testid="markets-cpname" title={cp.address}>
+            {cp.name}
+          </span>
+        ) : null}
         {cp.lookalike ? (
           <span
             className="mac-chip trd-mk__flag"
@@ -579,18 +703,14 @@ function Row({
       >
         {formatUsdShort(pool.volume24hUsd)}
       </span>
+      {/* USD, then the price in the other token, then (base rows) the premium:
+          each on its own line, so none runs into the next or into Age. */}
       <span className="trd-mk__px trd-num">
-        <span>{formatPoolPrice(pool.priceUsd)}</span>
-        <small>
-          {formatRatio(pool.priceInToken)} {pool.side === 'quote' ? symbol : second || cp.symbol}
+        <span className="trd-mk__usd">{formatPoolPrice(pool.priceUsd)}</span>
+        <small className="trd-mk__in">
+          {formatRatio(pool.priceInToken)}{' '}
+          {pool.side === 'quote' ? symbol : second || counterpartySymbol(cp)}
         </small>
-      </span>
-      <span
-        className="trd-mk__chg trd-num"
-        data-tone={pnlTone(pool.change24hPct)}
-        title={t('trading.markets.change')}
-      >
-        {formatPct(pool.change24hPct, { signed: true })}
         {pool.premiumPct !== null && pool.side === 'base' ? (
           <small
             className="trd-mk__premium"
@@ -602,6 +722,13 @@ function Row({
             })}
           </small>
         ) : null}
+      </span>
+      <span
+        className="trd-mk__chg trd-num"
+        data-tone={pnlTone(pool.change24hPct)}
+        title={t('trading.markets.change')}
+      >
+        {formatPct(pool.change24hPct, { signed: true })}
       </span>
       <span className="trd-mk__age trd-num" title={t('trading.markets.age')}>
         {poolAge(pool.createdAt, now)}

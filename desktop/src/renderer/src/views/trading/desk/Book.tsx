@@ -111,6 +111,13 @@ export function Book({
 }) {
   const tab = useTradingUi((s) => s.bookTab)
   const setTab = useTradingUi((s) => s.setBookTab)
+  // The tab strip scrolls when a narrow BOOK cannot fit it; a tab chosen from
+  // outside (a Holdings row's Markets, a Swap request) is brought into view.
+  const tabsRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const selected = tabsRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+    selected?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [tab, collapsed])
   const openSheet = useTradingUi((s) => s.openSheet)
   const requestSwap = useTradingUi((s) => s.requestSwap)
   const openMarkets = useTradingUi((s) => s.openMarkets)
@@ -287,7 +294,12 @@ export function Book({
         onDoubleClick={() => onResize(360)}
       />
       <header className="trd-book__head">
-        <div className="trd-book__tabs" role="tablist" aria-label={t('trading.book.title')}>
+        <div
+          ref={tabsRef}
+          className="trd-book__tabs"
+          role="tablist"
+          aria-label={t('trading.book.title')}
+        >
           {TABS.map(({ id, icon: Icon }) => (
             <button
               key={id}

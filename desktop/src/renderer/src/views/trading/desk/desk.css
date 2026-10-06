@@ -1498,15 +1498,25 @@ body[data-dragging] .trd-book__handle {
   border-bottom: 1px solid var(--hairline);
   background: color-mix(in srgb, var(--foreground) 3%, transparent);
 }
+/* Six tabs and the pips do not always fit the BOOK's 300 px minimum. The
+   strip scrolls sideways instead of squeezing: a squeezed tab used to shrink
+   its icon to a 4 px dot. Tabs and icons never shrink. */
 .trd-book__tabs {
   display: flex;
   min-width: 0;
   flex: 1;
   gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.trd-book__tabs::-webkit-scrollbar {
+  display: none;
 }
 .trd-book__tab {
   display: inline-flex;
-  min-width: 0;
+  flex-shrink: 0;
   align-items: center;
   gap: 5px;
   height: 26px;
@@ -1518,6 +1528,9 @@ body[data-dragging] .trd-book__handle {
   transition:
     color 120ms ease-out,
     background-color 120ms ease-out;
+}
+.trd-book__tab > svg {
+  flex-shrink: 0;
 }
 .trd-book__tab:hover {
   color: var(--foreground);

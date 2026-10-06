@@ -187,7 +187,7 @@ export const useTradingUi = create<TradingUiStore>((set) => ({
   },
   openMarkets({ chainId, address, symbol }) {
     set((s) => {
-      const markets = { ...s.markets, query: symbol || address, address, chainId }
+      const markets = { ...s.markets, query: symbol || address, address, chainId, deep: false }
       if (s.deskMode) return { markets }
       save(OPEN_KEY, 'true')
       return { markets, bookTab: 'markets', bookOpen: true }

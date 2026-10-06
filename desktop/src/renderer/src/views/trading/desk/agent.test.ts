@@ -432,8 +432,8 @@ describe('tradingAgentFiles · markets (v25)', () => {
   ]
 
   it('bumped the version and names markets in the description', () => {
-    expect(TRADING_AGENT_VERSION).toBe(25)
-    expect(agents).toContain('trading agent v25')
+    expect(TRADING_AGENT_VERSION).toBe(26)
+    expect(agents).toContain('trading agent v26')
     expect(tradingAgentSpec().description).toMatch(/markets \(every pool a token trades in/)
   })
 
@@ -451,6 +451,19 @@ describe('tradingAgentFiles · markets (v25)', () => {
       expect(file).toMatch(/A liquidity question about ONE pool[^.]*stays\s+`lp pool`/)
     }
     expect(agents).toMatch(/The card it\s+publishes is the answer/)
+  })
+
+  // Live test 2026-10-06: "show me the AI/NVDA pool" got `pool_key_unknown`
+  // from `lp pool` (a Bankr pool), and the agent published NVDA/USDG's card
+  // instead — a different pool, presented as the answer.
+  it('answers a launchpad pool lp pool cannot key with the markets card of its quote token', () => {
+    for (const file of [agents, tools]) {
+      expect(file).toContain('`trading.lp.pool_key_unknown`')
+      expect(file).toMatch(
+        /`trading\.lp\.pool_key_unknown` is answered\s+with\s+`agentos trade markets <quote token> --chain robinhood --json`/,
+      )
+      expect(file).toMatch(/Never publish a\s+different\s+pool's card in its place/)
+    }
   })
 
   it('carries the command with the CLI’s own flags, its default chain and its errors', () => {

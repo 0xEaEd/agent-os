@@ -1,17 +1,24 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  counterpartySymbol,
   dexLabel,
   feeLabel,
   formatPoolPrice,
   formatRatio,
   formatUsdShort,
+  isNativeCounterparty,
   isStockToken,
   isStockTokenName,
+  launcherRepeatsDex,
+  offersDeeper,
   pairParts,
   pickMarketsTarget,
   poolAge,
   poolSwapTokens,
+  rankMatches,
+  rowPair,
+  showsCounterpartyName,
   tvlStepLabel,
 } from './markets-logic'
 import type { MarketsPayload, SearchToken } from './types'
@@ -157,6 +164,7 @@ describe('markets-logic · which token a query means', () => {
       chainId: 8453,
       target: 'NVDA',
       token: null,
+      candidates: [],
     })
   })
 
@@ -169,6 +177,7 @@ describe('markets-logic · which token a query means', () => {
       chainId: 4663,
       target: 'NVDA',
       token: null,
+      candidates: [],
     })
   })
 
@@ -177,7 +186,145 @@ describe('markets-logic · which token a query means', () => {
       chainId: 4663,
       target: NVDA_ADDRESS,
       token: null,
+      candidates: [],
     })
+  })
+
+  // Live test 2026-10-06: "AI" took "AI PIN" (~$15k liquidity), the search's
+  // first exact match, instead of Artificial Inu (~$131k).
+  describe('several verified tokens share the symbol', () => {
+    const pin = found({
+      address: '0x5555555555555555555555555555555555555555',
+      symbol: 'AI',
+      name: 'AI PIN',
+      stockToken: false,
+      liquidityUsd: 15_000,
+    })
+    const inu = found({
+      address: '0x2e8c4b1f0a3d6e7c9b5a4f3e2d1c0b9a8f7e1e18',
+      symbol: 'AI',
+      name: 'Artificial Inu',
+      stockToken: false,
+      liquidityUsd: 131_000,
+    })
+    const dry = found({
+      address: '0x6666666666666666666666666666666666666666',
+      symbol: 'AI',
+      name: 'No Liquidity AI',
+      stockToken: false,
+      liquidityUsd: null,
+    })
+
+    it('takes the deepest one, not the first the search returned', () => {
+      const pick = pickMarketsTarget('ai', [pin, dry, inu], 4663, false)
+      expect(pick).toMatchObject({ chainId: 4663, target: inu.address })
+      expect(pick.token?.name).toBe('Artificial Inu')
+      // Every match stays on offer, the pick first, unknown liquidity last.
+      expect(pick.candidates.map((c) => c.name)).toEqual([
+        'Artificial Inu',
+        'AI PIN',
+        'No Liquidity AI',
+      ])
+      // Same answer on a chain the user chose.
+      expect(pickMarketsTarget('AI', [pin, inu], 4663, true).target).toBe(inu.address)
+    })
+
+    it('prefers a Stock Token over a deeper community token of the same symbol', () => {
+      const stockAi = found({
+        address: '0x7777777777777777777777777777777777777777',
+        symbol: 'AI',
+        name: 'C3.ai • Robinhood Token',
+        stockToken: true,
+        liquidityUsd: 2_000,
+      })
+      expect(rankMatches([inu, stockAi, pin]).map((c) => c.name)).toEqual([
+        'C3.ai • Robinhood Token',
+        'Artificial Inu',
+        'AI PIN',
+      ])
+      expect(pickMarketsTarget('AI', [inu, stockAi], 4663, true).target).toBe(stockAi.address)
+    })
+
+    it('lists the pick’s chain first, then the other chain’s matches', () => {
+      const baseAi = found({
+        chainId: 8453,
+        address: '0x8888888888888888888888888888888888888888',
+        symbol: 'AI',
+        name: 'Base AI',
+        stockToken: false,
+        liquidityUsd: 900_000,
+      })
+      const pick = pickMarketsTarget('AI', [baseAi, pin, inu], 4663, false)
+      // The desk's chain wins over a deeper match elsewhere.
+      expect(pick.target).toBe(inu.address)
+      expect(pick.candidates.map((c) => c.name)).toEqual(['Artificial Inu', 'AI PIN', 'Base AI'])
+      // A chosen chain lists only its own.
+      expect(
+        pickMarketsTarget('AI', [baseAi, pin, inu], 4663, true).candidates.map((c) => c.name),
+      ).toEqual(['Artificial Inu', 'AI PIN'])
+    })
+  })
+})
+
+describe('markets-logic · what a row says', () => {
+  const ai = NVDA_MARKETS.sections.quote[0]!
+  const usdg = NVDA_MARKETS.sections.base[0]!
+  const ZERO = '0x0000000000000000000000000000000000000000'
+
+  it('names the native coin ETH, never the zero address', () => {
+    const eth = {
+      ...usdg,
+      pair: 'NVDA/0x0000…0000',
+      counterparty: { ...usdg.counterparty, address: ZERO, symbol: '0x0000…0000', native: true },
+    }
+    expect(isNativeCounterparty(eth.counterparty)).toBe(true)
+    expect(counterpartySymbol(eth.counterparty)).toBe('ETH')
+    expect(rowPair(eth, 'NVDA')).toEqual(['NVDA', 'ETH'])
+    expect(rowPair({ ...eth, side: 'quote' }, 'NVDA')).toEqual(['ETH', 'NVDA'])
+    // The zero address alone is enough, for an engine that sends no flag.
+    const bare = { ...eth.counterparty, native: undefined }
+    expect(counterpartySymbol(bare)).toBe('ETH')
+    // The ticket gets ETH as the native coin.
+    const legs = poolSwapTokens(NVDA_MARKETS, {
+      ...eth,
+      swap: { chainId: 4663, tokenIn: NVDA_ADDRESS, tokenOut: ZERO },
+    })
+    expect(legs.tokenOut).toMatchObject({ symbol: 'ETH', native: true, verified: true })
+    // Anything else keeps the engine's pair.
+    expect(rowPair(ai, 'NVDA')).toEqual(['AI', 'NVDA'])
+  })
+
+  it('names the counterparty after the pair for a lookalike or a same-symbol token', () => {
+    expect(showsCounterpartyName(ai, 'NVDA')).toBe(false)
+    const lookalike = { ...ai, counterparty: { ...ai.counterparty, lookalike: true } }
+    expect(showsCounterpartyName(lookalike, 'NVDA')).toBe(true)
+    const twin = { ...ai, counterparty: { ...ai.counterparty, symbol: 'nvda', name: 'Nvda Inu' } }
+    expect(showsCounterpartyName(twin, 'NVDA')).toBe(true)
+    // Nothing to show without a name.
+    expect(
+      showsCounterpartyName({ ...twin, counterparty: { ...twin.counterparty, name: '' } }, 'NVDA'),
+    ).toBe(false)
+  })
+
+  it('drops the launcher pill when it would repeat the venue', () => {
+    expect(launcherRepeatsDex(ai)).toBe(true)
+    expect(launcherRepeatsDex({ ...ai, launcher: 'bankr' })).toBe(true)
+    expect(
+      launcherRepeatsDex({
+        ...ai,
+        dex: { id: 'uniswap-v4-robinhood', label: 'Uniswap', version: 'v4' },
+      }),
+    ).toBe(false)
+    expect(launcherRepeatsDex({ ...ai, launcher: null })).toBe(false)
+  })
+
+  it('offers Deeper only when the page cap ended a read with more pools, and not twice', () => {
+    expect(offersDeeper({ pageCapHit: true }, false)).toBe(true)
+    expect(offersDeeper({ pageCapHit: true }, true)).toBe(false)
+    // A limit-cut read: a deeper read finds nothing more.
+    expect(offersDeeper({ pageCapHit: false }, false)).toBe(false)
+    // An older engine says nothing: no promise it cannot keep.
+    expect(offersDeeper({}, false)).toBe(false)
   })
 })
 
