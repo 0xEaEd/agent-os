@@ -62,8 +62,10 @@ def _payload() -> dict[str, Any]:
             "shown": 2,
             "belowMinTvl": 61,
             "hiddenLookalikes": 5,
+            "limited": 12,
             "pages": 5,
             "pageCap": 5,
+            "pageCapHit": False,
         },
         "sections": {"quote": [{**row, "pair": "AI/NVDA", "side": "quote"}], "base": [base]},
         "request": {"kind": "markets", "params": {"side": "all", "minTvlUsd": 10000}},
@@ -181,7 +183,10 @@ def test_human_output_has_both_tables_and_the_counts(client: _Client, tmp_path: 
     assert "IN QUOTE" in out  # the base section's ratio is NVDA priced in the counterparty
     assert "AI/NVDA" in out and "$4.7M" in out and "Bankr" in out
     assert "Uniswap v4 0.01%" in out and "uni" in out
-    assert "2 of 100 pools shown · 61 under $10k · 5 lookalikes hidden · partial" in out
+    assert (
+        "2 of 100 pools shown · 61 under $10k · 5 lookalikes hidden"
+        " · 12 more over the limit · partial"
+    ) in out
     assert not (tmp_path / trade_cmd.MARKETS_CARD_DIR).exists()
 
 
@@ -189,3 +194,52 @@ def test_bad_side_is_a_usage_error(client: _Client) -> None:
     result = runner.invoke(trade_cmd.app, ["markets", "NVDA", "--side", "both", "--json"])
     assert result.exit_code == 2
     assert client.calls == []
+
+
+def test_error_envelope_keeps_the_engine_details(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An ambiguous symbol: the gateway's ``error.details`` reaches the JSON envelope."""
+    from agentos.cli import gateway_client, gateway_rpc
+
+    candidates = [{"address": "0x" + "d1" * 20}, {"address": "0x" + "d2" * 20}]
+
+    class _Ws:
+        def __init__(self, owner: gateway_client.GatewayClient) -> None:
+            self.owner = owner
+
+        async def send(self, raw: str) -> None:
+            frame = json.loads(raw)
+            # The shape the gateway's ResFrame/ErrorShape serialises to.
+            self.owner._pending[frame["id"]].set_result(
+                {
+                    "type": "res",
+                    "id": frame["id"],
+                    "ok": False,
+                    "error": {
+                        "code": "trading.invalid",
+                        "message": "Ambiguous token symbol DUP",
+                        "details": {"candidates": candidates},
+                        "retryable": False,
+                    },
+                }
+            )
+
+    class _Client(gateway_client.GatewayClient):
+        async def connect(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+            self._ws = _Ws(self)  # type: ignore[assignment]
+
+        async def close(self) -> None:
+            self._ws = None
+
+    monkeypatch.setattr(gateway_client, "GatewayClient", _Client)
+    monkeypatch.setattr(gateway_rpc, "_target_gateway_url", lambda **kw: "ws://127.0.0.1:1/ws")
+    monkeypatch.setattr(gateway_rpc, "default_gateway_token", lambda *a: None)
+    monkeypatch.setattr(gateway_rpc, "_apply_version_skew_policy", lambda *a, **kw: None)
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(trade_cmd.app, ["markets", "DUP", "--json"])
+    assert result.exit_code != 0
+    envelope = json.loads(result.stderr.strip().splitlines()[-1])
+    assert envelope["error"]["code"] == "trading.invalid"
+    assert envelope["error"]["details"] == {"candidates": candidates}
+    assert not (tmp_path / trade_cmd.MARKETS_CARD_DIR).exists()

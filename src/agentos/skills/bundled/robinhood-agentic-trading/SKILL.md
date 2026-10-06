@@ -51,12 +51,15 @@ Recheck these primary sources when product behavior or permissions may have chan
 - https://robinhood.com/us/en/newsroom/robinhood-is-now-open-to-agents/
 
 This skill is the brokerage account, not the chain. On **Robinhood Chain**
-(the on-chain venue the `wallet-trading` skill swaps on) most Stock Tokens
-(AAPL, TSLA, NVDA …) answer `trading.token_not_tradeable`: the venue
-refuses them for legal reasons. That is final for this token: do not retry,
-do not retry by address; tell the user and stop. A user who wants to trade
-a stock trades it here, through the Robinhood Agentic account, never as a
-token swap.
+(the on-chain venue the `wallet-trading` skill swaps on) the aggregator (0x)
+refuses the Stock Tokens (AAPL, TSLA, NVDA …), but the desk routes any pair
+with one through Uniswap automatically when a Uniswap API key is configured
+(`agentos config set trading.uniswap_api_key <key>`, or Settings › Trading);
+without a key the `trading.token_not_tradeable` error carries that hint, and
+`agentos trade markets <stock> --chain robinhood --json` lists every pool a
+stock trades in. That is a token swap on the chain; a user who wants to
+trade the stock itself trades it here, through the Robinhood Agentic
+account.
 
 ## Classify the request
 

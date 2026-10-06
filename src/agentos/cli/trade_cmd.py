@@ -2490,6 +2490,8 @@ def _render_markets(result: dict[str, Any]) -> None:
         line.append(f"{counts['belowMinTvl']} under {_compact_usd(min_tvl)}")
     if counts.get("hiddenLookalikes"):
         line.append(f"{counts['hiddenLookalikes']} lookalikes hidden")
+    if counts.get("limited"):
+        line.append(f"{counts['limited']} more over the limit")
     if result.get("partial"):
         line.append("partial")
     console.print(" · ".join(line))

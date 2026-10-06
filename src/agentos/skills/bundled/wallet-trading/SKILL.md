@@ -63,14 +63,15 @@ cannot read it, and you never need to.
 provider aggregator|uniswap` switches it (only when the user asks). A quote
 or order carries `provider` so you can say which venue priced it.
 
-**The tokenised stocks on Robinhood Chain cannot be traded at all.** AAPL,
-TSLA, NVDA, MSFT, SPY, QQQ and 23 others — 29 of the 34 listed tokens on
-chain 4663 — are refused in both directions, at any size, at any hour, for
-legal reasons upstream. You get `trading.token_not_tradeable`. Do **not**
-retry, do not shrink the size, do not pass the contract address instead of
-the symbol, and do not silently substitute a different asset: tell the user
-this venue will not trade that token. ETH, WETH and USDG trade normally
-there. On Robinhood Chain size orders in token units (`--amount`): `--usd`
+**The tokenised stocks on Robinhood Chain route through Uniswap.** The
+aggregator (0x) refuses AAPL, TSLA, NVDA, SPY and the other Stock Tokens,
+but the desk sends any pair with a Stock Token through Uniswap on its own
+when a Uniswap API key is configured; without one you get
+`trading.token_not_tradeable` with a hint to add the key (the user runs
+`agentos config set trading.uniswap_api_key <key>` or uses Settings ›
+Trading — relay that, do not retry or substitute another asset).
+`agentos trade markets <stock> --chain robinhood --json` lists every pool a
+stock trades in. ETH, WETH and USDG trade normally there. On Robinhood Chain size orders in token units (`--amount`): `--usd`
 may be refused with `trading.unpriced` (no native USD price there yet), and
 the bare symbol `USDC` resolves to unverified lookalikes — use ETH or an
 address from `agentos trade tokens --chain robinhood … --json` marked

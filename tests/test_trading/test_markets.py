@@ -34,10 +34,12 @@ AI = "0x2e8c00000000000000000000000000000000e1e1"
 #: Borrows NVDA's symbol and name (without the bullet); not the Stock Token.
 FAKE_NVDA = "0xbad0000000000000000000000000000000000001"
 TINY = "0x7171000000000000000000000000000000000001"
+NATIVE = "0x0000000000000000000000000000000000000000"
 FEED = "0xfeed000000000000000000000000000000000001"
 
 NVDA_POOL = "0x6444a8e0b267406a15db74ca00c4a24bdfa81ed3180f5b6d0851f8ed6f4f29c5"
-AI_POOL = "0xcbdfea9000000000000000000000000000000000000000000000000000ce27"
+#: A Bankr pool is a v4 poolId (32 bytes), though its DEX id names no version.
+AI_POOL = "0xcbdfea90" + "0" * 52 + "ce27"
 FAKE_POOL = "0x00000000000000000000000000000000000fa4e1"
 TINY_POOL = "0x0000000000000000000000000000000000071171"
 
@@ -206,6 +208,8 @@ class FakeMarkets:
     pages: dict[int, dict[str, Any]] = field(default_factory=dict)
     #: page -> HTTP status to answer instead of the page.
     status: dict[int, int] = field(default_factory=dict)
+    #: page -> how many more requests for it time out before it answers.
+    timeouts: dict[int, int] = field(default_factory=dict)
     dexscreener: list[dict[str, Any]] | None = field(default_factory=list)
     oracle_answer: int | None = None
     oracle_updated_at: int = 0
@@ -217,6 +221,9 @@ class FakeMarkets:
         if host == "api.geckoterminal.com" and path.endswith(f"/tokens/{NVDA}/pools"):
             self.gecko.append(request)
             page = int(request.url.params.get("page", "1"))
+            if self.timeouts.get(page, 0) > 0:
+                self.timeouts[page] -= 1
+                raise httpx.ReadTimeout("timed out", request=request)
             if page in self.status:
                 return httpx.Response(self.status[page], json={"status": self.status[page]})
             return httpx.Response(200, json=self.pages.get(page, {"data": [], "included": []}))
@@ -332,16 +339,19 @@ async def test_sections_split_by_side(service: TradingService, fake_markets: Fak
     assert token["oracle"] is None  # the feed answered nothing usable
 
     ai = _row(result, "quote", "AI/NVDA")
-    assert ai["dex"] == {"id": "bankr-robinhood", "label": "Bankr", "version": None}
+    # No DexScreener label and no version in the DEX id: the 32-byte poolId says v4.
+    assert ai["dex"] == {"id": "bankr-robinhood", "label": "Bankr", "version": "v4"}
     assert ai["launcher"] == "Bankr" and ai["viaUniswap"] is False and ai["feePct"] is None
     assert ai["counterparty"]["symbol"] == "AI" and ai["counterparty"]["lookalike"] is False
     assert ai["counterparty"]["verified"] is True and ai["counterparty"]["stockToken"] is False
+    assert ai["counterparty"]["native"] is False
     assert ai["tvlUsd"] == pytest.approx(4730665.8503)
     assert ai["volume24hUsd"] == pytest.approx(806473.0)
     assert ai["txns24h"] == {"buys": 812, "sells": 790}
-    # Quote rows: the counterparty's price, and the counterparty priced in NVDA.
+    # Quote rows: the counterparty's price, and the counterparty priced in NVDA,
+    # as the ratio of the two USD prices (GeckoTerminal's own 0.000711 was off).
     assert ai["priceUsd"] == pytest.approx(0.1103804417)
-    assert ai["priceInToken"] == pytest.approx(0.000710917196)
+    assert ai["priceInToken"] == pytest.approx(0.1103804417 / 239.99985596935)
     assert ai["premiumPct"] is None
     assert ai["swap"] == {"chainId": 4663, "tokenIn": NVDA, "tokenOut": AI}
     assert ai["url"] == f"https://www.geckoterminal.com/robinhood/pools/{AI_POOL}"
@@ -353,7 +363,7 @@ async def test_sections_split_by_side(service: TradingService, fake_markets: Fak
     assert usdg["launcher"] is None
     # Base rows: NVDA's price in this pool, and NVDA priced in USDG.
     assert usdg["priceUsd"] == pytest.approx(240.3017762048)
-    assert usdg["priceInToken"] == pytest.approx(234.1476294422)
+    assert usdg["priceInToken"] == pytest.approx(240.3017762048 / 0.999601273523243)
     assert usdg["change24hPct"] == pytest.approx(2.01)
     assert usdg["createdAt"] == "2026-07-25T00:52:36Z"
     assert usdg["swap"] == {"chainId": 4663, "tokenIn": NVDA, "tokenOut": USDG}
@@ -368,8 +378,10 @@ async def test_sections_split_by_side(service: TradingService, fake_markets: Fak
         "shown": 23,
         "belowMinTvl": 1,
         "hiddenLookalikes": 1,
+        "limited": 0,
         "pages": 2,
         "pageCap": 5,
+        "pageCapHit": False,
     }
     assert result["request"] == {
         "kind": "markets",
@@ -408,6 +420,89 @@ async def test_lookalike_hidden_by_default_and_shown_on_request(
     assert fake[0]["pair"] == "NVDA/NVDA"
     assert shown["counts"]["hiddenLookalikes"] == 0
     assert shown["counts"]["shown"] == hidden["counts"]["shown"] + 1
+
+
+async def test_rate_limit_is_not_a_page_cap_hit(
+    service: TradingService, fake_markets: FakeMarkets
+) -> None:
+    fake_markets.pages[2] = _filler_page(16, 20)
+    fake_markets.status[3] = 429
+    result = await _read(service)
+    assert result["partial"] is True and result["counts"]["pageCapHit"] is False
+
+
+async def test_a_page_that_timed_out_is_retried_once(
+    service: TradingService, fake_markets: FakeMarkets
+) -> None:
+    fake_markets.pages[2] = _filler_page(16, 20)
+    fake_markets.pages[3] = _filler_page(36, 3)
+    fake_markets.timeouts[2] = 1
+    result = await _read(service, limit=200)
+    assert result["partial"] is False and result["warnings"] == []
+    assert result["counts"]["pages"] == 3 and result["counts"]["scanned"] == 43
+    # The burst asked for pages 1-5; page 2 was asked once more after it.
+    assert [r.url.params["page"] for r in fake_markets.gecko] == ["1", "2", "3", "4", "5", "2"]
+
+
+async def test_a_page_that_times_out_twice_ends_the_prefix(
+    service: TradingService, fake_markets: FakeMarkets
+) -> None:
+    fake_markets.pages[2] = _filler_page(16, 20)
+    fake_markets.pages[3] = _filler_page(36, 3)
+    fake_markets.timeouts[2] = 2
+    result = await _read(service, limit=200)
+    assert result["partial"] is True and result["counts"]["pageCapHit"] is False
+    assert result["warnings"][0] == "GeckoTerminal stopped answering: showing the first 20 pools"
+    assert result["counts"]["pages"] == 1
+    # Page 3 answered, but it is not kept past the missing page 2.
+    assert [r.url.params["page"] for r in fake_markets.gecko] == ["1", "2", "3", "4", "5", "2"]
+
+
+async def test_a_timeout_after_the_end_of_the_listing_is_not_retried(
+    service: TradingService, fake_markets: FakeMarkets
+) -> None:
+    fake_markets.timeouts[4] = 5  # page 2 is short: nothing past it is kept or retried
+    result = await _read(service)
+    assert result["partial"] is False and result["counts"]["pages"] == 2
+    assert len(fake_markets.gecko) == 5
+
+
+async def test_first_page_timing_out_twice_is_unavailable(
+    service: TradingService, fake_markets: FakeMarkets
+) -> None:
+    fake_markets.timeouts[1] = 2
+    with pytest.raises(TradingError) as err:
+        await _read(service)
+    assert err.value.code == "trading.markets.unavailable"
+    assert "did not answer" in str(err.value)
+
+
+async def test_price_in_token_falls_back_to_the_pool_ratio(
+    service: TradingService, fake_markets: FakeMarkets
+) -> None:
+    page = _page_one()
+    ai = next(p for p in page["data"] if p["attributes"]["address"] == AI_POOL)
+    ai["attributes"]["quote_token_price_usd"] = None
+    fake_markets.pages[1] = page
+    row = _row(await _read(service), "quote", "AI/NVDA")
+    assert row["priceInToken"] == pytest.approx(0.000710917196)
+
+
+async def test_native_counterparty_is_eth(
+    service: TradingService, fake_markets: FakeMarkets
+) -> None:
+    page = _page_one()
+    pool = page["data"][4]  # a filler: re-point its base at the zero address
+    pool["relationships"]["base_token"]["data"]["id"] = f"robinhood_{NATIVE}"
+    page["included"].append(_token(NATIVE, "WETH", "Wrapped Ether"))
+    fake_markets.pages[1] = page
+    row = _row(await _read(service), "quote", "ETH/NVDA")
+    cp = row["counterparty"]
+    assert cp["address"] == NATIVE and cp["symbol"] == "ETH" and cp["name"] == "Ether"
+    assert cp["native"] is True and cp["verified"] is True and cp["lookalike"] is False
+    assert cp["decimals"] == 18
+    # A Pons pool with a 20-byte address: the version comes from the DEX id.
+    assert row["dex"]["version"] == "v2"
 
 
 async def test_rate_limit_on_page_three_is_partial(
@@ -452,6 +547,9 @@ async def test_limit_stops_paging(service: TradingService, fake_markets: FakeMar
     assert result["counts"]["shown"] == 5 and result["counts"]["pages"] == 2
     assert len(fake_markets.gecko) == 5
     assert result["partial"] is False
+    # 23 rows passed the filters; the limit cut 18 of them, the page cap nothing.
+    assert result["counts"]["limited"] == 18
+    assert result["counts"]["pageCapHit"] is False
 
 
 async def test_page_cap_marks_the_read_partial(
@@ -461,10 +559,13 @@ async def test_page_cap_marks_the_read_partial(
         fake_markets.pages[page] = _filler_page(100 + page * 20, 20)
     result = await _read(service, limit=200)
     assert result["counts"]["pages"] == 5 and result["counts"]["pageCap"] == 5
-    assert result["partial"] is True
+    assert result["partial"] is True and result["counts"]["pageCapHit"] is True
+    assert result["counts"]["limited"] == 0
     assert result["warnings"][0].startswith("Read the first 100 pools (page cap)")
+    assert "deep reads up to 200" in result["warnings"][0]
     deep = await _read(service, limit=200, deep=True)
     assert deep["counts"]["pages"] == 10 and deep["counts"]["pageCap"] == 10
+    assert deep["counts"]["pageCapHit"] is True and deep["partial"] is True
     # The deep read reused the five cached pages.
     assert len(fake_markets.gecko) == 10
 
@@ -504,9 +605,10 @@ async def test_stale_or_paused_oracle(service: TradingService, fake_markets: Fak
 async def test_dexscreener_enriches_and_its_failure_is_a_warning(
     service: TradingService, fake_markets: FakeMarkets
 ) -> None:
-    fake_markets.dexscreener = [{"pairAddress": AI_POOL.upper(), "labels": ["v4"]}]
+    # DexScreener's label comes first, over the poolId and the DEX id.
+    fake_markets.dexscreener = [{"pairAddress": AI_POOL.upper(), "labels": ["v3"]}]
     result = await _read(service)
-    assert _row(result, "quote", "AI/NVDA")["dex"]["version"] == "v4"
+    assert _row(result, "quote", "AI/NVDA")["dex"]["version"] == "v3"
     mk.clear_cache()
     fake_markets.dexscreener = None
     result = await _read(service)
@@ -537,6 +639,11 @@ def test_parsers() -> None:
     assert mk.dex_version("ramses-v3-robinhood") == "v3"
     assert mk.dex_version("giga-v3") == "v3"
     assert mk.dex_version("bankr-robinhood") is None
+    assert mk.dex_version("bankr-robinhood", None, "0x" + "ab" * 32) == "v4"
+    assert mk.dex_version("uniswap-v3-robinhood", [], "0x" + "ab" * 20) == "v3"
+    assert mk.dex_version("pancakeswap-v3-robinhood") == "v3"
+    assert mk.dex_version("pons-v2-dex") == "v2"
+    assert mk.dex_version("pons-v2-dex", ["v4"]) == "v4"
     assert mk.dex_label("pons-v2-dex", "Pons V2 Dex") == "Pons"
     assert mk.dex_label("uniswap-v3-robinhood", "Uniswap V3 (Robinhood)") == "Uniswap"
     assert mk.dex_label("up-v3", "") == "Up"

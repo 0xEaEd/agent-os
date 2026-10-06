@@ -10,8 +10,8 @@ Sources, in order:
 
 * **GeckoTerminal** ``/networks/{net}/tokens/{address}/pools`` — the only
   listing that returns pools on both sides of a token. 20 pools a page, 30
-  requests a minute per IP, so pages are read one at a time and the raw pages
-  are cached for :data:`PAGE_CACHE_TTL_S` per ``(chain, token)``.
+  requests a minute per IP, so pages are read in small concurrent bursts and
+  the raw pages are cached for :data:`PAGE_CACHE_TTL_S` per ``(chain, token)``.
 * **DexScreener** ``/token-pairs/v1/{slug}/{address}`` — enrichment only
   (version label, liquidity and volume where GeckoTerminal left a gap). It
   lists the base side alone, which is why it cannot be the source.
@@ -62,6 +62,9 @@ DEEP_PAGE_CAP = 10
 PAGE_BURST = 5
 #: How long the raw pages of one ``(chain, token)`` are reused.
 PAGE_CACHE_TTL_S = 120.0
+#: Per-page timeout: a page GeckoTerminal's edge has not cached was measured
+#: at up to 18.5 s, and five of them in one burst take longer still.
+PAGE_TIMEOUT_S = 60.0
 GECKOTERMINAL_ACCEPT = "application/json;version=20230302"
 GECKOTERMINAL_WEB = "https://www.geckoterminal.com"
 
@@ -100,6 +103,8 @@ _RH_SUFFIX_LOOSE_RE = re.compile(
 )
 _FEE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%\s*$")
 _VERSION_RE = re.compile(r"(?:^|-)v(\d)(?:-|$)", re.IGNORECASE)
+#: A v4 pool is addressed by its 32-byte poolId, not a 20-byte contract.
+_POOL_ID_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 _DEX_SUFFIX_RE = re.compile(r"\s*\([^)]*\)\s*$")
 _DEX_VERSION_RE = re.compile(r"\s+v\d+(?:\.\d+)?\b.*$", re.IGNORECASE)
 
@@ -150,14 +155,24 @@ def launcher_for(dex_id: str | None) -> str | None:
     return LAUNCHERS.get(head)
 
 
-def dex_version(dex_id: str | None, labels: Any = None) -> str | None:
-    match = _VERSION_RE.search(dex_id or "")
-    if match:
-        return f"v{match.group(1)}"
+def dex_version(
+    dex_id: str | None, labels: Any = None, pool_address: str | None = None
+) -> str | None:
+    """DexScreener's label first; else ``v4`` for a 32-byte poolId; else the DEX id's.
+
+    ``bankr-robinhood`` carries no version, but its pools are v4 poolIds (so
+    are Pons V2's: the launchpad's "v2" is not the AMM's). A 20-byte pool
+    falls back to the DEX id: ``uniswap-v3-robinhood`` -> ``v3``.
+    """
     for label in labels or []:
         text = str(label).strip().lower()
         if re.fullmatch(r"v\d", text):
             return text
+    if _POOL_ID_RE.match(pool_address or ""):
+        return "v4"
+    match = _VERSION_RE.search(dex_id or "")
+    if match:
+        return f"v{match.group(1)}"
     return None
 
 
@@ -237,6 +252,10 @@ class _UnavailableError(Exception):
     pass
 
 
+class _TimedOutError(_UnavailableError):
+    """The page did not answer within :data:`PAGE_TIMEOUT_S` (retried once)."""
+
+
 async def _fetch_page(
     service: Any, chain: ChainSpec, address: str, page: int
 ) -> dict[str, Any] | None:
@@ -253,8 +272,11 @@ async def _fetch_page(
             url,
             params=params,
             headers={"accept": GECKOTERMINAL_ACCEPT, "user-agent": USER_AGENT},
-            timeout=25.0,
+            timeout=PAGE_TIMEOUT_S,
         )
+    except httpx.TimeoutException as exc:
+        detail = str(exc) or exc.__class__.__name__
+        raise _TimedOutError(f"GeckoTerminal did not answer: {detail}") from exc
     except httpx.HTTPError as exc:
         detail = str(exc) or exc.__class__.__name__
         raise _UnavailableError(f"GeckoTerminal did not answer: {detail}") from exc
@@ -293,18 +315,37 @@ async def _fill_pages(
     A page GeckoTerminal has not cached at its edge takes 11-13 s (measured
     2026-10-06: ``cf-cache-status: EXPIRED`` 13 s, ``HIT`` 0.2 s), so reading
     one page at a time cost 40 s for a token; a burst of five costs one page's
-    wait and stays well inside the 30 requests / minute limit. Pages are kept
-    in order and only as a contiguous prefix: the first 429 or outage drops
-    that page and every later one. Returns ``(rate_limited, failure)``.
+    wait and stays well inside the 30 requests / minute limit. An uncached page
+    can still take 18.5 s, so a page that timed out inside the burst is asked
+    once more after it (only when an earlier page did not already end the
+    prefix). Pages are kept in order and only as a contiguous prefix: the
+    first 429 or outage drops that page and every later one. Returns
+    ``(rate_limited, failure)``.
     """
     first = len(entry.pages) + 1
     wanted = list(range(first, upto + 1))
     if entry.complete or not wanted:
         return False, None
-    results = await asyncio.gather(
-        *(_fetch_page(service, chain, address, page) for page in wanted),
-        return_exceptions=True,
+    results: list[Any] = list(
+        await asyncio.gather(
+            *(_fetch_page(service, chain, address, page) for page in wanted),
+            return_exceptions=True,
+        )
     )
+    retry: list[int] = []
+    for index, body in enumerate(results):
+        if isinstance(body, _TimedOutError):
+            retry.append(index)
+            continue
+        if isinstance(body, BaseException) or len(_rows_of(body)) < PAGE_SIZE:
+            break  # the prefix ends here: a later page is never kept
+    if retry:
+        again = await asyncio.gather(
+            *(_fetch_page(service, chain, address, wanted[i]) for i in retry),
+            return_exceptions=True,
+        )
+        for index, body in zip(retry, again, strict=True):
+            results[index] = body
     for body in results:
         if isinstance(body, _RateLimitedError):
             return True, None
@@ -312,13 +353,16 @@ async def _fill_pages(
             return False, str(body)
         if isinstance(body, BaseException):
             raise body
-        data = (body or {}).get("data")
-        rows = data if isinstance(data, list) else []
         entry.pages.append(body or {"data": [], "included": []})
-        if len(rows) < PAGE_SIZE:
+        if len(_rows_of(body)) < PAGE_SIZE:
             entry.complete = True
             break
     return False, None
+
+
+def _rows_of(body: dict[str, Any] | None) -> list[Any]:
+    data = (body or {}).get("data")
+    return data if isinstance(data, list) else []
 
 
 async def _dexscreener(service: Any, chain: ChainSpec, address: str, entry: _Pages) -> bool:
@@ -480,15 +524,18 @@ async def _counterparty(
         except Exception:  # noqa: BLE001 - metadata is best effort
             known_cache[address] = None
     known = known_cache[address]
+    native = is_native(address)
     symbol = html.unescape(str(attrs.get("symbol") or (known.symbol if known else "") or ""))
     name = html.unescape(str(attrs.get("name") or (known.name if known else "") or ""))
     decimals = _int(attrs.get("decimals"))
     if decimals is None and known is not None:
         decimals = known.decimals
+    if native:
+        # GeckoTerminal labels the zero address "WETH"; it is the chain's coin.
+        symbol, name, decimals = "ETH", "Ether", 18
     logo = str(attrs.get("image_url") or "") or (known.logo_url if known else None) or None
     if logo and "missing" in logo.rsplit("/", 1)[-1]:
         logo = known.logo_url if known else None
-    native = is_native(address)
     stock = address in stocks or bool(
         known and chain.key == "robinhood" and (known.stock_token or is_stock_name(known.name))
     )
@@ -509,6 +556,7 @@ async def _counterparty(
         "verified": bool(known is not None and known.verified) or native,
         "stockToken": stock,
         "lookalike": lookalike,
+        "native": native,
     }
 
 
@@ -631,15 +679,20 @@ async def markets(
         buys = _int(txns.get("buys")) if isinstance(txns, dict) else None
         sells = _int(txns.get("sells")) if isinstance(txns, dict) else None
         # The pool's base token is the counterparty on quote rows and the
-        # token on base rows; either way the row's price is the base's.
+        # token on base rows; either way the row's price is the base's, and
+        # ``priceInToken`` is the base priced in the quote (AI in NVDA on a
+        # quote row, NVDA in USDG on a base row). It is the ratio of the two
+        # USD prices: GeckoTerminal's own ``base_token_price_quote_token`` was
+        # 45-77 % off real quotes on launchpad pools (2026-10-06), so it is
+        # only the fallback when a USD price is missing.
         price_usd = _pos(attrs.get("base_token_price_usd"))
-        price_in = _pos(attrs.get("base_token_price_quote_token"))
+        quote_usd = _pos(attrs.get("quote_token_price_usd"))
+        price_in = price_usd / quote_usd if price_usd and quote_usd else None
+        if price_in is None:
+            price_in = _pos(attrs.get("base_token_price_quote_token"))
         if price_in is None:
             inverse = _pos(attrs.get("quote_token_price_base_token"))
             price_in = 1 / inverse if inverse else None
-        if price_in is None:
-            quote_usd = _pos(attrs.get("quote_token_price_usd"))
-            price_in = price_usd / quote_usd if price_usd and quote_usd else None
         premium = None
         oracle_usd = (oracle or {}).get("usd")
         if row_side == "base" and price_usd is not None and oracle_usd:
@@ -658,7 +711,7 @@ async def markets(
             "dex": {
                 "id": dex_id or None,
                 "label": dex_label(dex_id, included.dexes.get(dex_id)) if dex_id else None,
-                "version": dex_version(dex_id, (ds or {}).get("labels")),
+                "version": dex_version(dex_id, (ds or {}).get("labels"), pool_address),
             },
             "launcher": launcher_for(dex_id),
             "viaUniswap": dex_id.lower().startswith("uniswap-"),
@@ -726,13 +779,19 @@ async def markets(
 
     scanned = int(state["seen"])
     partial = False
+    # The page cap, not ``limit``, ended a read GeckoTerminal had more for.
+    page_cap_hit = (
+        not rate_limited
+        and failure is None
+        and len(rows) < limit
+        and len(pages) >= cap
+        and not (entry.complete and len(entry.pages) <= cap)
+    )
     if rate_limited or failure is not None:
         partial = True
         source = "rate limit" if rate_limited else "stopped answering"
         warnings.insert(0, f"GeckoTerminal {source}: showing the first {scanned} pools")
-    elif (
-        len(rows) < limit and len(pages) >= cap and not (entry.complete and len(entry.pages) <= cap)
-    ):
+    elif page_cap_hit:
         partial = True
         more = "" if deep else "; deep reads up to 200"
         warnings.insert(0, f"Read the first {scanned} pools (page cap){more}")
@@ -742,6 +801,7 @@ async def markets(
         return float(value) if isinstance(value, int | float) else -1.0
 
     rows.sort(key=tvl_key, reverse=True)
+    limited = max(0, len(rows) - limit)
     rows = rows[:limit]
     quote_rows = [r for r in rows if r["side"] == "quote"]
     base_rows = [r for r in rows if r["side"] == "base"]
@@ -782,8 +842,10 @@ async def markets(
             "shown": len(quote_rows) + len(base_rows),
             "belowMinTvl": int(state["below"]),
             "hiddenLookalikes": int(state["hidden"]),
+            "limited": limited,
             "pages": len(pages),
             "pageCap": cap,
+            "pageCapHit": page_cap_hit,
         },
         "sections": {"quote": quote_rows, "base": base_rows},
         "request": {
