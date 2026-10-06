@@ -25,7 +25,9 @@ import {
   formatDuration,
   isMuted,
   runKind,
+  triggerFiredEvent,
   type RunTrack,
+  type TriggerFiredPayload,
 } from './notifications/logic'
 
 /**
@@ -179,8 +181,9 @@ function useJobSignals(): void {
 
 /**
  * The desk. An agent swap above the threshold asks for a decision; a swap
- * that settles (confirmed, failed, lapsed, rejected) is news too. Both are
- * gateway broadcasts, so nothing is polled.
+ * that settles (confirmed, failed, lapsed, rejected) is news too, and so is
+ * a price trigger that fires. All are gateway broadcasts, so nothing is
+ * polled.
  */
 function useTradingSignals(): void {
   const rpc = useRpc()
@@ -225,9 +228,17 @@ function useTradingSignals(): void {
         target: { type: 'trading', orderId: order.orderId },
       })
     })
+    // A price trigger fired (docs/triggers.md): once per fire, when the
+    // alert is sent, the order placed, or the fire skipped or failed.
+    const offFired = rpc.on('trading.trigger.fired', (payload) => {
+      const preview = useSettings.getState().settings.notifications.preview
+      const ev = triggerFiredEvent(payload as TriggerFiredPayload | undefined, preview)
+      if (ev) void notify(ev)
+    })
     return () => {
       offRequested()
       offFinished()
+      offFired()
     }
   }, [rpc, connected])
 }

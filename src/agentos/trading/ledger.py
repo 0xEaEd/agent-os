@@ -29,7 +29,7 @@ from agentos.trading.pnl import Lot
 
 log = structlog.get_logger(__name__)
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 # Version 6 repair: a native receipt booked as a separate deposit is matched
 # to its swap within this many seconds, and a phantom withdrawal to the swap
@@ -203,7 +203,9 @@ CREATE TABLE IF NOT EXISTS orders (
     -- (and, for a multisend, to the same recipient) is the same order.
     client_order_id TEXT,
     -- The DCA mandate that placed this order (docs/dca.md), if any.
-    mandate_id TEXT
+    mandate_id TEXT,
+    -- The price trigger that fired this order (docs/triggers.md), if any.
+    trigger_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_wallet ON orders (wallet, created_at DESC);
@@ -259,6 +261,66 @@ CREATE TABLE IF NOT EXISTS mandate_runs (
     manual INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_mandate_runs ON mandate_runs (mandate_id, n DESC);
+
+-- Conditional orders the engine watches and fires by itself (docs/triggers.md).
+-- The condition, the size and the confirmation state live here; a fire is a
+-- trigger_fires row written before its order.
+CREATE TABLE IF NOT EXISTS triggers (
+    trigger_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    status_reason TEXT,
+    chain_id INTEGER NOT NULL,
+    wallet TEXT NOT NULL,
+    token TEXT NOT NULL,
+    quote TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    price_usd REAL,
+    trail_pct REAL,
+    from_price_usd REAL,
+    amount_usd REAL,
+    amount_pct REAL,
+    amount_raw TEXT,
+    slippage_pct REAL,
+    confirm_ticks INTEGER NOT NULL DEFAULT 2,
+    hits INTEGER NOT NULL DEFAULT 0,
+    peak_price_usd REAL,
+    armed_at REAL,
+    armed_price_usd REAL,
+    last_price_usd REAL,
+    last_checked_at REAL,
+    triggered_at REAL,
+    fires_failed INTEGER NOT NULL DEFAULT 0,
+    bad_streak INTEGER NOT NULL DEFAULT 0,
+    valid_until REAL,
+    initiator TEXT NOT NULL,
+    session_key TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    approved_at REAL,
+    expires_at REAL,
+    -- A bracket's leg (docs/brackets.md): the group, its name, 'tp' | 'sl'.
+    -- NULL for a plain trigger.
+    group_id TEXT,
+    group_name TEXT,
+    leg TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_triggers_status ON triggers (status, created_at DESC);
+
+-- One row per attempt of a trigger (an alert, an order, a skip), manual or not.
+CREATE TABLE IF NOT EXISTS trigger_fires (
+    fire_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger_id TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    at REAL NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    price_usd REAL,
+    order_id TEXT,
+    manual INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_trigger_fires ON trigger_fires (trigger_id, n DESC);
 
 -- ERC-20 allowances this wallet has granted, as seen in its Approval logs.
 -- Only the (token, spender) pairs are remembered; the live amount is read
@@ -387,9 +449,23 @@ _MANDATE_INDEX = (
     "CREATE INDEX IF NOT EXISTS idx_orders_mandate ON orders (mandate_id) "
     "WHERE mandate_id IS NOT NULL"
 )
+# Created after the version-8 migration has added ``orders.trigger_id``.
+_TRIGGER_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_orders_trigger ON orders (trigger_id) "
+    "WHERE trigger_id IS NOT NULL"
+)
+# Created after the version-9 migration has added ``triggers.group_id``.
+_GROUP_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_triggers_group ON triggers (group_id) "
+    "WHERE group_id IS NOT NULL"
+)
+#: ``list_triggers(legs=…)``: plain triggers only, bracket legs only, or both.
+TRIGGER_LEG_FILTERS = ("exclude", "only", "all")
 # A mandate run whose order is still open: waiting for the chain (pending)
 # or for the user (parked).
 RUN_OPEN_STATUSES = ("pending", "parked")
+# A trigger fire whose order is still open, likewise.
+FIRE_OPEN_STATUSES = ("pending", "parked")
 
 
 def default_ledger_path() -> Path:
@@ -466,12 +542,18 @@ class Ledger:
                     self._repair_native_receipts()
                 if version < 7:
                     self._add_order_mandate_column()
+                if version < 8:
+                    self._add_order_trigger_column()
+                if version < 9:
+                    self._add_trigger_group_columns()
                 if version < SCHEMA_VERSION:
                     self._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
             self._conn.execute(_OPENING_INDEX)
             self._conn.execute(_BATCH_INDEX)
             self._conn.execute(_CLIENT_INDEX)
             self._conn.execute(_MANDATE_INDEX)
+            self._conn.execute(_TRIGGER_INDEX)
+            self._conn.execute(_GROUP_INDEX)
             self._commit()
 
     def _add_token_columns(self) -> None:
@@ -508,6 +590,19 @@ class Ledger:
         have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(orders)")}
         if "mandate_id" not in have:
             self._conn.execute("ALTER TABLE orders ADD COLUMN mandate_id TEXT")
+
+    def _add_order_trigger_column(self) -> None:
+        """Version 8: the price trigger an order was fired by (``docs/triggers.md``)."""
+        have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(orders)")}
+        if "trigger_id" not in have:
+            self._conn.execute("ALTER TABLE orders ADD COLUMN trigger_id TEXT")
+
+    def _add_trigger_group_columns(self) -> None:
+        """Version 9: a trigger may be one leg of a bracket (``docs/brackets.md``)."""
+        have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(triggers)")}
+        for column in ("group_id", "group_name", "leg"):
+            if column not in have:
+                self._conn.execute(f"ALTER TABLE triggers ADD COLUMN {column} TEXT")  # noqa: S608
 
     def _add_full_synced_column(self) -> None:
         """Version 6: when the last full rebuild of a wallet/chain landed."""
@@ -1362,12 +1457,13 @@ class Ledger:
     # ── orders ─────────────────────────────────────────────────────────
 
     def insert_order(self, order: dict[str, Any]) -> None:
-        """Insert an order row; a mandate's order is tied to its run in the same write.
+        """Insert an order row; a mandate's or trigger's order is tied to its run in the same write.
 
         A DCA run inserts its ``pending`` run row before it places the order
-        (``docs/dca.md``); the order that run creates adopts it here, so the
-        link between the two survives a crash between the insert and the
-        pipeline's first answer.
+        (``docs/dca.md``), a trigger its ``pending`` fire (``docs/triggers.md``);
+        the order that run or fire creates adopts it here, so the link between
+        the two survives a crash between the insert and the pipeline's first
+        answer.
         """
         columns = list(order.keys())
         with self.transaction():
@@ -1383,6 +1479,14 @@ class Ledger:
                     "AND status = 'pending' AND order_id IS NULL "
                     "ORDER BY run_id DESC LIMIT 1)",
                     (order["order_id"], order["mandate_id"]),
+                )
+            if order.get("trigger_id"):
+                self._conn.execute(
+                    "UPDATE trigger_fires SET order_id = ? WHERE fire_id = ("
+                    "SELECT fire_id FROM trigger_fires WHERE trigger_id = ? "
+                    "AND status = 'pending' AND order_id IS NULL "
+                    "ORDER BY fire_id DESC LIMIT 1)",
+                    (order["order_id"], order["trigger_id"]),
                 )
 
     def update_order(
@@ -1806,6 +1910,247 @@ class Ledger:
                 ids,
             ).fetchall()
         return {str(r["order_id"]): float(r["gas"]) for r in rows}
+
+    # ── price triggers (docs/triggers.md) ──────────────────────────────
+
+    def insert_trigger(self, trigger: dict[str, Any]) -> None:
+        columns = list(trigger.keys())
+        with self._lock:
+            self._conn.execute(
+                f"INSERT INTO triggers ({', '.join(columns)}) "  # noqa: S608
+                f"VALUES ({', '.join('?' for _ in columns)})",
+                [trigger[c] for c in columns],
+            )
+            self._commit()
+
+    def get_trigger(self, trigger_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            return _row(
+                self._conn.execute(
+                    "SELECT * FROM triggers WHERE trigger_id = ?", (trigger_id,)
+                ).fetchone()
+            )
+
+    def insert_triggers(self, rows: list[dict[str, Any]]) -> None:
+        """Insert several triggers (a bracket's two legs) in one transaction: all or none."""
+        with self.transaction():
+            for row in rows:
+                self.insert_trigger(row)
+
+    def list_triggers(
+        self,
+        *,
+        statuses: Iterable[str] | None = None,
+        wallet: str | None = None,
+        legs: str = "exclude",
+    ) -> list[dict[str, Any]]:
+        """Triggers, newest first.
+
+        ``legs``: ``"exclude"`` (the default) leaves bracket legs out, so a
+        plain trigger list never shows them; ``"only"`` lists legs alone;
+        ``"all"`` both (the checker and the expirers).
+        """
+        if legs not in TRIGGER_LEG_FILTERS:
+            raise ValueError(f"legs must be one of {', '.join(TRIGGER_LEG_FILTERS)}")
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if legs == "exclude":
+            clauses.append("group_id IS NULL")
+        elif legs == "only":
+            clauses.append("group_id IS NOT NULL")
+        if statuses is not None:
+            wanted = list(statuses)
+            if not wanted:
+                return []
+            clauses.append(f"status IN ({', '.join('?' for _ in wanted)})")
+            params.extend(wanted)
+        if wallet:
+            clauses.append("wallet = ?")
+            params.append(wallet.lower())
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    f"SELECT * FROM triggers WHERE {' AND '.join(clauses)} "  # noqa: S608
+                    "ORDER BY created_at DESC, rowid DESC",
+                    params,
+                )
+            )
+
+    def group_triggers(self, group_id: str) -> list[dict[str, Any]]:
+        """A bracket's legs, take-profit first."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM triggers WHERE group_id = ? "
+                    "ORDER BY CASE leg WHEN 'tp' THEN 0 WHEN 'sl' THEN 1 ELSE 2 END, rowid",
+                    (group_id,),
+                )
+            )
+
+    def list_groups(
+        self,
+        *,
+        statuses: Iterable[str] | None = None,
+        wallet: str | None = None,
+    ) -> list[str]:
+        """Bracket ids, newest first; with ``statuses``, those where any leg is in one."""
+        clauses = ["group_id IS NOT NULL"]
+        params: list[Any] = []
+        if statuses is not None:
+            wanted = list(statuses)
+            if not wanted:
+                return []
+            clauses.append(f"status IN ({', '.join('?' for _ in wanted)})")
+            params.extend(wanted)
+        if wallet:
+            clauses.append("wallet = ?")
+            params.append(wallet.lower())
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT group_id, MAX(created_at) AS created, MAX(rowid) AS seq "  # noqa: S608
+                f"FROM triggers WHERE {' AND '.join(clauses)} "
+                "GROUP BY group_id ORDER BY created DESC, seq DESC",
+                params,
+            ).fetchall()
+        return [str(r["group_id"]) for r in rows]
+
+    def update_trigger(
+        self,
+        trigger_id: str,
+        *,
+        now: float,
+        expect_status: str | Iterable[str] | None = None,
+        **fields: Any,
+    ) -> dict[str, Any] | None:
+        """Update a trigger; with ``expect_status`` it is a compare-and-set.
+
+        ``expect_status`` (one status or several) decides races between two
+        writers of the state (a check that fires vs. a pause, a settling
+        order vs. a stop); the loser gets ``None``.
+        """
+        fields["updated_at"] = float(now)
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        where = "trigger_id = ?"
+        params: list[Any] = [*fields.values(), trigger_id]
+        if expect_status is not None:
+            wanted = [expect_status] if isinstance(expect_status, str) else list(expect_status)
+            where += f" AND status IN ({', '.join('?' for _ in wanted)})"
+            params.extend(wanted)
+        with self._lock:
+            cursor = self._conn.execute(
+                f"UPDATE triggers SET {sets} WHERE {where}",  # noqa: S608
+                params,
+            )
+            self._commit()
+            if cursor.rowcount == 0 and expect_status is not None:
+                return None
+        return self.get_trigger(trigger_id)
+
+    def add_trigger_counts(self, trigger_id: str, *, now: float, **deltas: int) -> None:
+        """Add to the counters (``fires_failed``, ``bad_streak``, ``hits``) in one write."""
+        allowed = {"fires_failed", "bad_streak", "hits"}
+        unknown = set(deltas) - allowed
+        if unknown:
+            raise ValueError(f"not a trigger counter: {sorted(unknown)}")
+        if not deltas:
+            return
+        sets = ", ".join(f"{k} = {k} + ?" for k in deltas)
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE triggers SET {sets}, updated_at = ? WHERE trigger_id = ?",  # noqa: S608
+                [*(int(v) for v in deltas.values()), float(now), trigger_id],
+            )
+            self._commit()
+
+    def insert_fire(self, fire: dict[str, Any]) -> int:
+        columns = list(fire.keys())
+        with self._lock:
+            cursor = self._conn.execute(
+                f"INSERT INTO trigger_fires ({', '.join(columns)}) "  # noqa: S608
+                f"VALUES ({', '.join('?' for _ in columns)})",
+                [fire[c] for c in columns],
+            )
+            self._commit()
+            return int(cursor.lastrowid or 0)
+
+    def get_fire(self, fire_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            return _row(
+                self._conn.execute(
+                    "SELECT * FROM trigger_fires WHERE fire_id = ?", (int(fire_id),)
+                ).fetchone()
+            )
+
+    def update_fire(
+        self, fire_id: int, *, expect_status: Iterable[str] | None = None, **fields: Any
+    ) -> dict[str, Any] | None:
+        """Update a fire; with ``expect_status`` only a fire still in one of them moves."""
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        where = "fire_id = ?"
+        params: list[Any] = [*fields.values(), int(fire_id)]
+        if expect_status is not None:
+            wanted = list(expect_status)
+            where += f" AND status IN ({', '.join('?' for _ in wanted)})"
+            params.extend(wanted)
+        with self._lock:
+            cursor = self._conn.execute(
+                f"UPDATE trigger_fires SET {sets} WHERE {where}",  # noqa: S608
+                params,
+            )
+            self._commit()
+            if expect_status is not None and cursor.rowcount == 0:
+                return None
+        return self.get_fire(fire_id)
+
+    def list_fires(self, trigger_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        """A trigger's fires, newest first."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM trigger_fires WHERE trigger_id = ? "
+                    "ORDER BY n DESC, fire_id DESC LIMIT ?",
+                    (trigger_id, max(1, int(limit))),
+                )
+            )
+
+    def fire_attempts(self, trigger_id: str) -> int:
+        """How many fires a trigger has had (the highest ``n``)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(n), 0) AS n FROM trigger_fires WHERE trigger_id = ?",
+                (trigger_id,),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def open_fires(self, trigger_id: str | None = None) -> list[dict[str, Any]]:
+        """Fires whose order has not settled yet, oldest first."""
+        placeholders = ", ".join("?" for _ in FIRE_OPEN_STATUSES)
+        sql = f"SELECT * FROM trigger_fires WHERE status IN ({placeholders})"  # noqa: S608
+        params: list[Any] = list(FIRE_OPEN_STATUSES)
+        if trigger_id is not None:
+            sql += " AND trigger_id = ?"
+            params.append(trigger_id)
+        with self._lock:
+            return _rows(self._conn.execute(sql + " ORDER BY fire_id ASC", params))
+
+    def fire_for_order(self, order_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            return _row(
+                self._conn.execute(
+                    "SELECT * FROM trigger_fires WHERE order_id = ? ORDER BY fire_id DESC LIMIT 1",
+                    (order_id,),
+                ).fetchone()
+            )
+
+    def orders_for_trigger(self, trigger_id: str) -> list[dict[str, Any]]:
+        """Every order a trigger placed, oldest first."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM orders WHERE trigger_id = ? ORDER BY created_at ASC, rowid ASC",
+                    (trigger_id,),
+                )
+            )
 
     # ── daily spend ────────────────────────────────────────────────────
 

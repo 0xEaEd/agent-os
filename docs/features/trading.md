@@ -107,10 +107,19 @@ and refuses the quote outright otherwise. The approval is always for exactly
 the order's amount, never unlimited.
 
 The tokenised stocks on Robinhood Chain (29 of the 34 listed: AAPL, TSLA,
-NVDA, SPY, …) cannot be routed in either direction, at any size, at any time
-— 0x refuses them for legal reasons. That surfaces as
-`trading.token_not_tradeable`, and retrying does not help — not by address
-either. ETH, WETH and USDG trade normally there. Two more Robinhood Chain
+NVDA, SPY, …) are refused by the aggregator in either direction, at any
+size, at any time — 0x refuses them for legal reasons
+(`trading.token_not_tradeable`). Uniswap's Trading API quotes them, so the
+engine picks the provider per pair: when `trading.provider` is `aggregator`
+and either side is a Stock Token (a name ending `• Robinhood Token`, or a
+truncated form of it), the quote, the swap, DCA runs and trigger fires go
+through Uniswap instead, provided a Uniswap API key is configured; the quote
+and the order record `provider: "uniswap"`. A `token_not_tradeable` the
+flag missed is retried once through Uniswap. Without a key the aggregator's
+error is returned with *"Stock Tokens route through Uniswap: add a Uniswap
+API key (`agentos config set trading.uniswap_api_key <key>`, or Settings › Trading in the desktop app)"* appended. Pairs without
+a Stock Token keep the configured provider. ETH, WETH and USDG trade
+normally there. Two more Robinhood Chain
 facts: the engine has no native USD price there yet, so `--usd` may be
 refused with `trading.unpriced` (size with `--amount`), and the bare symbol
 `USDC` resolves to unverified lookalikes (`TOKEN_UNVERIFIED`) — use an

@@ -154,13 +154,24 @@ def reset_browser_runtime() -> None:
 
 
 def _version_key(path: str) -> tuple[int, ...]:
-    """Sort key for a ``.../v24.16.0/<leaf>`` directory, so newest sorts first."""
-    parts: list[int] = []
-    for piece in os.path.basename(os.path.dirname(path)).lstrip("v").split("."):
-        if not piece.isdigit():
-            break
-        parts.append(int(piece))
-    return tuple(parts)
+    """Sort key for a node-version directory, so newest sorts first.
+
+    The version is whichever component of *path* parses as one, searched from
+    the right. A fixed depth does not work for both globs below: nvm ends
+    ``.../v24.16.0/bin`` but fnm ends ``.../v24.16.0/installation/bin``, so
+    reading the parent of the leaf found ``installation``, keyed every fnm
+    entry to ``()`` and left them in ``glob`` order -- which is not newest
+    first, and silently picked an older Node's binary (#3606).
+    """
+    for piece in reversed(path.replace(chr(92), "/").split("/")):
+        parts: list[int] = []
+        for chunk in piece.lstrip("v").split("."):
+            if not chunk.isdigit():
+                break
+            parts.append(int(chunk))
+        if parts:
+            return tuple(parts)
+    return ()
 
 
 def _newest_first(pattern: str) -> list[str]:

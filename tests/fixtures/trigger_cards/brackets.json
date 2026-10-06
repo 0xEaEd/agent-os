@@ -1,0 +1,716 @@
+{
+  "version": 1,
+  "kind": "brackets",
+  "fetchedAt": "2026-09-20T09:02:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "list",
+    "params": {
+      "all": false
+    }
+  },
+  "brackets": [
+    {
+      "id": "brk_00000004",
+      "name": "Protect WETH",
+      "kind": "sell",
+      "status": "awaiting_approval",
+      "statusReason": null,
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "wallet": {
+        "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+        "label": "Key main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18,
+        "priceUsd": 2000.0
+      },
+      "quote": {
+        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6,
+        "priceUsd": 1.0
+      },
+      "takeProfit": {
+        "id": "trg_00000007",
+        "name": "Take-profit WETH",
+        "bracket": {
+          "id": "brk_00000004",
+          "name": "Protect WETH",
+          "leg": "tp"
+        },
+        "kind": "sell",
+        "status": "awaiting_approval",
+        "statusReason": null,
+        "chain": {
+          "id": 8453,
+          "key": "base",
+          "name": "Base",
+          "explorer": "https://basescan.org"
+        },
+        "wallet": {
+          "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+          "label": "Key main",
+          "inApp": true
+        },
+        "token": {
+          "address": "0x4200000000000000000000000000000000000006",
+          "symbol": "WETH",
+          "decimals": 18,
+          "priceUsd": 2000.0
+        },
+        "quote": {
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "symbol": "USDC",
+          "decimals": 6,
+          "priceUsd": 1.0
+        },
+        "condition": {
+          "direction": "above",
+          "priceUsd": 2300.0,
+          "trailPct": null,
+          "fromPriceUsd": 2000.0,
+          "peakPriceUsd": null,
+          "stopPriceUsd": null,
+          "confirmTicks": 2,
+          "hits": 0,
+          "label": "over $2,300"
+        },
+        "action": {
+          "kind": "sell",
+          "amountUsd": null,
+          "amountPct": 50.0,
+          "amount": null,
+          "estimatedUsd": 60.0,
+          "slippagePct": null,
+          "needsApproval": false,
+          "approvalThresholdUsd": 100.0,
+          "dailyCapUsd": 1000.0,
+          "label": "sell 50 % of WETH → USDC"
+        },
+        "market": {
+          "priceUsd": 2000.0,
+          "armedPriceUsd": null,
+          "distancePct": 15.0,
+          "checkedAt": "2026-09-20T09:01:50Z",
+          "balance": {
+            "raw": "60000000000000000",
+            "human": "0.06",
+            "usd": 120.0
+          }
+        },
+        "fires": [],
+        "result": null,
+        "validUntil": null,
+        "initiator": "agent",
+        "sessionKey": "agent:desk:main",
+        "createdAt": "2026-09-20T09:01:50Z",
+        "updatedAt": "2026-09-20T09:01:50Z",
+        "approvedAt": null,
+        "armedAt": null,
+        "triggeredAt": null,
+        "expiresAt": "2026-09-21T09:01:50Z"
+      },
+      "stopLoss": {
+        "id": "trg_00000008",
+        "name": "Trailing stop WETH",
+        "bracket": {
+          "id": "brk_00000004",
+          "name": "Protect WETH",
+          "leg": "sl"
+        },
+        "kind": "sell",
+        "status": "awaiting_approval",
+        "statusReason": null,
+        "chain": {
+          "id": 8453,
+          "key": "base",
+          "name": "Base",
+          "explorer": "https://basescan.org"
+        },
+        "wallet": {
+          "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+          "label": "Key main",
+          "inApp": true
+        },
+        "token": {
+          "address": "0x4200000000000000000000000000000000000006",
+          "symbol": "WETH",
+          "decimals": 18,
+          "priceUsd": 2000.0
+        },
+        "quote": {
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "symbol": "USDC",
+          "decimals": 6,
+          "priceUsd": 1.0
+        },
+        "condition": {
+          "direction": "trail",
+          "priceUsd": null,
+          "trailPct": 10.0,
+          "fromPriceUsd": null,
+          "peakPriceUsd": null,
+          "stopPriceUsd": null,
+          "confirmTicks": 2,
+          "hits": 0,
+          "label": "10 % below peak"
+        },
+        "action": {
+          "kind": "sell",
+          "amountUsd": null,
+          "amountPct": 100.0,
+          "amount": null,
+          "estimatedUsd": 120.0,
+          "slippagePct": null,
+          "needsApproval": true,
+          "approvalThresholdUsd": 100.0,
+          "dailyCapUsd": 1000.0,
+          "label": "sell 100 % of WETH → USDC"
+        },
+        "market": {
+          "priceUsd": 2000.0,
+          "armedPriceUsd": null,
+          "distancePct": null,
+          "checkedAt": "2026-09-20T09:01:50Z",
+          "balance": {
+            "raw": "60000000000000000",
+            "human": "0.06",
+            "usd": 120.0
+          }
+        },
+        "fires": [],
+        "result": null,
+        "validUntil": null,
+        "initiator": "agent",
+        "sessionKey": "agent:desk:main",
+        "createdAt": "2026-09-20T09:01:50Z",
+        "updatedAt": "2026-09-20T09:01:50Z",
+        "approvedAt": null,
+        "armedAt": null,
+        "triggeredAt": null,
+        "expiresAt": "2026-09-21T09:01:50Z"
+      },
+      "lines": {
+        "takeProfitUsd": 2300.0,
+        "stopLossUsd": 1800.0,
+        "trailPct": 10.0,
+        "fromPriceUsd": 2000.0,
+        "takeProfitLabel": "over $2,300",
+        "stopLossLabel": "10 % below peak"
+      },
+      "action": {
+        "kind": "sell",
+        "amountPct": 100.0,
+        "amount": null,
+        "amountUsd": null,
+        "tpPct": 50.0,
+        "estimatedUsd": 120.0,
+        "slippagePct": null,
+        "needsApproval": true,
+        "approvalThresholdUsd": 100.0,
+        "dailyCapUsd": 1000.0,
+        "label": "sell 50 % of WETH at take-profit, 100 % at stop → USDC"
+      },
+      "market": {
+        "priceUsd": 2000.0,
+        "armedPriceUsd": null,
+        "checkedAt": "2026-09-20T09:01:50Z",
+        "balance": {
+          "raw": "60000000000000000",
+          "human": "0.06",
+          "usd": 120.0
+        },
+        "upsidePct": 15.0,
+        "downsidePct": -10.0,
+        "positionPct": 40.0,
+        "rewardRisk": 1.5,
+        "nearest": "sl"
+      },
+      "fired": null,
+      "result": null,
+      "validUntil": null,
+      "initiator": "agent",
+      "sessionKey": "agent:desk:main",
+      "createdAt": "2026-09-20T09:01:50Z",
+      "updatedAt": "2026-09-20T09:01:50Z",
+      "approvedAt": null,
+      "armedAt": null,
+      "expiresAt": "2026-09-21T09:01:50Z"
+    },
+    {
+      "id": "brk_00000003",
+      "name": "Watch WETH",
+      "kind": "alert",
+      "status": "armed",
+      "statusReason": null,
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "wallet": {
+        "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+        "label": "Key main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18,
+        "priceUsd": 2000.0
+      },
+      "quote": {
+        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6,
+        "priceUsd": 1.0
+      },
+      "takeProfit": {
+        "id": "trg_00000005",
+        "name": "Alert WETH over $2,300",
+        "bracket": {
+          "id": "brk_00000003",
+          "name": "Watch WETH",
+          "leg": "tp"
+        },
+        "kind": "alert",
+        "status": "armed",
+        "statusReason": null,
+        "chain": {
+          "id": 8453,
+          "key": "base",
+          "name": "Base",
+          "explorer": "https://basescan.org"
+        },
+        "wallet": {
+          "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+          "label": "Key main",
+          "inApp": true
+        },
+        "token": {
+          "address": "0x4200000000000000000000000000000000000006",
+          "symbol": "WETH",
+          "decimals": 18,
+          "priceUsd": 2000.0
+        },
+        "quote": {
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "symbol": "USDC",
+          "decimals": 6,
+          "priceUsd": 1.0
+        },
+        "condition": {
+          "direction": "above",
+          "priceUsd": 2300.0,
+          "trailPct": null,
+          "fromPriceUsd": null,
+          "peakPriceUsd": null,
+          "stopPriceUsd": null,
+          "confirmTicks": 2,
+          "hits": 0,
+          "label": "over $2,300"
+        },
+        "action": {
+          "kind": "alert",
+          "amountUsd": null,
+          "amountPct": null,
+          "amount": null,
+          "estimatedUsd": null,
+          "slippagePct": null,
+          "needsApproval": false,
+          "approvalThresholdUsd": 100.0,
+          "dailyCapUsd": 1000.0,
+          "label": "notify"
+        },
+        "market": {
+          "priceUsd": 2000.0,
+          "armedPriceUsd": 2000.0,
+          "distancePct": 15.0,
+          "checkedAt": "2026-09-20T09:01:30Z",
+          "balance": null
+        },
+        "fires": [],
+        "result": null,
+        "validUntil": null,
+        "initiator": "manual",
+        "sessionKey": null,
+        "createdAt": "2026-09-20T09:00:00Z",
+        "updatedAt": "2026-09-20T09:01:30Z",
+        "approvedAt": "2026-09-20T09:00:00Z",
+        "armedAt": "2026-09-20T09:00:00Z",
+        "triggeredAt": null,
+        "expiresAt": null
+      },
+      "stopLoss": {
+        "id": "trg_00000006",
+        "name": "Alert WETH under $1,850",
+        "bracket": {
+          "id": "brk_00000003",
+          "name": "Watch WETH",
+          "leg": "sl"
+        },
+        "kind": "alert",
+        "status": "armed",
+        "statusReason": null,
+        "chain": {
+          "id": 8453,
+          "key": "base",
+          "name": "Base",
+          "explorer": "https://basescan.org"
+        },
+        "wallet": {
+          "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+          "label": "Key main",
+          "inApp": true
+        },
+        "token": {
+          "address": "0x4200000000000000000000000000000000000006",
+          "symbol": "WETH",
+          "decimals": 18,
+          "priceUsd": 2000.0
+        },
+        "quote": {
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "symbol": "USDC",
+          "decimals": 6,
+          "priceUsd": 1.0
+        },
+        "condition": {
+          "direction": "below",
+          "priceUsd": 1850.0,
+          "trailPct": null,
+          "fromPriceUsd": null,
+          "peakPriceUsd": null,
+          "stopPriceUsd": null,
+          "confirmTicks": 2,
+          "hits": 0,
+          "label": "under $1,850"
+        },
+        "action": {
+          "kind": "alert",
+          "amountUsd": null,
+          "amountPct": null,
+          "amount": null,
+          "estimatedUsd": null,
+          "slippagePct": null,
+          "needsApproval": false,
+          "approvalThresholdUsd": 100.0,
+          "dailyCapUsd": 1000.0,
+          "label": "notify"
+        },
+        "market": {
+          "priceUsd": 2000.0,
+          "armedPriceUsd": 2000.0,
+          "distancePct": -7.5,
+          "checkedAt": "2026-09-20T09:01:30Z",
+          "balance": null
+        },
+        "fires": [],
+        "result": null,
+        "validUntil": null,
+        "initiator": "manual",
+        "sessionKey": null,
+        "createdAt": "2026-09-20T09:00:00Z",
+        "updatedAt": "2026-09-20T09:01:30Z",
+        "approvedAt": "2026-09-20T09:00:00Z",
+        "armedAt": "2026-09-20T09:00:00Z",
+        "triggeredAt": null,
+        "expiresAt": null
+      },
+      "lines": {
+        "takeProfitUsd": 2300.0,
+        "stopLossUsd": 1850.0,
+        "trailPct": null,
+        "fromPriceUsd": null,
+        "takeProfitLabel": "over $2,300",
+        "stopLossLabel": "under $1,850"
+      },
+      "action": {
+        "kind": "alert",
+        "amountPct": null,
+        "amount": null,
+        "amountUsd": null,
+        "tpPct": null,
+        "estimatedUsd": null,
+        "slippagePct": null,
+        "needsApproval": false,
+        "approvalThresholdUsd": 100.0,
+        "dailyCapUsd": 1000.0,
+        "label": "notify"
+      },
+      "market": {
+        "priceUsd": 2000.0,
+        "armedPriceUsd": 2000.0,
+        "checkedAt": "2026-09-20T09:01:30Z",
+        "balance": null,
+        "upsidePct": 15.0,
+        "downsidePct": -7.5,
+        "positionPct": 33.3333333333,
+        "rewardRisk": 2.0,
+        "nearest": "sl"
+      },
+      "fired": null,
+      "result": null,
+      "validUntil": null,
+      "initiator": "manual",
+      "sessionKey": null,
+      "createdAt": "2026-09-20T09:00:00Z",
+      "updatedAt": "2026-09-20T09:01:30Z",
+      "approvedAt": "2026-09-20T09:00:00Z",
+      "armedAt": "2026-09-20T09:00:00Z",
+      "expiresAt": null
+    },
+    {
+      "id": "brk_00000001",
+      "name": "Protect WETH",
+      "kind": "sell",
+      "status": "armed",
+      "statusReason": null,
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "wallet": {
+        "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+        "label": "Key main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "symbol": "WETH",
+        "decimals": 18,
+        "priceUsd": 2000.0
+      },
+      "quote": {
+        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6,
+        "priceUsd": 1.0
+      },
+      "takeProfit": {
+        "id": "trg_00000001",
+        "name": "Take-profit WETH",
+        "bracket": {
+          "id": "brk_00000001",
+          "name": "Protect WETH",
+          "leg": "tp"
+        },
+        "kind": "sell",
+        "status": "armed",
+        "statusReason": null,
+        "chain": {
+          "id": 8453,
+          "key": "base",
+          "name": "Base",
+          "explorer": "https://basescan.org"
+        },
+        "wallet": {
+          "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+          "label": "Key main",
+          "inApp": true
+        },
+        "token": {
+          "address": "0x4200000000000000000000000000000000000006",
+          "symbol": "WETH",
+          "decimals": 18,
+          "priceUsd": 2000.0
+        },
+        "quote": {
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "symbol": "USDC",
+          "decimals": 6,
+          "priceUsd": 1.0
+        },
+        "condition": {
+          "direction": "above",
+          "priceUsd": 2400.0,
+          "trailPct": null,
+          "fromPriceUsd": 2000.0,
+          "peakPriceUsd": null,
+          "stopPriceUsd": null,
+          "confirmTicks": 2,
+          "hits": 0,
+          "label": "over $2,400"
+        },
+        "action": {
+          "kind": "sell",
+          "amountUsd": null,
+          "amountPct": 100.0,
+          "amount": null,
+          "estimatedUsd": 120.0,
+          "slippagePct": 1.0,
+          "needsApproval": true,
+          "approvalThresholdUsd": 100.0,
+          "dailyCapUsd": 1000.0,
+          "label": "sell 100 % of WETH → USDC"
+        },
+        "market": {
+          "priceUsd": 2000.0,
+          "armedPriceUsd": 2000.0,
+          "distancePct": 20.0,
+          "checkedAt": "2026-09-20T09:01:30Z",
+          "balance": {
+            "raw": "60000000000000000",
+            "human": "0.06",
+            "usd": 120.0
+          }
+        },
+        "fires": [],
+        "result": null,
+        "validUntil": "2026-09-27T09:00:00Z",
+        "initiator": "manual",
+        "sessionKey": null,
+        "createdAt": "2026-09-20T09:00:00Z",
+        "updatedAt": "2026-09-20T09:01:30Z",
+        "approvedAt": "2026-09-20T09:00:00Z",
+        "armedAt": "2026-09-20T09:00:00Z",
+        "triggeredAt": null,
+        "expiresAt": null
+      },
+      "stopLoss": {
+        "id": "trg_00000002",
+        "name": "Stop-loss WETH",
+        "bracket": {
+          "id": "brk_00000001",
+          "name": "Protect WETH",
+          "leg": "sl"
+        },
+        "kind": "sell",
+        "status": "armed",
+        "statusReason": null,
+        "chain": {
+          "id": 8453,
+          "key": "base",
+          "name": "Base",
+          "explorer": "https://basescan.org"
+        },
+        "wallet": {
+          "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+          "label": "Key main",
+          "inApp": true
+        },
+        "token": {
+          "address": "0x4200000000000000000000000000000000000006",
+          "symbol": "WETH",
+          "decimals": 18,
+          "priceUsd": 2000.0
+        },
+        "quote": {
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "symbol": "USDC",
+          "decimals": 6,
+          "priceUsd": 1.0
+        },
+        "condition": {
+          "direction": "below",
+          "priceUsd": 1800.0,
+          "trailPct": null,
+          "fromPriceUsd": 2000.0,
+          "peakPriceUsd": null,
+          "stopPriceUsd": null,
+          "confirmTicks": 2,
+          "hits": 0,
+          "label": "under $1,800"
+        },
+        "action": {
+          "kind": "sell",
+          "amountUsd": null,
+          "amountPct": 100.0,
+          "amount": null,
+          "estimatedUsd": 120.0,
+          "slippagePct": 1.0,
+          "needsApproval": true,
+          "approvalThresholdUsd": 100.0,
+          "dailyCapUsd": 1000.0,
+          "label": "sell 100 % of WETH → USDC"
+        },
+        "market": {
+          "priceUsd": 2000.0,
+          "armedPriceUsd": 2000.0,
+          "distancePct": -10.0,
+          "checkedAt": "2026-09-20T09:01:30Z",
+          "balance": {
+            "raw": "60000000000000000",
+            "human": "0.06",
+            "usd": 120.0
+          }
+        },
+        "fires": [],
+        "result": null,
+        "validUntil": "2026-09-27T09:00:00Z",
+        "initiator": "manual",
+        "sessionKey": null,
+        "createdAt": "2026-09-20T09:00:00Z",
+        "updatedAt": "2026-09-20T09:01:30Z",
+        "approvedAt": "2026-09-20T09:00:00Z",
+        "armedAt": "2026-09-20T09:00:00Z",
+        "triggeredAt": null,
+        "expiresAt": null
+      },
+      "lines": {
+        "takeProfitUsd": 2400.0,
+        "stopLossUsd": 1800.0,
+        "trailPct": null,
+        "fromPriceUsd": 2000.0,
+        "takeProfitLabel": "over $2,400",
+        "stopLossLabel": "under $1,800"
+      },
+      "action": {
+        "kind": "sell",
+        "amountPct": 100.0,
+        "amount": null,
+        "amountUsd": null,
+        "tpPct": null,
+        "estimatedUsd": 120.0,
+        "slippagePct": 1.0,
+        "needsApproval": true,
+        "approvalThresholdUsd": 100.0,
+        "dailyCapUsd": 1000.0,
+        "label": "sell 100 % of WETH → USDC"
+      },
+      "market": {
+        "priceUsd": 2000.0,
+        "armedPriceUsd": 2000.0,
+        "checkedAt": "2026-09-20T09:01:30Z",
+        "balance": {
+          "raw": "60000000000000000",
+          "human": "0.06",
+          "usd": 120.0
+        },
+        "upsidePct": 20.0,
+        "downsidePct": -10.0,
+        "positionPct": 33.3333333333,
+        "rewardRisk": 2.0,
+        "nearest": "sl"
+      },
+      "fired": null,
+      "result": null,
+      "validUntil": "2026-09-27T09:00:00Z",
+      "initiator": "manual",
+      "sessionKey": null,
+      "createdAt": "2026-09-20T09:00:00Z",
+      "updatedAt": "2026-09-20T09:01:30Z",
+      "approvedAt": "2026-09-20T09:00:00Z",
+      "armedAt": "2026-09-20T09:00:00Z",
+      "expiresAt": null
+    }
+  ],
+  "totals": {
+    "count": 3,
+    "armed": 2,
+    "awaiting": 1,
+    "triggered": 0
+  }
+}

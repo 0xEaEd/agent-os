@@ -35,6 +35,8 @@ import { isCardsArtifact } from './cards'
 import { isChartArtifact } from './chart'
 import { isDcaArtifact } from './dca'
 import { isLpArtifact } from './lp'
+import { isMarketsArtifact } from './markets'
+import { isTriggerArtifact } from './trigger'
 
 /* ── Artifact shape ─────────────────────────────────────────────────────── */
 
@@ -107,15 +109,17 @@ export function artifactExtension(name: string): string {
 }
 
 // chat.js:7538-7549 — category: visual | audio | data | document | code | file,
-// plus the AgentOS-native 'chart' (chart.ts), 'cards' (cards.ts), 'lp' (lp.ts)
-// and 'dca' (dca.ts) categories, which have no legacy counterpart: they render
-// inline rather than as a download chip.
+// plus the AgentOS-native 'chart' (chart.ts), 'cards' (cards.ts), 'lp' (lp.ts),
+// 'markets' (markets.ts), 'dca' (dca.ts) and 'trigger' (trigger.ts) categories, which have no legacy
+// counterpart: they render inline rather than as a download chip.
 // NOTE: image/* maps to 'visual' (NOT 'image' — the brief example was wrong).
 export function artifactCategory(artifact: Artifact | null | undefined): string {
   if (isChartArtifact(artifact)) return 'chart'
   if (isCardsArtifact(artifact)) return 'cards'
   if (isLpArtifact(artifact)) return 'lp'
+  if (isMarketsArtifact(artifact)) return 'markets'
   if (isDcaArtifact(artifact)) return 'dca'
+  if (isTriggerArtifact(artifact)) return 'trigger'
   const mime = artifactMime(artifact)
   if (mime.startsWith('image/')) return 'visual'
   if (mime.startsWith('audio/')) return 'audio'
@@ -137,8 +141,12 @@ export function artifactCategoryLabel(category: string): string {
       return 'cards'
     case 'lp':
       return 'lp'
+    case 'markets':
+      return 'markets'
     case 'dca':
       return 'dca'
+    case 'trigger':
+      return 'trigger'
     case 'data':
       return 'data'
     case 'document':
@@ -472,9 +480,13 @@ export function createArtifactRenderer(deps: ArtifactRendererDeps) {
               ? 'cards'
               : category === 'lp'
                 ? 'lp'
-                : category === 'dca'
-                  ? 'dca'
-                  : 'file'
+                : category === 'markets'
+                  ? 'markets'
+                  : category === 'dca'
+                    ? 'dca'
+                    : category === 'trigger'
+                      ? 'trigger'
+                      : 'file'
       if (groupKind !== openGroup) {
         closeGroup()
         html +=
@@ -486,9 +498,13 @@ export function createArtifactRenderer(deps: ArtifactRendererDeps) {
                 ? '<div class="msg-artifact-cards-group">'
                 : groupKind === 'lp'
                   ? '<div class="msg-artifact-lp-group">'
-                  : groupKind === 'dca'
-                    ? '<div class="msg-artifact-dca-group">'
-                    : '<div class="msg-artifact-files">'
+                  : groupKind === 'markets'
+                    ? '<div class="msg-artifact-markets-group">'
+                    : groupKind === 'dca'
+                      ? '<div class="msg-artifact-dca-group">'
+                      : groupKind === 'trigger'
+                        ? '<div class="msg-artifact-trigger-group">'
+                        : '<div class="msg-artifact-files">'
         openGroup = groupKind
       }
       const name = artifactName(artifact)
@@ -542,6 +558,16 @@ export function createArtifactRenderer(deps: ArtifactRendererDeps) {
           <div class="msg-artifact-lp__body"></div>
           <p class="msg-artifact-lp__status">${escAttr(t('chat.lpLoading'))}</p>
         </div>`
+      } else if (category === 'markets') {
+        // A mount placeholder for a markets card (markets.ts,
+        // docs/markets.md): the markets mounter fetches `data-markets-src` and
+        // builds the card into `__body`. Like the LP card, no download
+        // affordance.
+        const payloadUrl = artifactPreviewUrl(artifact || {}, { sessionKey, token })
+        html += `<div class="msg-artifact-markets" data-markets-src="${escAttr(payloadUrl)}" data-artifact-category="${escAttr(category)}" data-artifact-id="${escAttr(artifact?.id || '')}" data-artifact-name="${escAttr(name)}">
+          <div class="msg-artifact-markets__body"></div>
+          <p class="msg-artifact-markets__status">${escAttr(t('chat.marketsLoading'))}</p>
+        </div>`
       } else if (category === 'dca') {
         // A mount placeholder for a DCA mandate card (dca.ts, docs/dca.md):
         // the DCA mounter fetches `data-dca-src` and builds the card into
@@ -550,6 +576,16 @@ export function createArtifactRenderer(deps: ArtifactRendererDeps) {
         html += `<div class="msg-artifact-dca" data-dca-src="${escAttr(payloadUrl)}" data-artifact-category="${escAttr(category)}" data-artifact-id="${escAttr(artifact?.id || '')}" data-artifact-name="${escAttr(name)}">
           <div class="msg-artifact-dca__body"></div>
           <p class="msg-artifact-dca__status">${escAttr(t('chat.dcaLoading'))}</p>
+        </div>`
+      } else if (category === 'trigger') {
+        // A mount placeholder for a price trigger card (trigger.ts,
+        // docs/triggers.md): the trigger mounter fetches `data-trigger-src` and
+        // builds the card into `__body`. Like the DCA card, no download
+        // affordance.
+        const payloadUrl = artifactPreviewUrl(artifact || {}, { sessionKey, token })
+        html += `<div class="msg-artifact-trigger" data-trigger-src="${escAttr(payloadUrl)}" data-artifact-category="${escAttr(category)}" data-artifact-id="${escAttr(artifact?.id || '')}" data-artifact-name="${escAttr(name)}">
+          <div class="msg-artifact-trigger__body"></div>
+          <p class="msg-artifact-trigger__status">${escAttr(t('chat.triggerLoading'))}</p>
         </div>`
       } else if (isImageArtifact(artifact)) {
         const previewUrl = artifactPreviewUrl(artifact || {}, { sessionKey, token })

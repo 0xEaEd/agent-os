@@ -382,11 +382,16 @@ class GatewayClient:
         res = await fut
         if not res.get("ok"):
             err = res.get("error", {})
+            # The gateway's ErrorShape names the payload ``details``; ``data``
+            # is the older spelling some callers and doubles still send.
+            data = err.get("details")
+            if not isinstance(data, dict):
+                data = err.get("data")
             raise GatewayRPCError(
                 method,
                 code=err.get("code"),
                 message=err.get("message") or "RPC failed",
-                data=err.get("data") if isinstance(err.get("data"), dict) else None,
+                data=data if isinstance(data, dict) else None,
             )
         payload = res.get("payload")
         return {} if payload is None else payload

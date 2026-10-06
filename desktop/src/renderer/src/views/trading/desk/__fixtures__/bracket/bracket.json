@@ -1,0 +1,248 @@
+{
+  "version": 1,
+  "kind": "bracket",
+  "fetchedAt": "2026-10-04T06:00:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "get",
+    "params": {
+      "bracketId": "brk_1a2b3c4d"
+    }
+  },
+  "bracket": {
+    "id": "brk_1a2b3c4d",
+    "name": "Protect ETH",
+    "kind": "sell",
+    "status": "armed",
+    "statusReason": null,
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "label": "Main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x0000000000000000000000000000000000000000",
+      "symbol": "ETH",
+      "decimals": 18,
+      "priceUsd": 3800.0
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1
+    },
+    "takeProfit": {
+      "id": "trg_0000000a",
+      "name": "Take-profit ETH",
+      "kind": "sell",
+      "status": "armed",
+      "statusReason": null,
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "wallet": {
+        "address": "0x1111111111111111111111111111111111111111",
+        "label": "Main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0x0000000000000000000000000000000000000000",
+        "symbol": "ETH",
+        "decimals": 18,
+        "priceUsd": 3800.0
+      },
+      "quote": {
+        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6,
+        "priceUsd": 1
+      },
+      "condition": {
+        "direction": "above",
+        "priceUsd": 4560.0,
+        "trailPct": null,
+        "fromPriceUsd": 3800.0,
+        "peakPriceUsd": null,
+        "stopPriceUsd": null,
+        "confirmTicks": 2,
+        "hits": 0,
+        "label": "over $4,560"
+      },
+      "action": {
+        "kind": "sell",
+        "amountUsd": null,
+        "amountPct": 100.0,
+        "amount": null,
+        "estimatedUsd": 380.0,
+        "slippagePct": 1.0,
+        "needsApproval": true,
+        "approvalThresholdUsd": 100.0,
+        "dailyCapUsd": 1000.0,
+        "label": "sell 100 % of ETH → USDC"
+      },
+      "market": {
+        "priceUsd": 3800.0,
+        "armedPriceUsd": 3800.0,
+        "distancePct": 20.0,
+        "checkedAt": "2026-10-04T05:59:48Z",
+        "balance": {
+          "raw": "100000000000000000",
+          "human": "0.1",
+          "usd": 380.0
+        }
+      },
+      "fires": [],
+      "result": null,
+      "validUntil": null,
+      "initiator": "agent",
+      "sessionKey": "agent:trading:webchat:desk-test",
+      "createdAt": "2026-10-03T08:00:00Z",
+      "updatedAt": "2026-10-03T08:02:10Z",
+      "approvedAt": "2026-10-03T08:02:10Z",
+      "armedAt": "2026-10-03T08:02:10Z",
+      "triggeredAt": null,
+      "expiresAt": null,
+      "bracket": {
+        "id": "brk_1a2b3c4d",
+        "name": "Protect ETH",
+        "leg": "tp"
+      }
+    },
+    "stopLoss": {
+      "id": "trg_0000000b",
+      "name": "Stop-loss ETH",
+      "kind": "sell",
+      "status": "armed",
+      "statusReason": null,
+      "chain": {
+        "id": 8453,
+        "key": "base",
+        "name": "Base",
+        "explorer": "https://basescan.org"
+      },
+      "wallet": {
+        "address": "0x1111111111111111111111111111111111111111",
+        "label": "Main",
+        "inApp": true
+      },
+      "token": {
+        "address": "0x0000000000000000000000000000000000000000",
+        "symbol": "ETH",
+        "decimals": 18,
+        "priceUsd": 3800.0
+      },
+      "quote": {
+        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6,
+        "priceUsd": 1
+      },
+      "condition": {
+        "direction": "below",
+        "priceUsd": 3420.0,
+        "trailPct": null,
+        "fromPriceUsd": 3800.0,
+        "peakPriceUsd": null,
+        "stopPriceUsd": null,
+        "confirmTicks": 2,
+        "hits": 0,
+        "label": "under $3,420"
+      },
+      "action": {
+        "kind": "sell",
+        "amountUsd": null,
+        "amountPct": 100.0,
+        "amount": null,
+        "estimatedUsd": 380.0,
+        "slippagePct": 1.0,
+        "needsApproval": true,
+        "approvalThresholdUsd": 100.0,
+        "dailyCapUsd": 1000.0,
+        "label": "sell 100 % of ETH → USDC"
+      },
+      "market": {
+        "priceUsd": 3800.0,
+        "armedPriceUsd": 3800.0,
+        "distancePct": -10.0,
+        "checkedAt": "2026-10-04T05:59:48Z",
+        "balance": {
+          "raw": "100000000000000000",
+          "human": "0.1",
+          "usd": 380.0
+        }
+      },
+      "fires": [],
+      "result": null,
+      "validUntil": null,
+      "initiator": "agent",
+      "sessionKey": "agent:trading:webchat:desk-test",
+      "createdAt": "2026-10-03T08:00:00Z",
+      "updatedAt": "2026-10-03T08:02:10Z",
+      "approvedAt": "2026-10-03T08:02:10Z",
+      "armedAt": "2026-10-03T08:02:10Z",
+      "triggeredAt": null,
+      "expiresAt": null,
+      "bracket": {
+        "id": "brk_1a2b3c4d",
+        "name": "Protect ETH",
+        "leg": "sl"
+      }
+    },
+    "lines": {
+      "takeProfitUsd": 4560.0,
+      "stopLossUsd": 3420.0,
+      "trailPct": null,
+      "fromPriceUsd": 3800.0,
+      "takeProfitLabel": "over $4,560",
+      "stopLossLabel": "under $3,420"
+    },
+    "action": {
+      "kind": "sell",
+      "amountPct": 100.0,
+      "amount": null,
+      "amountUsd": null,
+      "tpPct": null,
+      "estimatedUsd": 380.0,
+      "slippagePct": 1.0,
+      "needsApproval": true,
+      "approvalThresholdUsd": 100.0,
+      "dailyCapUsd": 1000.0,
+      "label": "sell 100 % of ETH → USDC"
+    },
+    "market": {
+      "priceUsd": 3800.0,
+      "armedPriceUsd": 3800.0,
+      "checkedAt": "2026-10-04T05:59:48Z",
+      "balance": {
+        "raw": "100000000000000000",
+        "human": "0.1",
+        "usd": 380.0
+      },
+      "upsidePct": 20.0,
+      "downsidePct": -10.0,
+      "positionPct": 33.3,
+      "rewardRisk": 2.0,
+      "nearest": "sl"
+    },
+    "fired": null,
+    "result": null,
+    "validUntil": null,
+    "initiator": "agent",
+    "sessionKey": "agent:trading:webchat:desk-test",
+    "createdAt": "2026-10-03T08:00:00Z",
+    "updatedAt": "2026-10-03T08:02:10Z",
+    "approvedAt": "2026-10-03T08:02:10Z",
+    "armedAt": "2026-10-03T08:02:10Z",
+    "expiresAt": null
+  }
+}

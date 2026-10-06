@@ -268,6 +268,10 @@ def _clean(value: Any) -> Any:
     return value
 
 
+#: Public name of :func:`_clean` for the other card modules (``triggers.py``).
+clean = _clean
+
+
 def chain_json(spec: ChainSpec) -> dict[str, Any]:
     """The LP cards' ``Chain`` (``docs/lp-cards.md``)."""
     return {"id": spec.chain_id, "key": spec.key, "name": spec.name, "explorer": spec.explorer_url}

@@ -317,9 +317,12 @@
 .trd-card__spacer {
   flex: 1;
 }
+/* Laid over the transcript's own box (`.chat-transcript`), never the stage:
+   positioned against the stage it ran down behind the approvals region and
+   read through its cards. */
 .trd-chat__empty {
   position: absolute;
-  inset: 0 0 20%;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -531,21 +534,48 @@
   background: var(--danger);
   color: var(--danger);
 }
+/* Rows never outgrow the column: the controls are a band above the
+   composer, and a row that ran under the BOOK put its Stop out of reach.
+   The list scrolls inside its own cap so the transcript keeps its floor. */
 .trd-mctl {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 0 2px;
+  min-width: 0;
+  max-height: min(9.5rem, 22vh);
+  padding: 1px 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
+/* While a proposal is docked (the approvals region is a child of the stage)
+   the decision is what the column is for: the rows band folds to about two
+   rows and scrolls, and the room it gives up goes to the region. At a
+   1200×800 window the region was 238px for a 275px trigger card — its
+   explanation and every card after it sat behind an inner scroll. */
+.chat-stage:has(> .trd-asks) .trd-mctl {
+  max-height: min(4rem, 10vh);
+}
+/* A row shrinks and wraps: its texts ellipsize, its controls (one group)
+   drop to a second line rather than past the edge. */
 .trd-mctl__row {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  height: 26px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 26px;
   padding: 0 2px 0 10px;
-  border-radius: var(--radius-pill);
+  border-radius: 13px;
   background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-mctl__ctl {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
 }
 .trd-mctl__row[data-state='running'] {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent);
@@ -609,6 +639,7 @@
 }
 .trd-mctl__kind {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   height: 18px;
   padding: 0 6px;
@@ -625,9 +656,11 @@
 }
 .trd-mctl__word {
   margin-right: 4px;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: 10.5px;
   letter-spacing: 0.06em;
+  text-overflow: ellipsis;
   white-space: nowrap;
   text-transform: uppercase;
   color: var(--muted-foreground);
@@ -650,6 +683,8 @@
    bought nothing, so a finished row with no buys never reads as a success. */
 .trd-mctl__runs {
   margin-right: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -671,6 +706,16 @@
   color: var(--dim);
   cursor: pointer;
 }
+/* A toggle is a line of its own in the band's flow, after the rows it
+   folds: never laid over a row. Sticky to the band's foot it sat on top of
+   the second bracket row whenever a docked proposal folded the band to two
+   rows. Its 26px line matches a row's, so the band's scroll stops on a whole
+   line rather than a few pixels into the toggle. */
+.trd-mctl > .trd-mctl__more {
+  flex: 0 0 100%;
+  min-height: 26px;
+  text-align: left;
+}
 .trd-mctl__more:hover {
   color: var(--foreground);
   text-decoration: underline;
@@ -681,6 +726,9 @@
   outline-offset: 1px;
 }
 .trd-mctl__hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding-right: 8px;
   font-size: 11px;
   color: var(--dim);
@@ -716,6 +764,86 @@
   white-space: nowrap;
   color: var(--muted-foreground);
 }
+/* Price triggers beside the mandates (docs/triggers.md). The tag says what
+   fires — a sell in red, a buy in green, an alert in info blue — and the state
+   word carries the engine's figures: price, distance, checks. Armed reads
+   green, near its line amber, triggered blue while its order is open. */
+.trd-mctl__row[data-kind='trigger'] {
+  gap: 4px;
+  padding-left: 4px;
+}
+.trd-mctl__row[data-kind='trigger'][data-state='awaiting_approval'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.trd-mctl__row[data-kind='trigger'] .trd-mctl__name {
+  margin-right: 0;
+}
+.trd-mctl__kind[data-action='sell'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.trd-mctl__kind[data-action='buy'] {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+/* A bracket (docs/brackets.md) is one row for both legs: its tag reads the
+   pair — red stop under green take-profit — and its rail the trigger's. */
+.trd-mctl__row[data-kind='bracket'] {
+  gap: 4px;
+  padding-left: 4px;
+}
+.trd-mctl__row[data-kind='bracket'][data-state='awaiting_approval'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.trd-mctl__row[data-kind='bracket'] .trd-mctl__name {
+  margin-right: 0;
+}
+.trd-mctl__kind[data-action='bracket'] {
+  color: var(--foreground);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ok) 18%, transparent) 50%,
+    color-mix(in srgb, var(--danger) 18%, transparent) 50%
+  );
+}
+.trd-mctl__row[data-state='armed'] .trd-mctl__word,
+.trd-mstrip__item[data-state='armed'] .trd-mstrip__word {
+  color: var(--ok);
+}
+.trd-mctl__row[data-state='triggered'] .trd-mctl__word,
+.trd-mctl__row[data-state='done'] .trd-mctl__word,
+.trd-mstrip__item[data-state='triggered'] .trd-mstrip__word {
+  color: var(--info);
+}
+.trd-mctl__row[data-near] .trd-mctl__word,
+.trd-mstrip__item[data-near] .trd-mstrip__word {
+  color: var(--warn);
+}
+.trd-mstrip__item[data-state='armed'] .trd-mstrip__dot {
+  background: var(--ok);
+}
+.trd-mstrip__item[data-state='triggered'] .trd-mstrip__dot,
+.trd-mstrip__item[data-state='done'] .trd-mstrip__dot {
+  background: var(--info);
+}
+.trd-mstrip__item[data-near] .trd-mstrip__dot {
+  background: var(--warn);
+}
+/* Fire now, armed: spelled out in amber — it trades at once, it is not final. */
+.trd-mctl__row .trd-mctl__confirm[data-tone='fire'] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+/* The status strip's trigger chip: blue while one has fired, amber near a line. */
+.trd-strip__chip[data-state='fired'] {
+  color: var(--info);
+}
+.trd-strip__chip[data-state='near'] {
+  color: var(--warn);
+}
+.trd-strip__chip[data-kind='trigger'] {
+  flex-shrink: 2;
+}
 /* Stop is final: the second click is a word, in red, where the icon was. */
 .trd-mctl__row .trd-mctl__confirm {
   width: auto;
@@ -746,7 +874,7 @@
   position: relative;
   z-index: 3;
   display: flex;
-  flex-shrink: 0;
+  flex: 0 1 auto;
   flex-direction: column;
   gap: 8px;
   width: 100%;
@@ -760,7 +888,9 @@
 .trd-card {
   border-radius: var(--radius-surface);
   padding: 12px 14px 12px;
-  background: color-mix(in srgb, var(--elevated) 92%, transparent);
+  /* Opaque: a card docks over the canvas and the foot of the transcript, and
+     at 92% the desk's empty hint read through its facts. */
+  background: var(--elevated);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, var(--border)),
     inset 3px 0 0 var(--warn);
@@ -825,6 +955,94 @@
 .trd-mandate__enforced::before {
   content: '● ';
   color: var(--ok);
+}
+/* A price trigger among the asks: the same card family, with a rail in the
+   colour of what it fires (red sell, green buy, blue alert) — one decision
+   here lets the engine trade later with nobody watching. */
+.trd-card.trd-trigger {
+  --trd-trigger-tone: var(--info);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--trd-trigger-tone) 45%, var(--border)),
+    inset 3px 0 0 var(--trd-trigger-tone);
+}
+.trd-card.trd-trigger[data-action='sell'] {
+  --trd-trigger-tone: var(--danger);
+}
+.trd-card.trd-trigger[data-action='buy'] {
+  --trd-trigger-tone: var(--ok);
+}
+/* A bracket proposal: the trigger card family, its rail the warn of a
+   standing permission on both sides of the price. */
+.trd-card.trd-trigger.trd-bracket[data-action='sell'] {
+  --trd-trigger-tone: var(--warn);
+}
+.trd-trigger .trd-card__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--trd-trigger-tone);
+}
+.trd-trigger__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.trd-trigger__legs {
+  align-items: baseline;
+}
+.trd-trigger__hero {
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-trigger__now {
+  margin: 2px 0 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+/* Read before one click arms it: its facts are never cut short. */
+.trd-trigger .trd-card__fact {
+  align-items: baseline;
+}
+.trd-trigger .trd-card__fact dt {
+  flex-shrink: 0;
+}
+.trd-trigger .trd-card__fact dd {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.trd-trigger__warnings {
+  margin: 8px 0 0;
+  padding-left: 14px;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+.trd-trigger__enforced {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-trigger__enforced::before {
+  content: '● ';
+  color: var(--ok);
+}
+/* A bracket proposal says its explanation on one line (the whole sentence is
+   the tooltip): at a 1200×800 window it ran to three and was cut off
+   mid-sentence behind the region's scroll. */
+.trd-bracket .trd-trigger__enforced {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .trd-asks__stamp .trd-card {
   padding: 8px 14px;
@@ -1280,15 +1498,59 @@ body[data-dragging] .trd-book__handle {
   border-bottom: 1px solid var(--hairline);
   background: color-mix(in srgb, var(--foreground) 3%, transparent);
 }
+/* Six tabs and the pips do not always fit the BOOK's 300 px minimum. The
+   strip scrolls sideways instead of squeezing: a squeezed tab used to shrink
+   its icon to a 4 px dot. Tabs and icons never shrink. */
 .trd-book__tabs {
   display: flex;
   min-width: 0;
   flex: 1;
   gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.trd-book__tabs::-webkit-scrollbar {
+  display: none;
+}
+/* A tab brought into view (scrollIntoView) clears the fade at the edge. */
+.trd-book__tabs {
+  scroll-padding-inline: 18px;
+}
+/* The strip hides tabs: the side that hides them fades out, so it reads as
+   scrollable (watchTabStrip in Book.tsx sets data-fade). */
+.trd-book__tabs[data-fade='end'] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+}
+.trd-book__tabs[data-fade='start'] {
+  mask-image: linear-gradient(to left, #000 calc(100% - 22px), transparent);
+}
+.trd-book__tabs[data-fade='both'] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 22px,
+    #000 calc(100% - 22px),
+    transparent
+  );
+}
+/* The words do not fit beside the pips: the tabs drop to their icons before
+   any label is clipped mid-glyph (the title carries the word). */
+.trd-book__tabs[data-labels='off'] .trd-book__tab > span:not(.trd-book__count) {
+  display: none;
+}
+.trd-book__tabs[data-labels='off'] .trd-book__tab {
+  padding: 0 7px;
+}
+.trd-book__tab > span:not(.trd-book__count) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .trd-book__tab {
   display: inline-flex;
-  min-width: 0;
+  flex-shrink: 0;
   align-items: center;
   gap: 5px;
   height: 26px;
@@ -1300,6 +1562,9 @@ body[data-dragging] .trd-book__handle {
   transition:
     color 120ms ease-out,
     background-color 120ms ease-out;
+}
+.trd-book__tab > svg {
+  flex-shrink: 0;
 }
 .trd-book__tab:hover {
   color: var(--foreground);
@@ -1453,8 +1718,9 @@ body[data-dragging] .trd-book__handle {
 .trd-book .trd-table td.trd-col--asset {
   padding-left: 12px;
 }
-/* The shared renderer's own "No messages yet." would sit under the desk's hint. */
-.trd-chat .chat-empty {
+/* The shared renderer's own "No messages yet." would sit over the desk's hint:
+   the desk says it once, in its own words. */
+.chat-desktop[data-desk] .chat-empty {
   display: none;
 }
 
@@ -1866,6 +2132,15 @@ body[data-dragging] .trd-book__handle {
   min-width: 0;
   height: auto;
   min-height: 0;
+}
+/* The transcript keeps a floor. With a proposal docked, the dot strip, the
+   mission rows and the composer all above the fold, it once shrank to 28px
+   and hid the very card the agent had just posted. A zero basis freezes it
+   at the floor when space runs short, so the approvals region (the one
+   flexible sibling) yields first and scrolls inside its own cap. */
+.chat-desktop[data-desk] .chat-transcript {
+  flex: 1 1 0;
+  min-height: clamp(6rem, 22vh, 11rem);
 }
 .chat-desktop[data-desk] .chat-thread {
   --chat-col: min(56rem, calc(100% - 3rem));

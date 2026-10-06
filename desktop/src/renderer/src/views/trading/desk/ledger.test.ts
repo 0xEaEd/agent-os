@@ -5,11 +5,14 @@ import {
   dcaCallFromResult,
   commandFromToolInput,
   exitCodeOf,
+  isBracketKind,
   ledgerRuns,
   lpCallFromResult,
   parseTradeCommand,
   parseTradeResult,
+  triggerCallFromResult,
   withLiveMandate,
+  withLiveTrigger,
 } from './ledger'
 
 describe('commandFromToolInput', () => {
@@ -759,5 +762,427 @@ describe('DCA mandates (agentos trade dca)', () => {
     // The live rewrite ends in "]" after the JSON; the row still reads the card.
     const out = parseTradeResult(dcaCallFromResult(`${FIXTURE}\n${live}`)!, `${FIXTURE}\n${live}`)
     expect(out.detail).toBe('ETH ← USDC · $10 / day')
+  })
+})
+
+describe('price triggers (agentos trade trigger)', () => {
+  const FIXTURE = readFileSync(
+    'src/renderer/src/views/trading/desk/__fixtures__/trigger/trigger.json',
+    'utf8',
+  )
+  const MARKER =
+    'publish_artifact path=/tmp/trigger-cards/trigger-stop-loss-eth-20261004T060000Z.json mime=application/vnd.agentos.trigger+json'
+
+  it('titles a create by what it arms, and its subject by token and line', () => {
+    const rows: [string, string, string][] = [
+      [
+        'agentos trade trigger create ETH --sell --pct 50 --below 3800 --json',
+        'Stop-loss',
+        'ETH · under $3,800',
+      ],
+      [
+        'agentos trade trigger create eth --sell --pct 50 --above +20% --json',
+        'Take-profit',
+        'ETH · 20 % over now',
+      ],
+      [
+        'agentos trade trigger create ETH --sell --pct 100 --below -10% --chain base --json',
+        'Stop-loss',
+        'ETH · 10 % under now · Base',
+      ],
+      [
+        'agentos trade trigger create ETH --sell --pct 100 --trail 10 --json',
+        'Trailing stop',
+        'ETH · 10 % below peak',
+      ],
+      [
+        'agentos trade trigger create ETH --buy --usd 50 --below 3500 --json',
+        'Buy the dip',
+        'ETH · under $3,500',
+      ],
+      [
+        'agentos trade trigger create ETH --buy --usd 50 --above 4200 --json',
+        'Buy the breakout',
+        'ETH · over $4,200',
+      ],
+      [
+        'agentos trade trigger create ETH --alert --above 5000 --json',
+        'Price alert',
+        'ETH · over $5,000',
+      ],
+      [
+        'agentos trade trigger create USDC --alert --above 0.5 --json',
+        'Price alert',
+        'USDC · over $0.5',
+      ],
+    ]
+    for (const [command, title, detail] of rows) {
+      expect(parseTradeCommand(command), command).toMatchObject({
+        kind: 'trigger_create',
+        title,
+        detail,
+      })
+    }
+  })
+
+  it('titles every other subcommand and names its trigger', () => {
+    const rows: [string, string, string, string][] = [
+      [
+        'agentos trade trigger show trg_1a2b3c4d --json',
+        'trigger',
+        'Trigger status',
+        'trg_1a2b3c4d',
+      ],
+      ['agentos trade trigger list --json', 'trigger_list', 'Triggers', ''],
+      ['agentos trade trigger list --all --json', 'trigger_list', 'Triggers', 'all'],
+      [
+        'agentos trade trigger approve trg_1a2b3c4d --json',
+        'trigger_approve',
+        'Approve trigger',
+        'trg_1a2b3c4d',
+      ],
+      [
+        'agentos trade trigger reject trg_1a2b3c4d --reason "no" --json',
+        'trigger_reject',
+        'Reject trigger',
+        'trg_1a2b3c4d',
+      ],
+      [
+        'agentos trade trigger pause trg_1a2b3c4d --json',
+        'trigger_pause',
+        'Pause trigger',
+        'trg_1a2b3c4d',
+      ],
+      [
+        'agentos trade trigger resume trg_1a2b3c4d --json',
+        'trigger_resume',
+        'Resume trigger',
+        'trg_1a2b3c4d',
+      ],
+      [
+        'agentos trade trigger stop trg_1a2b3c4d --json',
+        'trigger_stop',
+        'Stop trigger',
+        'trg_1a2b3c4d',
+      ],
+      [
+        'agentos trade trigger fire trg_1a2b3c4d --wait --wait-seconds 60 --json',
+        'trigger_fire',
+        'Fire now',
+        'trg_1a2b3c4d',
+      ],
+    ]
+    for (const [command, kind, title, detail] of rows) {
+      expect(parseTradeCommand(command), command).toMatchObject({ kind, title, detail })
+    }
+  })
+
+  it('reads a trigger card as subject, state, plan and price — never its JSON', () => {
+    const call = parseTradeCommand('agentos trade trigger show trg_1a2b3c4d --json')!
+    const out = parseTradeResult(call, `${FIXTURE}\n${MARKER}`)
+    expect(out.detail).toBe('ETH · under $3,800')
+    expect(out.summary).toBe('armed · sell 50 % of ETH → USDC · ETH $3,882 · −2.1 %')
+    expect(out.error).toBeNull()
+    expect(out.triggerId).toBe('trg_1a2b3c4d')
+    expect(out.summary).not.toContain('{')
+  })
+
+  it('names the fire of a Fire now and earns the awaiting stamp when its order parks', () => {
+    const payload = JSON.parse(FIXTURE) as Record<string, unknown>
+    const call = parseTradeCommand('agentos trade trigger fire trg_1a2b3c4d --json')!
+    const fire = {
+      n: 2,
+      at: '2026-10-04T06:01:00Z',
+      manual: true,
+      status: 'parked',
+      reasonCode: null,
+      reason: null,
+      priceUsd: 3790,
+      orderId: 'ord_9',
+      txHash: null,
+      explorerUrl: null,
+    }
+    const parked = parseTradeResult(call, JSON.stringify({ ...payload, fire }))
+    expect(parked.summary.startsWith('fire #2 awaiting approval')).toBe(true)
+    expect(parked.awaiting).toBe(true)
+    expect(parked.orderId).toBe('ord_9')
+    const skipped = parseTradeResult(
+      call,
+      JSON.stringify({
+        ...payload,
+        fire: { ...fire, status: 'skipped', orderId: null, reason: 'paused: nothing to sell' },
+      }),
+    )
+    expect(skipped.error).toBe('paused: nothing to sell')
+  })
+
+  it('reads a list, an empty one, and one with a proposal as awaiting', () => {
+    const payload = JSON.parse(FIXTURE) as { trigger: Record<string, unknown> }
+    const list = {
+      version: 1,
+      kind: 'triggers',
+      fetchedAt: '2026-10-04T06:00:00Z',
+      warnings: [],
+      triggers: [payload.trigger, { ...payload.trigger, id: 'trg_2', status: 'awaiting_approval' }],
+      totals: { count: 2, armed: 1, awaiting: 1, triggered: 0 },
+    }
+    const call = parseTradeCommand('agentos trade trigger list --json')!
+    const out = parseTradeResult(call, JSON.stringify(list))
+    expect(out.detail).toBe('2 triggers')
+    expect(out.summary).toBe('1 armed · 1 awaiting approval')
+    expect(out.awaiting).toBe(true)
+    const empty = {
+      ...list,
+      triggers: [],
+      totals: { count: 0, armed: 0, awaiting: 0, triggered: 0 },
+    }
+    expect(parseTradeResult(call, JSON.stringify(empty)).summary).toBe('none yet')
+  })
+
+  it('reads a result cut past valid JSON, and follows the trigger in the live list', () => {
+    const call = parseTradeCommand(
+      'agentos trade trigger create ETH --sell --pct 50 --below 3800 --json',
+    )!
+    const cut = FIXTURE.replace('"armed"', '"awaiting_approval"').slice(0, 700)
+    const out = parseTradeResult(call, cut)
+    expect(out.detail).toBe('Stop-loss ETH')
+    expect(out.summary).toBe('awaiting approval · trg_1a2b3c4d')
+    expect(out.awaiting).toBe(true)
+    expect(withLiveTrigger(out, undefined)).toBe(out)
+    const armed = withLiveTrigger(out, 'armed')
+    expect(armed.awaiting).toBe(false)
+    expect(armed.triggerLive).toBe('armed')
+    expect(armed.summary).toBe('armed · trg_1a2b3c4d')
+  })
+
+  it('reports an operator-only refusal plainly', () => {
+    const call = parseTradeCommand('agentos trade trigger pause trg_1a2b3c4d --json')!
+    const out = parseTradeResult(
+      call,
+      'exit_code=1\n{"error": {"code": "trading.operator_required", "message": "only the operator may pause"}}',
+    )
+    expect(out.error).toBe('only the operator may pause')
+  })
+
+  it('recognises a trigger call from its card line alone, in all three shapes', () => {
+    expect(triggerCallFromResult(`{"version": 1, "kind": "trigger"}\n${MARKER}`)).toMatchObject({
+      kind: 'trigger',
+      title: 'Trigger status',
+    })
+    const live =
+      '[inline artifact published and already rendered for the user: ' +
+      'trigger-cards/triggers-all-20261004T060000Z.json. Do not call publish_artifact for it.]'
+    expect(triggerCallFromResult(live)).toMatchObject({ kind: 'trigger_list', title: 'Triggers' })
+    expect(
+      triggerCallFromResult(
+        '[generated artifact omitted: trigger-x-1.json (application/vnd.agentos.trigger+json)]',
+      ),
+    ).not.toBeNull()
+    expect(
+      triggerCallFromResult('publish_artifact path=a.json mime=application/vnd.agentos.dca+json'),
+    ).toBeNull()
+    expect(cardCallFromResult(`{}\n${MARKER}`)?.kind).toBe('trigger')
+    // The live rewrite ends in "]" after the JSON; the row still reads the card.
+    const single =
+      '[inline artifact published and already rendered for the user: ' +
+      'trigger-cards/trigger-stop-loss-eth-1.json. Do not call publish_artifact for it.]'
+    const text = `${FIXTURE}\n${single}`
+    const out = parseTradeResult(triggerCallFromResult(text)!, text)
+    expect(out.detail).toBe('ETH · under $3,800')
+  })
+})
+
+describe('brackets (agentos trade protect / trade bracket)', () => {
+  const FIXTURE = readFileSync(
+    'src/renderer/src/views/trading/desk/__fixtures__/bracket/bracket.json',
+    'utf8',
+  )
+  const MARKER =
+    'publish_artifact path=/tmp/trigger-cards/bracket-protect-eth-20261004T060000Z.json mime=application/vnd.agentos.trigger+json'
+
+  it('titles a protect by its two lines, percent or price', () => {
+    const rows: [string, string, string][] = [
+      ['agentos trade protect ETH --tp +20% --sl -10% --json', 'Protect', 'ETH · +20 % / −10 %'],
+      [
+        'agentos trade protect eth --tp 20% --sl 10% --pct 50 --json',
+        'Protect',
+        'ETH · +20 % / −10 %',
+      ],
+      [
+        'agentos trade protect ETH --tp 4560 --sl 3420 --chain base --json',
+        'Protect',
+        'ETH · $4,560 / $3,420 · Base',
+      ],
+      [
+        'agentos trade protect ETH --tp +20% --trail 10 --tp-pct 50 --json',
+        'Protect',
+        'ETH · +20 % / trail 10 %',
+      ],
+      [
+        'agentos trade protect USDC --tp 0.5 --sl 0.1 --alert --json',
+        'Watch',
+        'USDC · $0.5 / $0.1',
+      ],
+    ]
+    for (const [command, title, detail] of rows) {
+      expect(parseTradeCommand(command), command).toMatchObject({
+        kind: 'bracket_create',
+        title,
+        detail,
+      })
+    }
+  })
+
+  it('titles every bracket subcommand and names its bracket', () => {
+    const rows: [string, string, string, string][] = [
+      [
+        'agentos trade bracket show brk_1a2b3c4d --json',
+        'bracket',
+        'Bracket status',
+        'brk_1a2b3c4d',
+      ],
+      ['agentos trade bracket list --json', 'bracket_list', 'Brackets', ''],
+      ['agentos trade bracket list --all --json', 'bracket_list', 'Brackets', 'all'],
+      [
+        'agentos trade bracket approve brk_1a2b3c4d --json',
+        'bracket_approve',
+        'Approve bracket',
+        'brk_1a2b3c4d',
+      ],
+      [
+        'agentos trade bracket reject brk_1a2b3c4d --reason "no" --json',
+        'bracket_reject',
+        'Reject bracket',
+        'brk_1a2b3c4d',
+      ],
+      [
+        'agentos trade bracket pause brk_1a2b3c4d --json',
+        'bracket_pause',
+        'Pause bracket',
+        'brk_1a2b3c4d',
+      ],
+      [
+        'agentos trade bracket resume brk_1a2b3c4d --json',
+        'bracket_resume',
+        'Resume bracket',
+        'brk_1a2b3c4d',
+      ],
+      [
+        'agentos trade bracket stop brk_1a2b3c4d --json',
+        'bracket_stop',
+        'Stop bracket',
+        'brk_1a2b3c4d',
+      ],
+      [
+        'agentos trade bracket fire brk_1a2b3c4d --leg tp --wait --json',
+        'bracket_fire',
+        'Fire now',
+        'brk_1a2b3c4d',
+      ],
+    ]
+    for (const [command, kind, title, detail] of rows) {
+      expect(parseTradeCommand(command), command).toMatchObject({ kind, title, detail })
+    }
+    expect(isBracketKind('bracket_fire')).toBe(true)
+    expect(isBracketKind('trigger_fire')).toBe(false)
+  })
+
+  it('reads a bracket card as subject, state, plan and moves — never its JSON', () => {
+    const call = parseTradeCommand('agentos trade bracket show brk_1a2b3c4d --json')!
+    const out = parseTradeResult(call, `${FIXTURE}\n${MARKER}`)
+    expect(out.detail).toBe('ETH · $3,420 – $4,560')
+    expect(out.summary).toBe('armed · sell 100 % of ETH → USDC · ETH $3,800 · +20 % / −10 %')
+    expect(out.error).toBeNull()
+    expect(out.triggerId).toBe('brk_1a2b3c4d')
+    expect(out.summary).not.toContain('{')
+  })
+
+  it('names the fire of a Sell now and earns the awaiting stamp when its order parks', () => {
+    const payload = JSON.parse(FIXTURE) as Record<string, unknown>
+    const call = parseTradeCommand('agentos trade bracket fire brk_1a2b3c4d --json')!
+    const fire = {
+      n: 1,
+      at: '2026-10-04T06:01:00Z',
+      manual: true,
+      status: 'parked',
+      reasonCode: null,
+      reason: null,
+      priceUsd: 3800,
+      orderId: 'ord_9',
+      txHash: null,
+      explorerUrl: null,
+    }
+    const parked = parseTradeResult(call, JSON.stringify({ ...payload, fire }))
+    expect(parked.summary.startsWith('fire #1 awaiting approval')).toBe(true)
+    expect(parked.awaiting).toBe(true)
+    expect(parked.orderId).toBe('ord_9')
+  })
+
+  it('reads a list, an empty one, and a result cut past valid JSON', () => {
+    const payload = JSON.parse(FIXTURE) as { bracket: Record<string, unknown> }
+    const list = {
+      version: 1,
+      kind: 'brackets',
+      fetchedAt: '2026-10-04T06:00:00Z',
+      warnings: [],
+      brackets: [payload.bracket, { ...payload.bracket, id: 'brk_2', status: 'awaiting_approval' }],
+      totals: { count: 2, armed: 1, awaiting: 1, triggered: 0 },
+    }
+    const call = parseTradeCommand('agentos trade bracket list --json')!
+    const out = parseTradeResult(call, JSON.stringify(list))
+    expect(out.detail).toBe('2 brackets')
+    expect(out.summary).toBe('1 armed · 1 awaiting approval')
+    expect(out.awaiting).toBe(true)
+    const empty = {
+      ...list,
+      brackets: [],
+      totals: { count: 0, armed: 0, awaiting: 0, triggered: 0 },
+    }
+    expect(parseTradeResult(call, JSON.stringify(empty)).summary).toBe('none yet')
+
+    const create = parseTradeCommand('agentos trade protect ETH --tp +20% --sl -10% --json')!
+    const cut = FIXTURE.replace('"armed"', '"awaiting_approval"').slice(0, 600)
+    const truncated = parseTradeResult(create, cut)
+    expect(truncated.detail).toBe('Protect ETH')
+    expect(truncated.summary).toBe('awaiting approval · brk_1a2b3c4d')
+    expect(truncated.awaiting).toBe(true)
+    // Its pill follows the live bracket list like a trigger row's.
+    const armed = withLiveTrigger(truncated, 'armed')
+    expect(armed.awaiting).toBe(false)
+    expect(armed.summary).toBe('armed · brk_1a2b3c4d')
+  })
+
+  it('reports an operator-only refusal plainly', () => {
+    const call = parseTradeCommand('agentos trade bracket approve brk_1a2b3c4d --json')!
+    const out = parseTradeResult(
+      call,
+      'exit_code=1\n{"error": {"code": "trading.operator_required", "message": "only the operator may approve"}}',
+    )
+    expect(out.error).toBe('only the operator may approve')
+  })
+
+  it('recognises a bracket call from its card line alone', () => {
+    expect(triggerCallFromResult(`{"version": 1, "kind": "bracket"}\n${MARKER}`)).toMatchObject({
+      kind: 'bracket',
+      title: 'Bracket status',
+    })
+    const live =
+      '[inline artifact published and already rendered for the user: ' +
+      'trigger-cards/brackets-all-20261004T060000Z.json. Do not call publish_artifact for it.]'
+    expect(triggerCallFromResult(live)).toMatchObject({ kind: 'bracket_list', title: 'Brackets' })
+    const single =
+      '[inline artifact published and already rendered for the user: ' +
+      'trigger-cards/bracket-protect-eth-1.json. Do not call publish_artifact for it.]'
+    expect(cardCallFromResult(single)?.kind).toBe('bracket')
+    // A plain trigger card is still a trigger.
+    expect(
+      triggerCallFromResult(
+        '[inline artifact published and already rendered for the user: trigger-cards/trigger-x-1.json.]',
+      )?.kind,
+    ).toBe('trigger')
+    const text = `${FIXTURE}\n${single}`
+    expect(parseTradeResult(triggerCallFromResult(text)!, text).detail).toBe(
+      'ETH · $3,420 – $4,560',
+    )
   })
 })

@@ -123,7 +123,9 @@ describe('ChatView jump to latest', () => {
     const dock = container.querySelector<HTMLElement>('.chat-jump-dock')!
     expect(dock.parentElement).toBe(stage)
     const children = [...stage.children]
-    const thread = stage.querySelector('.chat-thread')!
+    // The thread sits in the transcript's box, the stage's first row.
+    const thread = stage.querySelector('.chat-thread')!.parentElement!
+    expect(thread).toHaveClass('chat-transcript')
     const composerBlock = children.find((c) => c.querySelector('.chat-jump-dock, textarea'))!
     expect(children.indexOf(dock)).toBeGreaterThan(children.indexOf(thread))
     expect(composerBlock).not.toBe(dock)

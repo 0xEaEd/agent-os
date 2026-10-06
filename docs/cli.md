@@ -32,7 +32,7 @@ available without `uv tool list` or `pip show`.
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
 | `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
-| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL; Uniswap V4 liquidity; DCA mandates. |
+| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL; Uniswap V4 liquidity; DCA mandates; price triggers (stop-loss, take-profit, trailing stop, buy-the-dip, alerts); brackets (take-profit + stop-loss on one position, one cancels the other). |
 | `agentos skills` | List, search, view, install, update, publish, inspect, and tap skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
@@ -899,6 +899,7 @@ agentos trade lp positions [--wallet <addr|label>]… [--chain base|robinhood]�
 agentos trade lp collect <tokenId> --chain base|robinhood [--allow-empty] [--note <text>] [--client-id <id>] [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # collect a vault position's fees; always waits for approval
 agentos trade lp remove <tokenId> --chain base|robinhood [--pct 100] [--slippage 1] [--note …] [--client-id …] [--wait …] [--json] [--no-card]   # take liquidity (and every fee) out; --pct 100 burns the NFT
 agentos trade lp add <token|TOKEN/QUOTE|poolId> --chain base|robinhood [--quote <token>] [--fee <tier>] (--usd X | --amount-base A [--amount-quote B]) [--range mcap:2M-10M|pct:20|above[:20]|below[:20]|full|ticks:LO:HI] [--to-position <tokenId>] [--wallet <addr|label>] [--slippage 1] [--note …] [--client-id …] [--wait …] [--json] [--no-card]   # mint a position (or top one up); default range pct:20
+agentos trade markets <token> [--chain base|robinhood] [--side all|quote|base] [--min-tvl 10000] [--limit 50] [--lookalikes] [--deep] [--json] [--no-card]   # every pool the token trades in, on every DEX: tokens priced in it, and it priced in others; default chain robinhood
 agentos trade dca create <token> --usd X --every 30m|2h|1d|1w|<seconds> (--cap X | --runs N | both) [--max-price X] [--quote <token>] [--chain base|robinhood] [--wallet <addr|label>] [--slippage 1] [--name <text>] [--start now|next] [--json] [--no-card]   # DCA mandate: the engine buys on schedule under a hard cap; from an agent it waits for approval
 agentos trade dca list [--all] [--wallet <addr|label>] [--json] [--no-card]   # live mandates (awaiting approval, active, paused); --all adds completed/stopped/rejected/expired
 agentos trade dca show <id> [--json] [--no-card]            # one mandate: schedule, progress, avg buy vs price now, recent runs
@@ -906,6 +907,18 @@ agentos trade dca approve <id> / reject <id> [--reason <text>] [--json] [--no-ca
 agentos trade dca pause <id> / resume <id> / stop <id> [--reason <text>] [--json] [--no-card]   # operator-only; stop is final
 agentos trade dca run <id> [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # buy now (operator-only); the next scheduled buy does not move
 agentos trade dca update <id> [--usd X] [--cap X] [--runs N] [--every 12h] [--max-price X] [--name <text>] [--json] [--no-card]   # operator-only; --runs 0 / --max-price 0 remove the limit
+agentos trade trigger create <token> (--below <price|pct%> | --above <price|pct%> | --trail <pct>) (--sell (--pct 50 | --amount 0.05 | --usd 100) | --buy --usd 50 | --alert) [--quote <token>] [--chain base|robinhood] [--wallet <addr|label>] [--slippage 1] [--name <text>] [--for 30m|2h|1d|1w|<seconds>] [--json] [--no-card]   # price trigger: the engine watches the price and fires once; from an agent it waits for approval; --quote defaults to the chain's USDC (the native coin when the token is USDC)
+agentos trade trigger list [--all] [--wallet <addr|label>] [--json] [--no-card]   # live triggers (awaiting approval, armed, triggered, paused); --all adds done/stopped/rejected/expired
+agentos trade trigger show <id> [--json] [--no-card]            # one trigger: condition, price now and distance, size, checks, recent fires, result
+agentos trade trigger approve <id> / reject <id> [--reason <text>] [--json] [--no-card]   # operator-only
+agentos trade trigger pause <id> / resume <id> / stop <id> [--reason <text>] [--json] [--no-card]   # operator-only; stop is final
+agentos trade trigger fire <id> [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # fire now whatever the price (operator-only)
+agentos trade protect <token> --tp <price|pct%> (--sl <price|pct%> | --trail <pct>) [--pct 100 | --amount 0.05 | --usd 100] [--tp-pct 50] [--alert] [--quote <token>] [--chain base|robinhood] [--wallet <addr|label>] [--slippage 1] [--name <text>] [--for 30m|2h|1d|1w|<seconds>] [--json] [--no-card]   # bracket: a take-profit and a stop-loss on one position, whichever fires first stops the other; default the whole position (--pct 100); from an agent it waits for one approval
+agentos trade bracket list [--all] [--wallet <addr|label>] [--json] [--no-card]   # live brackets (awaiting approval, armed, triggered, paused); --all adds done/stopped/rejected/expired
+agentos trade bracket show <id> [--json] [--no-card]            # one bracket: both lines with the price now between them, upside/downside, reward:risk, size, each leg's checks, fires, result
+agentos trade bracket approve <id> / reject <id> [--reason <text>] [--json] [--no-card]   # operator-only; acts on both legs
+agentos trade bracket pause <id> / resume <id> / stop <id> [--reason <text>] [--json] [--no-card]   # operator-only; both legs; stop is final
+agentos trade bracket fire <id> [--leg tp|sl] [--wait] [--wait-seconds 1..900] [--json] [--no-card]   # fire one leg now (default the nearer one), the other goes on hold (operator-only)
 agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval|lp_collect|lp_remove|lp_add] [--limit N] [--hidden]
 agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
 agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
@@ -940,10 +953,15 @@ swap, reported back in the quote. **Uniswap** (`agentos trade provider
 uniswap`) is the fallback and needs a key: `agentos config set
 trading.uniswap_api_key <key>`, or Settings › Trading in the desktop app.
 
-29 of the 34 listed tokens on Robinhood Chain (the tokenised stocks — AAPL,
-TSLA, SPY and the rest) cannot be routed at all: the aggregator answers
-`trading.token_not_tradeable`, a legal refusal upstream that no retry, size,
-address or time of day changes. ETH, WETH and USDG trade normally there.
+The aggregator refuses the Robinhood Stock Tokens (the tokenised stocks —
+AAPL, TSLA, NVDA, SPY and the rest) for legal reasons
+(`trading.token_not_tradeable`), so when either side of a pair is a Stock
+Token the engine quotes and swaps it through **Uniswap** instead, provided a
+Uniswap API key is configured — `quote`, `swap`, DCA runs, trigger fires and
+bracket legs alike; the quote and the order record `provider: "uniswap"`.
+Without a key the refusal is kept and its message says to add one
+(`agentos config set trading.uniswap_api_key <key>`, or Settings › Trading
+in the desktop app). ETH, WETH and USDG trade normally there.
 Robinhood Chain has no native USD price feed yet, so `--usd` may be refused
 with `trading.unpriced` (size with `--amount`), and the bare symbol `USDC`
 resolves to unverified lookalikes there (`TOKEN_UNVERIFIED`): use an
@@ -1092,6 +1110,36 @@ on stderr, and input errors (`INVALID_ARGUMENT`, `trading.invalid`,
 payload is specified in [`lp-cards.md`](lp-cards.md); every card also echoes
 `request: {kind, params}` — the `trading.lp.<kind>` call that re-reads it.
 
+`trade markets` lists **every pool a token trades in, on every DEX** the
+chain has, in two sections: *priced in NVDA* (the token is the pool's quote
+asset — `AI/NVDA` on Bankr, `ORBIO/NVDA` on Pons) and *NVDA priced in* (the
+token is the base — `NVDA/USDG`, `NVDA/WETH`). It is read-only and allowed
+from an agent (gateway method `trading.markets`), and it is the one `trade`
+command whose `--chain` defaults to **robinhood**. Pools come from
+GeckoTerminal (the only listing with both sides; 20 a page, 5 pages by
+default, 10 with `--deep`, read in bursts of five and cached for 120 s per
+token — a cold read takes 20–60 s because GeckoTerminal's edge caches a
+page only after the first request, a warm one about a second), enriched by
+DexScreener; for a Stock Token the card also carries the
+Chainlink oracle price (`oracle`, with `stale`/`paused`) and each `base` row
+its premium against it. Rows under `--min-tvl` (default $10k) and
+**lookalikes** — a counterparty that borrows a Stock Token's symbol or name
+at another address — are dropped and counted (`--lookalikes` shows them,
+flagged). Each section is sorted by TVL; `viaUniswap` marks the pools the
+Uniswap route can use. A rate limit stops paging and the card says
+`partial`; no page at all is `trading.markets.unavailable`. The counts line
+also says how many rows `--limit` cut (`· 12 more over the limit`), and
+`counts.pageCapHit` tells a client when `--deep` would show more. Human output is
+the token line (price, oracle, premium), one table per section
+(`PAIR DEX TVL VOL 24H PRICE IN <TOKEN> AGE FLAGS`, flags `uni`, `stock`,
+`lookalike`; the base section's ratio column is `IN QUOTE`, the token priced
+in each row's counterparty) and a counts line. With `--json` the payload goes to stdout, the
+card to `markets-cards/markets-<symbol>-<stamp>.json` (20 newest kept) with
+the `publish_artifact … mime=application/vnd.agentos.markets+json` line last
+on stdout, unless `--no-card`; errors are the `{"error": …}` envelope on
+stderr, exit 1, and write no card. The payload is specified in
+[`markets.md`](markets.md).
+
 `trade lp collect|remove|add` change a Uniswap V4 position of a vault wallet
 through the same order pipeline as a swap or a send (gateway methods
 `trading.lp.collect`, `trading.lp.remove`, `trading.lp.add`; the contract is
@@ -1173,6 +1221,79 @@ written to `dca-cards/<mandate|mandates>-<id|live|all>-<utc stamp>.json`
 without `--json` a mandate prints as a panel and `list` as a table. Input
 and state errors (`INVALID_ARGUMENT`, `trading.dca.invalid`,
 `trading.dca.bad_state`, `trading.dca.not_found`, `trading.invalid`,
+`trading.token_not_found`) exit 2; everything else exits 1; under `--json`
+every error is `{"error": …}` on stderr and writes no card.
+
+`trade trigger` manages **price triggers**: a conditional order the engine
+watches and fires by itself — `create ETH --sell --pct 50 --below 3800` sells
+half the wallet's ETH for USDC once ETH is at or under $3,800, `--buy --usd
+50 --below 3500` buys the dip, `--sell --pct 100 --trail 10` is a trailing
+stop 10 % under the highest price since arming, and `--alert --above 5000`
+only notifies you (gateway methods
+`trading.trigger.create|get|list|approve|reject|pause|resume|stop|fire`; the
+contract is [`triggers.md`](triggers.md)). Pass exactly one condition
+(`--below`, `--above`, `--trail`) and one action: `--sell` with exactly one
+size (`--pct` of the balance at fire time, a token `--amount`, or `--usd`),
+`--buy` with `--usd`, or `--alert` with none; a wrong combination exits 2
+before anything is sent. `--below`/`--above` take a USD price (`3800`) or a
+percent of the price now (`--below -10%` or `10%`, `--above +15%` or `15%`),
+resolved to a price when the trigger is created. The engine checks the price
+every tick (30 s) and fires only after the condition held on two checks in a
+row; an unknown price never fires. A sell or buy is one ordinary swap order
+(guardrails, approval threshold, daily cap, ledger) with the trigger's id and
+a `Stop-loss ETH · fired at $3,790` note; a fire that cannot act (nothing to
+sell, not enough USDC) pauses the trigger, and three failed fires in a row
+pause it too. `--for` (`30m`, `2h`, `1d`, `1w` or seconds, minimum 60) lets
+it expire unreached; without it the trigger stays until it fires or you stop
+it. A trigger created from an agent's shell always answers `status:
+"awaiting_approval"` and expires after 24 h without a decision; yours is
+`armed` at once. `create`, `list` and `show` are allowed from an agent;
+`approve`, `reject`, `pause`, `resume`, `stop` and `fire` are the user's and
+answer `trading.operator_required` to an agent. `fire --wait` waits for the
+order it placed and prints the trigger again once it settled. With `--json`
+the payload is the first line of stdout and, unless `--no-card`, it is
+written to `trigger-cards/<trigger|triggers>-<id|live|all>-<utc stamp>.json`
+(the 20 newest kept) and announced by the last line,
+`publish_artifact path=<file> mime=application/vnd.agentos.trigger+json`;
+without `--json` a trigger prints as a panel and `list` as a table. Input
+and state errors (`INVALID_ARGUMENT`, `trading.trigger.invalid`,
+`trading.trigger.bad_state`, `trading.trigger.not_found`, `trading.invalid`,
+`trading.token_not_found`) exit 2; everything else exits 1; under `--json`
+every error is `{"error": …}` on stderr and writes no card.
+
+`trade protect` creates a **bracket**: a take-profit and a stop-loss on one
+position, whichever fires first stops the other (one cancels the other) —
+`protect ETH --tp +20% --sl -10%` sells all of the wallet's ETH for USDC once
+ETH is 20 % up or 10 % down, `--tp 4560 --sl 3420` uses prices, `--trail 10`
+makes the stop a trailing stop, `--tp-pct 50` takes profit on half and lets
+the stop guard the rest, and `--alert` is a range alert that only notifies
+you when the price leaves the range; `trade bracket list|show|approve|reject|
+pause|resume|stop|fire` manages one (gateway methods
+`trading.bracket.create|get|list|approve|reject|pause|resume|stop|fire`; the
+contract is [`brackets.md`](brackets.md)). `--tp` is required (a price, or
+`+20%`/`20%` over the price now) with exactly one of `--sl` (a price, or
+`-10%`/`10%` under it) or `--trail`; pass at most one size (`--pct`,
+`--amount`, `--usd`; none is `--pct 100`); `--tp-pct` needs `--pct` (or the
+default) and may not exceed it; `--alert` takes no size; a wrong combination,
+or a take-profit price not above the stop price, exits 2 before anything is
+sent. The two legs are ordinary price triggers with the trigger's checks
+(two ticks in a row, guardrails, approval threshold, daily cap); while one
+leg's order is open the other is on hold, a filled leg stops the other, and a
+failed fire releases it. A bracket created from an agent's shell always
+answers `status: "awaiting_approval"` and one approval arms both legs; yours
+is `armed` at once. `create` (`protect`), `list` and `show` are allowed from
+an agent; `approve`, `reject`, `pause`, `resume`, `stop` and `fire` are the
+user's and answer `trading.operator_required` to an agent. `fire` fires the
+`--leg` given or the nearer one; `fire --wait` waits for its order and prints
+the bracket again once it settled. The legs do not appear in `trade trigger
+list` and refuse the `trade trigger` writes. With `--json` the payload is the
+first line of stdout and, unless `--no-card`, it is written to
+`trigger-cards/<bracket|brackets>-<id|live|all>-<utc stamp>.json` (the 20
+newest trigger and bracket cards kept) and announced by the last line,
+`publish_artifact path=<file> mime=application/vnd.agentos.trigger+json`;
+without `--json` a bracket prints as a panel and `list` as a table. Input and
+state errors (`INVALID_ARGUMENT`, `trading.bracket.invalid`,
+`trading.bracket.bad_state`, `trading.bracket.not_found`, `trading.invalid`,
 `trading.token_not_found`) exit 2; everything else exits 1; under `--json`
 every error is `{"error": …}` on stderr and writes no card.
 

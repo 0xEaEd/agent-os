@@ -1396,6 +1396,40 @@ describe('ChatPage', () => {
     expect(sendParams).not.toHaveProperty('intent')
   })
 
+  it('drops the new_chat intent when the user switches to another session before sending', async () => {
+    // #3612: the page stays mounted across sessions, so an unsent new chat's
+    // intent must not ride on the first send to an existing session.
+    mockRpc = makeRpc()
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await waitFor(() => expect(probe.search).not.toContain('webchat%3Adefault'))
+    fireEvent.click(screen.getByRole('button', { name: /switch chat session/i }))
+    fireEvent.click(await screen.findByText('agent:main:webchat:other'))
+    await waitFor(() => expect(probe.search).toContain('session=agent%3Amain%3Awebchat%3Aother'))
+
+    typeAndSend('first message')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send')).toHaveLength(1),
+    )
+    const [, sendParams] = mockRpc.call.mock.calls.find(([m]) => m === 'chat.send')!
+    expect(sendParams).not.toHaveProperty('intent')
+    expect((sendParams as { sessionKey: string }).sessionKey).toBe('agent:main:webchat:other')
+  })
+
+  it('keeps the new_chat intent on the new chat itself', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await waitFor(() => expect(probe.search).not.toContain('webchat%3Adefault'))
+
+    typeAndSend('first message')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send')).toHaveLength(1),
+    )
+    const [, sendParams] = mockRpc.call.mock.calls.find(([m]) => m === 'chat.send')!
+    expect(sendParams).toMatchObject({ intent: 'new_chat' })
+  })
+
   it('keeps the new_chat intent when the move fails', async () => {
     mockRpc = rpcWithProjects()
     const base = mockRpc.call

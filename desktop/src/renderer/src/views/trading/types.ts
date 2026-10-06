@@ -16,6 +16,8 @@ export interface Token {
   logoUrl: string | null
   native: boolean
   verified: boolean
+  /** A Robinhood Stock Token (the engine's `stock_token`); older engines omit it. */
+  stockToken?: boolean
 }
 
 export interface SearchToken extends Token {
@@ -211,6 +213,8 @@ export interface Order {
   spent?: { base: LpPlanAmount; quote: LpPlanAmount } | null
   /** A buy a DCA mandate fired carries the mandate's id (docs/dca.md); null otherwise. */
   mandateId?: string | null
+  /** A swap a price trigger fired carries the trigger's id (docs/triggers.md); null otherwise. */
+  triggerId?: string | null
 }
 
 /* ── DCA mandates (docs/dca.md) ──────────────────────────────────────────── */
@@ -352,6 +356,251 @@ export interface MandateListPayload extends MandateEnvelope {
 /** Still the user's to act on: awaiting a decision, running, or paused. */
 export function isLiveMandate(status: MandateStatus): boolean {
   return status === 'awaiting_approval' || status === 'active' || status === 'paused'
+}
+
+/* ── Price triggers (docs/triggers.md) ───────────────────────────────────── */
+
+export type TriggerStatus =
+  | 'awaiting_approval'
+  | 'armed'
+  | 'triggered'
+  | 'paused'
+  | 'done'
+  | 'stopped'
+  | 'rejected'
+  | 'expired'
+
+/** What fires: a sell (token → quote), a buy (quote → token) or a notification. */
+export type TriggerKind = 'sell' | 'buy' | 'alert'
+
+export type TriggerDirection = 'below' | 'above' | 'trail'
+
+/** `pending`: the order is placed and not settled yet; `parked`: it waits for the user. */
+export type TriggerFireStatus =
+  'pending' | 'filled' | 'parked' | 'alerted' | 'skipped' | 'failed' | 'expired' | 'rejected'
+
+/** One attempt to act: the condition held (or a manual Fire now). */
+export interface TriggerFire {
+  n: number
+  at: string
+  manual: boolean
+  status: TriggerFireStatus
+  /** Machine-readable: insufficient_balance | trading.<code>. */
+  reasonCode: string | null
+  reason: string | null
+  /** The spot price seen at the fire. */
+  priceUsd: number | null
+  orderId: string | null
+  txHash: string | null
+  explorerUrl: string | null
+}
+
+/**
+ * A conditional order the engine watches and fires by itself. Every figure is
+ * the engine's: the desk never evaluates a condition, it reads `market`.
+ */
+export interface Trigger {
+  id: string
+  name: string
+  kind: TriggerKind
+  status: TriggerStatus
+  statusReason: string | null
+  chain: CardChain
+  wallet: CardWallet
+  /** Watched and traded. */
+  token: CardToken
+  /** What a sell receives / a buy spends. */
+  quote: CardToken
+  condition: {
+    direction: TriggerDirection
+    /** below/above threshold. */
+    priceUsd: number | null
+    trailPct: number | null
+    /** The price at creation, when a percent was given. */
+    fromPriceUsd: number | null
+    /** trail: the highest price since arming. */
+    peakPriceUsd: number | null
+    /** trail: peak × (1 − trailPct/100), what it would fire at now. */
+    stopPriceUsd: number | null
+    confirmTicks: number
+    hits: number
+    /** "under $3,800" | "over $5,000" | "10 % below peak". */
+    label: string
+  }
+  action: {
+    kind: TriggerKind
+    amountUsd: number | null
+    amountPct: number | null
+    amount: LpPlanAmount | null
+    /**
+     * What the fire would move at the current price; once terminal with a
+     * result, what the order actually moved.
+     */
+    estimatedUsd: number | null
+    slippagePct: number | null
+    needsApproval: boolean
+    approvalThresholdUsd: number
+    dailyCapUsd: number
+    /** "sell 50 % of ETH → USDC" | "buy $50 of ETH with USDC" | "notify". */
+    label: string
+  }
+  market: {
+    /** The last price seen. */
+    priceUsd: number | null
+    armedPriceUsd: number | null
+    /** Signed % move from priceUsd needed to fire: −2.1 must fall, +4.0 must rise; 0 when met. */
+    distancePct: number | null
+    checkedAt: string | null
+    /** The wallet's token (sell) / quote (buy) balance now; null for an alert and once terminal. */
+    balance: LpPlanAmount | null
+  }
+  /** Newest first, at most 20. */
+  fires: TriggerFire[]
+  /** When an order finished it. */
+  result: {
+    orderId: string
+    txHash: string | null
+    explorerUrl: string | null
+    amountIn: LpPlanAmount
+    amountOut: LpPlanAmount | null
+    priceUsd: number | null
+    gasUsd: number | null
+  } | null
+  validUntil: string | null
+  initiator: 'agent' | 'manual'
+  sessionKey: string | null
+  createdAt: string
+  updatedAt: string
+  approvedAt: string | null
+  armedAt: string | null
+  triggeredAt: string | null
+  expiresAt: string | null
+  /**
+   * Set when the trigger is one leg of a bracket (docs/brackets.md): its writes
+   * are refused, the bracket is acted on instead. Absent from older engines.
+   */
+  bracket?: { id: string; name: string; leg: BracketLeg } | null
+}
+
+/** What every `trading.trigger.*` write and `trading.trigger.get` answer. */
+export interface TriggerPayload extends MandateEnvelope {
+  kind: 'trigger'
+  trigger: Trigger
+  /** Only in the answer of `trading.trigger.fire`. */
+  fire?: TriggerFire
+}
+
+/** What `trading.trigger.list` answers: live first, then newest. */
+export interface TriggerListPayload extends MandateEnvelope {
+  kind: 'triggers'
+  triggers: Trigger[]
+  totals: { count: number; armed: number; awaiting: number; triggered: number }
+}
+
+/** Still the user's to act on: awaiting a decision, armed, firing, or paused. */
+export function isLiveTrigger(status: TriggerStatus): boolean {
+  return (
+    status === 'awaiting_approval' ||
+    status === 'armed' ||
+    status === 'triggered' ||
+    status === 'paused'
+  )
+}
+
+/* ── Brackets: take-profit + stop-loss as one OCO object (docs/brackets.md) ─ */
+
+/** The take-profit leg (fires above) or the stop-loss leg (fires below / trail). */
+export type BracketLeg = 'tp' | 'sl'
+
+/** A bracket sells the position, or (alert) tells the user the range was left. */
+export type BracketKind = 'sell' | 'alert'
+
+/**
+ * Two price triggers on one position that know about each other: when one
+ * fills, the other is stopped. The status is derived by the engine from the
+ * legs; the desk never re-derives it.
+ */
+export interface Bracket {
+  id: string
+  name: string
+  kind: BracketKind
+  status: TriggerStatus
+  statusReason: string | null
+  chain: CardChain
+  wallet: CardWallet
+  token: CardToken
+  quote: CardToken
+  /** The take-profit leg, a full trigger with `bracket` set. */
+  takeProfit: Trigger
+  /** The stop-loss leg. */
+  stopLoss: Trigger
+  lines: {
+    takeProfitUsd: number | null
+    /** The stop line now: the threshold, or a trail's peak × (1 − trailPct/100). */
+    stopLossUsd: number | null
+    trailPct: number | null
+    fromPriceUsd: number | null
+    /** "over $4,560". */
+    takeProfitLabel: string
+    /** "under $3,420" | "10 % below peak". */
+    stopLossLabel: string
+  }
+  action: {
+    kind: BracketKind
+    amountPct: number | null
+    amount: LpPlanAmount | null
+    amountUsd: number | null
+    /** The partial take-profit share, when under amountPct. */
+    tpPct: number | null
+    /** What the stop-loss leg would move now; terminal: what the filled leg moved. */
+    estimatedUsd: number | null
+    slippagePct: number | null
+    needsApproval: boolean
+    approvalThresholdUsd: number
+    dailyCapUsd: number
+    label: string
+  }
+  market: {
+    priceUsd: number | null
+    armedPriceUsd: number | null
+    checkedAt: string | null
+    balance: LpPlanAmount | null
+    /** % rise to the take-profit line; 0 when met. */
+    upsidePct: number | null
+    /** % fall to the stop line (negative); 0 when met. */
+    downsidePct: number | null
+    /** 0 = at the stop, 100 = at the take-profit, clamped. */
+    positionPct: number | null
+    rewardRisk: number | null
+    /** The leg closer to firing. */
+    nearest: BracketLeg | null
+  }
+  /** The leg whose fire ended (or, partial take-profit, advanced) the bracket. */
+  fired: BracketLeg | null
+  result: Trigger['result']
+  validUntil: string | null
+  initiator: 'agent' | 'manual'
+  sessionKey: string | null
+  createdAt: string
+  updatedAt: string
+  approvedAt: string | null
+  armedAt: string | null
+  expiresAt: string | null
+}
+
+/** What every `trading.bracket.*` write and `trading.bracket.get` answer. */
+export interface BracketPayload extends MandateEnvelope {
+  kind: 'bracket'
+  bracket: Bracket
+  /** Only in the answer of `trading.bracket.fire`. */
+  fire?: TriggerFire
+}
+
+/** What `trading.bracket.list` answers: live first, then newest. */
+export interface BracketListPayload extends MandateEnvelope {
+  kind: 'brackets'
+  brackets: Bracket[]
+  totals: { count: number; armed: number; awaiting: number; triggered: number }
 }
 
 export function isLpKind(kind: OrderKind | undefined | null): boolean {
@@ -723,3 +972,113 @@ export const CHAINS: readonly {
   { id: 8453, key: 'base', name: 'Base', short: 'Base', abbr: 'BA' },
   { id: 4663, key: 'robinhood', name: 'Robinhood Chain', short: 'Robinhood', abbr: 'RH' },
 ]
+
+/* ── Markets (docs/markets.md, "Payload") ────────────────────────────────── */
+
+/** Which side of the pool the asked-about token is on: `quote` = it prices
+ *  the counterparty (AI/NVDA), `base` = it is priced in it (NVDA/USDG). */
+export type MarketsSide = 'quote' | 'base'
+
+export interface MarketsOracle {
+  usd: number
+  updatedAt: string
+  ageSeconds: number
+  stale: boolean
+  paused: boolean
+}
+
+/** The token the read is about. */
+export interface MarketsToken {
+  address: string
+  symbol: string
+  name: string
+  decimals: number
+  logoUrl: string | null
+  verified: boolean
+  stockToken: boolean
+  priceUsd: number | null
+  oracle: MarketsOracle | null
+}
+
+/** The other token in a pool. */
+export interface MarketsCounterparty {
+  address: string
+  symbol: string
+  name: string
+  decimals: number
+  logoUrl: string | null
+  verified: boolean
+  stockToken: boolean
+  lookalike: boolean
+  /** The chain's native coin (the zero address): the engine names it ETH. */
+  native?: boolean
+}
+
+export interface MarketsPool {
+  /** GeckoTerminal's address; for a v4 pool the poolId. */
+  poolAddress: string
+  /** Counterparty first on quote rows, the token first on base rows. */
+  pair: string
+  side: MarketsSide
+  dex: { id: string; label: string; version: 'v2' | 'v3' | 'v4' | null }
+  launcher: string | null
+  viaUniswap: boolean
+  feePct: number | null
+  counterparty: MarketsCounterparty
+  tvlUsd: number | null
+  volume24hUsd: number | null
+  txns24h: { buys: number; sells: number } | null
+  /** quote rows: the counterparty's USD price; base rows: the token's. */
+  priceUsd: number | null
+  /** quote rows: the counterparty priced in the token; base rows: the token priced in the counterparty. */
+  priceInToken: number | null
+  change24hPct: number | null
+  /** base rows of a Stock Token only: the pool's price against the oracle. */
+  premiumPct: number | null
+  createdAt: string | null
+  url: string
+  /** What the Swap button prefills: sell the token, buy the counterparty. */
+  swap: { chainId: number; tokenIn: string; tokenOut: string }
+}
+
+export interface MarketsCounts {
+  scanned: number
+  shown: number
+  belowMinTvl: number
+  hiddenLookalikes: number
+  /** Rows above the floor that `limit` cut ("· 12 more over the limit"); older engines omit it. */
+  limited?: number
+  pages: number
+  pageCap: number
+  /** The page cap, not `limit`, ended a read that had more pools: Deeper is offered (not yet deep). */
+  pageCapHit?: boolean
+  /**
+   * A 429 cut the read short: Deeper is offered again on a read that was not
+   * deep, *Read again* on one that was; older engines omit it.
+   */
+  rateLimited?: boolean
+}
+
+export interface MarketsParams {
+  target: string
+  chainId: number
+  side?: 'all' | MarketsSide
+  minTvlUsd?: number
+  limit?: number
+  lookalikes?: boolean
+  deep?: boolean
+}
+
+export interface MarketsPayload {
+  version: number
+  kind: 'markets'
+  chain: { id: number; key: string; name: string; explorer: string }
+  fetchedAt: string
+  /** Paging stopped early (rate limit / cap). */
+  partial: boolean
+  warnings: string[]
+  token: MarketsToken
+  counts: MarketsCounts
+  sections: { quote: MarketsPool[]; base: MarketsPool[] }
+  request: { kind: 'markets'; params: MarketsParams }
+}

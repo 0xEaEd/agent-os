@@ -1,20 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { t } from '~/i18n'
-import type { Mandate, Order, Wallet } from '../types'
+import type { Bracket, Mandate, Order, Trigger, Wallet } from '../types'
 import { ApprovalCard } from './ApprovalCard'
+import { BracketCard } from './BracketCard'
 import { groupAsks } from './desk-logic'
 import { MandateCard } from './MandateCard'
+import { TriggerCard } from './TriggerCard'
 import { useAsksAnchor } from './useAsksAnchor'
 
 const NO_MANDATES: Mandate[] = []
+const NO_TRIGGERS: Trigger[] = []
+const NO_BRACKETS: Bracket[] = []
 
 /**
  * Where the agent's asks dock: between the transcript and the composer, at
  * the point of cause. Height-bounded so a queue of asks can never push the
  * composer off-screen; the region scrolls inside. A card that settles stays
  * for a while as a one-line stamp so the outcome is read where the ask was.
- * The legs of a multisend are one ask and one card. A DCA mandate waiting
- * for approval comes first: one decision there starts every buy after it.
+ * The legs of a multisend are one ask and one card. A bracket waiting for
+ * approval comes first (one decision arms both its legs), then a price
+ * trigger, then a DCA mandate: one decision there arms (or starts) every
+ * order after it.
  */
 export function ApprovalsRegion({
   pending,
@@ -29,6 +35,14 @@ export function ApprovalsRegion({
   mandateDeciding = null,
   onApproveMandate,
   onRejectMandate,
+  triggers = NO_TRIGGERS,
+  triggerDeciding = null,
+  onApproveTrigger,
+  onRejectTrigger,
+  brackets = NO_BRACKETS,
+  bracketDeciding = null,
+  onApproveBracket,
+  onRejectBracket,
 }: {
   pending: Order[]
   settled: Order[]
@@ -47,6 +61,18 @@ export function ApprovalsRegion({
   mandateDeciding?: string | null
   onApproveMandate?: (m: Mandate) => void
   onRejectMandate?: (m: Mandate) => void
+  /** Price triggers awaiting the operator (docs/triggers.md), shown above the mandates. */
+  triggers?: Trigger[]
+  /** The trigger with a decision in flight. */
+  triggerDeciding?: string | null
+  onApproveTrigger?: (tr: Trigger) => void
+  onRejectTrigger?: (tr: Trigger) => void
+  /** Brackets awaiting the operator (docs/brackets.md), shown above the triggers. */
+  brackets?: Bracket[]
+  /** The bracket with a decision in flight. */
+  bracketDeciding?: string | null
+  onApproveBracket?: (b: Bracket) => void
+  onRejectBracket?: (b: Bracket) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const asks = useMemo(() => groupAsks(pending), [pending])
@@ -65,7 +91,12 @@ export function ApprovalsRegion({
     el?.scrollIntoView({ block: 'nearest' })
   }, [focusOrderId, asks])
 
-  const shown = asks.length > 0 || stamps.length > 0 || mandates.length > 0
+  const shown =
+    asks.length > 0 ||
+    stamps.length > 0 ||
+    mandates.length > 0 ||
+    triggers.length > 0 ||
+    brackets.length > 0
   // Docking takes its room from the transcript's foot; give the reader it back.
   useAsksAnchor(ref, shown)
 
@@ -78,6 +109,30 @@ export function ApprovalsRegion({
       aria-label={t('trading.card.region')}
       data-testid="approvals-region"
     >
+      {brackets.map((b, i) => (
+        <BracketCard
+          key={b.id}
+          bracket={b}
+          wallets={wallets}
+          deciding={bracketDeciding === b.id}
+          onApprove={(x) => onApproveBracket?.(x)}
+          onReject={(x) => onRejectBracket?.(x)}
+          // The first ask on screen takes focus once, on its least destructive button.
+          focusOnMount={i === 0 && asks.length === 0}
+        />
+      ))}
+      {triggers.map((tr, i) => (
+        <TriggerCard
+          key={tr.id}
+          trigger={tr}
+          wallets={wallets}
+          deciding={triggerDeciding === tr.id}
+          onApprove={(x) => onApproveTrigger?.(x)}
+          onReject={(x) => onRejectTrigger?.(x)}
+          // The first ask on screen takes focus once, on its least destructive button.
+          focusOnMount={i === 0 && asks.length === 0 && brackets.length === 0}
+        />
+      ))}
       {mandates.map((m, i) => (
         <MandateCard
           key={m.id}
@@ -87,7 +142,9 @@ export function ApprovalsRegion({
           onApprove={(x) => onApproveMandate?.(x)}
           onReject={(x) => onRejectMandate?.(x)}
           // The first ask on screen takes focus once, on its least destructive button.
-          focusOnMount={i === 0 && asks.length === 0}
+          focusOnMount={
+            i === 0 && asks.length === 0 && triggers.length === 0 && brackets.length === 0
+          }
         />
       ))}
       {asks.map((ask) => (

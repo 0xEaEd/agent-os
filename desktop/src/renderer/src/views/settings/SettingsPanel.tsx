@@ -9,6 +9,7 @@ import { AboutPane } from './panes/AboutPane'
 import { AdvancedPane } from './panes/AdvancedPane'
 import { AppearancePane } from './panes/AppearancePane'
 import { BehaviourPane } from './panes/BehaviourPane'
+import { EnvironmentPane } from './panes/EnvironmentPane'
 import { GatewayPane } from './panes/GatewayPane'
 import { NotificationsPane } from './panes/NotificationsPane'
 import { ProvidersPane } from './panes/ProvidersPane'
@@ -23,6 +24,7 @@ const PANE: Record<SettingsSection, () => React.JSX.Element> = {
   providers: ProvidersPane,
   router: RouterPane,
   skills: SkillsPane,
+  environment: EnvironmentPane,
   trading: TradingPane,
   gateway: GatewayPane,
   appearance: AppearancePane,

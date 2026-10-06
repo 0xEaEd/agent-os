@@ -29,6 +29,7 @@ import { usePendingQueue, type PendingComposerBridge } from '@/views/chat/usePen
 import { useRoutePin } from '@/views/chat/useRoutePin'
 import { useSlashCommands } from '@/views/chat/useSlashCommands'
 import type { LpActions } from '@/views/chat/transcript/lp'
+import type { MarketsSwapHandler } from '@/views/chat/transcript/markets'
 import { useTranscript } from '@/views/chat/useTranscript'
 import { t as tw } from '@/i18n'
 import '@/i18n/en/chat'
@@ -40,6 +41,7 @@ import { rememberLastSession } from '~/lib/last-session'
 import { useQuickAskSend } from '~/lib/use-quick-ask'
 import { ease, spring } from '~/lib/motion'
 import { useGateway } from '~/stores/gateway'
+import { useTradingUi } from '~/stores/trading-ui'
 import { useLive } from '~/stores/live'
 import { useQuickAsk } from '~/stores/quick-ask'
 import { useSettings } from '~/stores/settings'
@@ -49,7 +51,12 @@ import { useConfigSnapshot } from '~/views/settings/use-snapshot'
 import { ProjectChip } from './ProjectChip'
 import { useDeskInstruments, type DeskProps } from '~/views/trading/desk/useDeskInstruments'
 import { useTradeLedger } from '~/views/trading/desk/useTradeLedger'
-import { requireMandateTouchId } from '~/views/trading/touch-id'
+import type { Token } from '~/views/trading/types'
+import {
+  requireBracketTouchId,
+  requireMandateTouchId,
+  requireTriggerTouchId,
+} from '~/views/trading/touch-id'
 
 const NEW_CHAT_COMBO = 'mod+shift+o'
 const DEFAULT_AGENT_KEY = webchatSessionKey('main')
@@ -285,6 +292,20 @@ function ConnectedChat({
                   (m, p) => rpc.call(m, p),
                   String(params.mandateId ?? ''),
                 )
+              // A trigger card's "Approve & arm" (docs/triggers.md) is gated the same way.
+              if (method === 'trading.trigger.approve')
+                await requireTriggerTouchId(
+                  (m, p) => rpc.call(m, p),
+                  String(params.triggerId ?? ''),
+                )
+              // A bracket card's "Approve & arm" (one decision for both legs)
+              // and its "Sell now", which trades at once (docs/brackets.md).
+              if (method === 'trading.bracket.approve' || method === 'trading.bracket.fire')
+                await requireBracketTouchId(
+                  (m, p) => rpc.call(m, p),
+                  String(params.bracketId ?? ''),
+                  method === 'trading.bracket.fire' ? 'fire' : 'approve',
+                )
               return rpc.call(method, params)
             },
             onOrder: (orderId) => {
@@ -294,6 +315,35 @@ function ConnectedChat({
           }
         : null,
     [atDesk, rpc],
+  )
+
+  // A markets card's Swap (docs/markets.md) fills the desk's ticket: the card
+  // names two addresses, the ticket wants tokens, so both are resolved over
+  // this connection first. A plain chat has no ticket, so no button there.
+  const requestSwap = useTradingUi((s) => s.requestSwap)
+  const onMarketsSwap = useMemo<MarketsSwapHandler | null>(
+    () =>
+      atDesk
+        ? (swap) => {
+            const resolve = (address: string) =>
+              rpc.call<{ token: Token }>('trading.tokens.resolve', {
+                chainId: swap.chainId,
+                address,
+              })
+            void Promise.all([resolve(swap.tokenIn), resolve(swap.tokenOut)])
+              .then(([tokenIn, tokenOut]) =>
+                requestSwap({
+                  chainId: swap.chainId,
+                  tokenIn: tokenIn.token,
+                  tokenOut: tokenOut.token,
+                }),
+              )
+              .catch(() => {
+                /* an unknown token: the ticket stays as it is */
+              })
+          }
+        : null,
+    [atDesk, rpc, requestSwap],
   )
 
   const {
@@ -323,6 +373,8 @@ function ConnectedChat({
     routePinned: route.isPinned,
     lpActions,
     dcaActions: lpActions,
+    triggerActions: lpActions,
+    onMarketsSwap,
   })
   const attachments = useAttachments()
   useEffect(() => {
@@ -373,6 +425,14 @@ function ConnectedChat({
   const enterToSend = useSettings((s) => s.settings.general.enterToSend)
 
   const pendingIntentRef = useRef<string | null>(null)
+  // `new_chat` belongs to the keyless home's fresh key. This view stays
+  // mounted across sessions, so landing on a keyed one (a sidebar session, a
+  // project folder's New chat, which creates its row first) must drop it, or
+  // the first send there is rejected as a session_key conflict (#3612). The
+  // home's own first send consumes the intent before it gives the key a URL.
+  useEffect(() => {
+    if (paramKey) pendingIntentRef.current = null
+  }, [paramKey])
   const sendDrainedHeadRef = useRef<
     (text: string, atts: PendingAttachment[], intent: string | null) => void
   >(() => {})
@@ -831,12 +891,17 @@ function ConnectedChat({
 
       <div className="chat-stage" onDrop={onDrop} onDragOver={onDragOver} onPaste={onPaste}>
         <h1 className="sr-only">{tw('chat.srTitle')}</h1>
-        <div className="chat-thread" ref={containerRef} data-history-ready="false" />
-        <div className="chat-history-loading" role="status" aria-live="polite">
-          <span className="chat-history-loading__dot" aria-hidden="true" />
-          <span>{desk ? t('trading.chat.opening') : tw('chat.opening')}</span>
+        {/* The transcript's own box: the loading line and the desk's empty
+            hint are positioned in it, so neither can spill over the desk's
+            approvals region or the composer below it. */}
+        <div className="chat-transcript">
+          <div className="chat-thread" ref={containerRef} data-history-ready="false" />
+          <div className="chat-history-loading" role="status" aria-live="polite">
+            <span className="chat-history-loading__dot" aria-hidden="true" />
+            <span>{desk ? t('trading.chat.opening') : tw('chat.opening')}</span>
+          </div>
+          {instruments.emptyHint}
         </div>
-        {instruments.emptyHint}
 
         {/* Zero-height dock at the foot of the transcript — above the desk's
             approvals region, whose cards (and their notes) it used to cover,

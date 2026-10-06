@@ -6,9 +6,20 @@ import { useConnection } from '@/stores/connection'
 import type { RawJob, RawRun } from '@/views/cron/logic'
 import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
-import { useMandateActions, useMandates, type MandateActions } from '~/stores/trading'
+import {
+  useBracketActions,
+  useBrackets,
+  useMandateActions,
+  useMandates,
+  useTriggerActions,
+  useTriggers,
+  type BracketActions,
+  type MandateActions,
+  type TriggerActions,
+} from '~/stores/trading'
 import { errorText } from '../logic'
-import type { Mandate } from '../types'
+import type { Bracket, Mandate, Trigger } from '../types'
+import { deskBrackets } from './bracket-logic'
 import {
   isSessionMission,
   jobText,
@@ -20,6 +31,7 @@ import {
   type MissionForm,
 } from './desk-logic'
 import { deskMandates } from './mandate-logic'
+import { deskTriggers } from './trigger-logic'
 
 /**
  * Missions are cron jobs that post into the desk's chat. This hook reads
@@ -28,7 +40,9 @@ import { deskMandates } from './mandate-logic'
  * truth for every state word shown.
  *
  * DCA mandates (docs/dca.md) sit beside them: the engine runs those itself,
- * so the desk only lists them and forwards the user's controls.
+ * so the desk only lists them and forwards the user's controls. Price
+ * triggers (docs/triggers.md) are listed the same way, and so are brackets
+ * (docs/brackets.md): one row per bracket, never one per leg.
  */
 
 const MISSIONS_KEY = ['trading', 'missions'] as const
@@ -103,6 +117,18 @@ export interface MissionsApi {
   awaitingMandates: Mandate[]
   /** The mandate controls (approve, pause, buy now, update …), toasting their own outcome. */
   mandate: MandateActions
+  /** This desk's price triggers: filed to the session or unfiled; live, or finished within the hour. */
+  triggers: Trigger[]
+  /** Every trigger awaiting the operator's approval, whichever chat proposed it. */
+  awaitingTriggers: Trigger[]
+  /** The trigger controls (approve, pause, fire now, stop …), toasting their own outcome. */
+  trigger: TriggerActions
+  /** This desk's brackets: filed to the session or unfiled; live, or finished within the hour. */
+  brackets: Bracket[]
+  /** Every bracket awaiting the operator's approval, whichever chat proposed it. */
+  awaitingBrackets: Bracket[]
+  /** The bracket controls (approve, pause, sell now, stop …): one write for both legs. */
+  bracket: BracketActions
 }
 
 export function useMissions(sessionKey: string, enabled = true): MissionsApi {
@@ -141,6 +167,31 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
   const awaitingMandates = useMemo(
     () => allMandates.mandates.filter((m) => m.status === 'awaiting_approval'),
     [allMandates.mandates],
+  )
+  // Triggers the same way: every one, so a fired or stopped trigger still
+  // says how it ended for an hour.
+  const allTriggers = useTriggers(true, enabled)
+  const triggerActions = useTriggerActions()
+  const triggers = useMemo(
+    () => deskTriggers(allTriggers.triggers, sessionKey, minute),
+    [allTriggers.triggers, sessionKey, minute],
+  )
+  const awaitingTriggers = useMemo(
+    () => allTriggers.triggers.filter((tr) => tr.status === 'awaiting_approval'),
+    [allTriggers.triggers],
+  )
+
+  // Brackets the same way: every one, so a bracket that took profit or was
+  // stopped still says how it ended for an hour.
+  const allBrackets = useBrackets(true, enabled)
+  const bracketActions = useBracketActions()
+  const brackets = useMemo(
+    () => deskBrackets(allBrackets.brackets, sessionKey, minute),
+    [allBrackets.brackets, sessionKey, minute],
+  )
+  const awaitingBrackets = useMemo(
+    () => allBrackets.brackets.filter((b) => b.status === 'awaiting_approval'),
+    [allBrackets.brackets],
   )
 
   const stopCompleted = useCallback(
@@ -292,6 +343,12 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
     mandates,
     awaitingMandates,
     mandate: mandateActions,
+    triggers,
+    awaitingTriggers,
+    trigger: triggerActions,
+    brackets,
+    awaitingBrackets,
+    bracket: bracketActions,
     loading: connected && query.isPending,
     running,
     busy: create.isPending || update.isPending || run.isPending || removeJob.isPending,
@@ -355,6 +412,9 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
       const active = missions.filter((job) => job.id && job.enabled !== false)
       // Only the mandates filed to this session: an unfiled one is the
       // operator's and stays on screen at the fresh desk too.
+      // Price triggers and brackets are left armed: a stop-loss guards the
+      // wallet, not this chat, and pausing one silently would be the
+      // dangerous default.
       const running = mandates.filter((m) => m.status === 'active' && m.sessionKey === sessionKey)
       if (active.length === 0 && running.length === 0) return true
       try {

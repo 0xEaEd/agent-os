@@ -142,8 +142,8 @@ Open Settings with ⌘, or the toolbar gear. Escape or **Done** closes it.
 
 | Group | Sections |
 | --- | --- |
-| Agent | Providers, Pilot Router, Skills, Trading |
-| App | Gateway, Appearance, Notifications, Behaviour, Shortcuts |
+| Agent | Providers, Pilot Router, Skills, Environment, Trading |
+| App | Gateway, Appearance, Notifications, Security, Behaviour, Shortcuts |
 | More | Advanced, About |
 
 Providers and Pilot Router edit the gateway's own configuration through the
@@ -152,6 +152,14 @@ same guided setup the Web UI uses. Appearance holds the theme
 the optional pet mascot. Behaviour holds open at login, what to open at
 launch, stopping the gateway on quit, the Quick Ask shortcut, and Return vs
 ⌘Return to send.
+
+Environment is the Web UI's Environment screen inside the app: every variable
+the gateway, its providers and your skills read, grouped by what uses it,
+with set, missing and shadowed counts. Set, replace, import from a source
+that already holds the credential, or remove a variable in
+`~/.agentos/.env`; **Add variable** stores one of your own. Listings never
+carry a value. Showing a secret asks first, is rate limited by the gateway,
+and hides again after 30 seconds.
 
 ## Updates
 

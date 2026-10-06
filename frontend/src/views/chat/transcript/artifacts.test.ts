@@ -32,6 +32,8 @@ import {
 } from './artifacts'
 import { CHART_ARTIFACT_MIME } from './chart'
 import { DCA_ARTIFACT_MIME } from './dca'
+import { MARKETS_ARTIFACT_MIME } from './markets'
+import { TRIGGER_ARTIFACT_MIME } from './trigger'
 import { LP_ARTIFACT_MIME } from './lp'
 
 /* ── artifactMime / artifactName (chat.js:7523-7529) ────────────────────── */
@@ -127,6 +129,24 @@ describe('artifactCategory (parity chat.js:7538)', () => {
       artifactCategory({ mime: `${DCA_ARTIFACT_MIME}; charset=utf-8`, name: 'x.json' } as never),
     ).toBe('dca')
   })
+  it('classifies the AgentOS trigger mime as "trigger" (no legacy counterpart)', () => {
+    expect(artifactCategory({ mime: TRIGGER_ARTIFACT_MIME, name: 'trigger.json' } as never)).toBe(
+      'trigger',
+    )
+    expect(
+      artifactCategory({
+        mime: `${TRIGGER_ARTIFACT_MIME}; charset=utf-8`,
+        name: 'x.json',
+      } as never),
+    ).toBe('trigger')
+    expect(
+      artifactCategory({ mime: 'APPLICATION/VND.AGENTOS.TRIGGER+JSON', name: 'x.json' } as never),
+    ).toBe('trigger')
+    // A near miss is not a trigger card.
+    expect(
+      artifactCategory({ mime: 'application/vnd.agentos.triggers+json', name: 'x.json' } as never),
+    ).not.toBe('trigger')
+  })
 })
 
 /* ── artifactCategoryLabel (chat.js:7551) ───────────────────────────────── */
@@ -140,6 +160,8 @@ describe('artifactCategoryLabel (parity chat.js:7551)', () => {
     expect(artifactCategoryLabel('chart')).toBe('chart')
     expect(artifactCategoryLabel('lp')).toBe('lp')
     expect(artifactCategoryLabel('dca')).toBe('dca')
+    expect(artifactCategoryLabel('trigger')).toBe('trigger')
+    expect(artifactCategoryLabel('markets')).toBe('markets')
   })
   it('defaults unknown / visual / file categories to "file"', () => {
     expect(artifactCategoryLabel('visual')).toBe('file')
@@ -430,6 +452,54 @@ describe('createArtifactRenderer DCA artifacts', () => {
   })
 })
 
+/* ── trigger card placeholder + mounter handoff (AgentOS-native) ────────── */
+
+const TRIGGER_ARTIFACT: Artifact = {
+  id: 'trg-1',
+  name: 'trigger-stop-loss-weth-20261004T091500Z.json',
+  mime: TRIGGER_ARTIFACT_MIME,
+  download_url: '/api/v1/artifacts/trg-1',
+}
+
+describe('createArtifactRenderer trigger artifacts', () => {
+  it('renders a mount placeholder carrying the hooks the trigger mounter looks for', () => {
+    const { deps } = chartRendererDeps()
+    const container = document.createElement('div')
+    container.innerHTML = createArtifactRenderer(deps).renderArtifacts([
+      TRIGGER_ARTIFACT,
+      DCA_ARTIFACT,
+    ])
+
+    const host = container.querySelector<HTMLElement>('[data-trigger-src]')
+    expect(host).not.toBeNull()
+    expect(host?.classList.contains('msg-artifact-trigger')).toBe(true)
+    expect(host?.dataset.triggerSrc).toBe(
+      '/api/v1/artifacts/trg-1?sessionKey=agent%3Amain%3Awebchat%3Atest&token=tok',
+    )
+    expect(host?.dataset.artifactCategory).toBe('trigger')
+    expect(host?.querySelector('.msg-artifact-trigger__body')).not.toBeNull()
+    expect(host?.querySelector('.msg-artifact-trigger__status')).toHaveTextContent(
+      'Loading trigger…',
+    )
+    // Its own group, apart from the DCA group next to it; never a download target.
+    expect(container.querySelector('.msg-artifact-trigger-group [data-trigger-src]')).toBe(host)
+    expect(container.querySelector('.msg-artifact-trigger-group [data-dca-src]')).toBeNull()
+    expect(container.querySelector('.msg-artifact-dca-group [data-dca-src]')).not.toBeNull()
+    expect(container.querySelector('.msg-artifact-files')).toBeNull()
+    expect(container.querySelector('[data-artifact-download]')).toBeNull()
+  })
+
+  it('hands a streamed trigger artifact to the mounter as soon as it lands', () => {
+    const mountCharts = vi.fn()
+    const { deps, body } = chartRendererDeps({ mountCharts })
+
+    createArtifactRenderer(deps).appendArtifact(TRIGGER_ARTIFACT)
+
+    expect(mountCharts).toHaveBeenCalledWith(body)
+    expect(body.querySelector('[data-trigger-src]')).not.toBeNull()
+  })
+})
+
 /* ── off-gateway hosts (the desktop renderer) ───────────────────────────── */
 
 describe('artifact URLs on an off-gateway host', () => {
@@ -581,5 +651,48 @@ describe('artifactSizeLabel / artifactSummary', () => {
     expect(chip?.querySelector('.msg-file-chip__meta')?.textContent).toBe(
       'application/octet-stream · 5 KB',
     )
+  })
+})
+
+/* ── markets card placeholder + mounter handoff (AgentOS-native) ────────── */
+
+const MARKETS_ARTIFACT: Artifact = {
+  id: 'mk-1',
+  name: 'markets-NVDA-20261006T041200Z.json',
+  mime: MARKETS_ARTIFACT_MIME,
+  download_url: '/api/v1/artifacts/mk-1',
+}
+
+describe('createArtifactRenderer markets artifacts', () => {
+  it('classifies the markets mime as "markets" and nothing near it', () => {
+    expect(artifactCategory(MARKETS_ARTIFACT)).toBe('markets')
+    expect(
+      artifactCategory({ mime: `${MARKETS_ARTIFACT_MIME}; charset=utf-8`, name: 'x' } as never),
+    ).toBe('markets')
+    expect(
+      artifactCategory({ mime: 'application/vnd.agentos.market+json', name: 'x.json' } as never),
+    ).not.toBe('markets')
+  })
+
+  it('renders a mount placeholder in its own group, never a download target', () => {
+    const { deps } = chartRendererDeps()
+    const container = document.createElement('div')
+    container.innerHTML = createArtifactRenderer(deps).renderArtifacts([
+      MARKETS_ARTIFACT,
+      TRIGGER_ARTIFACT,
+    ])
+    const host = container.querySelector<HTMLElement>('[data-markets-src]')
+    expect(host?.classList.contains('msg-artifact-markets')).toBe(true)
+    expect(host?.dataset.marketsSrc).toBe(
+      '/api/v1/artifacts/mk-1?sessionKey=agent%3Amain%3Awebchat%3Atest&token=tok',
+    )
+    expect(host?.dataset.artifactCategory).toBe('markets')
+    expect(host?.querySelector('.msg-artifact-markets__body')).not.toBeNull()
+    expect(host?.querySelector('.msg-artifact-markets__status')).toHaveTextContent(
+      'Loading markets…',
+    )
+    expect(container.querySelector('.msg-artifact-markets-group [data-markets-src]')).toBe(host)
+    expect(container.querySelector('.msg-artifact-markets-group [data-trigger-src]')).toBeNull()
+    expect(container.querySelector('[data-artifact-download]')).toBeNull()
   })
 })

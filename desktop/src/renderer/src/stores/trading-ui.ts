@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { isTradingAgentKey } from '~/views/trading/desk/agent'
 import { BOOK_DEFAULT, BOOK_MAX, BOOK_MIN } from '~/views/trading/desk/desk-logic'
+import { DEFAULT_MIN_TVL } from '~/views/trading/markets-logic'
+import type { Token } from '~/views/trading/types'
 
 /**
  * The desk's own chrome state: the BOOK's width and whether it is open, the
@@ -43,7 +45,47 @@ function save(key: string, value: string): void {
   }
 }
 
-export type BookTab = 'portfolio' | 'swap' | 'orders' | 'history' | 'tools'
+export type BookTab = 'portfolio' | 'swap' | 'markets' | 'orders' | 'history' | 'tools'
+
+/**
+ * A swap asked for from anywhere — a Markets row, a chat card's Swap, a
+ * Holdings row — for whichever ticket is on screen (the BOOK's or the full
+ * desk's) to take. `seq` grows by one per request, so the same pair asked
+ * for twice fills the ticket twice. `tokenOut` and `wallet` are optional:
+ * a Holdings row names only what to sell and whose it is.
+ */
+export interface SwapRequest {
+  chainId: number
+  tokenIn: Token
+  tokenOut?: Token
+  wallet?: string
+  seq: number
+}
+
+/**
+ * The Markets tab's search and filters. Kept here rather than in the tab so
+ * a trip to the ticket from a row's Swap, and back, finds the list as it was.
+ */
+export interface MarketsView {
+  /** What the search field submitted: a symbol or an address. */
+  query: string
+  /** The token's address when the query came from a row that already knows it. */
+  address: string | null
+  /** A chain the user picked in the tab; null follows the desk (Robinhood by default). */
+  chainId: number | null
+  minTvlUsd: number
+  lookalikes: boolean
+  deep: boolean
+}
+
+const MARKETS_VIEW: MarketsView = {
+  query: '',
+  address: null,
+  chainId: null,
+  minTvlUsd: DEFAULT_MIN_TVL,
+  lookalikes: false,
+  deep: false,
+}
 
 /** A sheet the BOOK asks the chat to open: Send posts into the chat, so it lives there. */
 export type DeskSheet =
@@ -62,6 +104,9 @@ interface TradingUiStore {
    * shell's ⌘N can start a fresh desk session instead of leaving for Chat.
    */
   startFreshDesk: (() => void) | null
+  /** The latest swap asked for; the ticket that takes it clears it. */
+  swapRequest: SwapRequest | null
+  markets: MarketsView
   setBookWidth(width: number): void
   toggleBook(): void
   setBookOpen(open: boolean): void
@@ -69,7 +114,25 @@ interface TradingUiStore {
   setDeskMode(on: boolean): void
   openSheet(sheet: DeskSheet): void
   setStartFreshDesk(fn: (() => void) | null): void
+  /**
+   * Fill a ticket with this pair. Beside the chat it also brings the BOOK
+   * up on its Swap tab; at the full desk the ticket is always on screen and
+   * the BOOK's own tab and open-ness are left as they were.
+   */
+  requestSwap(req: Omit<SwapRequest, 'seq'>): void
+  /** The ticket took request `seq`; a newer one stays. */
+  clearSwapRequest(seq: number): void
+  /** Patch the Markets tab's search and filters. */
+  setMarkets(patch: Partial<MarketsView>): void
+  /**
+   * Open Markets on one token (a Holdings row's Markets action). Beside the
+   * chat this selects the BOOK's Markets tab; the full desk switches its own.
+   */
+  openMarkets(req: { chainId: number; address: string; symbol: string }): void
 }
+
+/** Survives a cleared request, so a seq is never handed out twice in one launch. */
+let lastSwapSeq = 0
 
 export const useTradingUi = create<TradingUiStore>((set) => ({
   bookWidth: loadWidth(),
@@ -78,6 +141,8 @@ export const useTradingUi = create<TradingUiStore>((set) => ({
   deskMode: false,
   sheet: null,
   startFreshDesk: null,
+  swapRequest: null,
+  markets: MARKETS_VIEW,
   setBookWidth(width) {
     const clamped = Math.round(Math.min(BOOK_MAX, Math.max(BOOK_MIN, width)))
     save(WIDTH_KEY, String(clamped))
@@ -105,6 +170,28 @@ export const useTradingUi = create<TradingUiStore>((set) => ({
   },
   setStartFreshDesk(fn) {
     set({ startFreshDesk: fn })
+  },
+  requestSwap(req) {
+    set((s) => {
+      const swapRequest = { ...req, seq: ++lastSwapSeq }
+      if (s.deskMode) return { swapRequest }
+      save(OPEN_KEY, 'true')
+      return { swapRequest, bookTab: 'swap', bookOpen: true }
+    })
+  },
+  clearSwapRequest(seq) {
+    set((s) => (s.swapRequest?.seq === seq ? { swapRequest: null } : {}))
+  },
+  setMarkets(patch) {
+    set((s) => ({ markets: { ...s.markets, ...patch } }))
+  },
+  openMarkets({ chainId, address, symbol }) {
+    set((s) => {
+      const markets = { ...s.markets, query: symbol || address, address, chainId, deep: false }
+      if (s.deskMode) return { markets }
+      save(OPEN_KEY, 'true')
+      return { markets, bookTab: 'markets', bookOpen: true }
+    })
   },
 }))
 

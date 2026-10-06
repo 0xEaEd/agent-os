@@ -6,6 +6,7 @@ import {
   ArrowLeftRight,
   Eye,
   EyeOff,
+  Layers,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '~/components/ui/button'
@@ -28,6 +29,7 @@ import {
   splitDust,
   walletLabel,
 } from './logic'
+import { isStockToken } from './markets-logic'
 import { UnwrapNote } from './Orders'
 import { AssetCell, Empty, ErrorState, Skeleton, Tick } from './parts'
 import { isWrappedEth, type Holding, type Wallet } from './types'
@@ -43,6 +45,7 @@ export function Holdings({
   selected,
   onSelect,
   onSwap,
+  onMarkets,
   showChain,
   hiddenCount = 0,
   showHidden = false,
@@ -63,6 +66,8 @@ export function Holdings({
   selected: Holding | null
   onSelect: (holding: Holding | null) => void
   onSwap: (holding: Holding) => void
+  /** A Stock Token row's Markets action: every pool it trades in (docs/markets.md). */
+  onMarkets?: (holding: Holding) => void
   showChain: boolean
   /** Junk tokens the engine keeps out of `holdings` (and the totals). */
   hiddenCount?: number
@@ -337,6 +342,25 @@ export function Holdings({
                             aria-hidden
                           />
                         </Button>
+                        {onMarkets && isStockToken(h.token) ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`${t('trading.holdings.markets')} ${h.token.symbol}`}
+                            title={t('trading.holdings.markets')}
+                            data-testid="holding-markets"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onMarkets(h)
+                            }}
+                          >
+                            <Layers
+                              className="size-3.5 text-muted-foreground"
+                              strokeWidth={1.75}
+                              aria-hidden
+                            />
+                          </Button>
+                        ) : null}
                         <Button
                           variant="ghost"
                           size="icon"

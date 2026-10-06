@@ -23,10 +23,12 @@ import {
   useWalletStatus,
   useWallets,
 } from '~/stores/trading'
+import { useTradingUi } from '~/stores/trading-ui'
 import { useUi } from '~/stores/ui'
 import { Notice } from '~/views/settings/parts'
 import { History } from './History'
 import { Holdings } from './Holdings'
+import { Markets } from './Markets'
 import { EMPTY_TOTALS, errorText, filterHoldings, isAwaitingApproval, sameAddress } from './logic'
 import { Orders } from './Orders'
 import { Overview } from './Overview'
@@ -49,7 +51,7 @@ import { WalletHead } from './WalletHead'
 import { Budget, WalletRail, type WalletAction, type WalletSelection } from './WalletRail'
 import { WalletSheet, type WalletSheetMode } from './WalletSheet'
 
-type Tab = 'holdings' | 'history' | 'orders' | 'approvals'
+type Tab = 'holdings' | 'markets' | 'history' | 'orders' | 'approvals'
 
 /**
  * The desk. Three columns once the vault is open; before that, one message
@@ -227,7 +229,17 @@ function Desk({
   const [chain, setChain] = useState<ChainId | null>(null)
   const [tab, setTab] = useState<Tab>('holdings')
   const [picked, setPicked] = useState<Holding | null>(null)
+  const requestSwap = useTradingUi((s) => s.requestSwap)
+  const openMarkets = useTradingUi((s) => s.openMarkets)
+  const swapRequest = useTradingUi((s) => s.swapRequest)
+  const clearSwapRequest = useTradingUi((s) => s.clearSwapRequest)
+  // A swap asked for from anywhere (a Holdings row, a Markets row) fills the
+  // ticket, which is always on screen here; the request is cleared once taken.
   const [prefill, setPrefill] = useState<SwapPrefill | null>(null)
+  if (swapRequest && swapRequest.seq !== prefill?.seq) setPrefill({ ...swapRequest })
+  useEffect(() => {
+    if (swapRequest) clearSwapRequest(swapRequest.seq)
+  }, [swapRequest, clearSwapRequest])
   const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
   const [railWanted, setRailWanted] = useRailPreference()
@@ -439,7 +451,7 @@ function Desk({
 
           <div className="trd-panel">
             <div className="trd-tabs" role="tablist" aria-label={t('trading.title')}>
-              {(['holdings', 'history', 'orders', 'approvals'] as Tab[]).map((id) => (
+              {(['holdings', 'markets', 'history', 'orders', 'approvals'] as Tab[]).map((id) => (
                 <button
                   key={id}
                   type="button"
@@ -524,15 +536,24 @@ function Desk({
                         )
                       }
                       onSwap={(h) =>
-                        setPrefill({
+                        requestSwap({
                           chainId: h.chainId,
                           tokenIn: h.token,
                           wallet: h.wallet ?? (selected === 'all' ? undefined : selected),
-                          seq: Date.now(),
                         })
                       }
+                      onMarkets={(h) => {
+                        openMarkets({
+                          chainId: h.chainId,
+                          address: h.token.address,
+                          symbol: h.token.symbol,
+                        })
+                        setTab('markets')
+                      }}
                     />
                   </>
+                ) : tab === 'markets' ? (
+                  <Markets deskChain={chain} />
                 ) : tab === 'history' ? (
                   <History
                     entries={history.entries}
