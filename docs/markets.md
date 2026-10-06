@@ -302,11 +302,14 @@ Rows are capped at 40 per section with *+N more* that expands in place.
 .mk-section[data-side=quote|base]  .mk-section-title  .mk-section-count  .mk-empty
 .mk-rows                       the row list
 .mk-row[data-lookalike=true]   one pool
-.mk-pair  .mk-dex  .mk-version  .mk-launcher  .mk-tvl  .mk-vol  .mk-px  .mk-px-in  .mk-change[data-tone=up|down|flat]  .mk-age  .mk-flags  .mk-flag[data-kind=uni|stock|lookalike]  .mk-premium[data-tone=up|down|flat]
+.mk-pair  .mk-cp-name (the counterparty's name on lookalike / same-symbol rows)  .mk-dex  .mk-version  .mk-launcher  .mk-tvl  .mk-vol  .mk-px  .mk-px-in  .mk-change[data-tone=up|down|flat]  .mk-age  .mk-flags  .mk-flag[data-kind=uni|stock|lookalike]  .mk-premium[data-tone=up|down|flat]
 .mk-swap                       the Swap button (absent when no onSwap)
 .mk-more                       the "+N more" control
 .mk-foot  .mk-counts  .mk-partial  .mk-refresh  .mk-link[data-action=lookalikes|deep]
 ```
+
+The exact nesting is documented verbatim in `MARKETS_DOM` (exported from
+`markets.ts`); the desktop skin is tested against the real DOM.
 
 Text and numbers use the renderer's existing money/percent formatters
 (`formatMoney`, compact for ≥ $100k: `$4.7M`).
