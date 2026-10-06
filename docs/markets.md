@@ -124,6 +124,11 @@ async def markets(service, *, chain, target, side="all", min_tvl_usd=10_000.0,
   first N pools"*. No pages at all (network, 5xx) →
   `trading.markets.unavailable`. `partial` is also set when the page cap
   stopped a read that had more pools (warning points at `deep`).
+  An uncached page was measured at up to 18.5 s (`cf-cache-status: MISS`),
+  so the per-page timeout is **60 s**, and a page that timed out inside a
+  burst is retried **once** after the burst before the read gives up on it.
+  Clients show *"A first read of a token can take up to a minute"* while
+  loading.
 - One DexScreener call enriches matches; its failure is a warning.
 - Rows below `min_tvl_usd` are dropped and counted (`counts.belowMinTvl`).
   Lookalike counterparties are dropped and counted unless `lookalikes`
@@ -141,12 +146,19 @@ async def markets(service, *, chain, target, side="all", min_tvl_usd=10_000.0,
 - `feePct` is parsed from the trailing `N%` of GeckoTerminal's pool name
   (`"0.01%"` → `0.01`); `null` when absent.
 - Prices: for `side = quote`, `priceUsd` is the **counterparty's** USD price
-  and `priceInToken` the counterparty priced in the token
-  (`quote_token_price_base_token` is *token per counterparty*; invert
-  `base_token_price_quote_token` accordingly). For `side = base`,
-  `priceUsd` is the **token's** USD price in that pool and `priceInToken`
-  is the token priced in the counterparty. Strings from the source become
-  JSON numbers; unknown → `null`, never `0`.
+  and `priceInToken` the counterparty priced in the token. For `side =
+  base`, `priceUsd` is the **token's** USD price in that pool and
+  `priceInToken` is the token priced in the counterparty. `priceInToken`
+  is computed as the **ratio of the two USD prices** GeckoTerminal gives
+  for the pool (`base_token_price_usd`, `quote_token_price_usd`) — its
+  `base_token_price_quote_token` field was measured 45–77 % off real
+  quotes on launchpad pools (2026-10-06) and is used only when one USD
+  price is missing. Strings from the source become JSON numbers; unknown →
+  `null`, never `0`.
+- A counterparty at the zero address is the chain's native coin:
+  `{address: "0x000…0", symbol: "ETH", name: "Ether", native: true}`, never
+  "WETH". `dex.version` falls back to `"v4"` when the pool address is 32
+  bytes (a v4 poolId) and to the version in the DEX id (`uniswap-v3-…`).
 - `token.oracle` is read only on 4663 and only when `token.stockToken`;
   `premiumPct` on a `base` row is `(priceUsd / oracle.usd - 1) * 100` when
   both exist, else `null` (never on `quote` rows: a memecoin has no oracle).
@@ -169,7 +181,12 @@ async def markets(service, *, chain, target, side="all", min_tvl_usd=10_000.0,
     "priceUsd": 240.30 | null,            // from the engine's price feed (DexScreener best pair)
     "oracle": { "usd": 239.74, "updatedAt": "2026-10-05T20:38:49Z", "ageSeconds": 47269, "stale": false, "paused": false } | null
   },
-  "counts": { "scanned": 100, "shown": 34, "belowMinTvl": 61, "hiddenLookalikes": 5, "pages": 5, "pageCap": 5 },
+  "counts": {
+    "scanned": 100, "shown": 34, "belowMinTvl": 61, "hiddenLookalikes": 5,
+    "limited": 0,                       // rows above the floor that `limit` cut (the counts line says "· 12 more over the limit")
+    "pages": 5, "pageCap": 5,
+    "pageCapHit": false                 // the page cap, not `limit`, ended a read that had more pools: the only case *Deeper* is offered (and never when `deep`)
+  },
   "sections": {
     "quote": [ Pool, … ],                 // "Priced in NVDA" — empty array when side=base
     "base":  [ Pool, … ]                  // "NVDA priced in" — empty array when side=quote
@@ -262,9 +279,15 @@ Mounted by `createMarketsMounter` from `useTranscript.ts` beside
   24 h volume, price (USD) and price in token, 24 h change coloured, age
   (`3d`, `2mo`), flags. Lookalike rows (only when requested) wear a warning
   pill. `premiumPct` shows on base rows as `+0.4 % vs oracle`.
-- Footer: counts line, `partial` badge, ↻ refresh (re-runs
-  `trading.markets` with `request.params`, like LP cards), *Show lookalikes*
-  and *Deeper* links that re-run with `lookalikes: true` / `deep: true`.
+- Footer: counts line (including `limited` when > 0), `partial` badge, ↻
+  refresh (re-runs `trading.markets` with `request.params`, like LP cards),
+  *Show lookalikes* (only when `hiddenLookalikes` > 0 and the read did not
+  include them) and *Deeper* (only when `counts.pageCapHit` and not `deep`)
+  links that re-run with `lookalikes: true` / `deep: true`.
+- The launcher pill is hidden when it would repeat the DEX label (Bankr on
+  Bankr). A lookalike row (and any row whose counterparty symbol equals the
+  token's) shows the counterparty's **name** after the pair so two "GME/GME"
+  rows can be told apart.
 - **Swap** button per row, rendered only when the mounter is given an
   `onSwap(swap: { chainId, tokenIn, tokenOut })` dep; the web console passes
   none (no button), the desktop passes one.
@@ -297,14 +320,20 @@ Text and numbers use the renderer's existing money/percent formatters
   current chain from the desk's chain control, defaulting to Robinhood
   Chain when the user types a known Stock Token symbol on Base — i.e. the
   component looks the symbol up with `useTokenSearch` on both chains and
-  prefers the verified Stock Token), filters (*Min TVL* segmented
+  prefers the verified Stock Token; among several verified exact matches
+  on the chain it prefers a Stock Token, then the highest liquidity, and
+  shows which token it picked — it must never silently take the first
+  match), filters (*Min TVL* segmented
   `$1k / $10k / $100k`, *Lookalikes* toggle), the two sections as lists,
   the counts footer, *Deeper* control. Rows match the card's content but
   are built in the desktop's own markup and `.mac-*` / `trd-*` vocabulary
   (`desktop-shares-logic-not-ui`): share the **logic** (`useMarkets` hook,
   formatters, lookalike/launcher helpers exported from the renderer module)
   and nothing presentational. Loading, empty, rate-limited (`partial`) and
-  error states are drawn.
+  error states are drawn. At the BOOK's minimum width (300 px) the tab
+  icons keep their size (the bar scrolls or wraps, icons never shrink),
+  the price-in-token cell wraps rather than truncating to "0.0…", and the
+  premium never overlaps the Age column.
 - `useMarkets(params, enabled)` in `stores/trading.ts` → `rpc.call('trading.markets', …)`,
   `staleTime` 60 s, keyed by every param.
 - **Swap from anywhere**: `stores/trading-ui.ts` gains
@@ -322,7 +351,10 @@ Text and numbers use the renderer's existing money/percent formatters
   markets`; TOOLS.md teaches: *"pairs of X", "what trades against X",
   "markets for X", "tokens priced in X", "pools of X on every DEX"* →
   `agentos trade markets X --chain robinhood --json`; the card is the
-  answer; a liquidity question about **one** pool stays `lp pool`.
+  answer; a liquidity question about **one** pool stays `lp pool` — but a
+  launchpad pool (Bankr, Pons: `lp pool` answers
+  `trading.lp.pool_key_unknown`) is answered with the markets card of its
+  quote token, never with a different pool's card.
   `TRADING_AGENT_VERSION` bumps.
 - Desktop skin for `.mk-*` in `views/chat/chat.css` next to `.lp-card`,
   distinct from the web look.
@@ -331,7 +363,11 @@ Text and numbers use the renderer's existing money/percent formatters
 
 `docs/cli.md` (the `trade markets` command, and the Stock Token paragraph:
 they now route through Uniswap), `src/agentos/skills/bundled/agentos/SKILL.md`
-(the `trade` command list), `docs/features/trading.md` (the aggregator
+(the `trade` command list **and** its `trade` row that said the 29 stocks
+"cannot be routed at all"), `src/agentos/skills/bundled/wallet-trading/SKILL.md`
+and `src/agentos/skills/bundled/robinhood-agentic-trading/SKILL.md` (same
+sentence: Stock Tokens route through Uniswap when a key is configured; the
+aggregator alone refuses them), `docs/features/trading.md` (the aggregator
 paragraph quoted above), `CHANGELOG.md` under *Unreleased / Added*.
 
 ## Verified facts the tests pin
