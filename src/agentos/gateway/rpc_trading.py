@@ -925,6 +925,79 @@ async def _trading_lp_positions(params: dict | None, ctx: RpcContext) -> dict[st
     return _with_request(result, "positions", echo)
 
 
+# ── trading.markets (every pool a token trades in; docs/markets.md) ─────────
+
+
+@_d.method("trading.markets")
+async def _trading_markets(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Every pool a token trades in, on every DEX, split by side (docs/markets.md).
+
+    Read-only, so an agent may call it. ``chainId`` defaults to Robinhood Chain.
+    """
+    from agentos.trading import markets
+
+    p = _params(params)
+    chain = _chain(p, required=False) or resolve_chain(markets.ROBINHOOD_CHAIN_ID)
+    try:
+        target = _str(p, "target") or _str(p, "token")
+        if not target:
+            raise ValueError("params.target (a token symbol, address or ETH) is required")
+        side = (_str(p, "side") or "all").lower()
+        if side not in markets.SIDES:
+            raise ValueError("params.side must be all, quote or base")
+        raw_tvl = p.get("minTvlUsd")
+        if raw_tvl is None or raw_tvl == "":
+            min_tvl = markets.DEFAULT_MIN_TVL_USD
+        else:
+            if isinstance(raw_tvl, bool) or not isinstance(raw_tvl, int | float | str):
+                raise ValueError("params.minTvlUsd must be a number of dollars, 0 or more")
+            try:
+                min_tvl = float(raw_tvl)
+            except ValueError as exc:
+                raise ValueError("params.minTvlUsd must be a number of dollars, 0 or more") from exc
+            if not min_tvl >= 0 or min_tvl == float("inf"):
+                raise ValueError("params.minTvlUsd must be a number of dollars, 0 or more")
+        limit = _int(p, "limit", markets.DEFAULT_LIMIT)
+        if not 1 <= limit <= markets.MAX_LIMIT:
+            raise ValueError(f"params.limit must be between 1 and {markets.MAX_LIMIT}")
+        flags: dict[str, bool] = {}
+        for key in ("lookalikes", "deep"):
+            value = p.get(key, False)
+            if value is None:
+                value = False
+            if not isinstance(value, bool):
+                raise ValueError(f"params.{key} must be a boolean")
+            flags[key] = value
+    except ValueError as exc:
+        raise _raise(exc) from exc
+    service = _service(ctx)
+    try:
+        result = await markets.markets(
+            service,
+            chain=chain,
+            target=target,
+            side=side,
+            min_tvl_usd=min_tvl,
+            limit=limit,
+            lookalikes=flags["lookalikes"],
+            deep=flags["deep"],
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    token = result.get("token") if isinstance(result, dict) else None
+    resolved = token.get("address") if isinstance(token, dict) else None
+    echo = {
+        "target": resolved or target,
+        "chainId": chain.chain_id,
+        "side": side,
+        "minTvlUsd": min_tvl,
+        "limit": limit,
+        "lookalikes": flags["lookalikes"],
+        "deep": flags["deep"],
+    }
+    return _with_request(result, "markets", echo)
+
+
 # ── trading.lp.collect|remove|add (docs/lp-write.md) ─────────────────────────
 #
 # An agent may call these: each only creates an order, and every LP write parks

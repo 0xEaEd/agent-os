@@ -79,7 +79,13 @@ from agentos.trading.pnl import (
     to_human,
     to_raw,
 )
-from agentos.trading.prices import PriceInfo, PriceService, TokenMeta, native_token
+from agentos.trading.prices import (
+    PriceInfo,
+    PriceService,
+    TokenMeta,
+    is_stock_token_name,
+    native_token,
+)
 from agentos.trading.providers import (
     DEFAULT_PROVIDER_ID,
     PROVIDER_IDS,
@@ -220,6 +226,24 @@ class TradingError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.details = details
+
+
+#: Appended to the aggregator's ``token_not_tradeable`` error when no Uniswap
+#: key is configured. Clients show it verbatim (``docs/markets.md``).
+STOCK_TOKEN_UNISWAP_HINT = (
+    "Stock Tokens route through Uniswap: add a Uniswap API key "
+    "(`agentos config set trading.uniswap_api_key <key>`, "
+    "or Settings › Trading in the desktop app)"
+)
+
+
+def _with_hint(message: str, hint: str) -> str:
+    text = message.strip()
+    if not text:
+        return hint
+    if text[-1] not in ".!?":
+        text += "."
+    return f"{text} {hint}"
 
 
 def _err(exc: Exception) -> TradingError:
@@ -483,6 +507,73 @@ class TradingService:
         if chosen == "uniswap":
             return UniswapProvider(self.uniswap(api_key))
         raise TradingError("trading.invalid", f"unknown swap provider {chosen!r}")
+
+    def _provider_id_for(self, meta_in: TokenMeta, meta_out: TokenMeta) -> str:
+        """The provider for this pair: the configured one, unless it cannot quote it.
+
+        The aggregator refuses Robinhood Stock Tokens (``token_not_tradeable``)
+        while Uniswap's Trading API quotes them, so a pair with a Stock Token
+        on either side goes to Uniswap when a Uniswap key is configured.
+        Every other pair keeps the configured provider, read on every call.
+        """
+        chosen = self.provider_id()
+        if (
+            chosen == "aggregator"
+            and (meta_in.stock_token or meta_out.stock_token)
+            and self.api_key()
+        ):
+            return "uniswap"
+        return chosen
+
+    async def _priced_routed(
+        self,
+        provider_id: str,
+        *,
+        chain: ChainSpec,
+        swapper: str,
+        meta_in: TokenMeta,
+        meta_out: TokenMeta,
+        amount_raw: int,
+        slippage_pct: float | None,
+        decision_origin: DecisionOrigin,
+    ) -> ProviderQuote:
+        """:meth:`_priced` through ``provider_id``, with the Stock Token fallback.
+
+        When the aggregator answers ``trading.token_not_tradeable`` for a pair
+        the Stock Token flag missed, the quote is retried once through
+        Uniswap if a key is configured; without one the aggregator's error is
+        raised with :data:`STOCK_TOKEN_UNISWAP_HINT` appended. The returned
+        quote's ``provider`` says which provider actually answered.
+        """
+        provider = self.provider(provider_id)
+        kwargs: dict[str, Any] = {
+            "chain": chain,
+            "swapper": swapper,
+            "meta_in": meta_in,
+            "meta_out": meta_out,
+            "amount_raw": amount_raw,
+            "slippage_pct": slippage_pct,
+            "decision_origin": decision_origin,
+        }
+        try:
+            return await self._priced(provider, **kwargs)
+        except ProviderError as exc:
+            if provider.id != "aggregator" or exc.code != "trading.token_not_tradeable":
+                raise
+            if not self.api_key():
+                raise ProviderError(
+                    exc.code,
+                    _with_hint(str(exc), STOCK_TOKEN_UNISWAP_HINT),
+                    retryable=exc.retryable,
+                    details=exc.details,
+                ) from exc
+            log.info(
+                "trading.stock_token_fallback",
+                chain=chain.chain_id,
+                token_in=meta_in.address,
+                token_out=meta_out.address,
+            )
+            return await self._priced(self.provider("uniswap"), **kwargs)
 
     def ensure_unlocked(self) -> bool:
         if self.vault.unlocked:
@@ -762,7 +853,7 @@ class TradingService:
                 decimals=int(row["decimals"]),
                 logo_url=row["logo_url"],
                 verified=bool(row["verified"]),
-                stock_token=str(row["name"]).endswith("• Robinhood Token"),
+                stock_token=is_stock_token_name(str(row["name"])),
             )
         known = await self.prices.known_token(chain, key)
         if known is not None:
@@ -954,7 +1045,7 @@ class TradingService:
             logo_url=row["logo_url"],
             native=bool(row["is_native"]),
             verified=bool(row["verified"]),
-            stock_token=str(row["name"]).endswith("• Robinhood Token"),
+            stock_token=is_stock_token_name(str(row["name"])),
         ).to_dict()
 
     def _decimals(self, chain_id: int, address: str) -> int:
@@ -1878,8 +1969,8 @@ class TradingService:
         slippage = slippage_pct if slippage_pct is not None else self.config.default_slippage_pct
         self._check_agent_slippage(initiator, slippage)
         try:
-            quote = await self._priced(
-                self.provider(),
+            quote = await self._priced_routed(
+                self._provider_id_for(meta_in, meta_out),
                 chain=chain,
                 swapper=record.address,
                 meta_in=meta_in,
@@ -3538,7 +3629,7 @@ class TradingService:
             "session_key": session_key,
             "note": note,
             "slippage_pct": slippage,
-            "provider": self.provider_id(),
+            "provider": self._provider_id_for(meta_in, meta_out),
             "client_order_id": client_order_id,
         }
         if quote_json is not None:
@@ -3565,9 +3656,9 @@ class TradingService:
                 f"{meta_in.symbol or 'tokens'}, needs "
                 f"{format_amount(amount_raw, meta_in.decimals)}",
             )
-        provider = self.provider(str(row.get("provider") or ""))
-        quote = await self._priced(
-            provider,
+        row_provider = str(row.get("provider") or "").strip().lower() or self.provider_id()
+        quote = await self._priced_routed(
+            row_provider,
             chain=chain,
             swapper=record.address,
             meta_in=meta_in,
@@ -3576,6 +3667,12 @@ class TradingService:
             slippage_pct=row.get("slippage_pct"),
             decision_origin=_origin(str(row["initiator"])),
         )
+        if quote.provider != row_provider:
+            # The aggregator refused a Stock Token the flag missed and Uniswap
+            # answered instead: the row follows, so execution (now or after an
+            # approval) builds the swap through the provider that quoted it.
+            self.ledger.update_order(row["order_id"], provider=quote.provider)
+            row["provider"] = quote.provider
         value = await self._order_value_usd(
             chain, meta_in, amount_raw, meta_out, quote.amount_out_raw
         )

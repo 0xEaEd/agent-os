@@ -71,7 +71,7 @@ Swap button would be decoration. Two engine changes land with the feature:
      flag missed, and a Uniswap key exists, the engine retries that one
      quote through Uniswap. Without a key the original error is raised with
      its message extended: *"Stock Tokens route through Uniswap: add a
-     Uniswap API key (`agentos trade provider uniswap --key …`)"* — the
+     Uniswap API key (`agentos config set trading.uniswap_api_key <key>`, or Settings › Trading in the desktop app)"* — the
      exact wording lives in the engine, the desktop shows it verbatim.
    - Nothing changes for pairs with no Stock Token; the configured provider
      is still read on every call.
@@ -114,12 +114,16 @@ async def markets(service, *, chain, target, side="all", min_tvl_usd=10_000.0,
   community tokens of the same symbol — the existing rule).
 - Pages GeckoTerminal until `limit` rows survive the filters, a page comes
   back short, or the page cap: **5 pages** (100 pools) by default, **10**
-  with `deep`. Pages are fetched one at a time (never concurrently) with a
-  **120 s cache per `(chain, token)`** of the raw pages, so a refresh or a
-  second section costs nothing. A 429 stops paging; what was read is
-  returned with `partial: true` and the warning *"GeckoTerminal rate limit:
-  showing the first N pools"*. No pages at all (network, 5xx) →
-  `trading.markets.unavailable`.
+  with `deep`. Pages are read in **bursts of up to 5 concurrent requests**
+  (a page GeckoTerminal's edge has not cached takes 11–13 s, a cached one
+  0.2 s, measured 2026-10-06; one page at a time cost 40 s per token) with
+  a **120 s cache per `(chain, token)`** of the raw pages, so a refresh or a
+  second section costs nothing. Pages are kept as a contiguous prefix: a 429
+  drops that page and every later one; what was read is returned with
+  `partial: true` and the warning *"GeckoTerminal rate limit: showing the
+  first N pools"*. No pages at all (network, 5xx) →
+  `trading.markets.unavailable`. `partial` is also set when the page cap
+  stopped a read that had more pools (warning points at `deep`).
 - One DexScreener call enriches matches; its failure is a warning.
 - Rows below `min_tvl_usd` are dropped and counted (`counts.belowMinTvl`).
   Lookalike counterparties are dropped and counted unless `lookalikes`

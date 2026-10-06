@@ -2325,6 +2325,235 @@ def lp_add(
     )
 
 
+# ── trade markets: every pool a token trades in (docs/markets.md) ──────────
+
+MARKETS_MIME = "application/vnd.agentos.markets+json"
+#: Where ``trade markets --json`` writes its card payloads, relative to the
+#: working directory (same reasoning and pruning as ``LP_CARD_DIR``).
+MARKETS_CARD_DIR = "markets-cards"
+MARKETS_CARDS_KEPT = 20
+_MARKETS_CARD_FILE = re.compile(r"^markets-[A-Za-z0-9._-]*\.json$")
+_MARKETS_SIDES = ("all", "quote", "base")
+
+
+def _markets_card_name(result: dict[str, Any]) -> str:
+    token = _dict(result.get("token"))
+    slug = _LP_SLUG.sub("", str(token.get("symbol") or "token")).strip("-") or "token"
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{MARKETS_CARD_DIR}/markets-{slug}-{stamp}.json"
+
+
+def _write_markets_card(result: dict[str, Any]) -> None:
+    """Write the card payload and announce it; the marker is the last line on stdout."""
+    name = _markets_card_name(result)
+    try:
+        path = Path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"[card not written: {exc}]", err=True)
+        return
+    _prune_cards(path.parent, _MARKETS_CARD_FILE, MARKETS_CARDS_KEPT)
+    print_text(f"publish_artifact path={name} mime={MARKETS_MIME}")
+
+
+def _compact_usd(value: Any) -> str:
+    """``$4.7M``, ``$61.2k``, ``$10k``, ``$950``; "—" when unknown."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    size = abs(number)
+    for unit, scale in (("B", 1e9), ("M", 1e6), ("k", 1e3)):
+        if size >= scale:
+            short = f"{size / scale:.1f}".removesuffix(".0")
+            return f"{'-' if number < 0 else ''}${short}{unit}"
+    return _usd(number)
+
+
+def _sig(value: Any) -> str:
+    """A ratio with four significant digits; "—" when unknown."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{number:.4g}"
+
+
+def _age(created_at: Any, now: float | None = None) -> str:
+    """``2026-07-25T00:52:36Z`` -> ``73d``; "—" when unknown."""
+    if not created_at:
+        return "—"
+    try:
+        stamp = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except ValueError:
+        return "—"
+    seconds = max(0.0, (now if now is not None else time.time()) - stamp.timestamp())
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86_400:
+        return f"{int(seconds // 3600)}h"
+    days = seconds / 86_400
+    if days < 60:
+        return f"{int(days)}d"
+    if days < 730:
+        return f"{int(days // 30)}mo"
+    return f"{int(days // 365)}y"
+
+
+def _markets_flags(row: dict[str, Any]) -> str:
+    counterparty = _dict(row.get("counterparty"))
+    flags = []
+    if row.get("viaUniswap"):
+        flags.append("uni")
+    if counterparty.get("stockToken"):
+        flags.append("stock")
+    if counterparty.get("lookalike"):
+        flags.append("lookalike")
+    return " ".join(flags)
+
+
+def _markets_table(title: str, rows: list[dict[str, Any]], price_in: str) -> Table:
+    """One section. ``price_in`` heads the ratio column: ``IN NVDA`` on the quote
+    section (the counterparty priced in the token), ``IN QUOTE`` on the base
+    section (the token priced in each row's counterparty)."""
+    table = Table(title=title, show_header=True, header_style=ACCENT_HEADER)
+    table.add_column("PAIR")
+    table.add_column("DEX")
+    table.add_column("TVL", justify="right")
+    table.add_column("VOL 24H", justify="right")
+    table.add_column("PRICE", justify="right")
+    table.add_column(price_in, justify="right")
+    table.add_column("AGE", justify="right")
+    table.add_column("FLAGS")
+    for row in rows:
+        dex = _dict(row.get("dex"))
+        venue = " ".join(
+            str(x) for x in (dex.get("label") or dex.get("id"), dex.get("version")) if x
+        )
+        fee = row.get("feePct")
+        if fee is not None:
+            venue = f"{venue} {fee:g}%"
+        table.add_row(
+            markup_escape(str(row.get("pair") or "—")),
+            markup_escape(venue or "—"),
+            _compact_usd(row.get("tvlUsd")),
+            _compact_usd(row.get("volume24hUsd")),
+            _usd(row.get("priceUsd")),
+            _sig(row.get("priceInToken")),
+            _age(row.get("createdAt")),
+            _markets_flags(row),
+        )
+    return table
+
+
+def _render_markets(result: dict[str, Any]) -> None:
+    token = _dict(result.get("token"))
+    chain = _dict(result.get("chain"))
+    symbol = str(token.get("symbol") or "token")
+    parts = [f"[bold]{markup_escape(symbol)}[/]"]
+    if token.get("name"):
+        parts.append(markup_escape(str(token["name"])))
+    parts.append(markup_escape(str(chain.get("name") or "")))
+    parts.append(_usd(token.get("priceUsd")))
+    oracle = _dict(token.get("oracle"))
+    if oracle.get("usd") is not None:
+        badge = " paused" if oracle.get("paused") else (" stale" if oracle.get("stale") else "")
+        parts.append(f"oracle {_usd(oracle.get('usd'))}{badge}")
+        price = token.get("priceUsd")
+        if isinstance(price, int | float) and float(oracle["usd"]) > 0:
+            parts.append(f"premium {percent((float(price) / float(oracle['usd']) - 1) * 100)}")
+    console.print(" · ".join(p for p in parts if p))
+    sections = _dict(result.get("sections"))
+    params = _dict(_dict(result.get("request")).get("params"))
+    side = str(params.get("side") or "all")
+    min_tvl = params.get("minTvlUsd")
+    floor = (
+        f" above {_compact_usd(min_tvl)}" if isinstance(min_tvl, int | float) and min_tvl else ""
+    )
+    for key, title in (("quote", f"Priced in {symbol}"), ("base", f"{symbol} priced in")):
+        if side not in ("all", key):
+            continue
+        rows = [r for r in sections.get(key) or [] if isinstance(r, dict)]
+        if rows:
+            price_in = f"IN {symbol}" if key == "quote" else "IN QUOTE"
+            console.print(_markets_table(f"{title} · {len(rows)}", rows, price_in))
+        else:
+            console.print(f"{title}: no pools against {markup_escape(symbol)}{floor}")
+    counts = _dict(result.get("counts"))
+    line = [f"{counts.get('shown', 0)} of {counts.get('scanned', 0)} pools shown"]
+    if counts.get("belowMinTvl"):
+        line.append(f"{counts['belowMinTvl']} under {_compact_usd(min_tvl)}")
+    if counts.get("hiddenLookalikes"):
+        line.append(f"{counts['hiddenLookalikes']} lookalikes hidden")
+    if result.get("partial"):
+        line.append("partial")
+    console.print(" · ".join(line))
+    for warning in result.get("warnings") or []:
+        console.print(f"• {markup_escape(str(warning))}")
+
+
+@app.command("markets")
+def trade_markets(
+    target: str = typer.Argument(..., help="Token symbol, address or ETH (NVDA, 0x…)"),
+    chain: str = typer.Option(
+        "robinhood",
+        "--chain",
+        help="base or robinhood (default robinhood: the one trade command that defaults to it)",
+    ),
+    side: str = typer.Option(
+        "all",
+        "--side",
+        help="all, quote (tokens priced in this one) or base (this token priced in others)",
+    ),
+    min_tvl: float = typer.Option(10_000.0, "--min-tvl", help="Hide pools under this TVL (USD)"),
+    limit: int = typer.Option(50, "--limit", help="Most pools to show (1-200)", min=1, max=200),
+    lookalikes: bool = typer.Option(
+        False, "--lookalikes", help="Show counterparties that borrow a Stock Token's name"
+    ),
+    deep: bool = typer.Option(False, "--deep", help="Read up to 200 pools instead of 100"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """Every pool a token trades in, on every DEX: tokens priced in it, and it priced in others.
+
+    Defaults to Robinhood Chain (the only `trade` command that does), where Stock
+    Tokens such as NVDA are the quote asset of many launchpad tokens.
+    """
+
+    choice = side.strip().lower()
+    if choice not in _MARKETS_SIDES:
+        _bad_argument(f"--side {side!r} must be all, quote or base", json_output=json_output)
+    if min_tvl < 0 or min_tvl != min_tvl:
+        _bad_argument("--min-tvl must be 0 or more", json_output=json_output)
+    params: dict[str, Any] = {
+        "target": target,
+        "chainId": chain_id_from_arg(chain),
+        "side": choice,
+        "minTvlUsd": min_tvl,
+        "limit": limit,
+        "lookalikes": lookalikes,
+        "deep": deep,
+    }
+
+    async def _run(client):
+        return await client.call("trading.markets", params)
+
+    result = _dict(run_gateway_sync(_run, json_output=json_output))
+    if not json_output:
+        _render_markets(result)
+        return
+    print_json(result)
+    if not no_card and result.get("kind"):
+        _write_markets_card(result)
+
+
 # ── trade dca: DCA mandates (docs/dca.md) ──────────────────────────────────
 
 DCA_MIME = "application/vnd.agentos.dca+json"
