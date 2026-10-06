@@ -1050,8 +1050,13 @@ export interface MarketsCounts {
   limited?: number
   pages: number
   pageCap: number
-  /** The page cap, not `limit`, ended a read that had more pools: the only case Deeper is offered. */
+  /** The page cap, not `limit`, ended a read that had more pools: Deeper is offered (not yet deep). */
   pageCapHit?: boolean
+  /**
+   * A 429 cut the read short: Deeper is offered again on a read that was not
+   * deep, *Read again* on one that was; older engines omit it.
+   */
+  rateLimited?: boolean
 }
 
 export interface MarketsParams {

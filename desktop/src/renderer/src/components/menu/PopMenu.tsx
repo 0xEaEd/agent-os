@@ -312,12 +312,15 @@ export function PopMenu({
   children,
   /** Presses on this element do not count as "outside" (the trigger). */
   triggerRef,
+  /** A menu of its own width (a list of tokens, not of commands). */
+  className,
 }: {
   place: MenuPlace
   onClose: () => void
   label?: string
   children: ReactNode
   triggerRef?: React.RefObject<HTMLElement | null>
+  className?: string
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number; origin: Origin } | null>(null)
@@ -347,7 +350,7 @@ export function PopMenu({
     <MenuContext.Provider value={ctx}>
       <div
         ref={ref}
-        className="mac-menu app-no-drag"
+        className={cn('mac-menu app-no-drag', className)}
         data-placement="float"
         data-origin={pos?.origin ?? 'top-left'}
         role="menu"
@@ -416,6 +419,7 @@ export function MenuItem({
   disabled,
   checked,
   aside,
+  detail,
   role = checked === undefined ? 'menuitem' : 'menuitemcheckbox',
 }: {
   icon?: LucideIcon
@@ -428,6 +432,8 @@ export function MenuItem({
   checked?: boolean
   /** Trailing text: a shortcut, a count. */
   aside?: ReactNode
+  /** A second, smaller line under the label (the row grows to fit it). */
+  detail?: ReactNode
   role?: 'menuitem' | 'menuitemcheckbox' | 'menuitemradio'
 }) {
   const ctx = useMenuContext()
@@ -437,7 +443,11 @@ export function MenuItem({
       role={role}
       aria-checked={checked === undefined ? undefined : checked}
       // A mark takes a column of its own, so the row keeps its three others.
-      className={cn('mac-menu__item', mark && 'mac-menu__item--mark')}
+      className={cn(
+        'mac-menu__item',
+        mark && 'mac-menu__item--mark',
+        detail && 'mac-menu__item--detail',
+      )}
       data-tone={tone}
       disabled={disabled}
       onClick={() => {
@@ -455,7 +465,14 @@ export function MenuItem({
         <span className="mac-menu__check" aria-hidden />
       )}
       {mark ? <span className="mac-menu__mark">{mark}</span> : null}
-      <span className="mac-menu__label">{label}</span>
+      {detail ? (
+        <span className="mac-menu__text">
+          <span className="mac-menu__label">{label}</span>
+          <span className="mac-menu__detail">{detail}</span>
+        </span>
+      ) : (
+        <span className="mac-menu__label">{label}</span>
+      )}
       {aside ? <span className="mac-menu__aside">{aside}</span> : null}
     </button>
   )

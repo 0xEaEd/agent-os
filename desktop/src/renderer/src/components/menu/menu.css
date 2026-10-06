@@ -119,6 +119,38 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* A row with a second line (a token's symbol and address under its name):
+   it grows to fit, and its label wraps rather than hiding the name. */
+.mac-menu__item--detail {
+  height: auto;
+  min-height: 26px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.mac-menu__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.mac-menu__item--detail .mac-menu__label {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.mac-menu__detail {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.mac-menu__item:hover .mac-menu__detail,
+.mac-menu__item:focus-visible .mac-menu__detail,
+.mac-menu__item[data-active='true'] .mac-menu__detail {
+  color: inherit;
+  opacity: 0.85;
+}
 /* The trailing column: a submenu's current value, a shortcut, a chevron. */
 .mac-menu__aside {
   display: inline-flex;

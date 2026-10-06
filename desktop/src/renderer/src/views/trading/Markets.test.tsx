@@ -170,7 +170,7 @@ describe('Markets · the board', () => {
     const base = within(screen.getByTestId('markets-section-base')).getAllByTestId('markets-row')
     expect(base[0]!.querySelector('.trd-mk__pairtext')).toHaveTextContent('NVDA/USDG')
     expect(base[0]!.querySelector('.trd-mk__px small')).toHaveTextContent('240.85 USDG')
-    expect(within(base[0]!).getByTestId('markets-premium')).toHaveTextContent('+0.46% vs oracle')
+    expect(within(base[0]!).getByTestId('markets-premium')).toHaveTextContent('+0.5% vs oracle')
     // The premium is a line of the price cell, not squeezed into 24h beside Age.
     expect(base[0]!.querySelector('.trd-mk__px .trd-mk__premium')).not.toBeNull()
     expect(base[0]!.querySelector('.trd-mk__chg .trd-mk__premium')).toBeNull()
@@ -304,6 +304,57 @@ describe('Markets · states', () => {
     expect(screen.getByTestId('markets-foot')).toHaveTextContent('95 under $10k')
   })
 
+  it('prints a premium under 0.05 % as a flat 0.0%, never −0.0%', async () => {
+    const usdg = NVDA_MARKETS.sections.base[0]!
+    answer(() => ({
+      ...NVDA_MARKETS,
+      sections: { ...NVDA_MARKETS.sections, base: [{ ...usdg, premiumPct: -0.004 }] },
+    }))
+    renderDesk(<Markets />)
+    search('NVDA')
+    const premium = await screen.findByTestId('markets-premium')
+    expect(premium).toHaveTextContent(/^0\.0% vs oracle$/)
+    expect(premium).toHaveAttribute('data-tone', 'flat')
+  })
+
+  it('says a 429 cut the read short in the footer, and offers Deeper again', async () => {
+    answer(() => ({
+      ...NVDA_MARKETS,
+      partial: true,
+      counts: { ...NVDA_MARKETS.counts, pageCapHit: false, rateLimited: true },
+    }))
+    renderDesk(<Markets />)
+    search('NVDA')
+    expect(await screen.findByTestId('markets-ratelimited')).toHaveTextContent(
+      'The source rate-limited this read',
+    )
+    expect(screen.getByTestId('markets-foot')).toContainElement(
+      screen.getByTestId('markets-ratelimited'),
+    )
+    expect(screen.getByTestId('markets-deep')).toBeInTheDocument()
+    expect(screen.queryByTestId('markets-again')).toBeNull()
+  })
+
+  it('offers Read again on a deep read a 429 cut short', async () => {
+    answer(() => ({
+      ...NVDA_MARKETS,
+      partial: true,
+      counts: { ...NVDA_MARKETS.counts, pageCapHit: true, rateLimited: true },
+      request: {
+        kind: 'markets',
+        params: { ...NVDA_MARKETS.request!.params, deep: true },
+      },
+    }))
+    renderDesk(<Markets />)
+    search('NVDA')
+    const again = await screen.findByTestId('markets-again')
+    expect(again).toHaveTextContent('Read again')
+    expect(screen.queryByTestId('markets-deep')).toBeNull()
+    const before = marketsCalls().length
+    fireEvent.click(again)
+    await waitFor(() => expect(marketsCalls().length).toBe(before + 1))
+  })
+
   it('flags a rate-limited read as partial, with the source’s warning', async () => {
     answer(() => ({
       ...NVDA_MARKETS,
@@ -404,11 +455,19 @@ describe('Markets · a symbol several tokens share', () => {
     await screen.findByTestId('markets-head')
     fireEvent.click(screen.getByTestId('markets-matches'))
     const menu = screen.getByRole('menu', { name: 'Tokens with this symbol' })
+    // Its own width, portalled out of the tab's scroller: the house 200 px
+    // menu left the names 2 px.
+    expect(menu).toHaveClass('trd-mk__matchmenu')
+    expect(menu.parentElement).toBe(document.body)
     const items = within(menu).getAllByRole('menuitemcheckbox')
-    expect(items.map((i) => i.textContent)).toEqual([
-      expect.stringContaining('AI · Artificial Inu'),
-      expect.stringContaining('AI · AI PIN'),
-    ])
+    // The full name, the symbol and short address under it, the liquidity.
+    expect(items[0]!.querySelector('.mac-menu__label')).toHaveTextContent(/^Artificial Inu$/)
+    expect(items[0]!.querySelector('.mac-menu__detail')).toHaveTextContent('AI · 0x2e8c…1e18')
+    expect(within(items[0]!).getByTestId('markets-match-liquidity')).toHaveTextContent(
+      'Liquidity$131.0K',
+    )
+    expect(items[1]!.querySelector('.mac-menu__label')).toHaveTextContent(/^AI PIN$/)
+    expect(items[1]!.querySelector('.mac-menu__detail')).toHaveTextContent('AI · 0x5555…5555')
     expect(items[0]).toHaveAttribute('aria-checked', 'true')
     fireEvent.click(items[1]!)
     await waitFor(() =>
@@ -422,6 +481,38 @@ describe('Markets · a symbol several tokens share', () => {
     )
     // The field still says what was typed; the list is still there to go back.
     expect(screen.getByTestId('markets-search')).toHaveValue('AI')
+    expect(screen.getByTestId('markets-matches')).toHaveTextContent('2 matches')
+  })
+
+  it('lists the same matches on every search: the chosen chain only, deduped', async () => {
+    const BASE_AI = {
+      ...PIN,
+      chainId: 8453,
+      address: '0x8888888888888888888888888888888888888888',
+      name: 'Base AI',
+      liquidityUsd: 900_000,
+    }
+    let flip = false
+    rpcCall.mockImplementation(async (method: string, params: { chainId?: number }) => {
+      if (method === 'trading.tokens.search') {
+        if (params.chainId === 8453) return { tokens: [BASE_AI] }
+        // Each search answers in another order, with INU listed twice.
+        flip = !flip
+        return { tokens: flip ? [PIN, INU, { ...INU }] : [INU, PIN] }
+      }
+      if (method === 'trading.markets') return NVDA_MARKETS
+      return {}
+    })
+    renderDesk(<Markets />)
+    search('AI')
+    await screen.findByTestId('markets-head')
+    expect(screen.getByTestId('markets-matches')).toHaveTextContent('2 matches')
+    search('NVDA')
+    await waitFor(() => expect(screen.queryByTestId('markets-matches')).toBeNull())
+    search('AI')
+    await waitFor(() =>
+      expect(screen.getByTestId('markets-picked')).toHaveTextContent('Showing Artificial Inu'),
+    )
     expect(screen.getByTestId('markets-matches')).toHaveTextContent('2 matches')
   })
 

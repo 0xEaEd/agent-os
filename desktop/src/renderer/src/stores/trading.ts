@@ -820,7 +820,7 @@ export function useTokenSearch(first: number, query: string) {
     // survives, so an exact symbol match still comes first.
     () => [...rows].sort((a, b) => Number(b.chainId === first) - Number(a.chainId === first)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [stamps, first],
+    [stamps, first, debounced],
   )
   return { isFetching, tokens, debounced }
 }

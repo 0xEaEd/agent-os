@@ -11,11 +11,14 @@ import {
   isStockToken,
   isStockTokenName,
   launcherRepeatsDex,
+  formatPremiumPct,
   offersDeeper,
+  offersReadAgain,
   pairParts,
   pickMarketsTarget,
   poolAge,
   poolSwapTokens,
+  premiumTone,
   rankMatches,
   rowPair,
   showsCounterpartyName,
@@ -245,7 +248,7 @@ describe('markets-logic · which token a query means', () => {
       expect(pickMarketsTarget('AI', [inu, stockAi], 4663, true).target).toBe(stockAi.address)
     })
 
-    it('lists the pick’s chain first, then the other chain’s matches', () => {
+    it('lists only the pick’s chain, whichever chain answered first', () => {
       const baseAi = found({
         chainId: 8453,
         address: '0x8888888888888888888888888888888888888888',
@@ -257,11 +260,89 @@ describe('markets-logic · which token a query means', () => {
       const pick = pickMarketsTarget('AI', [baseAi, pin, inu], 4663, false)
       // The desk's chain wins over a deeper match elsewhere.
       expect(pick.target).toBe(inu.address)
-      expect(pick.candidates.map((c) => c.name)).toEqual(['Artificial Inu', 'AI PIN', 'Base AI'])
+      // Base's AI is not offered while Robinhood Chain's markets are read.
+      expect(pick.candidates.map((c) => c.name)).toEqual(['Artificial Inu', 'AI PIN'])
       // A chosen chain lists only its own.
       expect(
         pickMarketsTarget('AI', [baseAi, pin, inu], 4663, true).candidates.map((c) => c.name),
       ).toEqual(['Artificial Inu', 'AI PIN'])
+    })
+
+    // Live test 2026-10-06 (second round): "AI" showed 4 matches, then 2 on
+    // the next search — both chains' answers and debounce races mixed in.
+    it('answers the same list for the same search: deduped, ranked, one chain', () => {
+      const stockAi = found({
+        address: '0x7777777777777777777777777777777777777777',
+        symbol: 'AI',
+        name: 'C3.ai • Robinhood Token',
+        stockToken: true,
+        liquidityUsd: 2_000,
+      })
+      const baseAi = found({
+        chainId: 8453,
+        address: '0x8888888888888888888888888888888888888888',
+        symbol: 'AI',
+        name: 'Base AI',
+        stockToken: false,
+        liquidityUsd: 900_000,
+      })
+      // The same token twice (two sources), once with a stale liquidity and
+      // its address in another case.
+      const inuAgain = {
+        ...inu,
+        address: inu.address.toUpperCase().replace('0X', '0x'),
+        liquidityUsd: 90_000,
+      }
+      const twin = found({
+        address: '0x4444444444444444444444444444444444444444',
+        symbol: 'AI',
+        name: 'AI Twin',
+        stockToken: false,
+        liquidityUsd: 15_000,
+      })
+      const rows = [baseAi, pin, inuAgain, dry, stockAi, inu, twin]
+      const expected = [
+        'C3.ai • Robinhood Token',
+        'Artificial Inu',
+        'AI Twin',
+        'AI PIN',
+        'No Liquidity AI',
+      ]
+      // Every arrival order, either chain first: one answer.
+      for (const order of [
+        rows,
+        [...rows].reverse(),
+        [inu, twin, stockAi, dry, pin, baseAi, inuAgain],
+      ]) {
+        for (const explicit of [false, true]) {
+          const pick = pickMarketsTarget('AI', order, 4663, explicit)
+          expect(
+            pick.candidates.map((c) => c.name),
+            String(explicit),
+          ).toEqual(expected)
+          expect(pick.target).toBe(stockAi.address)
+        }
+      }
+      // The deeper duplicate is the one kept.
+      const kept = pickMarketsTarget('AI', rows, 4663, true).candidates.find(
+        (c) => c.name === 'Artificial Inu',
+      )
+      expect(kept?.liquidityUsd).toBe(131_000)
+      // Equal liquidity ties break on the address, not on arrival.
+      expect(rankMatches([twin, pin]).map((c) => c.name)).toEqual(['AI Twin', 'AI PIN'])
+      expect(rankMatches([pin, twin]).map((c) => c.name)).toEqual(['AI Twin', 'AI PIN'])
+      // Unverified and inexact rows never count.
+      expect(
+        pickMarketsTarget(
+          'AI',
+          [
+            { ...pin, verified: false },
+            { ...inu, symbol: 'AIX' },
+          ],
+          4663,
+          true,
+        ).candidates,
+      ).toEqual([])
     })
   })
 })
@@ -325,6 +406,27 @@ describe('markets-logic · what a row says', () => {
     expect(offersDeeper({ pageCapHit: false }, false)).toBe(false)
     // An older engine says nothing: no promise it cannot keep.
     expect(offersDeeper({}, false)).toBe(false)
+  })
+
+  it('offers Deeper again after a 429, and Read again when the read was already deep', () => {
+    expect(offersDeeper({ pageCapHit: false, rateLimited: true }, false)).toBe(true)
+    expect(offersDeeper({ pageCapHit: false, rateLimited: true }, true)).toBe(false)
+    expect(offersReadAgain({ rateLimited: true }, true)).toBe(true)
+    expect(offersReadAgain({ rateLimited: true }, false)).toBe(false)
+    expect(offersReadAgain({ rateLimited: false }, true)).toBe(false)
+    expect(offersReadAgain({}, true)).toBe(false)
+  })
+
+  it('prints a premium under 0.05 % either way as a flat 0.0%, never −0.0%', () => {
+    for (const pct of [0, -0.0, -0.004, 0.004, -0.049, 0.049]) {
+      expect(formatPremiumPct(pct), String(pct)).toBe('0.0%')
+      expect(premiumTone(pct), String(pct)).toBe('flat')
+    }
+    expect(formatPremiumPct(0.4)).toBe('+0.4%')
+    expect(premiumTone(0.4)).toBe('up')
+    expect(formatPremiumPct(-0.06)).toBe('−0.1%')
+    expect(premiumTone(-0.06)).toBe('down')
+    expect(formatPremiumPct(null)).toBe('—')
   })
 })
 

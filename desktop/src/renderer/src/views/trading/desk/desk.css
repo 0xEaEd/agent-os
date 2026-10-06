@@ -1514,6 +1514,40 @@ body[data-dragging] .trd-book__handle {
 .trd-book__tabs::-webkit-scrollbar {
   display: none;
 }
+/* A tab brought into view (scrollIntoView) clears the fade at the edge. */
+.trd-book__tabs {
+  scroll-padding-inline: 18px;
+}
+/* The strip hides tabs: the side that hides them fades out, so it reads as
+   scrollable (watchTabStrip in Book.tsx sets data-fade). */
+.trd-book__tabs[data-fade='end'] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+}
+.trd-book__tabs[data-fade='start'] {
+  mask-image: linear-gradient(to left, #000 calc(100% - 22px), transparent);
+}
+.trd-book__tabs[data-fade='both'] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 22px,
+    #000 calc(100% - 22px),
+    transparent
+  );
+}
+/* The words do not fit beside the pips: the tabs drop to their icons before
+   any label is clipped mid-glyph (the title carries the word). */
+.trd-book__tabs[data-labels='off'] .trd-book__tab > span:not(.trd-book__count) {
+  display: none;
+}
+.trd-book__tabs[data-labels='off'] .trd-book__tab {
+  padding: 0 7px;
+}
+.trd-book__tab > span:not(.trd-book__count) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .trd-book__tab {
   display: inline-flex;
   flex-shrink: 0;

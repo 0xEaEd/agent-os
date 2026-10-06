@@ -1139,6 +1139,10 @@ export const trading = {
   'trading.markets.deep.help':
     'Read up to 200 pools instead of 100. Slower, and spends more of the source’s rate limit',
   'trading.markets.refresh': 'Read again',
+  'trading.markets.again.help':
+    'The source rate-limited this deep read. Read it again in a minute to finish the list',
+  'trading.markets.rateLimited':
+    'The source rate-limited this read, so the list is incomplete. Read again in a minute.',
   'trading.markets.prompt.title': 'Every pool a token trades in',
   'trading.markets.prompt.body':
     'Type a symbol or paste an address, then press Return. On Robinhood Chain a Stock Token such as NVDA is also the price hundreds of other tokens are quoted in.',

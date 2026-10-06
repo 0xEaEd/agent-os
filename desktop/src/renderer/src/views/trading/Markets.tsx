@@ -8,8 +8,8 @@ import {
   ShieldAlert,
   TriangleAlert,
 } from 'lucide-react'
-import { useState } from 'react'
-import { Menu, MenuItem } from '~/components/menu/PopMenu'
+import { useCallback, useRef, useState } from 'react'
+import { MenuItem, PopMenu, type MenuPlace } from '~/components/menu/PopMenu'
 import { Button } from '~/components/ui/button'
 import { Switch } from '~/components/ui/switch'
 import { t } from '~/i18n'
@@ -27,14 +27,18 @@ import {
   formatPoolPrice,
   formatRatio,
   counterpartySymbol,
+  formatPremiumPct,
   formatUsdShort,
   isNativeCounterparty,
+  isStockToken,
   launcherRepeatsDex,
   MIN_TVL_STEPS,
   offersDeeper,
+  offersReadAgain,
   pickMarketsTarget,
   poolAge,
   poolSwapTokens,
+  premiumTone,
   ROBINHOOD_CHAIN,
   rowPair,
   SECTION_CAP,
@@ -265,6 +269,7 @@ export function Markets({ deskChain = null }: { deskChain?: ChainId | null }) {
           refreshing={markets.isFetching}
           deep={view.deep}
           onDeeper={() => setView({ deep: true })}
+          onReadAgain={() => void markets.refetch()}
           onSwap={(pool) => requestSwap(poolSwapTokens(data, pool))}
         />
       )}
@@ -290,7 +295,12 @@ function Picked({
   candidates: SearchToken[]
   onPick: (match: SearchToken) => void
 }) {
-  const [open, setOpen] = useState(false)
+  // The anchor rect is captured on open; the list is portalled out of the
+  // tab's scroller and sized for a token's full name (not the house 200 px).
+  const [place, setPlace] = useState<MenuPlace | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const close = useCallback(() => setPlace(null), [])
+  const open = place !== null
   const shown = token ?? fallback
   if (!shown) return null
   const chainId = token?.chainId ?? fallbackChain
@@ -308,31 +318,59 @@ function Picked({
         {candidates.length > 1 ? (
           <span className="trd-mk__matchwrap">
             <button
+              ref={triggerRef}
               type="button"
               className="trd-mk__matches app-no-drag"
               aria-expanded={open}
               aria-haspopup="menu"
               data-testid="markets-matches"
-              onClick={() => setOpen((o) => !o)}
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect()
+                setPlace((p) => (p ? null : { anchor: rect, align: 'end' }))
+              }}
             >
               {fill(t('trading.markets.matches'), { count: candidates.length })}
               <ChevronDown className="size-3" strokeWidth={2} aria-hidden />
             </button>
-            {open ? (
-              <Menu label={t('trading.markets.matches.label')} onClose={() => setOpen(false)}>
+            {place ? (
+              <PopMenu
+                place={place}
+                triggerRef={triggerRef}
+                onClose={close}
+                label={t('trading.markets.matches.label')}
+                className="trd-mk__matchmenu"
+              >
                 {candidates.map((c) => (
                   <MenuItem
                     key={`${c.chainId}:${c.address}`}
                     mark={<TokenLogo token={c} size={14} />}
-                    label={c.name ? `${c.symbol} · ${c.name}` : c.symbol}
-                    aside={`${formatUsdShort(c.liquidityUsd)} · ${shortAddress(c.address)}`}
+                    label={c.name || c.symbol}
+                    detail={
+                      <span className="trd-mk__matchdetail" title={c.address}>
+                        <span className="trd-sym">{c.symbol}</span>
+                        <span aria-hidden> · </span>
+                        <span className="trd-num">{shortAddress(c.address)}</span>
+                        {isStockToken(c) ? (
+                          <>
+                            <span aria-hidden> · </span>
+                            <span>{t('trading.markets.stock')}</span>
+                          </>
+                        ) : null}
+                      </span>
+                    }
+                    aside={
+                      <span className="trd-mk__matchliq" data-testid="markets-match-liquidity">
+                        <small>{t('trading.markets.liquidity')}</small>
+                        <b className="trd-num">{formatUsdShort(c.liquidityUsd)}</b>
+                      </span>
+                    }
                     checked={isShown(c)}
                     onSelect={() => {
                       if (!isShown(c)) onPick(c)
                     }}
                   />
                 ))}
-              </Menu>
+              </PopMenu>
             ) : null}
           </span>
         ) : null}
@@ -368,6 +406,7 @@ function Board({
   refreshing,
   deep,
   onDeeper,
+  onReadAgain,
   onSwap,
 }: {
   data: MarketsPayload
@@ -376,11 +415,13 @@ function Board({
   refreshing: boolean
   deep: boolean
   onDeeper: () => void
+  onReadAgain: () => void
   onSwap: (pool: MarketsPool) => void
 }) {
   const tvl = tvlStepLabel(data.request?.params?.minTvlUsd ?? minTvlUsd)
   const nothing = data.sections.quote.length === 0 && data.sections.base.length === 0
   const c = data.counts
+  const wasDeep = deep || data.request?.params?.deep === true
   return (
     <div className="trd-mk__board" data-refreshing={refreshing || undefined}>
       <TokenHead data={data} now={now} />
@@ -431,7 +472,7 @@ function Board({
             {t('trading.markets.partial')}
           </span>
         ) : null}
-        {offersDeeper(c, deep || data.request?.params?.deep === true) ? (
+        {offersDeeper(c, wasDeep) ? (
           <button
             type="button"
             className="trd-chip trd-mk__deeper app-no-drag"
@@ -443,6 +484,25 @@ function Board({
             <Layers className="size-3" strokeWidth={2} aria-hidden />
             <span className="trd-chip__label">{t('trading.markets.deep')}</span>
           </button>
+        ) : null}
+        {offersReadAgain(c, wasDeep) ? (
+          <button
+            type="button"
+            className="trd-chip trd-mk__deeper app-no-drag"
+            title={t('trading.markets.again.help')}
+            disabled={refreshing}
+            data-testid="markets-again"
+            onClick={onReadAgain}
+          >
+            <RotateCw className="size-3" strokeWidth={2} aria-hidden />
+            <span className="trd-chip__label">{t('trading.markets.refresh')}</span>
+          </button>
+        ) : null}
+        {c.rateLimited ? (
+          <p className="trd-mk__ratelimited" role="status" data-testid="markets-ratelimited">
+            <TriangleAlert className="size-3" strokeWidth={2} aria-hidden />
+            <span>{t('trading.markets.rateLimited')}</span>
+          </p>
         ) : null}
       </footer>
       <QuoteWarnings warnings={data.warnings} />
@@ -625,7 +685,7 @@ function Row({
     >
       <span className="trd-mk__pair" title={cp.name}>
         <TokenLogo token={logo} size={18} />
-        <span className="trd-mk__pairtext">
+        <span className="trd-mk__pairtext" title={`${first}/${second}`}>
           <Sym symbol={first} className="trd-mk__first" />
           <span className="trd-mk__slash">/</span>
           <Sym symbol={second} className="trd-mk__second" />
@@ -714,12 +774,10 @@ function Row({
         {pool.premiumPct !== null && pool.side === 'base' ? (
           <small
             className="trd-mk__premium"
-            data-tone={pnlTone(pool.premiumPct)}
+            data-tone={premiumTone(pool.premiumPct)}
             data-testid="markets-premium"
           >
-            {fill(t('trading.markets.premium'), {
-              pct: formatPct(pool.premiumPct, { signed: true }),
-            })}
+            {fill(t('trading.markets.premium'), { pct: formatPremiumPct(pool.premiumPct) })}
           </small>
         ) : null}
       </span>

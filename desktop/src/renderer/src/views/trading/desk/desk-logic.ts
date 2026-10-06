@@ -1517,3 +1517,44 @@ export function tradingProjectKnowledge(ctx: {
     .filter(Boolean)
     .join('\n')
 }
+
+/**
+ * Keep a scrolling tab strip honest: `data-labels="off"` when the tabs with
+ * their words do not fit (the icons stay, the title carries the word), and
+ * `data-fade="start|end|both"` on the side(s) that hide tabs. Attributes are
+ * set on the element directly (React renders neither), measured on resize
+ * and scroll. Returns the cleanup.
+ */
+export function watchTabStrip(el: HTMLElement): () => void {
+  const measure = () => {
+    // With labels: do they fit? (A synchronous re-layout, no paint between.)
+    const before = el.dataset.labels
+    el.dataset.labels = 'on'
+    const fits = el.scrollWidth <= el.clientWidth + 1
+    el.dataset.labels = fits ? 'on' : 'off'
+    // The strip changed shape: the selected tab stays in view.
+    if (before !== el.dataset.labels) {
+      el.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({
+        block: 'nearest',
+        inline: 'nearest',
+      })
+    }
+    fade()
+  }
+  const fade = () => {
+    const max = el.scrollWidth - el.clientWidth
+    const start = el.scrollLeft > 1
+    const end = max > 1 && el.scrollLeft < max - 1
+    const side = start && end ? 'both' : start ? 'start' : end ? 'end' : ''
+    if (side) el.dataset.fade = side
+    else delete el.dataset.fade
+  }
+  measure()
+  el.addEventListener('scroll', fade, { passive: true })
+  const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+  ro?.observe(el)
+  return () => {
+    el.removeEventListener('scroll', fade)
+    ro?.disconnect()
+  }
+}

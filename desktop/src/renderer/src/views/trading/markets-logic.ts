@@ -147,37 +147,63 @@ export interface MarketsTarget {
   /** The resolved token, for the head line before the read lands. */
   token: SearchToken | null
   /**
-   * Every verified exact match the pick was made among, the pick first: the
-   * "Showing … · 3 matches" list the user can choose another from. Empty for
-   * an address or when nothing verified matched.
+   * The verified exact matches on the pick's chain, the pick first: the
+   * "Showing … · 3 matches" list the user can choose another from. Deduped
+   * by address and ranked by `rankMatches`, so the same search answers the
+   * same list whatever order the chains replied in. Empty for an address or
+   * when nothing verified matched.
    */
   candidates: SearchToken[]
 }
 
 /**
  * Verified exact matches, best first: a Stock Token, then the deepest
- * liquidity (unknown last). The order is stable, so the engine's own ranking
- * breaks ties.
+ * liquidity (unknown last), then the address — a total order, so the list
+ * never depends on which chain's search answered first.
  */
 export function rankMatches(rows: readonly SearchToken[]): SearchToken[] {
   return [...rows].sort(
     (a, b) =>
       Number(isStockToken(b)) - Number(isStockToken(a)) ||
-      (b.liquidityUsd ?? -Infinity) - (a.liquidityUsd ?? -Infinity),
+      (b.liquidityUsd ?? -Infinity) - (a.liquidityUsd ?? -Infinity) ||
+      a.chainId - b.chainId ||
+      a.address.toLowerCase().localeCompare(b.address.toLowerCase()),
   )
 }
 
 /**
+ * One row per token (chain + address, case-insensitive): a search can list
+ * a token twice (two sources, or a refetch merged in); the row with the
+ * deeper liquidity is kept.
+ */
+export function dedupeMatches(rows: readonly SearchToken[]): SearchToken[] {
+  const byKey = new Map<string, SearchToken>()
+  for (const row of rows) {
+    const key = `${row.chainId}:${row.address.toLowerCase()}`
+    const seen = byKey.get(key)
+    if (!seen || (row.liquidityUsd ?? -Infinity) > (seen.liquidityUsd ?? -Infinity)) {
+      byKey.set(key, row)
+    }
+  }
+  return [...byKey.values()]
+}
+
+/**
  * Which token a typed query means. An address is taken as given on `chain`.
- * A symbol is looked up on both chains (`results` from `useTokenSearch`); only
- * verified exact matches count, ranked by `rankMatches` (a Stock Token, then
- * the highest liquidity) — never simply the first one the search returned:
- * "AI" on Robinhood Chain is several tokens, and the deep one is meant.
+ * A symbol is looked up on both chains (`results` from `useTokenSearch`, read
+ * only once that search has settled); only verified exact matches count,
+ * deduped by address and ranked by `rankMatches` (a Stock Token, then the
+ * highest liquidity) — never simply the first one the search returned: "AI"
+ * on Robinhood Chain is several tokens, and the deep one is meant.
  *
  * - With no chain chosen in the tab, a verified Stock Token of that symbol
  *   wins wherever it lives (NVDA typed on Base means Robinhood Chain's
  *   NVDA), then the best match on the desk's chain, then on any chain.
  * - With a chain chosen, only that chain's matches are taken.
+ *
+ * The candidates are the pick's chain only: the list a user picks from is
+ * the tokens of that symbol where the markets are being read, not a mix of
+ * both chains (whose count changed with whichever chain answered last).
  *
  * Nothing verified → the symbol goes to the engine as typed, on `chain`; it
  * applies its own Stock-Token-first rule and answers ambiguity itself.
@@ -191,18 +217,21 @@ export function pickMarketsTarget(
   const q = query.trim()
   if (ADDRESS_RE.test(q)) return { chainId: chain, target: q, token: null, candidates: [] }
   const sym = q.toLowerCase()
-  const exact = results.filter((r) => r.verified && r.symbol.toLowerCase() === sym)
+  const exact = dedupeMatches(
+    results.filter((r) => r.verified && r.symbol.trim().toLowerCase() === sym),
+  )
   const onChain = rankMatches(exact.filter((r) => r.chainId === chain))
   const pick = explicitChain
     ? onChain[0]
     : (rankMatches(exact.filter((r) => isStockToken(r)))[0] ?? onChain[0] ?? rankMatches(exact)[0])
   if (!pick) return { chainId: chain, target: q, token: null, candidates: [] }
-  // The pick first, then the rest of its chain, then the other chain's.
-  const pool = explicitChain ? onChain : rankMatches(exact)
-  const rest = pool
-    .filter((r) => r !== pick)
-    .sort((a, b) => Number(b.chainId === pick.chainId) - Number(a.chainId === pick.chainId))
-  return { chainId: pick.chainId, target: pick.address, token: pick, candidates: [pick, ...rest] }
+  const sameChain = rankMatches(exact.filter((r) => r.chainId === pick.chainId))
+  return {
+    chainId: pick.chainId,
+    target: pick.address,
+    token: pick,
+    candidates: [pick, ...sameChain.filter((r) => r !== pick)],
+  }
 }
 
 /** The pool's counterparty is the chain's native coin (the zero address). */
@@ -254,12 +283,45 @@ export function launcherRepeatsDex(pool: Pick<MarketsPool, 'launcher' | 'dex'>):
 }
 
 /**
- * Deeper is offered only when the page cap — not `limit` — ended a read that
- * had more pools, and the read was not already deep. A limit-cut read has
- * nothing more for a deeper read to find.
+ * Deeper is offered on a read that was not already deep when the page cap —
+ * not `limit` — ended it with more pools left, or a 429 cut it short
+ * (`rateLimited`). A limit-cut read has nothing more for a deeper read to find.
  */
-export function offersDeeper(counts: Pick<MarketsCounts, 'pageCapHit'>, deep: boolean): boolean {
-  return counts.pageCapHit === true && !deep
+export function offersDeeper(
+  counts: Pick<MarketsCounts, 'pageCapHit' | 'rateLimited'>,
+  deep: boolean,
+): boolean {
+  return !deep && (counts.pageCapHit === true || counts.rateLimited === true)
+}
+
+/**
+ * *Read again* is offered on a deep read a 429 cut short: Deeper has nothing
+ * more to give there, but the same read a minute later may finish.
+ */
+export function offersReadAgain(
+  counts: Pick<MarketsCounts, 'rateLimited'>,
+  deep: boolean,
+): boolean {
+  return deep && counts.rateLimited === true
+}
+
+/**
+ * A premium (or any signed percent) the way the chat card prints it: one
+ * decimal, signed, and never a signed zero — anything under 0.05 % either
+ * way is a flat "0.0%", toned flat (docs/markets.md, shared with the card).
+ */
+export function formatPremiumPct(pct: number | null | undefined): string {
+  if (pct === null || pct === undefined || !Number.isFinite(pct)) return '—'
+  if (premiumTone(pct) === 'flat') return '0.0%'
+  return `${pct > 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`
+}
+
+/** The tone that goes with `formatPremiumPct`: flat under 0.05 % either way. */
+export function premiumTone(pct: number | null | undefined): 'up' | 'down' | 'flat' {
+  if (pct === null || pct === undefined || !Number.isFinite(pct) || Math.abs(pct) < 0.05) {
+    return 'flat'
+  }
+  return pct > 0 ? 'up' : 'down'
 }
 
 function asToken(

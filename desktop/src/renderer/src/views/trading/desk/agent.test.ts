@@ -432,8 +432,8 @@ describe('tradingAgentFiles · markets (v25)', () => {
   ]
 
   it('bumped the version and names markets in the description', () => {
-    expect(TRADING_AGENT_VERSION).toBe(26)
-    expect(agents).toContain('trading agent v26')
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(26)
+    expect(agents).toContain(`trading agent v${TRADING_AGENT_VERSION}`)
     expect(tradingAgentSpec().description).toMatch(/markets \(every pool a token trades in/)
   })
 
@@ -491,6 +491,28 @@ describe('tradingAgentFiles · markets (v25)', () => {
   it('stays English only', () => {
     for (const file of [agents, tools]) {
       expect(file).not.toMatch(/[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i)
+    }
+  })
+})
+
+// Live test 2026-10-06 (second round): summarising NVDA's card, the agent
+// called USDG and WETH NVDA's "quote-side markets" — the pools where NVDA is
+// bought and sold, shown under *NVDA priced in*.
+describe('tradingAgentFiles · naming the markets sections (v27)', () => {
+  const files = tradingAgentFiles()
+  const agents = files['AGENTS.md'] ?? ''
+  const tools = files['TOOLS.md'] ?? ''
+
+  it('bumped the version', () => {
+    expect(TRADING_AGENT_VERSION).toBe(27)
+    expect(agents).toContain('trading agent v27')
+  })
+
+  it('says which section is which, and never calls USDG/WETH quote-side markets', () => {
+    for (const file of [agents, tools]) {
+      expect(file).toMatch(/\*X priced in\*\)? (?:are|is)?[^.]*?X itself is bought\s+and\s+sold/)
+      expect(file).toMatch(/\*Priced in X\*\)?[^.]*?other tokens quoted in X/)
+      expect(file).toMatch(/Never call USDG or\s+WETH\s+"quote-side markets" of X\./)
     }
   })
 })

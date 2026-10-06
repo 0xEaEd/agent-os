@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 26
+export const TRADING_AGENT_VERSION = 27
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -134,7 +134,11 @@ only when none applies.
   "pairs of X", "what trades against X", "markets for X",
   "tokens priced in X", "pools of X on every DEX" →
   \`agentos trade markets X --chain robinhood --json\`. The card it
-  publishes is the answer. A liquidity question about ONE pool ("how deep
+  publishes is the answer. Name its two sections as the card does: pools
+  in *X priced in* are where X itself is bought and sold (NVDA/USDG,
+  NVDA/WETH: USDG and WETH are what X trades for); pools in *Priced in X*
+  are other tokens quoted in X (AI/NVDA). Never call USDG or WETH
+  "quote-side markets" of X. A liquidity question about ONE pool ("how deep
   is X", "pool X") stays \`lp pool\`. A launchpad pool (Bankr, Pons; "show
   me the AI/NVDA pool") that \`lp pool\` answers with
   \`trading.lp.pool_key_unknown\` is answered with
@@ -614,7 +618,10 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   "pairs of X", "what trades against X", "markets for X",
   "tokens priced in X", "pools of X on every DEX" →
   \`agentos trade markets X --chain robinhood --json\`. \`sections.quote\`
-  are the tokens priced in X, \`sections.base\` what X is priced in.
+  (*Priced in X*) are other tokens quoted in X (AI/NVDA);
+  \`sections.base\` (*X priced in*) are the pools where X itself is bought
+  and sold, against USDG, WETH and the like (NVDA/USDG). Never call USDG or
+  WETH "quote-side markets" of X.
   \`partial: true\` means the source rate-limited the read: say so once,
   never rerun it in a loop. \`counts.hiddenLookalikes\` counts tokens that
   copy a listed company's symbol or name; rerun with \`--lookalikes\` only

@@ -49,7 +49,7 @@ import { SwapPanel, type SwapPrefill } from '../SwapPanel'
 import type { Holding, Order, ProviderId, Totals, Wallet } from '../types'
 import { WalletHead } from '../WalletHead'
 import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
-import { BOOK_MAX, BOOK_MIN } from './desk-logic'
+import { BOOK_MAX, BOOK_MIN, watchTabStrip } from './desk-logic'
 import { ToolsPanel } from './ToolsPanel'
 
 const TABS: readonly { id: BookTab; icon: typeof BookOpen }[] = [
@@ -118,6 +118,14 @@ export function Book({
     const selected = tabsRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
     selected?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }, [tab, collapsed])
+  // Labels go before a glyph would clip (History was cut mid-letter by the
+  // pips at 520 px), and a strip that still overflows fades on the side
+  // that hides tabs, so it reads as scrollable.
+  useEffect(() => {
+    const el = tabsRef.current
+    if (!el) return
+    return watchTabStrip(el)
+  }, [collapsed])
   const openSheet = useTradingUi((s) => s.openSheet)
   const requestSwap = useTradingUi((s) => s.requestSwap)
   const openMarkets = useTradingUi((s) => s.openMarkets)

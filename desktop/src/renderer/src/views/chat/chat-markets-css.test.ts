@@ -114,13 +114,46 @@ function colsIn(block: string, selector: string): string {
   return value
 }
 
+/** Every `--mk-cols` value declared anywhere in chat.css. */
+const allCols = [...css.matchAll(/--mk-cols:\s*([^;]+);/g)].map((m) =>
+  m[1]!.replace(/\s+/g, ' ').trim(),
+)
+
+/** One `--mk-cols` value split into its top-level tracks. */
+function tracks(value: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of value.trim()) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) out.push(cur)
+      cur = ''
+      continue
+    }
+    cur += ch
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+/** The body of one `@container mk-card (max-width: Npx)` query. */
+function containerBlock(px: number): string {
+  const body = css.match(
+    new RegExp(`@container mk-card \\(max-width: ${px}px\\) \\{([\\s\\S]*?)\\n\\}`),
+  )?.[1]
+  if (!body) throw new Error(`no ${px}px container query`)
+  return body
+}
+
 /** The body of the narrow container query. */
 const narrow =
   css.match(/@container mk-card \(max-width: 420px\) \{([\s\S]*?)\n\}/)?.[1] ??
   (() => {
     throw new Error('no narrow container query')
   })()
-const wide = css.slice(0, css.indexOf('@container mk-card (max-width: 420px)'))
+const wide = css.slice(0, css.indexOf('@container mk-card (max-width: 640px)'))
 
 describe('markets card · the renderer’s real DOM', () => {
   it('draws the structural classes the desktop skin lays out', () => {
@@ -293,8 +326,53 @@ describe('markets card · the desktop skin in chat.css', () => {
     expect(narrow).toMatch(
       /\.mk-col--vol,\s*\.mk-col--age,\s*\.mk-vol,\s*\.mk-age \{\s*display: none;/,
     )
-    expect(trackCount(colsIn(narrow, '.mk-card'))).toBe(4)
-    expect(trackCount(colsIn(narrow, '.mk-section:has(.mk-swap)'))).toBe(5)
+    // Swap is not a column here: it sits under the 24h figure (row 2).
+    expect(trackCount(colsIn(narrow, '.mk-section:has(.mk-swap)'))).toBe(4)
+    expect(narrow).toMatch(/\.mk-swap \{\s*grid-column: 4;/)
+  })
+
+  // Live test 2026-10-06 (second round): at a 329–391 px card the pair cell
+  // was 32 px wide ("AI/…", "ORBIO/N…") while the Price column kept 85–110
+  // px, "Uniswap" broke into "Unisw/ap" and each venue pill took a line.
+  it('never starves the pair: every template keeps it at 9ch or more, and only Price gives way', () => {
+    expect(allCols.length).toBe(5)
+    for (const value of allCols) {
+      const [pair, ...rest] = tracks(value)
+      expect(pair, value).toMatch(/^minmax\((\d+(?:\.\d+)?)ch, 1fr\)$/)
+      expect(Number(pair!.match(/^minmax\(([\d.]+)ch/)![1]), value).toBeGreaterThanOrEqual(9)
+      // TVL, Vol 24h, Price, 24h, Age, Swap: the price (third after the
+      // pair) is the one track with a range; every other figure is fixed.
+      const flexible = rest.filter((t) => t.startsWith('minmax('))
+      expect(flexible, value).toEqual([rest[rest.length >= 5 ? 2 : 1]])
+      expect(
+        rest.some((t) => /fr\b/.test(t)),
+        value,
+      ).toBe(false)
+    }
+  })
+
+  it('moves Swap under the 24h figure below 640 px, so the pair keeps the width', () => {
+    const mid = containerBlock(640)
+    expect(trackCount(colsIn(mid, '.mk-section:has(.mk-swap)'))).toBe(6)
+    expect(mid).toMatch(/\.mk-market,\s*\.mk-pricing \{\s*grid-row: 1 \/ span 2;/)
+    expect(mid).toMatch(/\.mk-swap \{\s*grid-row: 2;\s*grid-column: 5;/)
+    // The order of the queries is the cascade: 640, then 420, then 340.
+    expect(css.indexOf('(max-width: 640px)')).toBeLessThan(css.indexOf('(max-width: 420px)'))
+    expect(css.indexOf('(max-width: 420px)')).toBeLessThan(css.indexOf('(max-width: 340px)'))
+  })
+
+  it('breaks a word in the card only at a space: "Uniswap" never splits', () => {
+    const cardRule = css.match(/\n\.mk-card \{([\s\S]*?)\n\}/)?.[1] ?? ''
+    expect(cardRule).toMatch(/overflow-wrap: normal;/)
+    const dex = css.match(/\n\.mk-dex \{([\s\S]*?)\n\}/)?.[1] ?? ''
+    expect(dex).toMatch(/word-break: keep-all;/)
+    expect(dex).not.toMatch(/anywhere/)
+    // The pair truncates with an ellipsis, never mid-glyph.
+    const pair = css.match(/\n\.mk-pair \{([\s\S]*?)\n\}/)?.[1] ?? ''
+    expect(pair).toMatch(/text-overflow: ellipsis;/)
+    expect(pair).toMatch(/white-space: nowrap;/)
+    // The venue wraps between its pills, never inside one.
+    expect(css).toMatch(/\.mk-venue > \* \{\s*flex-shrink: 0;/)
   })
 
   it('stacks the price cell, and never truncates the price in the other token', () => {
