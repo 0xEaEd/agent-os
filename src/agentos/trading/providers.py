@@ -244,10 +244,10 @@ class UniswapProvider:
         # a permit route to the Universal Router. Both are pinned per chain
         # in ``UNIVERSAL_ROUTERS``: a chain without a verified router entry
         # gets an empty set, which refuses the swap rather than guessing.
-        router = UNIVERSAL_ROUTERS.get(chain.chain_id)
-        if router is None:
+        routers = UNIVERSAL_ROUTERS.get(chain.chain_id)
+        if not routers:
             return frozenset()
-        return frozenset({router.lower(), PROXY_SPENDER.lower()})
+        return frozenset({r.lower() for r in routers} | {PROXY_SPENDER.lower()})
 
     async def build(
         self,

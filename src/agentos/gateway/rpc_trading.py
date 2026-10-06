@@ -9,11 +9,13 @@ Control-plane only.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import inspect
 import re
 import unicodedata
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from decimal import Decimal
 from typing import Any
 
 from agentos.gateway.agent_surface import agent_binding
@@ -923,6 +925,79 @@ async def _trading_lp_positions(params: dict | None, ctx: RpcContext) -> dict[st
     return _with_request(result, "positions", echo)
 
 
+# ── trading.markets (every pool a token trades in; docs/markets.md) ─────────
+
+
+@_d.method("trading.markets")
+async def _trading_markets(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Every pool a token trades in, on every DEX, split by side (docs/markets.md).
+
+    Read-only, so an agent may call it. ``chainId`` defaults to Robinhood Chain.
+    """
+    from agentos.trading import markets
+
+    p = _params(params)
+    chain = _chain(p, required=False) or resolve_chain(markets.ROBINHOOD_CHAIN_ID)
+    try:
+        target = _str(p, "target") or _str(p, "token")
+        if not target:
+            raise ValueError("params.target (a token symbol, address or ETH) is required")
+        side = (_str(p, "side") or "all").lower()
+        if side not in markets.SIDES:
+            raise ValueError("params.side must be all, quote or base")
+        raw_tvl = p.get("minTvlUsd")
+        if raw_tvl is None or raw_tvl == "":
+            min_tvl = markets.DEFAULT_MIN_TVL_USD
+        else:
+            if isinstance(raw_tvl, bool) or not isinstance(raw_tvl, int | float | str):
+                raise ValueError("params.minTvlUsd must be a number of dollars, 0 or more")
+            try:
+                min_tvl = float(raw_tvl)
+            except ValueError as exc:
+                raise ValueError("params.minTvlUsd must be a number of dollars, 0 or more") from exc
+            if not min_tvl >= 0 or min_tvl == float("inf"):
+                raise ValueError("params.minTvlUsd must be a number of dollars, 0 or more")
+        limit = _int(p, "limit", markets.DEFAULT_LIMIT)
+        if not 1 <= limit <= markets.MAX_LIMIT:
+            raise ValueError(f"params.limit must be between 1 and {markets.MAX_LIMIT}")
+        flags: dict[str, bool] = {}
+        for key in ("lookalikes", "deep"):
+            value = p.get(key, False)
+            if value is None:
+                value = False
+            if not isinstance(value, bool):
+                raise ValueError(f"params.{key} must be a boolean")
+            flags[key] = value
+    except ValueError as exc:
+        raise _raise(exc) from exc
+    service = _service(ctx)
+    try:
+        result = await markets.markets(
+            service,
+            chain=chain,
+            target=target,
+            side=side,
+            min_tvl_usd=min_tvl,
+            limit=limit,
+            lookalikes=flags["lookalikes"],
+            deep=flags["deep"],
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    token = result.get("token") if isinstance(result, dict) else None
+    resolved = token.get("address") if isinstance(token, dict) else None
+    echo = {
+        "target": resolved or target,
+        "chainId": chain.chain_id,
+        "side": side,
+        "minTvlUsd": min_tvl,
+        "limit": limit,
+        "lookalikes": flags["lookalikes"],
+        "deep": flags["deep"],
+    }
+    return _with_request(result, "markets", echo)
+
+
 # ── trading.lp.collect|remove|add (docs/lp-write.md) ─────────────────────────
 #
 # An agent may call these: each only creates an order, and every LP write parks
@@ -1321,6 +1396,572 @@ async def _trading_dca_update(params: dict | None, ctx: RpcContext) -> dict[str,
     service = _service(ctx)
     try:
         return await service.dca_update(mandate_id, **fields)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+# ── trading.trigger.* (docs/triggers.md) ────────────────────────────────────
+#
+# Same split as ``trading.dca.*``: an agent may create (it only proposes: an
+# agent-bound connection always gets ``awaiting_approval``), get and list; every
+# other write is the user's, so it is ``@_operator_only``. A malformed param is
+# ``trading.trigger.invalid`` naming the field. The structural rules (which
+# condition needs which number, which action takes which size) are checked
+# here; the engine checks the values against the market and the wallet.
+
+_TRIGGER_KINDS = ("sell", "buy", "alert")
+_TRIGGER_DIRECTIONS = ("below", "above", "trail")
+_TRIGGER_SIZES = ("amountUsd", "amountPct", "amount")
+_TRIGGER_MIN_VALID_SECONDS = 60
+
+
+def _trigger_invalid(message: str) -> RpcHandlerError:
+    return RpcHandlerError("trading.trigger.invalid", message)
+
+
+def _trigger_id(p: dict[str, Any]) -> str:
+    value = p.get("triggerId")
+    if not isinstance(value, str) or not value.strip():
+        raise _trigger_invalid("params.triggerId is required")
+    return value.strip()
+
+
+def _trigger_number(p: dict[str, Any], key: str) -> float | None:
+    try:
+        value = _number(p, key)
+    except ValueError as exc:
+        raise _trigger_invalid(str(exc)) from exc
+    if value is not None and (value != value or value in (float("inf"), float("-inf"))):
+        raise _trigger_invalid(f"params.{key} must be a finite number")
+    return value
+
+
+def _trigger_int(p: dict[str, Any], key: str) -> int | None:
+    """A whole number: an int, an integral float (``3600.0``) or a digit string."""
+    value = p.get(key)
+    if value is None or value == "":
+        return None
+    number = _trigger_number(p, key)
+    if number is None or number != int(number):
+        raise _trigger_invalid(f"params.{key} must be an integer")
+    return int(number)
+
+
+def _trigger_bool(p: dict[str, Any], key: str, default: bool) -> bool:
+    value = p.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise _trigger_invalid(f"params.{key} must be a boolean")
+    return value
+
+
+def _trigger_text(p: dict[str, Any], key: str) -> str | None:
+    """A free-text field a person reads (name, reason): sanitised like a note."""
+    try:
+        return _note(p, key)
+    except ValueError as exc:
+        raise _trigger_invalid(str(exc)) from exc
+
+
+def _trigger_str(p: dict[str, Any], key: str, *, required: bool = False) -> str | None:
+    try:
+        return _str(p, key, required=required)
+    except ValueError as exc:
+        raise _trigger_invalid(str(exc)) from exc
+
+
+def _trigger_choice(p: dict[str, Any], key: str, choices: tuple[str, ...]) -> str:
+    value = (_trigger_str(p, key, required=True) or "").lower()
+    if value not in choices:
+        raise _trigger_invalid(f"params.{key} must be one of {', '.join(choices)}")
+    return value
+
+
+def _trigger_price(p: dict[str, Any]) -> str | float | None:
+    """``price`` as given: ``"3800"``, ``"-10%"``, ``"+15%"`` or a number.
+
+    The engine resolves a percent against the price at creation, so the text
+    goes through untouched (stripped); a number must be finite.
+    """
+    value = p.get("price")
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise _trigger_invalid("params.price must be a string or a number")
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise _trigger_invalid("params.price must be a finite number")
+    return number
+
+
+def _trigger_amount(p: dict[str, Any]) -> str | None:
+    """``amount`` (token units, human): a string or a number, passed on as a string."""
+    value = p.get("amount")
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise _trigger_invalid("params.amount must be a string or a number")
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise _trigger_invalid("params.amount must be a finite number")
+    # ``1e-05`` would reach the engine as an exponent; give it plain digits.
+    return format(Decimal(str(value)), "f")
+
+
+def _trigger_valid_for(p: dict[str, Any]) -> int | None:
+    seconds = _trigger_int(p, "validForSeconds")
+    if seconds is not None and seconds < _TRIGGER_MIN_VALID_SECONDS:
+        raise _trigger_invalid(
+            f"params.validForSeconds must be at least {_TRIGGER_MIN_VALID_SECONDS}"
+        )
+    return seconds
+
+
+@_d.method("trading.trigger.create")
+async def _trading_trigger_create(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Create a price trigger. The operator's is ``armed`` at once; an agent's awaits approval.
+
+    ``initiator`` and ``sessionKey`` are decided by :func:`_initiator`: an
+    agent-bound connection is the agent and files under its bound chat
+    whatever it declares.
+    """
+    p = _params(params)
+    try:
+        chain = _chain(p)
+        initiator, session_key = _initiator(ctx, p)
+    except ValueError as exc:
+        raise _trigger_invalid(str(exc)) from exc
+    assert chain is not None
+    kind = _trigger_choice(p, "kind", _TRIGGER_KINDS)
+    token = _trigger_str(p, "token", required=True) or ""
+    direction = _trigger_choice(p, "direction", _TRIGGER_DIRECTIONS)
+    price = _trigger_price(p)
+    trail_pct = _trigger_number(p, "trailPct")
+    if direction == "trail":
+        if kind == "buy":
+            raise _trigger_invalid("params.kind buy cannot use direction trail")
+        if trail_pct is None:
+            raise _trigger_invalid("params.trailPct is required for direction trail")
+        if price is not None:
+            raise _trigger_invalid("params.price is not used with direction trail")
+    else:
+        if price is None:
+            raise _trigger_invalid(f"params.price is required for direction {direction}")
+        if trail_pct is not None:
+            raise _trigger_invalid(f"params.trailPct is not used with direction {direction}")
+    amount_usd = _trigger_number(p, "amountUsd")
+    amount_pct = _trigger_number(p, "amountPct")
+    amount = _trigger_amount(p)
+    given = [
+        key
+        for key, value in zip(_TRIGGER_SIZES, (amount_usd, amount_pct, amount), strict=True)
+        if value is not None
+    ]
+    if kind == "alert" and given:
+        raise _trigger_invalid(f"params.{given[0]} is not used by kind alert: it sends no order")
+    if kind == "buy" and (amount_usd is None or len(given) > 1):
+        raise _trigger_invalid("params.amountUsd is required for kind buy, and is its only size")
+    if kind == "sell" and len(given) != 1:
+        raise _trigger_invalid(
+            "kind sell takes exactly one size: params.amountPct, params.amount or params.amountUsd"
+        )
+    service = _service(ctx)
+    try:
+        return await service.trigger_create(
+            chain=chain,
+            kind=kind,
+            token=token,
+            quote=_trigger_str(p, "quote"),
+            direction=direction,
+            price=price,
+            trail_pct=trail_pct,
+            amount_usd=amount_usd,
+            amount_pct=amount_pct,
+            amount=amount,
+            wallet=_trigger_str(p, "wallet"),
+            slippage_pct=_trigger_number(p, "slippagePct"),
+            name=_trigger_text(p, "name"),
+            valid_for_seconds=_trigger_valid_for(p),
+            initiator=initiator,
+            session_key=session_key,
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.get")
+async def _trading_trigger_get(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """One trigger as a ``trigger`` card payload."""
+    trigger_id = _trigger_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.trigger_get(trigger_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.list")
+async def _trading_trigger_list(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Live triggers (every one with ``all``), optionally of one ``wallet``."""
+    p = _params(params)
+    include_all = _trigger_bool(p, "all", False)
+    wallet = _trigger_str(p, "wallet")
+    service = _service(ctx)
+    try:
+        return await service.trigger_list(all=include_all, wallet=wallet)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.approve")
+@_operator_only
+async def _trading_trigger_approve(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Approve a pending trigger: it is ``armed`` and checked from the next tick."""
+    trigger_id = _trigger_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.trigger_approve(trigger_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.reject")
+@_operator_only
+async def _trading_trigger_reject(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    p = _params(params)
+    trigger_id = _trigger_id(p)
+    service = _service(ctx)
+    try:
+        return await service.trigger_reject(trigger_id, _trigger_text(p, "reason"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.pause")
+@_operator_only
+async def _trading_trigger_pause(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    trigger_id = _trigger_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.trigger_pause(trigger_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.resume")
+@_operator_only
+async def _trading_trigger_resume(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    trigger_id = _trigger_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.trigger_resume(trigger_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.stop")
+@_operator_only
+async def _trading_trigger_stop(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Stop for good; an order of the trigger still awaiting approval is rejected."""
+    p = _params(params)
+    trigger_id = _trigger_id(p)
+    service = _service(ctx)
+    try:
+        return await service.trigger_stop(trigger_id, _trigger_text(p, "reason"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.trigger.fire")
+@_operator_only
+async def _trading_trigger_fire(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Fire now: act at once on an armed or paused trigger, whatever the price."""
+    p = _params(params)
+    trigger_id = _trigger_id(p)
+    wait = _trigger_bool(p, "wait", False)
+    service = _service(ctx)
+    try:
+        return await service.trigger_fire_now(trigger_id, wait=wait)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+# ── trading.bracket.* (docs/brackets.md) ────────────────────────────────────
+#
+# A bracket is a take-profit and a stop-loss on one position, one cancelling
+# the other. Same split as ``trading.trigger.*``: an agent may create (it only
+# proposes, both legs ``awaiting_approval``), get and list; every other write
+# is the user's (``@_operator_only``). A malformed param is
+# ``trading.bracket.invalid`` naming the field. The structural rules
+# (``takeProfit`` required, exactly one of ``stopLoss`` / ``trailPct``, one
+# size at most, ``tpPct`` only with ``amountPct``, no size on an alert) are
+# checked here; the lines against the market and the wallet in the engine.
+
+_BRACKET_KINDS = ("sell", "alert")
+_BRACKET_LEGS = ("tp", "sl")
+_BRACKET_SIZES = ("amountPct", "amount", "amountUsd")
+
+
+def _bracket_invalid(message: str) -> RpcHandlerError:
+    return RpcHandlerError("trading.bracket.invalid", message)
+
+
+@contextlib.contextmanager
+def _bracket_errors() -> Iterator[None]:
+    """Re-code the shared ``_trigger_*`` helpers' refusals as ``trading.bracket.invalid``.
+
+    The field parsing is the trigger's (same types, same wording); only the
+    error code is the bracket's.
+    """
+    try:
+        yield
+    except RpcHandlerError as exc:
+        if exc.code != "trading.trigger.invalid":
+            raise
+        raise _bracket_invalid(str(exc)) from exc
+    except ValueError as exc:
+        raise _bracket_invalid(str(exc)) from exc
+
+
+def _bracket_id(p: dict[str, Any]) -> str:
+    value = p.get("bracketId")
+    if not isinstance(value, str) or not value.strip():
+        raise _bracket_invalid("params.bracketId is required")
+    return value.strip()
+
+
+def _bracket_number(p: dict[str, Any], key: str) -> float | None:
+    with _bracket_errors():
+        return _trigger_number(p, key)
+
+
+def _bracket_bool(p: dict[str, Any], key: str, default: bool) -> bool:
+    with _bracket_errors():
+        return _trigger_bool(p, key, default)
+
+
+def _bracket_text(p: dict[str, Any], key: str) -> str | None:
+    with _bracket_errors():
+        return _trigger_text(p, key)
+
+
+def _bracket_str(p: dict[str, Any], key: str, *, required: bool = False) -> str | None:
+    with _bracket_errors():
+        return _trigger_str(p, key, required=required)
+
+
+def _bracket_choice(
+    p: dict[str, Any], key: str, choices: tuple[str, ...], default: str | None = None
+) -> str | None:
+    """One of ``choices`` (case-insensitive); ``default`` when the param is absent."""
+    value = _bracket_str(p, key)
+    if value is None:
+        return default
+    value = value.lower()
+    if value not in choices:
+        raise _bracket_invalid(f"params.{key} must be one of {', '.join(choices)}")
+    return value
+
+
+def _bracket_line(p: dict[str, Any], key: str) -> str | float | None:
+    """``takeProfit`` / ``stopLoss`` as given: ``"4560"``, ``"+20%"``, ``"-10%"`` or a number.
+
+    The engine resolves a percent against the price at creation, so the text
+    goes through untouched (stripped); a number must be finite.
+    """
+    value = p.get(key)
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise _bracket_invalid(f"params.{key} must be a string or a number")
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        raise _bracket_invalid(f"params.{key} must be a finite number")
+    return number
+
+
+def _bracket_amount(p: dict[str, Any]) -> str | None:
+    with _bracket_errors():
+        return _trigger_amount(p)
+
+
+def _bracket_valid_for(p: dict[str, Any]) -> int | None:
+    with _bracket_errors():
+        return _trigger_valid_for(p)
+
+
+@_d.method("trading.bracket.create")
+async def _trading_bracket_create(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Create a bracket: two legs, one cancelling the other.
+
+    The operator's legs are ``armed`` at once; an agent's both await one
+    approval. ``initiator`` and ``sessionKey`` are decided by
+    :func:`_initiator`, as for a trigger.
+    """
+    p = _params(params)
+    with _bracket_errors():
+        chain = _chain(p)
+        initiator, session_key = _initiator(ctx, p)
+    assert chain is not None
+    kind = _bracket_choice(p, "kind", _BRACKET_KINDS, "sell") or "sell"
+    token = _bracket_str(p, "token", required=True) or ""
+    take_profit = _bracket_line(p, "takeProfit")
+    if take_profit is None:
+        raise _bracket_invalid("params.takeProfit is required")
+    stop_loss = _bracket_line(p, "stopLoss")
+    trail_pct = _bracket_number(p, "trailPct")
+    if stop_loss is None and trail_pct is None:
+        raise _bracket_invalid("one of params.stopLoss or params.trailPct is required")
+    if stop_loss is not None and trail_pct is not None:
+        raise _bracket_invalid("params.stopLoss and params.trailPct exclude each other: pass one")
+    amount_pct = _bracket_number(p, "amountPct")
+    amount = _bracket_amount(p)
+    amount_usd = _bracket_number(p, "amountUsd")
+    tp_pct = _bracket_number(p, "tpPct")
+    given = [
+        key
+        for key, value in zip(_BRACKET_SIZES, (amount_pct, amount, amount_usd), strict=True)
+        if value is not None
+    ]
+    if kind == "alert":
+        if given or tp_pct is not None:
+            field = given[0] if given else "tpPct"
+            raise _bracket_invalid(f"params.{field} is not used by kind alert: it sends no order")
+    if len(given) > 1:
+        raise _bracket_invalid(
+            "a bracket takes one size at most: params.amountPct, params.amount or "
+            f"params.amountUsd (got {', '.join(given)})"
+        )
+    if tp_pct is not None and given and given[0] != "amountPct":
+        raise _bracket_invalid(
+            f"params.tpPct works with params.amountPct only (got params.{given[0]})"
+        )
+    service = _service(ctx)
+    try:
+        return await service.bracket_create(
+            chain=chain,
+            kind=kind,
+            token=token,
+            quote=_bracket_str(p, "quote"),
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            trail_pct=trail_pct,
+            amount_usd=amount_usd,
+            amount_pct=amount_pct,
+            amount=amount,
+            tp_pct=tp_pct,
+            wallet=_bracket_str(p, "wallet"),
+            slippage_pct=_bracket_number(p, "slippagePct"),
+            name=_bracket_text(p, "name"),
+            valid_for_seconds=_bracket_valid_for(p),
+            initiator=initiator,
+            session_key=session_key,
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.bracket.get")
+async def _trading_bracket_get(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """One bracket (both legs) as a ``bracket`` card payload."""
+    bracket_id = _bracket_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.bracket_get(bracket_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.bracket.list")
+async def _trading_bracket_list(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Live brackets (every one with ``all``), optionally of one ``wallet``."""
+    p = _params(params)
+    include_all = _bracket_bool(p, "all", False)
+    wallet = _bracket_str(p, "wallet")
+    service = _service(ctx)
+    try:
+        return await service.bracket_list(all=include_all, wallet=wallet)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.bracket.approve")
+@_operator_only
+async def _trading_bracket_approve(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Approve a proposed bracket: both legs are ``armed`` and checked from the next tick."""
+    bracket_id = _bracket_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.bracket_approve(bracket_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.bracket.reject")
+@_operator_only
+async def _trading_bracket_reject(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    p = _params(params)
+    bracket_id = _bracket_id(p)
+    service = _service(ctx)
+    try:
+        return await service.bracket_reject(bracket_id, _bracket_text(p, "reason"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.bracket.pause")
+@_operator_only
+async def _trading_bracket_pause(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    bracket_id = _bracket_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.bracket_pause(bracket_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.bracket.resume")
+@_operator_only
+async def _trading_bracket_resume(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    bracket_id = _bracket_id(_params(params))
+    service = _service(ctx)
+    try:
+        return await service.bracket_resume(bracket_id)
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.bracket.stop")
+@_operator_only
+async def _trading_bracket_stop(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Stop both legs for good; a parked order of either is rejected."""
+    p = _params(params)
+    bracket_id = _bracket_id(p)
+    service = _service(ctx)
+    try:
+        return await service.bracket_stop(bracket_id, _bracket_text(p, "reason"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.bracket.fire")
+@_operator_only
+async def _trading_bracket_fire(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Fire one leg now (``leg``, else the nearest), whatever the price; the other goes on hold."""
+    p = _params(params)
+    bracket_id = _bracket_id(p)
+    leg = _bracket_choice(p, "leg", _BRACKET_LEGS)
+    wait = _bracket_bool(p, "wait", False)
+    service = _service(ctx)
+    try:
+        return await service.bracket_fire_now(bracket_id, leg=leg, wait=wait)
     except Exception as exc:
         raise _raise(exc) from exc
 

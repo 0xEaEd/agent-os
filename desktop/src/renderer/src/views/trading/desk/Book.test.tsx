@@ -1,7 +1,9 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useTradingUi } from '~/stores/trading-ui'
 import { holding, order, renderDesk, USDC, WALLET } from '../test-utils'
-import type { Totals, Wallet } from '../types'
+import type { MarketsPayload, Token, Totals, Wallet } from '../types'
 import { Book } from './Book'
 
 const rpcCall = vi.fn()
@@ -231,5 +233,122 @@ describe('Book · rejecting from the Orders tab', () => {
     expect(rpcCall.mock.calls.find(([m]) => m === 'trading.orders.reject')?.[1]).toEqual({
       orderId: 'theirs',
     })
+  })
+})
+
+describe('Book · Markets and swaps asked for from anywhere', () => {
+  const MARKETS = JSON.parse(
+    readFileSync('src/renderer/src/views/trading/__fixtures__/markets/nvda.json', 'utf8'),
+  ) as MarketsPayload
+  const NVDA: Token = {
+    chainId: 4663,
+    address: MARKETS.token.address,
+    symbol: 'NVDA',
+    name: 'NVIDIA • Robinhood Token',
+    decimals: 18,
+    logoUrl: null,
+    native: false,
+    verified: true,
+    stockToken: true,
+  }
+  const AI: Token = {
+    ...NVDA,
+    address: MARKETS.sections.quote[0]!.counterparty.address,
+    symbol: 'AI',
+    verified: false,
+    stockToken: false,
+  }
+
+  function reset() {
+    useTradingUi.setState({
+      bookTab: 'portfolio',
+      deskMode: false,
+      swapRequest: null,
+      markets: {
+        query: '',
+        address: null,
+        chainId: null,
+        minTvlUsd: 10_000,
+        lookalikes: false,
+        deep: false,
+      },
+    })
+  }
+  beforeEach(() => {
+    reset()
+    const base = rpcCall.getMockImplementation()!
+    rpcCall.mockImplementation(async (method: string, params: unknown) => {
+      if (method === 'trading.portfolio')
+        return {
+          totals: totals(1240.99),
+          holdings: [
+            holding({ token: USDC }),
+            holding({ chainId: 4663, token: NVDA, amount: '2' }),
+          ],
+          wallets: [{ wallet: WALLET, totals: totals(1240.99) }],
+          hiddenCount: 0,
+          syncing: false,
+        }
+      if (method === 'trading.markets') return MARKETS
+      return base(method, params)
+    })
+  })
+  afterEach(reset)
+
+  it('puts Markets right after Swap', () => {
+    render()
+    const tabs = screen.getAllByRole('tab').map((tab) => tab.getAttribute('data-testid'))
+    expect(tabs).toEqual([
+      'book-tab-portfolio',
+      'book-tab-swap',
+      'book-tab-markets',
+      'book-tab-orders',
+      'book-tab-history',
+      'book-tab-tools',
+    ])
+  })
+
+  it('keeps the Holdings Swap button: the ticket opens on that token', async () => {
+    render()
+    const rows = await screen.findAllByTestId('holding-row')
+    const usdc = rows.find((r) => r.textContent?.includes('USDC'))!
+    fireEvent.click(usdc.querySelector('button[aria-label="Swap USDC"]')!)
+    expect(await screen.findByTestId('book-tab-swap')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByTestId('token-button')[0]).toHaveTextContent('USDC')
+    // Taken, so a later mount does not fill the ticket with it again.
+    await waitFor(() => expect(useTradingUi.getState().swapRequest).toBeNull())
+  })
+
+  it('fills the ticket from a swap asked for elsewhere (a chat card, a Markets row)', async () => {
+    render()
+    await screen.findAllByTestId('holding-row')
+    act(() => useTradingUi.getState().requestSwap({ chainId: 4663, tokenIn: NVDA, tokenOut: AI }))
+    expect(await screen.findByTestId('book-tab-swap')).toHaveAttribute('aria-selected', 'true')
+    const legs = screen.getAllByTestId('token-button')
+    expect(legs[0]).toHaveTextContent('NVDA')
+    expect(legs[1]).toHaveTextContent('AI')
+  })
+
+  it('offers Markets on a Stock Token holding only, and opens the tab on it', async () => {
+    render()
+    const rows = await screen.findAllByTestId('holding-row')
+    const usdc = rows.find((r) => r.textContent?.includes('USDC'))!
+    expect(usdc.querySelector('[data-testid="holding-markets"]')).toBeNull()
+    const nvda = rows.find((r) => r.textContent?.includes('NVDA'))!
+    fireEvent.click(nvda.querySelector('[data-testid="holding-markets"]')!)
+    expect(await screen.findByTestId('book-tab-markets')).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByTestId('markets-head')).toHaveTextContent('NVDA')
+    expect(screen.getByTestId('markets-search')).toHaveValue('NVDA')
+    expect(rpcCall).toHaveBeenCalledWith(
+      'trading.markets',
+      expect.objectContaining({ target: MARKETS.token.address, chainId: 4663 }),
+    )
+
+    // A row's Swap lands on the ticket with the pair.
+    fireEvent.click(screen.getAllByTestId('markets-swap')[0]!)
+    expect(await screen.findByTestId('book-tab-swap')).toHaveAttribute('aria-selected', 'true')
+    const legs = screen.getAllByTestId('token-button')
+    expect(legs[0]).toHaveTextContent('NVDA')
+    expect(legs[1]).toHaveTextContent('AI')
   })
 })

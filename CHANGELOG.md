@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Telegram: `render_telegram_html` emitted interleaved HTML for emphasis runs
+  that overlap rather than nest, and paired a `**` closer with the wrong
+  opener. The six emphasis passes are independent `re.sub` calls over text
+  that already carries tags -- the link pass parks `<a href=...>` before any
+  of them -- and a `.+?` spans those happily, so a delimiter inside an
+  element paired with one outside it: `**a*b** *i*` rendered as
+  `<b>a<i>b</b> *i</i>`. Telegram refuses that with `400 Bad Request: can't
+  parse entities`; two send paths retry as plain text and lose all
+  formatting, and `edit()` and the document caption have no retry at all.
+  #2032 reported this for `***`/`___` and was fixed with a pre-pass for those
+  two spellings only. A match whose span straddles a tag is now not a match,
+  and the closer is left available to an opener that can reach it. Separately,
+  a lazy `.+?` pairs the nearest *closer* with the *first* opener where
+  CommonMark pairs each closer with the nearest opener before it, and the
+  asterisk-italic pattern guarded only one end of a delimiter run: `Use
+  **/*.py to match **all** Python files` came out
+  `Use <b>/<i>.py to match *</i>all</b>`, and `f(*args, **kwargs)` came out
+  `f(<i>args, *</i>kwargs)`. Both now render verbatim, as CommonMark does.
+  A sweep over 17576 three-atom inline combinations produced 1615 interleaved
+  results before and none after. (#3543)
 - Telegram: a table label written as a code span had its contents edited. A
   cell reading `` `2**8` `` reached the reader as `28`, and `` `a*b*c` `` as
   `abc`, in a row whose value column says something else. `_plain_inline`
@@ -18,6 +38,129 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `_replace_code_spans`, which takes how to render a span so the HTML path
   can keep `<code>` while the plain-text path gets the content itself --
   one implementation of the backtick-run and escape rules for both. (#3586)
+
+## [2026.10.6] - 2026-10-06
+
+### Added
+- Trading: **markets** — `agentos trade markets NVDA` lists every pool a
+  token trades in, on every DEX the chain has, in two sections: tokens
+  *priced in NVDA* (the Bankr, Pons and long.xyz launches that use a Stock
+  Token as their quote asset, `AI/NVDA`) and *NVDA priced in* USDG or WETH.
+  Each row has TVL, 24 h volume, price, price in the token, age, launcher and
+  a `uni` flag for pools the Uniswap route can use; a Stock Token's card
+  carries its Chainlink oracle price and each base pool's premium against
+  it. Lookalikes that borrow a Stock Token's name are hidden and counted
+  (`--lookalikes` shows them), `--min-tvl` sets the floor, `--deep` reads
+  200 pools instead of 100. Defaults to Robinhood Chain; read-only and open
+  to agents. Gateway method `trading.markets`; chat card
+  `application/vnd.agentos.markets+json`; desktop Markets tab in the BOOK
+  and the full desk with a Swap button that fills the ticket. Contract:
+  `docs/markets.md` (#3619).
+- Trading: **Stock Tokens can be swapped.** The aggregator (0x) refuses the
+  29 Robinhood Stock Tokens for legal reasons; a pair with a Stock Token now
+  routes through the Uniswap Trading API when a Uniswap key is configured,
+  and a `token_not_tradeable` answer is retried once through Uniswap or
+  re-raised with that hint. `UNIVERSAL_ROUTERS` is a per-chain set that
+  includes Universal Router v2.1.2 on Base and Robinhood Chain — the chain
+  had no router pinned, and Base pinned only v2.0, so every Uniswap swap was
+  refused on both (#3619).
+- Trading: **brackets** — `agentos trade protect ETH --tp +20% --sl -10%`
+  is a take-profit and a stop-loss on one position as one object: two price
+  triggers that know each other, so when one fills the engine stops the
+  other and nothing fires into an empty wallet. `--trail 10` makes the stop
+  trail, `--tp-pct 50` sells half at the take-profit and keeps the stop on
+  the rest, `--alert` watches a range and only notifies. One approval for
+  both legs, one card, one Missions row with Pause / Sell now / Stop;
+  `trade bracket list|show|approve|reject|pause|resume|stop|fire` round it
+  out. Gateway methods `trading.bracket.*`. Contract: `docs/brackets.md`
+  (#3618).
+- Trading: **price triggers** — `agentos trade trigger create ETH --sell --pct
+  50 --below 3800` is a stop-loss the engine watches and fires by itself;
+  `--above` makes a take-profit, `--trail 10` a trailing stop 10 % under the
+  peak since arming, `--buy --usd 50 --below 3500` buys the dip and `--alert`
+  only notifies you. Prices are absolute or a percent of the price now
+  (`--below -10%`, `--above +15%`), the condition must hold on two checks in
+  a row, and a fire is one ordinary swap order under the usual guardrails;
+  `--for 7d` lets it expire unreached. From an agent a trigger parks as
+  `awaiting_approval`; `trigger list|show|approve|reject|pause|resume|stop|fire`
+  round it out, and each `--json` command publishes an
+  `application/vnd.agentos.trigger+json` card. Gateway methods
+  `trading.trigger.*` (create/get/list agent-callable, the rest
+  operator-only). Contract: `docs/triggers.md` (#3615).
+- Desktop app: Settings › Environment, the Web UI's Environment screen in the
+  app. It lists every variable the gateway, providers and skills read,
+  grouped by category with set, missing and shadowed counts, a search and
+  filters, and sets, replaces, imports, reveals (confirmed, auto-hidden after
+  30 seconds) and removes them through the same `env.*` RPCs. **Add
+  variable** stores a custom one in `~/.agentos/.env`.
+
+### Fixed
+- CLI: every `agentos trade` error dropped its `details` (the ambiguous-symbol
+  candidates, for one) because the gateway client read `error.data` while the
+  gateway sends `error.details` (#3619).
+- Trading: Stock Token detection tolerates CoinGecko's 60-character name
+  truncation (`… • Robinhood Toke`), so IBM and SPYD are flagged too (#3619).
+
+## [2026.10.4] - 2026-10-04
+
+### Fixed
+- Chat (desktop and web console): the first message to a session could fail
+  with "Send failed: session_key conflict", and sending it again worked.
+  New chat stamps a `new_chat` intent for the first send of its fresh key, but
+  the chat view stays mounted across sessions and nothing dropped the intent
+  on a switch. Opening another session before sending -- one from the
+  sidebar, or a project folder's New chat, which creates its row before it
+  navigates -- sent `new_chat` to an existing key, which the gateway rejects.
+  The intent is now bound to the new chat's own session and dropped when the
+  view moves to any other. (#3612)
+- Redaction: `PGPASSWORD`, `MYSQL_PWD` and `REDISCLI_AUTH` went through an
+  `env` dump verbatim while `DB_PASSWORD` beside them was masked. Names are
+  matched on segment boundaries, and these do not produce the segment the
+  vocabulary holds: `PGPASSWORD` is one all-caps run with no separator and no
+  case boundary, so it stays a single segment and `password` is never found
+  inside it, while `MYSQL_PWD` and `REDISCLI_AUTH` split into `pwd` and
+  `auth`, neither strong enough alone to add as a segment. All three are the
+  documented password variable for their client -- libpq, mysql and
+  redis-cli -- and `env` is exactly the output the assignment pass is turned
+  on for. They are now matched as whole names. `PGPASSFILE`, which holds a
+  path rather than a secret, is deliberately not, and the file it names has
+  had a rule of its own since #2620/#2721. (#3608)
+- Redaction: a credential in a URL query string -- `?api_key=…`,
+  `&access_token=…`, `&password=…` -- was never masked, although the
+  *userinfo* of the same URL is (#3432). The name-driven pass recognises all
+  three names; what it could not do is reach them. `_ASSIGNMENT_RE` matches a
+  URL's own `scheme:` first, with the rest of the URL as its "value", and
+  since `https` is not a credential name the span is returned unchanged --
+  and consumed, so the query parameters inside are never examined. A pass of
+  its own now masks a credential-named query parameter before the assignment
+  pass runs, stopping its value at the next `&` so one parameter cannot
+  swallow the next. It is under the same gate as the assignment pass, so it
+  inherits that policy rather than widening it: off for source files and for
+  an arbitrary command's output. (#3607)
+- Browser tool: the newest-Node sort added with the PATH fallback (#3604) was
+  a no-op for fnm, so an older Node's `agent-browser` could win. `_version_key`
+  read the version from the directory above the leaf, which is right for nvm
+  (`.../versions/node/v24.16.0/bin`) and wrong for fnm
+  (`.../node-versions/v24.16.0/installation/bin`), where the parent of `bin`
+  is `installation` -- every fnm candidate keyed to `()`, so the sort had
+  nothing to order by and `glob` order decided. The version is now taken from
+  whichever path component parses as one, searched from the right, so both
+  layouts order newest first. (#3606)
+- Identity: a workspace bootstrap file (`AGENTS.md`, `SOUL.md`, …) saved with
+  a byte-order mark reached the system prompt as one. `identity.workspace`
+  read them as plain `utf-8` with `errors="replace"`, while the other two
+  readers of user-authored Markdown already honour a mark -- `SKILL.md` since
+  #2697 and knowledge-base ingest since #2670. PowerShell 5's `Set-Content
+  -Encoding UTF8` writes a UTF-8 BOM, which prepended `﻿` to the first
+  character; its `>` and `Out-File` write UTF-16, which decoded -- without
+  failing, because of `errors="replace"` -- into interleaved NULs and
+  replacement characters, so the agent was handed unreadable text where its
+  operating rules should be, at twice the length against the bootstrap
+  budget, crowding out the files after it. The rule now lives once, in
+  `agentos.text_encoding`, which `memory.ingest` also delegates to; the probe
+  reads four bytes rather than two, so UTF-32 is no longer read as UTF-16.
+  `errors="replace"` is kept, so a genuinely undecodable file still degrades
+  rather than failing a session. (#3587)
 - Browser: a gateway started by the desktop app, launchd or systemd now finds
   an `agent-browser` installed with `npm install -g` under nvm, fnm, Volta,
   pnpm, Bun or Homebrew. Those launchers pass a bare `PATH`, so the binary was

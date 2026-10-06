@@ -12,11 +12,23 @@ import { useConnection } from '@/stores/connection'
 import { t, type MessageKey } from '~/i18n'
 import { biometricGate, requireBiometric } from '~/lib/biometric-gate'
 import { errorText, QUOTE_REFRESH_MS } from '~/views/trading/logic'
-import { mandateTouchId, orderTouchId, vaultReason } from '~/views/trading/touch-id'
+import { answeredBracketFire } from '~/views/trading/desk/bracket-logic'
+import { answeredFire } from '~/views/trading/desk/trigger-logic'
+import {
+  bracketTouchId,
+  mandateTouchId,
+  orderTouchId,
+  triggerTouchId,
+  vaultReason,
+} from '~/views/trading/touch-id'
 import { CHAINS } from '~/views/trading/types'
 import type {
   AllowanceList,
   Balance,
+  Bracket,
+  BracketLeg,
+  BracketListPayload,
+  BracketPayload,
   ChainRead,
   Chart,
   ChartRange,
@@ -26,6 +38,8 @@ import type {
   Mandate,
   MandateListPayload,
   MandatePayload,
+  MarketsParams,
+  MarketsPayload,
   NetworkStatus,
   Order,
   OrderKind,
@@ -37,6 +51,9 @@ import type {
   SearchToken,
   Token,
   TradingStatus,
+  Trigger,
+  TriggerListPayload,
+  TriggerPayload,
   Wallet,
   WalletStatus,
 } from '~/views/trading/types'
@@ -78,6 +95,10 @@ export const TRADING_KEYS = {
   network: ['trading', 'network'] as const,
   /** DCA mandates (docs/dca.md): the live ones, or every one ever made. */
   dca: (all = false) => ['trading', 'dca', all ? 'all' : 'live'] as const,
+  /** Price triggers (docs/triggers.md): the live ones, or every one ever made. */
+  trigger: (all = false) => ['trading', 'trigger', all ? 'all' : 'live'] as const,
+  /** Brackets (docs/brackets.md): the live ones, or every one ever made. */
+  bracket: (all = false) => ['trading', 'bracket', all ? 'all' : 'live'] as const,
 }
 
 /** Gateway events after which trading data is stale. */
@@ -86,11 +107,50 @@ export const TRADING_EVENTS = [
   'trading.approval.requested',
   'trading.order.finished',
   'trading.dca.changed',
+  'trading.trigger.changed',
+  'trading.trigger.fired',
+  'trading.bracket.changed',
   '_hello',
 ] as const
 
 export function invalidateTrading(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: ['trading'] })
+}
+
+const FINISHED_STATUSES: ReadonlySet<string> = new Set(['done', 'stopped', 'rejected', 'expired'])
+
+/**
+ * Writes one refreshed object (a trigger, a bracket) straight into its cached
+ * lists, before the invalidation refetches them. Every trigger and bracket
+ * write answers with the full object, yet the desk waited for a list read (5–8 s
+ * on a live engine) and a just-stopped bracket read "Armed" all along, its
+ * Stop offered again. A fetch already in flight is cancelled first: it may
+ * have started before the write and would land the old state over the new.
+ * The live list drops an object that has finished; a list that does not hold
+ * it is left to the refetch.
+ */
+export async function primeTradingList<T extends { id: string; status: string }>(
+  queryClient: QueryClient,
+  keyOf: (all?: boolean) => readonly unknown[],
+  field: 'triggers' | 'brackets',
+  item: T | null | undefined,
+): Promise<void> {
+  if (!item?.id) return
+  await queryClient.cancelQueries({ queryKey: keyOf().slice(0, 2) })
+  for (const all of [false, true]) {
+    queryClient.setQueryData<Record<string, unknown>>(keyOf(all), (prev) => {
+      const list = prev?.[field]
+      if (!prev || !Array.isArray(list)) return prev
+      const rows = list as T[]
+      const at = rows.findIndex((row) => row?.id === item.id)
+      if (at < 0) return prev
+      const next =
+        !all && FINISHED_STATUSES.has(item.status)
+          ? rows.filter((row) => row?.id !== item.id)
+          : rows.map((row, i) => (i === at ? item : row))
+      return { ...prev, [field]: next }
+    })
+  }
 }
 
 /**
@@ -760,9 +820,51 @@ export function useTokenSearch(first: number, query: string) {
     // survives, so an exact symbol match still comes first.
     () => [...rows].sort((a, b) => Number(b.chainId === first) - Number(a.chainId === first)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [stamps, first],
+    [stamps, first, debounced],
   )
   return { isFetching, tokens, debounced }
+}
+
+/* ── Markets (docs/markets.md) ───────────────────────────────────────────── */
+
+/**
+ * The query key of one Markets read: every param, with the engine's defaults
+ * filled in so `{}` and `{ side: 'all' }` share an entry. Deliberately outside
+ * the `trading` prefix: `trading.changed` fires on every order, and a refetch
+ * per order would spend GeckoTerminal's 30 requests a minute on nothing new.
+ */
+export function marketsKey(p: MarketsParams) {
+  return [
+    'trading-markets',
+    p.chainId,
+    p.target.trim().toLowerCase(),
+    p.side ?? 'all',
+    p.minTvlUsd ?? 10_000,
+    p.limit ?? 50,
+    Boolean(p.lookalikes),
+    Boolean(p.deep),
+  ] as const
+}
+
+/**
+ * Every pool a token trades in, on every DEX of the chain (`trading.markets`).
+ * A minute fresh: the engine caches the source pages for two, so a refetch
+ * inside that is free and outside it is one rate-limited call.
+ */
+export function useMarkets(params: MarketsParams, enabled = true) {
+  const rpc = useRpc()
+  const connected = useConnected()
+  return useQuery<MarketsPayload>({
+    queryKey: marketsKey(params),
+    enabled: connected && enabled && params.target.trim().length > 0,
+    queryFn: async () => {
+      await rpc.waitForConnection()
+      return rpc.call<MarketsPayload>('trading.markets', { ...params })
+    },
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
 }
 
 /* ── DCA mandates (docs/dca.md) ──────────────────────────────────────────── */
@@ -948,6 +1050,345 @@ export function useMandateActions(): MandateActions {
     resume: (mandate) => act('resume', mandate),
     stop: (mandate, reason) => act('stop', mandate, reason ? { reason } : {}),
     run: (mandate) => act('run', mandate),
+    pending,
+    busy: mutation.isPending,
+  }
+}
+
+/* ── Price triggers (docs/triggers.md) ───────────────────────────────────── */
+
+const NO_TRIGGERS: Trigger[] = []
+
+/**
+ * The engine's price triggers: live ones (awaiting approval, armed,
+ * triggered, paused), or every one with `all`. `trading.changed` (emitted on
+ * every trigger change) and `trading.trigger.changed` / `.fired` (in
+ * TRADING_EVENTS) refresh it; the price and distance move with the engine's
+ * own checks, so a slow poll backs up the events.
+ */
+export function useTriggers(all = false, enabled = true) {
+  const rpc = useRpc()
+  const connected = useConnected()
+  const query = useQuery<TriggerListPayload>({
+    queryKey: TRADING_KEYS.trigger(all),
+    enabled: connected && enabled,
+    queryFn: async () => {
+      await rpc.waitForConnection()
+      return rpc.call<TriggerListPayload>('trading.trigger.list', all ? { all: true } : {})
+    },
+    // The engine re-reads the price every 30 s without an event per check.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    placeholderData: (prev) => prev,
+  })
+  const triggers = useMemo(
+    () => (Array.isArray(query.data?.triggers) ? query.data.triggers : NO_TRIGGERS),
+    [query.data],
+  )
+  return { ...query, triggers, totals: query.data?.totals ?? null }
+}
+
+export type TriggerAction = 'approve' | 'reject' | 'pause' | 'resume' | 'stop' | 'fire'
+
+/** Operator writes on one trigger. Every answer is the full, refreshed card payload. */
+export interface TriggerActions {
+  /** Asks for Touch ID first when Settings › Security says so; null when declined. */
+  approve: (trigger: Trigger) => Promise<TriggerPayload | null>
+  reject: (trigger: Trigger, reason?: string) => Promise<TriggerPayload | null>
+  pause: (trigger: Trigger) => Promise<TriggerPayload | null>
+  resume: (trigger: Trigger) => Promise<TriggerPayload | null>
+  stop: (trigger: Trigger, reason?: string) => Promise<TriggerPayload | null>
+  /** "Fire now": one fire at once, whatever the condition; the payload carries `fire`. */
+  fire: (trigger: Trigger) => Promise<TriggerPayload | null>
+  /** The trigger with a write in flight, or null. */
+  pending: string | null
+  busy: boolean
+}
+
+const TRIGGER_DONE_KEYS: Record<Exclude<TriggerAction, 'fire'>, MessageKey> = {
+  approve: 'trading.trigger.toast.approved',
+  reject: 'trading.trigger.toast.rejected',
+  pause: 'trading.trigger.toast.paused',
+  resume: 'trading.trigger.toast.resumed',
+  stop: 'trading.trigger.toast.stopped',
+}
+
+/**
+ * The "Fire now" answer, said as what the fire did: alerted, placed, filled,
+ * waiting for approval, skipped (and why), failed (and why). A skip is not a
+ * success and never toasts a green check.
+ */
+export function fireToast(res: TriggerPayload | null | undefined, trigger: Trigger): void {
+  const name = res?.trigger?.name || trigger.name
+  const id = `trigger-${trigger.id}`
+  const fire = answeredFire(res?.fire, res?.trigger)
+  const why = (key: MessageKey) => `${t(key)}${fire?.reason ? `: ${fire.reason}` : ''} · ${name}`
+  switch (fire?.status) {
+    case 'alerted':
+      toast.success(`${t('trading.trigger.toast.alerted')} · ${name}`, { id })
+      return
+    case 'filled':
+      toast.success(`${t('trading.trigger.toast.filled')} · ${name}`, { id })
+      return
+    case 'pending':
+      toast.success(`${t('trading.trigger.toast.placed')} · ${name}`, { id })
+      return
+    case 'parked':
+      toast.info(`${t('trading.trigger.toast.parked')} · ${name}`, { id })
+      return
+    case 'skipped':
+      toast.warning(why('trading.trigger.toast.skipped'), { id })
+      return
+    case 'failed':
+      toast.error(why('trading.trigger.toast.fireFailed'), { id })
+      return
+    case 'expired':
+    case 'rejected':
+      toast.warning(why('trading.trigger.toast.void'), { id })
+      return
+    default:
+      toast.info(`${t('trading.trigger.toast.noFire')} · ${name}`, { id })
+  }
+}
+
+/**
+ * The trigger controls the desk offers (the Missions rows, the approval
+ * card). Each write toasts its own outcome, keyed by the trigger so a second
+ * click replaces the first toast instead of stacking.
+ */
+export function useTriggerActions(): TriggerActions {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: ({
+      method,
+      params,
+    }: {
+      method: string
+      params: Record<string, unknown>
+      id: string
+    }) => rpc.call<TriggerPayload>(method, params),
+    // The answer is the refreshed trigger: the Missions row shows it at once,
+    // then the sweep re-reads everything it moved.
+    onSuccess: (res) =>
+      primeTradingList(queryClient, TRADING_KEYS.trigger, 'triggers', res?.trigger),
+    onSettled: () => invalidateTrading(queryClient),
+  })
+  const { mutateAsync } = mutation
+  const act = useCallback(
+    async (
+      action: TriggerAction,
+      trigger: Trigger,
+      extra: Record<string, unknown> = {},
+    ): Promise<TriggerPayload | null> => {
+      try {
+        const res = await mutateAsync({
+          method: `trading.trigger.${action}`,
+          params: { triggerId: trigger.id, ...extra },
+          id: trigger.id,
+        })
+        if (action === 'fire') fireToast(res, trigger)
+        else
+          toast.success(`${t(TRIGGER_DONE_KEYS[action])} · ${res?.trigger?.name || trigger.name}`, {
+            id: `trigger-${trigger.id}`,
+          })
+        return res ?? null
+      } catch (err) {
+        toast.error(`${t('trading.trigger.toast.failed')}: ${errorText(err)}`, {
+          id: `trigger-${trigger.id}`,
+        })
+        return null
+      }
+    },
+    [mutateAsync],
+  )
+  const pending = mutation.isPending ? (mutation.variables?.id ?? null) : null
+  return {
+    // A trigger is a standing permission to trade when the market says so:
+    // with Touch ID on, the fingerprint comes first, and a declined prompt
+    // (already toasted) sends nothing.
+    approve: async (trigger) => {
+      const ask = triggerTouchId(trigger)
+      if (!(await biometricGate(ask.kind, ask.reason, `trigger:${trigger.id}`))) return null
+      return act('approve', trigger)
+    },
+    reject: (trigger, reason) => act('reject', trigger, reason ? { reason } : {}),
+    pause: (trigger) => act('pause', trigger),
+    resume: (trigger) => act('resume', trigger),
+    stop: (trigger, reason) => act('stop', trigger, reason ? { reason } : {}),
+    fire: (trigger) => act('fire', trigger),
+    pending,
+    busy: mutation.isPending,
+  }
+}
+
+/* ── Brackets: take-profit + stop-loss as one object (docs/brackets.md) ──── */
+
+const NO_BRACKETS: Bracket[] = []
+
+/**
+ * The engine's brackets: live ones, or every one with `all`. A bracket's legs
+ * never appear in `trading.trigger.list`; this list is where they are seen.
+ * `trading.changed` and `trading.bracket.changed` (in TRADING_EVENTS) refresh
+ * it; the distances move with the engine's own checks, so a slow poll backs
+ * up the events as for triggers.
+ */
+export function useBrackets(all = false, enabled = true) {
+  const rpc = useRpc()
+  const connected = useConnected()
+  const query = useQuery<BracketListPayload>({
+    queryKey: TRADING_KEYS.bracket(all),
+    enabled: connected && enabled,
+    queryFn: async () => {
+      await rpc.waitForConnection()
+      return rpc.call<BracketListPayload>('trading.bracket.list', all ? { all: true } : {})
+    },
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+    placeholderData: (prev) => prev,
+  })
+  const brackets = useMemo(
+    () => (Array.isArray(query.data?.brackets) ? query.data.brackets : NO_BRACKETS),
+    [query.data],
+  )
+  return { ...query, brackets, totals: query.data?.totals ?? null }
+}
+
+export type BracketAction = 'approve' | 'reject' | 'pause' | 'resume' | 'stop' | 'fire'
+
+/** Operator writes on one bracket: both legs at once. Every answer is the refreshed payload. */
+export interface BracketActions {
+  /** Asks for Touch ID first when Settings › Security says so; null when declined. */
+  approve: (bracket: Bracket) => Promise<BracketPayload | null>
+  reject: (bracket: Bracket, reason?: string) => Promise<BracketPayload | null>
+  pause: (bracket: Bracket) => Promise<BracketPayload | null>
+  resume: (bracket: Bracket) => Promise<BracketPayload | null>
+  stop: (bracket: Bracket, reason?: string) => Promise<BracketPayload | null>
+  /**
+   * "Sell now" / "Notify now": one leg fired at once, the given one or else
+   * the nearest (the engine picks); the sibling goes on hold. Asks for Touch
+   * ID like an approval: it trades at once.
+   */
+  fire: (bracket: Bracket, leg?: BracketLeg) => Promise<BracketPayload | null>
+  /** The bracket with a write in flight, or null. */
+  pending: string | null
+  busy: boolean
+}
+
+const BRACKET_DONE_KEYS: Record<Exclude<BracketAction, 'fire'>, MessageKey> = {
+  approve: 'trading.bracket.toast.approved',
+  reject: 'trading.bracket.toast.rejected',
+  pause: 'trading.bracket.toast.paused',
+  resume: 'trading.bracket.toast.resumed',
+  stop: 'trading.bracket.toast.stopped',
+}
+
+/** The Sell now answer, said as what the fire did; a skip never toasts a green check. */
+export function bracketFireToast(res: BracketPayload | null | undefined, bracket: Bracket): void {
+  const name = res?.bracket?.name || bracket.name
+  const id = `bracket-${bracket.id}`
+  const fire = answeredBracketFire(res?.fire, res?.bracket)
+  const why = (key: MessageKey) => `${t(key)}${fire?.reason ? `: ${fire.reason}` : ''} · ${name}`
+  switch (fire?.status) {
+    case 'alerted':
+      toast.success(`${t('trading.bracket.toast.alerted')} · ${name}`, { id })
+      return
+    case 'filled':
+      toast.success(`${t('trading.bracket.toast.filled')} · ${name}`, { id })
+      return
+    case 'pending':
+      toast.success(`${t('trading.bracket.toast.placed')} · ${name}`, { id })
+      return
+    case 'parked':
+      toast.info(`${t('trading.bracket.toast.parked')} · ${name}`, { id })
+      return
+    case 'skipped':
+      toast.warning(why('trading.bracket.toast.skipped'), { id })
+      return
+    case 'failed':
+      toast.error(why('trading.bracket.toast.fireFailed'), { id })
+      return
+    case 'expired':
+    case 'rejected':
+      toast.warning(why('trading.bracket.toast.void'), { id })
+      return
+    default:
+      toast.info(`${t('trading.bracket.toast.noFire')} · ${name}`, { id })
+  }
+}
+
+/**
+ * The bracket controls the desk offers (the Missions rows, the approval
+ * card). One write acts on both legs; each toasts its own outcome, keyed by
+ * the bracket so a second click replaces the first toast.
+ */
+export function useBracketActions(): BracketActions {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: ({
+      method,
+      params,
+    }: {
+      method: string
+      params: Record<string, unknown>
+      id: string
+    }) => rpc.call<BracketPayload>(method, params),
+    // The answer is the refreshed bracket: the Missions row shows it at once
+    // (onSuccess is awaited before onSettled, so the sweep's refetch is not
+    // the one cancelled). Then both lists move — the bracket, and its legs
+    // behind every trigger read — and both keys sit under the `trading`
+    // prefix this sweeps.
+    onSuccess: (res) =>
+      primeTradingList(queryClient, TRADING_KEYS.bracket, 'brackets', res?.bracket),
+    onSettled: () => invalidateTrading(queryClient),
+  })
+  const { mutateAsync } = mutation
+  const act = useCallback(
+    async (
+      action: BracketAction,
+      bracket: Bracket,
+      extra: Record<string, unknown> = {},
+    ): Promise<BracketPayload | null> => {
+      try {
+        const res = await mutateAsync({
+          method: `trading.bracket.${action}`,
+          params: { bracketId: bracket.id, ...extra },
+          id: bracket.id,
+        })
+        if (action === 'fire') bracketFireToast(res, bracket)
+        else
+          toast.success(`${t(BRACKET_DONE_KEYS[action])} · ${res?.bracket?.name || bracket.name}`, {
+            id: `bracket-${bracket.id}`,
+          })
+        return res ?? null
+      } catch (err) {
+        toast.error(`${t('trading.bracket.toast.failed')}: ${errorText(err)}`, {
+          id: `bracket-${bracket.id}`,
+        })
+        return null
+      }
+    },
+    [mutateAsync],
+  )
+  const pending = mutation.isPending ? (mutation.variables?.id ?? null) : null
+  return {
+    // One decision arms both legs: with Touch ID on, the fingerprint comes
+    // first, and a declined prompt (already toasted) sends nothing.
+    approve: async (bracket) => {
+      const ask = bracketTouchId(bracket)
+      if (!(await biometricGate(ask.kind, ask.reason, `bracket:${bracket.id}`))) return null
+      return act('approve', bracket)
+    },
+    reject: (bracket, reason) => act('reject', bracket, reason ? { reason } : {}),
+    pause: (bracket) => act('pause', bracket),
+    resume: (bracket) => act('resume', bracket),
+    stop: (bracket, reason) => act('stop', bracket, reason ? { reason } : {}),
+    fire: async (bracket, leg) => {
+      const ask = bracketTouchId(bracket, 'fire')
+      if (!(await biometricGate(ask.kind, ask.reason, `bracket:${bracket.id}`))) return null
+      return act('fire', bracket, leg ? { leg } : {})
+    },
     pending,
     busy: mutation.isPending,
   }

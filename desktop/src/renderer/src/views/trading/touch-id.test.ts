@@ -7,13 +7,24 @@ import { desktopApi } from '~/lib/desktop-api'
 import { useSettings } from '~/stores/settings'
 import { order, USDC } from './test-utils'
 import {
+  bracketTouchId,
   mandateCeilingUsd,
   mandateTouchId,
   orderTouchId,
+  requireBracketTouchId,
   requireMandateTouchId,
+  requireTriggerTouchId,
+  triggerTouchId,
   vaultReason,
 } from './touch-id'
-import type { Mandate, MandatePayload } from './types'
+import type {
+  Bracket,
+  BracketPayload,
+  Mandate,
+  MandatePayload,
+  Trigger,
+  TriggerPayload,
+} from './types'
 
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: vi.fn() } }))
 
@@ -26,6 +37,12 @@ const MANDATE = (
 function mandate(extra: Partial<Mandate> = {}): Mandate {
   return { ...MANDATE, ...extra }
 }
+
+const TRIGGER = (
+  JSON.parse(
+    readFileSync('src/renderer/src/views/trading/desk/__fixtures__/trigger/trigger.json', 'utf8'),
+  ) as TriggerPayload
+).trigger
 
 describe('orderTouchId', () => {
   it('names a swap the way the card does, on its chain', () => {
@@ -99,6 +116,108 @@ describe('mandateTouchId', () => {
     expect(mandateTouchId(mandate({ budget: { ...MANDATE.budget, capUsd: 5_000 } })).kind).toBe(
       'approve-high',
     )
+  })
+})
+
+describe('triggerTouchId', () => {
+  it('names the trigger and what it does; high-risk from what one fire moves', () => {
+    const ask = triggerTouchId(TRIGGER)
+    expect(ask).toEqual({
+      kind: 'approve',
+      reason: 'arm the trigger “Stop-loss ETH”: sell 50 % of ETH when under $3,800, on Base',
+    })
+    const big = { ...TRIGGER, action: { ...TRIGGER.action, estimatedUsd: 900 } }
+    expect(triggerTouchId(big).kind).toBe('approve-high')
+    const unknown = { ...TRIGGER, action: { ...TRIGGER.action, estimatedUsd: null } }
+    expect(triggerTouchId(unknown).kind).toBe('approve-high')
+    // An alert moves nothing.
+    const alert: Trigger = {
+      ...TRIGGER,
+      kind: 'alert',
+      action: { ...TRIGGER.action, kind: 'alert', amountPct: null, estimatedUsd: null },
+    }
+    expect(triggerTouchId(alert).kind).toBe('approve')
+  })
+})
+
+describe('requireTriggerTouchId', () => {
+  beforeEach(() => {
+    resetBiometricGateForTests()
+    useSettings.setState({
+      loaded: true,
+      settings: { ...structuredClone(DEFAULT_SETTINGS), security: { touchId: 'all' } },
+    })
+  })
+
+  it('reads the trigger to name it, and asks as high-risk when it cannot', async () => {
+    const authenticate = vi
+      .spyOn(desktopApi().app, 'authenticate')
+      .mockResolvedValue({ ok: true } satisfies AuthResult)
+    const call = vi.fn(async () => ({ kind: 'trigger', trigger: TRIGGER }))
+    await requireTriggerTouchId(call, 'trg_1a2b3c4d')
+    expect(call).toHaveBeenCalledWith('trading.trigger.get', { triggerId: 'trg_1a2b3c4d' })
+    expect(authenticate.mock.calls[0]?.[0]).toMatch(/^arm the trigger “Stop-loss ETH”/)
+    const failing = vi.fn(async () => {
+      throw new Error('trading.trigger.not_found')
+    })
+    await requireTriggerTouchId(failing, 'trg_9')
+    expect(authenticate.mock.calls[1]?.[0]).toBe('arm the trigger trg_9')
+    authenticate.mockRestore()
+  })
+})
+
+const BRACKET = (
+  JSON.parse(
+    readFileSync('src/renderer/src/views/trading/desk/__fixtures__/bracket/bracket.json', 'utf8'),
+  ) as BracketPayload
+).bracket
+
+describe('bracketTouchId', () => {
+  it('names both lines and the size; high-risk from what the stop would move; an alert moves nothing', () => {
+    expect(bracketTouchId(BRACKET)).toEqual({
+      kind: 'approve',
+      reason:
+        'arm the bracket “Protect ETH”: sell 100 % of ETH · take profit over $4,560 · stop under $3,420, on Base',
+    })
+    expect(bracketTouchId(BRACKET, 'fire').reason).toMatch(/^fire the bracket “Protect ETH” now: /)
+    const big = { ...BRACKET, action: { ...BRACKET.action, estimatedUsd: 900 } }
+    expect(bracketTouchId(big).kind).toBe('approve-high')
+    const unknown = { ...BRACKET, action: { ...BRACKET.action, estimatedUsd: null } }
+    expect(bracketTouchId(unknown).kind).toBe('approve-high')
+    const alert: Bracket = {
+      ...BRACKET,
+      kind: 'alert',
+      action: { ...BRACKET.action, kind: 'alert', amountPct: null, estimatedUsd: null },
+    }
+    expect(bracketTouchId(alert).kind).toBe('approve')
+  })
+})
+
+describe('requireBracketTouchId', () => {
+  beforeEach(() => {
+    resetBiometricGateForTests()
+    useSettings.setState({
+      loaded: true,
+      settings: { ...structuredClone(DEFAULT_SETTINGS), security: { touchId: 'all' } },
+    })
+  })
+
+  it('reads the bracket to name it, and asks as high-risk when it cannot', async () => {
+    const authenticate = vi
+      .spyOn(desktopApi().app, 'authenticate')
+      .mockResolvedValue({ ok: true } satisfies AuthResult)
+    const call = vi.fn(async () => ({ kind: 'bracket', bracket: BRACKET }))
+    await requireBracketTouchId(call, 'brk_1a2b3c4d')
+    expect(call).toHaveBeenCalledWith('trading.bracket.get', { bracketId: 'brk_1a2b3c4d' })
+    expect(authenticate.mock.calls[0]?.[0]).toMatch(/^arm the bracket “Protect ETH”/)
+    await requireBracketTouchId(call, 'brk_1a2b3c4d', 'fire')
+    expect(authenticate.mock.calls[1]?.[0]).toMatch(/^fire the bracket “Protect ETH” now/)
+    const failing = vi.fn(async () => {
+      throw new Error('trading.bracket.not_found')
+    })
+    await requireBracketTouchId(failing, 'brk_9')
+    expect(authenticate.mock.calls[2]?.[0]).toBe('arm the bracket brk_9')
+    authenticate.mockRestore()
   })
 })
 

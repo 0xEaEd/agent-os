@@ -234,8 +234,30 @@ def _name_segments(name: str) -> list[str]:
     return [segment.lower() for segment in _NAME_SPLIT_RE.split(name) if segment]
 
 
+#: Whole names a client reads a password from, which the segment rules
+#: cannot see. ``PGPASSWORD`` is one all-caps run with no separator and no
+#: case boundary, so it stays a single segment and ``password`` is never
+#: found inside it; ``MYSQL_PWD`` and ``REDISCLI_AUTH`` do split, but into
+#: ``pwd`` and ``auth``, neither of which is strong enough alone to be worth
+#: adding as a segment. All three are the documented variable for their
+#: client -- libpq, mysql and redis-cli -- and all three went through an
+#: ``env`` dump verbatim while ``DB_PASSWORD`` beside them was masked.
+#: ``.pgpass``, the file holding the same secret, has had a rule since
+#: #2620/#2721 (#3608).
+_CREDENTIAL_WHOLE_NAMES: frozenset[str] = frozenset(
+    {
+        "pgpassword",
+        "mysql_pwd",
+        "rediscli_auth",
+        "mongodb_password",
+    }
+)
+
+
 def _is_credential_name(name: str) -> bool:
     """Return whether *name* names a credential on a segment boundary."""
+    if name.strip().lower() in _CREDENTIAL_WHOLE_NAMES:
+        return True
     segments = _name_segments(name)
     if any(segment in _STRONG_NAME_SEGMENTS for segment in segments):
         return True
@@ -601,6 +623,11 @@ def _redact_named_credentials(
             ),
             text,
         )
+    # Before the assignment pass: that one consumes a whole URL as one
+    # ``scheme:`` match, so a query credential has to be masked while the
+    # query string is still its own text.
+    if assignments and "=" in text and ("?" in text or "&" in text):
+        text = _redact_query_credentials(text, mask=mask)
     if assignments and ("=" in text or ":" in text):
         text = _redact_assignments(text, mask=mask)
     return text
@@ -676,6 +703,30 @@ def _redact_pem_blocks(text: str, *, line_safe: bool) -> str:
         return "\n".join(masked)
 
     return _PEM_PRIVATE_KEY_BLOCK_RE.sub(_mask_block, text)
+
+
+#: ``?api_key=…`` / ``&password=…`` -- a credential in a URL query string.
+#: A pass of its own because :data:`_ASSIGNMENT_RE` cannot reach one: a URL's
+#: own ``scheme:`` matches that pattern first, with the rest of the URL as its
+#: "value", so every query parameter inside is consumed and never examined --
+#: ``https://x/v1?api_key=…`` matched as ``https`` = ``//x/v1?api_key=…``,
+#: and ``https`` is not a credential name (#3607). The value stops at the next
+#: separator, so ``&`` cannot run one parameter into the next.
+_QUERY_CREDENTIAL_RE = re.compile(
+    r"(?<=[?&])([A-Za-z][A-Za-z0-9_.\-]{0,64})=([^&\s\"'<>`]{1,4096})"
+)
+
+
+def _redact_query_credentials(text: str, *, mask: Callable[[str], str]) -> str:
+    """Mask the value of a credential-named URL query parameter."""
+
+    def _replace(match: re.Match[str]) -> str:
+        name, value = match.group(1), match.group(2)
+        if not _is_credential_name(name) or not _is_secret_literal_value(value):
+            return match.group(0)
+        return f"{name}={mask(value)}"
+
+    return _QUERY_CREDENTIAL_RE.sub(_replace, text)
 
 
 def _redact_assignments(text: str, *, mask: Callable[[str], str] = _mask_token) -> str:

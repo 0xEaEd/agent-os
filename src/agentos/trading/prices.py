@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import math
 import random
+import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
@@ -37,6 +38,18 @@ COINGECKO_API_BASE = "https://api.coingecko.com/api/v3"
 GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2"
 
 ROBINHOOD_STOCK_SUFFIX = "• Robinhood Token"
+#: The Stock Token suffix, bullet required: ``NVIDIA • Robinhood Token``.
+#: ``" NVIDIA Robinhood Token "`` (no bullet) is a lookalike, not a Stock Token.
+_STOCK_SUFFIX_RE = re.compile(r"\s*[•·]\s*robinhood token\s*$", re.IGNORECASE)
+#: The truncation-tolerant form: a bullet followed by any prefix of the
+#: marker. CoinGecko caps ``name``, so long listings arrive with the suffix
+#: chopped (``… • Robinhood Toke`` for IBM, ``… • Robinhood T`` for SPYD).
+#: Ported from ``robinhood-chain-stocks/scripts/chain_stocks.py``.
+_STOCK_SUFFIX_LOOSE_RE = re.compile(
+    r"\s*[•·]\s*r(?:o(?:b(?:i(?:n(?:h(?:o(?:o(?:d)?)?)?)?)?)?)?)?"
+    r"(?:\s+t(?:o(?:k(?:e(?:n)?)?)?)?)?\s*$",
+    re.IGNORECASE,
+)
 TOKEN_LIST_TTL_S = 24 * 3600
 # How long an empty (failed) token-list download is kept before retrying.
 TOKEN_LIST_EMPTY_HOLD_S = 60.0
@@ -109,6 +122,16 @@ class PriceInfo:
 NATIVE_LOGOS: dict[str, str] = {
     "ETH": "https://assets.coingecko.com/coins/images/279/thumb/ethereum.png",
 }
+
+
+def is_stock_token_name(name: str) -> bool:
+    """Whether a token name carries the Robinhood Stock Token suffix.
+
+    Matches ``… • Robinhood Token`` and its truncated forms (``… • Robinhood
+    Toke``); a name without the bullet is never a Stock Token.
+    """
+    text = name or ""
+    return bool(_STOCK_SUFFIX_RE.search(text) or _STOCK_SUFFIX_LOOSE_RE.search(text))
 
 
 def native_token(chain: ChainSpec) -> TokenMeta:
@@ -245,7 +268,7 @@ class PriceService:
         except (KeyError, ValueError, TypeError):
             return None
         name = str(raw.get("name") or "")
-        stock = chain.key == "robinhood" and name.endswith(ROBINHOOD_STOCK_SUFFIX)
+        stock = chain.key == "robinhood" and is_stock_token_name(name)
         return TokenMeta(
             chain_id=chain.chain_id,
             address=address,

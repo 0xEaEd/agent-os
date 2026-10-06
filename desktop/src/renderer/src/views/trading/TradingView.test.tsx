@@ -1,8 +1,9 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useGateway } from '~/stores/gateway'
+import { useTradingUi } from '~/stores/trading-ui'
 import { useUi } from '~/stores/ui'
-import { renderDesk, WALLET } from './test-utils'
+import { holding, renderDesk, USDC, WALLET } from './test-utils'
 import { TradingView } from './TradingView'
 import type { ProviderId } from './types'
 
@@ -131,5 +132,86 @@ describe('TradingView · the venue pill', () => {
     expect(screen.getByTestId('add-key')).toBeInTheDocument()
     fireEvent.click(cta)
     expect(useUi.getState()).toMatchObject({ settingsOpen: true, settingsSection: 'trading' })
+  })
+})
+
+describe('TradingView · Markets and the ticket', () => {
+  beforeEach(() => {
+    useTradingUi.setState({
+      deskMode: true,
+      bookTab: 'portfolio',
+      bookOpen: false,
+      swapRequest: null,
+      markets: {
+        query: '',
+        address: null,
+        chainId: null,
+        minTvlUsd: 10_000,
+        lookalikes: false,
+        deep: false,
+      },
+    })
+    rpcCall.mockImplementation(async (method: string) => {
+      switch (method) {
+        case 'trading.status':
+          return {
+            enabled: true,
+            apiKeyConfigured: false,
+            chains: [],
+            limits: { approvalThresholdUsd: 100, dailyCapUsd: 1000, approvalTtlSeconds: 900 },
+            unlockMode: 'auto',
+            unlocked: true,
+            syncing: false,
+            lastSyncAt: null,
+            provider: 'aggregator',
+            providers: [],
+          }
+        case 'wallet.status':
+          return { initialized: true, unlocked: true, unlockMode: 'auto', walletCount: 1 }
+        case 'wallet.list':
+          return { wallets: [WALLET], primary: WALLET.address }
+        case 'trading.portfolio':
+          return {
+            totals: {
+              valueUsd: 900,
+              costUsd: 880,
+              unrealizedUsd: 20,
+              realizedUsd: 0,
+              gasUsd: 0,
+              change24hUsd: 0,
+              change24hPct: 0,
+            },
+            holdings: [holding({ token: USDC })],
+            wallets: [],
+            syncing: false,
+          }
+        default:
+          return {}
+      }
+    })
+  })
+
+  it('puts Markets right after Holdings', async () => {
+    renderDesk(<TradingView />)
+    await screen.findByTestId('trading-desk')
+    const tabs = screen.getAllByRole('tab').map((tab) => tab.getAttribute('data-testid'))
+    expect(tabs).toEqual([
+      'tab-holdings',
+      'tab-markets',
+      'tab-history',
+      'tab-orders',
+      'tab-approvals',
+    ])
+    fireEvent.click(screen.getByTestId('tab-markets'))
+    expect(await screen.findByTestId('markets-prompt')).toBeInTheDocument()
+  })
+
+  it('fills the ticket from a Holdings row as before, leaving the BOOK as it was', async () => {
+    renderDesk(<TradingView />)
+    const row = await screen.findByTestId('holding-row')
+    fireEvent.click(row.querySelector('button[aria-label="Swap USDC"]')!)
+    await waitFor(() => expect(screen.getAllByTestId('token-button')[0]).toHaveTextContent('USDC'))
+    expect(screen.getByTestId('tab-holdings')).toHaveAttribute('aria-selected', 'true')
+    expect(useTradingUi.getState()).toMatchObject({ bookTab: 'portfolio', bookOpen: false })
   })
 })

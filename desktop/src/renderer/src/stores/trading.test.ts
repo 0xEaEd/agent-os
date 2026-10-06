@@ -8,11 +8,16 @@ import { DEFAULT_SETTINGS, type TouchIdMode } from '@shared/settings'
 import { isTouchIdDeclined, resetBiometricGateForTests } from '~/lib/biometric-gate'
 import { desktopApi } from '~/lib/desktop-api'
 import { order } from '~/views/trading/test-utils'
-import type { Mandate } from '~/views/trading/types'
+import type { Bracket, Mandate, Trigger } from '~/views/trading/types'
 import { useSettings } from './settings'
 import {
+  TRADING_EVENTS,
   TRADING_KEYS,
+  useBracketActions,
+  useBrackets,
   useMandateActions,
+  useTriggerActions,
+  useTriggers,
   useOrderDecision,
   useOrders,
   useWalletMutation,
@@ -49,6 +54,47 @@ describe('TRADING_KEYS.orders', () => {
     expect(TRADING_KEYS.orders(undefined, 50)).toEqual(TRADING_KEYS.orders(undefined, 50))
     // Every orders key still lives under the one prefix the invalidator sweeps.
     expect(TRADING_KEYS.orders(undefined, 50).slice(0, 2)).toEqual(['trading', 'orders'])
+  })
+})
+
+describe('price triggers in the store', () => {
+  it('refreshes on the trigger events and keys the list under trading/trigger', () => {
+    expect(TRADING_EVENTS).toContain('trading.trigger.changed')
+    expect(TRADING_EVENTS).toContain('trading.trigger.fired')
+    expect(TRADING_KEYS.trigger()).toEqual(['trading', 'trigger', 'live'])
+    expect(TRADING_KEYS.trigger(true)).toEqual(['trading', 'trigger', 'all'])
+  })
+
+  it('reads trading.trigger.list, every one with all, and tolerates an empty answer', async () => {
+    rpcCall.mockResolvedValue({ kind: 'triggers', triggers: [{ id: 'trg_1' }], totals: null })
+    const { result } = renderHook(() => useTriggers(true), { wrapper })
+    await waitFor(() => expect(result.current.triggers).toHaveLength(1))
+    expect(rpcCall).toHaveBeenCalledWith('trading.trigger.list', { all: true })
+    rpcCall.mockResolvedValue({})
+    const empty = renderHook(() => useTriggers(), { wrapper })
+    await waitFor(() => expect(empty.result.current.isSuccess).toBe(true))
+    expect(empty.result.current.triggers).toEqual([])
+    expect(rpcCall).toHaveBeenCalledWith('trading.trigger.list', {})
+  })
+})
+
+describe('brackets in the store', () => {
+  it('refreshes on trading.bracket.changed and keys the list under trading/bracket', () => {
+    expect(TRADING_EVENTS).toContain('trading.bracket.changed')
+    expect(TRADING_KEYS.bracket()).toEqual(['trading', 'bracket', 'live'])
+    expect(TRADING_KEYS.bracket(true)).toEqual(['trading', 'bracket', 'all'])
+  })
+
+  it('reads trading.bracket.list, every one with all, and tolerates an empty answer', async () => {
+    rpcCall.mockResolvedValue({ kind: 'brackets', brackets: [{ id: 'brk_1' }], totals: null })
+    const { result } = renderHook(() => useBrackets(true), { wrapper })
+    await waitFor(() => expect(result.current.brackets).toHaveLength(1))
+    expect(rpcCall).toHaveBeenCalledWith('trading.bracket.list', { all: true })
+    rpcCall.mockResolvedValue({})
+    const empty = renderHook(() => useBrackets(), { wrapper })
+    await waitFor(() => expect(empty.result.current.isSuccess).toBe(true))
+    expect(empty.result.current.brackets).toEqual([])
+    expect(rpcCall).toHaveBeenCalledWith('trading.bracket.list', {})
   })
 })
 
@@ -166,6 +212,103 @@ describe('Touch ID in front of every approval and vault write', () => {
       await result.current.approve(m)
     })
     expect(rpcCall).toHaveBeenCalledWith('trading.dca.approve', { mandateId: 'dca_1' })
+  })
+
+  it('asks before arming a price trigger, and a decline sends nothing', async () => {
+    setMode('high')
+    rpcCall.mockResolvedValue({ kind: 'trigger', trigger: { id: 'trg_1', name: 'Stop-loss ETH' } })
+    const { result } = renderHook(() => useTriggerActions(), { wrapper })
+    const tr = {
+      id: 'trg_1',
+      name: 'Stop-loss ETH',
+      kind: 'sell',
+      chain: { id: 8453, key: 'base', name: 'Base' },
+      token: { symbol: 'ETH' },
+      condition: { direction: 'below', priceUsd: 3800, label: 'under $3,800' },
+      action: { kind: 'sell', amountPct: 100, amountUsd: null, amount: null, estimatedUsd: 776 },
+    } as unknown as Trigger
+    authenticate.mockResolvedValueOnce({ ok: false, reason: 'cancelled' } satisfies AuthResult)
+    let res: unknown = 'unset'
+    await act(async () => {
+      res = await result.current.approve(tr)
+    })
+    expect(res).toBeNull()
+    expect(authenticate).toHaveBeenCalledWith(
+      'arm the trigger “Stop-loss ETH”: sell 100 % of ETH when under $3,800, on Base',
+    )
+    expect(rpcCall).not.toHaveBeenCalledWith('trading.trigger.approve', expect.anything())
+    authenticate.mockResolvedValueOnce({ ok: true } satisfies AuthResult)
+    await act(async () => {
+      await result.current.approve(tr)
+    })
+    expect(rpcCall).toHaveBeenCalledWith('trading.trigger.approve', { triggerId: 'trg_1' })
+    // Reject never prompts.
+    authenticate.mockClear()
+    await act(async () => {
+      await result.current.reject(tr)
+    })
+    expect(authenticate).not.toHaveBeenCalled()
+    expect(rpcCall).toHaveBeenCalledWith('trading.trigger.reject', { triggerId: 'trg_1' })
+  })
+
+  it('asks before arming a bracket and before its Sell now, naming both lines and the size', async () => {
+    setMode('high')
+    rpcCall.mockResolvedValue({ kind: 'bracket', bracket: { id: 'brk_1', name: 'Protect ETH' } })
+    const { result } = renderHook(() => useBracketActions(), { wrapper })
+    const b = {
+      id: 'brk_1',
+      name: 'Protect ETH',
+      kind: 'sell',
+      chain: { id: 8453, key: 'base', name: 'Base' },
+      token: { symbol: 'ETH' },
+      lines: {
+        takeProfitUsd: 4560,
+        stopLossUsd: 3420,
+        trailPct: null,
+        takeProfitLabel: 'over $4,560',
+        stopLossLabel: 'under $3,420',
+      },
+      action: {
+        kind: 'sell',
+        amountPct: 100,
+        amountUsd: null,
+        amount: null,
+        tpPct: null,
+        estimatedUsd: 776,
+      },
+    } as unknown as Bracket
+    authenticate.mockResolvedValueOnce({ ok: false, reason: 'cancelled' } satisfies AuthResult)
+    let res: unknown = 'unset'
+    await act(async () => {
+      res = await result.current.approve(b)
+    })
+    expect(res).toBeNull()
+    expect(authenticate).toHaveBeenCalledWith(
+      'arm the bracket “Protect ETH”: sell 100 % of ETH · take profit over $4,560 · stop under $3,420, on Base',
+    )
+    expect(rpcCall).not.toHaveBeenCalledWith('trading.bracket.approve', expect.anything())
+    authenticate.mockResolvedValueOnce({ ok: true } satisfies AuthResult)
+    await act(async () => {
+      await result.current.approve(b)
+    })
+    expect(rpcCall).toHaveBeenCalledWith('trading.bracket.approve', { bracketId: 'brk_1' })
+    authenticate.mockResolvedValueOnce({ ok: false, reason: 'cancelled' } satisfies AuthResult)
+    await act(async () => {
+      await result.current.fire(b, 'sl')
+    })
+    expect(authenticate).toHaveBeenLastCalledWith(
+      'fire the bracket “Protect ETH” now: sell 100 % of ETH · take profit over $4,560 · stop under $3,420, on Base',
+    )
+    expect(rpcCall).not.toHaveBeenCalledWith('trading.bracket.fire', expect.anything())
+    // Reject, pause and stop never prompt.
+    authenticate.mockClear()
+    await act(async () => {
+      await result.current.reject(b)
+      await result.current.pause(b)
+      await result.current.stop(b)
+    })
+    expect(authenticate).not.toHaveBeenCalled()
+    expect(rpcCall).toHaveBeenCalledWith('trading.bracket.reject', { bracketId: 'brk_1' })
   })
 
   it('asks before a key export or a wallet removal whenever it is not Off', async () => {

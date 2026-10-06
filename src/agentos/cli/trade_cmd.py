@@ -22,6 +22,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, tzinfo
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
-from agentos.cli.gateway_rpc import run_gateway_sync
+from agentos.cli.gateway_rpc import rpc_error_exit_code, run_gateway_sync
 from agentos.cli.output import emit_error, print_json, print_text
 from agentos.cli.ui import ACCENT, ACCENT_HEADER, console, markup_escape
 from agentos.cli.wallet_cmd import (
@@ -46,11 +47,31 @@ from agentos.cli.wallet_cmd import (
     token_symbol,
 )
 
+
+class _JsonUsageGroup(TyperGroup):
+    """A usage error under ``--json`` is a JSON error on stderr, exit 2.
+
+    Click reports a bad or missing option with a Rich usage panel, which an
+    agent reading stderr for ``{"error": …}`` cannot parse. The same error
+    without ``--json`` still gets the panel.
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        args = [*getattr(ctx, "_protected_args", []), *ctx.args]
+        try:
+            return super().invoke(ctx)
+        except click.UsageError as exc:
+            if "--json" not in args:
+                raise
+            _bad_argument(exc.format_message(), json_output=True)
+
+
 app = typer.Typer(
+    cls=_JsonUsageGroup,
     help=(
         "Swap and send tokens, review and revoke allowances, decode transactions, "
         "check the network, and track orders, history and PnL."
-    )
+    ),
 )
 
 AGENT_ENV_MARKERS = ("AGENTOS_SESSION_KEY", "AGENTOS_AGENT")
@@ -1583,22 +1604,8 @@ _LP_USAGE_CODES = frozenset(
 )
 
 
-class _LpGroup(TyperGroup):
-    """``trade lp``: a usage error under ``--json`` is a JSON error on stderr, exit 2.
-
-    Click reports a bad or missing option with a Rich usage panel, which an
-    agent reading stderr for ``{"error": …}`` cannot parse. The same error
-    without ``--json`` still gets the panel.
-    """
-
-    def invoke(self, ctx: click.Context) -> Any:
-        args = [*getattr(ctx, "_protected_args", []), *ctx.args]
-        try:
-            return super().invoke(ctx)
-        except click.UsageError as exc:
-            if "--json" not in args:
-                raise
-            _bad_argument(exc.format_message(), json_output=True)
+class _LpGroup(_JsonUsageGroup):
+    """``trade lp``: a usage error under ``--json`` is a JSON error on stderr, exit 2."""
 
 
 lp_app = typer.Typer(
@@ -2318,6 +2325,288 @@ def lp_add(
     )
 
 
+# ── trade markets: every pool a token trades in (docs/markets.md) ──────────
+
+MARKETS_MIME = "application/vnd.agentos.markets+json"
+#: Where ``trade markets --json`` writes its card payloads, relative to the
+#: working directory (same reasoning and pruning as ``LP_CARD_DIR``).
+MARKETS_CARD_DIR = "markets-cards"
+MARKETS_CARDS_KEPT = 20
+_MARKETS_CARD_FILE = re.compile(r"^markets-[A-Za-z0-9._-]*\.json$")
+_MARKETS_SIDES = ("all", "quote", "base")
+
+
+def _markets_card_name(result: dict[str, Any]) -> str:
+    token = _dict(result.get("token"))
+    slug = _LP_SLUG.sub("", str(token.get("symbol") or "token")).strip("-") or "token"
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{MARKETS_CARD_DIR}/markets-{slug}-{stamp}.json"
+
+
+def _write_markets_card(result: dict[str, Any]) -> None:
+    """Write the card payload and announce it; the marker is the last line on stdout."""
+    name = _markets_card_name(result)
+    try:
+        path = Path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"[card not written: {exc}]", err=True)
+        return
+    _prune_cards(path.parent, _MARKETS_CARD_FILE, MARKETS_CARDS_KEPT)
+    print_text(f"publish_artifact path={name} mime={MARKETS_MIME}")
+
+
+def _compact_usd(value: Any) -> str:
+    """``$4.7M``, ``$61.2k``, ``$10k``, ``$950``; "—" when unknown."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    size = abs(number)
+    for unit, scale in (("B", 1e9), ("M", 1e6), ("k", 1e3)):
+        if size >= scale:
+            short = f"{size / scale:.1f}".removesuffix(".0")
+            return f"{'-' if number < 0 else ''}${short}{unit}"
+    return _usd(number)
+
+
+def _price_digits(value: Any) -> str:
+    """A price with at most 6 significant digits (3 below 1), never in
+    scientific notation: ``0.000471788`` -> ``0.000472``, ``240.47`` stays,
+    ``1.415e-05`` -> ``0.0000142``; "—" when unknown."""
+    if value is None or value == "":
+        return "—"
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return str(value)
+    if not number.is_finite():
+        return str(value)
+    if number.is_zero():
+        return "0"
+    digits = 6 if abs(number) >= 1 else 3
+    places = max(0, digits - 1 - number.adjusted())
+    text = f"{number.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP):f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _price_usd(value: Any) -> str:
+    """:func:`_price_digits` with a dollar sign; "—" when unknown."""
+    text = _price_digits(value)
+    return text if text == "—" else f"${text}"
+
+
+def _age(created_at: Any, now: float | None = None) -> str:
+    """``2026-07-25T00:52:36Z`` -> ``73d``; "—" when unknown."""
+    if not created_at:
+        return "—"
+    try:
+        stamp = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except ValueError:
+        return "—"
+    seconds = max(0.0, (now if now is not None else time.time()) - stamp.timestamp())
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86_400:
+        return f"{int(seconds // 3600)}h"
+    days = seconds / 86_400
+    if days < 60:
+        return f"{int(days)}d"
+    if days < 730:
+        return f"{int(days // 30)}mo"
+    return f"{int(days // 365)}y"
+
+
+#: Characters a price keeps before it folds in a table wider than the terminal.
+_MARKETS_PRICE_WIDTH = 10
+
+
+def _markets_flags(row: dict[str, Any]) -> str:
+    counterparty = _dict(row.get("counterparty"))
+    flags = []
+    if row.get("viaUniswap"):
+        flags.append("uni")
+    if counterparty.get("stockToken"):
+        flags.append("stock")
+    if counterparty.get("lookalike"):
+        flags.append("lookalike")
+    return " ".join(flags)
+
+
+def _markets_table(title: str, rows: list[dict[str, Any]], price_in: str) -> Table:
+    """One section. ``price_in`` heads the ratio column: ``IN NVDA`` on the quote
+    section (the counterparty priced in the token), ``IN QUOTE`` on the base
+    section (the token priced in each row's counterparty)."""
+    cells: list[tuple[str, ...]] = []
+    for row in rows:
+        dex = _dict(row.get("dex"))
+        venue = " ".join(
+            str(x) for x in (dex.get("label") or dex.get("id"), dex.get("version")) if x
+        )
+        fee = row.get("feePct")
+        if fee is not None:
+            venue = f"{venue} {fee:g}%"
+        cells.append(
+            (
+                markup_escape(str(row.get("pair") or "—")),
+                markup_escape(venue or "—"),
+                _compact_usd(row.get("tvlUsd")),
+                _compact_usd(row.get("volume24hUsd")),
+                _price_usd(row.get("priceUsd")),
+                _price_digits(row.get("priceInToken")),
+                _age(row.get("createdAt")),
+                _markets_flags(row),
+            )
+        )
+    headers = ("PAIR", "DEX", "TVL", "VOL 24H", "PRICE", price_in, "AGE", "FLAGS")
+    natural = [max([len(h), *(len(c[i]) for c in cells)]) for i, h in enumerate(headers)]
+    # Fold, never truncate: a cell that does not fit breaks onto the next line
+    # instead of ending in "…". TVL, volume and age never wrap. When the table
+    # is wider than the terminal (80 columns, a sub-cent price written out in
+    # full), the two prices keep up to ten characters and the pair, venue and
+    # flags fold first (the outer border goes, to give them two more
+    # characters); only a longer price folds.
+    narrow = sum(natural) + 3 * len(headers) + 1 > console.width
+    table = Table(title=title, show_header=True, header_style=ACCENT_HEADER, show_edge=not narrow)
+    table.add_column("PAIR", overflow="fold")
+    table.add_column("DEX", overflow="fold")
+    table.add_column("TVL", justify="right", no_wrap=True)
+    table.add_column("VOL 24H", justify="right", no_wrap=True)
+    for index in (4, 5):
+        width = min(natural[index], _MARKETS_PRICE_WIDTH) if narrow else None
+        table.add_column(headers[index], justify="right", overflow="fold", width=width)
+    table.add_column("AGE", justify="right", no_wrap=True)
+    table.add_column("FLAGS", overflow="fold")
+    for cell in cells:
+        table.add_row(*cell)
+    return table
+
+
+def _render_markets(result: dict[str, Any]) -> None:
+    token = _dict(result.get("token"))
+    chain = _dict(result.get("chain"))
+    symbol = str(token.get("symbol") or "token")
+    parts = [f"[bold]{markup_escape(symbol)}[/]"]
+    if token.get("name"):
+        parts.append(markup_escape(str(token["name"])))
+    parts.append(markup_escape(str(chain.get("name") or "")))
+    parts.append(_usd(token.get("priceUsd")))
+    oracle = _dict(token.get("oracle"))
+    if oracle.get("usd") is not None:
+        badge = " paused" if oracle.get("paused") else (" stale" if oracle.get("stale") else "")
+        parts.append(f"oracle {_usd(oracle.get('usd'))}{badge}")
+        price = token.get("priceUsd")
+        if isinstance(price, int | float) and float(oracle["usd"]) > 0:
+            parts.append(f"premium {percent((float(price) / float(oracle['usd']) - 1) * 100)}")
+    console.print(" · ".join(p for p in parts if p))
+    sections = _dict(result.get("sections"))
+    params = _dict(_dict(result.get("request")).get("params"))
+    side = str(params.get("side") or "all")
+    min_tvl = params.get("minTvlUsd")
+    floor = (
+        f" above {_compact_usd(min_tvl)}" if isinstance(min_tvl, int | float) and min_tvl else ""
+    )
+    for key, title in (("quote", f"Priced in {symbol}"), ("base", f"{symbol} priced in")):
+        if side not in ("all", key):
+            continue
+        rows = [r for r in sections.get(key) or [] if isinstance(r, dict)]
+        if rows:
+            price_in = f"IN {symbol}" if key == "quote" else "IN QUOTE"
+            console.print(_markets_table(f"{title} · {len(rows)}", rows, price_in))
+        else:
+            console.print(f"{title}: no pools against {markup_escape(symbol)}{floor}")
+    counts = _dict(result.get("counts"))
+    line = [f"{counts.get('shown', 0)} of {counts.get('scanned', 0)} pools shown"]
+    if counts.get("belowMinTvl"):
+        line.append(f"{counts['belowMinTvl']} under {_compact_usd(min_tvl)}")
+    if counts.get("hiddenLookalikes"):
+        line.append(f"{counts['hiddenLookalikes']} lookalikes hidden")
+    if counts.get("limited"):
+        line.append(f"{counts['limited']} more over the limit")
+    if result.get("partial"):
+        line.append("partial")
+    console.print(" · ".join(line))
+    for warning in result.get("warnings") or []:
+        console.print(f"• {markup_escape(str(warning))}")
+
+
+@app.command("markets")
+def trade_markets(
+    target: str = typer.Argument(..., help="Token symbol, address or ETH (NVDA, 0x…)"),
+    chain: str = typer.Option(
+        "robinhood",
+        "--chain",
+        help="base or robinhood (default robinhood: the one trade command that defaults to it)",
+    ),
+    side: str = typer.Option(
+        "all",
+        "--side",
+        help="all, quote (tokens priced in this one) or base (this token priced in others)",
+    ),
+    min_tvl: float = typer.Option(10_000.0, "--min-tvl", help="Hide pools under this TVL (USD)"),
+    limit: int = typer.Option(50, "--limit", help="Most pools to show (1-200)", min=1, max=200),
+    lookalikes: bool = typer.Option(
+        False, "--lookalikes", help="Show counterparties that borrow a Stock Token's name"
+    ),
+    deep: bool = typer.Option(False, "--deep", help="Read up to 200 pools instead of 100"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    no_card: bool = typer.Option(
+        False, "--no-card", help="With --json: do not write the chat card"
+    ),
+) -> None:
+    """Every pool a token trades in, on every DEX: tokens priced in it, and it priced in others.
+
+    Defaults to Robinhood Chain (the only `trade` command that does), where Stock
+    Tokens such as NVDA are the quote asset of many launchpad tokens.
+    """
+
+    choice = side.strip().lower()
+    if choice not in _MARKETS_SIDES:
+        _bad_argument(f"--side {side!r} must be all, quote or base", json_output=json_output)
+    if min_tvl < 0 or min_tvl != min_tvl:
+        _bad_argument("--min-tvl must be 0 or more", json_output=json_output)
+    params: dict[str, Any] = {
+        "target": target,
+        "chainId": chain_id_from_arg(chain),
+        "side": choice,
+        "minTvlUsd": min_tvl,
+        "limit": limit,
+        "lookalikes": lookalikes,
+        "deep": deep,
+    }
+
+    async def _run(client):
+        from agentos.cli.gateway_client import GatewayRPCError
+
+        try:
+            return await client.call("trading.markets", params)
+        except GatewayRPCError as exc:
+            candidates = _dict(exc.data).get("candidates")
+            if json_output or not isinstance(candidates, list) or not candidates:
+                raise
+            # An ambiguous symbol: the JSON envelope carries the candidates in
+            # ``details``; a person gets them under the message.
+            emit_error(exc.message, code=exc.code)
+            for item in candidates:
+                c = _dict(item)
+                line = "  ".join(
+                    str(x) for x in (c.get("symbol"), c.get("name"), c.get("address")) if x
+                )
+                typer.echo(f"  {line}", err=True)
+            raise typer.Exit(rpc_error_exit_code(exc.code)) from exc
+
+    result = _dict(run_gateway_sync(_run, json_output=json_output))
+    if not json_output:
+        _render_markets(result)
+        return
+    print_json(result)
+    if not no_card and result.get("kind"):
+        _write_markets_card(result)
+
+
 # ── trade dca: DCA mandates (docs/dca.md) ──────────────────────────────────
 
 DCA_MIME = "application/vnd.agentos.dca+json"
@@ -2517,13 +2806,17 @@ def _dca_bar(progress: Any, width: int = _DCA_BAR_WIDTH) -> str:
 
 
 def _dca_amount(amount: Any, symbol: str) -> str:
+    """``0.0000953672 ETH``: six significant digits, never scientific notation."""
     human = _dict(amount).get("human")
     if human is None or human == "":
         return "—"
     try:
-        return f"{float(human):.6g} {symbol}"
-    except (TypeError, ValueError):
+        value = Decimal(f"{Decimal(str(human)):.6g}")
+    except (InvalidOperation, ValueError):
         return f"{human} {symbol}"
+    if not value.is_finite():
+        return f"{human} {symbol}"
+    return f"{value:f} {symbol}"
 
 
 def _dca_pair(mandate: dict[str, Any]) -> str:
@@ -2946,3 +3239,1213 @@ def dca_update(
         )
     result = _dca_call("trading.dca.update", params, json_output=json_output)
     _dca_emit(result, json_output=json_output, no_card=no_card)
+
+
+# ── trade trigger: price triggers (docs/triggers.md) ───────────────────────
+
+TRIGGER_MIME = "application/vnd.agentos.trigger+json"
+#: Where ``trade trigger --json`` writes its card payloads, relative to the
+#: working directory (same reasoning and pruning as ``DCA_CARD_DIR``).
+TRIGGER_CARD_DIR = "trigger-cards"
+TRIGGER_CARDS_KEPT = 20
+#: Brackets (docs/brackets.md) share the folder, the mime and the pruning.
+_TRIGGER_CARD_FILE = re.compile(r"^(trigger|triggers|bracket|brackets)-[A-Za-z0-9._-]*\.json$")
+_TRIGGER_CARD_KINDS = frozenset({"trigger", "triggers", "bracket", "brackets"})
+#: Gateway error codes that mean "change the input" (or the trigger's state):
+#: exit 2, not 1.
+_TRIGGER_USAGE_CODES = frozenset(
+    {
+        "trading.trigger.invalid",
+        "trading.trigger.bad_state",
+        "trading.trigger.not_found",
+        "trading.invalid",
+        "trading.token_not_found",
+    }
+)
+#: ``3800``, ``$3,800``, ``-10%``, ``10%``, ``+15%``.
+_TRIGGER_PRICE = re.compile(r"^([+-]?)(\d+(?:\.\d+)?|\.\d+)(%?)$")
+_TRIGGER_AMOUNT = re.compile(r"^(\d+(?:\.\d+)?|\.\d+)$")
+#: Fire statuses whose order may still move after ``trading.trigger.fire`` returns.
+_TRIGGER_OPEN_FIRES = frozenset({"pending", "parked"})
+_TRIGGER_GLYPHS = {"sell": "▼", "buy": "▲", "alert": "◆"}
+_TRIGGER_FIRES_SHOWN = 5
+
+
+class _TriggerGroup(_LpGroup):
+    """``trade trigger``: a usage error under ``--json`` is a JSON error on stderr, exit 2."""
+
+
+trigger_app = typer.Typer(
+    cls=_TriggerGroup,
+    help=(
+        "Price triggers: stop-loss, take-profit, trailing stop, buy-the-dip and price "
+        "alerts the trading engine watches and fires itself. From an agent, create only "
+        "proposes; you approve, pause, resume, stop and fire now."
+    ),
+)
+app.add_typer(trigger_app, name="trigger")
+
+
+def parse_trigger_price(value: str, flag: str) -> str:
+    """``--below``/``--above`` → the ``price`` param: an absolute USD price or a percent.
+
+    ``3800`` (``$3,800`` too) is a price; ``-10%``/``10%`` on ``--below`` is 10 %
+    under the price now and ``+15%``/``15%`` on ``--above`` 15 % over it. The
+    engine resolves a percent at creation. Raises ``ValueError`` for the user.
+    """
+    text = str(value or "").strip().replace(",", "").replace(" ", "")
+    if text.startswith("$"):
+        text = text[1:]
+    match = _TRIGGER_PRICE.match(text)
+    if not match:
+        raise ValueError(
+            f"{flag} {value!r} is not a price; use a USD price (3800) or a percent of the "
+            "price now (-10%, +15%)"
+        )
+    sign, number, pct = match.groups()
+    amount = float(number)
+    if not pct:
+        if sign:
+            raise ValueError(f"{flag} {value!r}: a USD price takes no sign")
+        if amount <= 0:
+            raise ValueError(f"{flag} must be above 0")
+        return number
+    if amount <= 0:
+        raise ValueError(f"{flag} {value!r}: the percent must be above 0")
+    if flag == "--below":
+        if sign == "+":
+            raise ValueError(f"--below {value!r} is over the price now; use --above +{number}%")
+        if amount >= 100:
+            raise ValueError(f"--below {value!r}: a price cannot fall 100 % or more")
+        return f"-{number}%"
+    if sign == "-":
+        raise ValueError(f"--above {value!r} is under the price now; use --below -{number}%")
+    return f"+{number}%"
+
+
+def _trigger_valid_for(value: str, *, json_output: bool) -> int:
+    try:
+        return parse_every(value)
+    except ValueError as exc:
+        _bad_argument(str(exc).replace("--every", "--for"), json_output=json_output)
+        raise  # unreachable: _bad_argument exits
+
+
+def _trigger_id(value: str, *, json_output: bool) -> str:
+    text = value.strip()
+    if not text:
+        _bad_argument("a trigger id is required (trg_…)", json_output=json_output)
+    return text
+
+
+def _trigger_flags(given: dict[str, bool], what: str, *, json_output: bool) -> str:
+    """The one flag of ``given`` that is set; none or several is a usage error."""
+    chosen = [flag for flag, on in given.items() if on]
+    if len(chosen) != 1:
+        flags = ", ".join(given)
+        got = f" (got {', '.join(chosen)})" if chosen else ""
+        _bad_argument(f"Pass exactly one {what}: {flags}{got}", json_output=json_output)
+    return chosen[0]
+
+
+def _trigger_card_name(result: dict[str, Any]) -> str:
+    kind = str(result.get("kind") or "trigger")
+    if kind in ("triggers", "brackets"):
+        params = _dict(_dict(result.get("request")).get("params"))
+        slug = "all" if params.get("all") else "live"
+    elif kind == "bracket":
+        slug = str(_dict(result.get("bracket")).get("id") or "")
+    else:
+        slug = str(_dict(result.get("trigger")).get("id") or "")
+    slug = _LP_SLUG.sub("", slug).strip("-") or kind
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{TRIGGER_CARD_DIR}/{kind}-{slug}-{stamp}.json"
+
+
+def _write_trigger_card(result: dict[str, Any]) -> None:
+    """Write the card payload and announce it; the marker is the last line on stdout."""
+    name = _trigger_card_name(result)
+    try:
+        path = Path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"[card not written: {exc}]", err=True)
+        return
+    _prune_cards(path.parent, _TRIGGER_CARD_FILE, TRIGGER_CARDS_KEPT)
+    print_text(f"publish_artifact path={name} mime={TRIGGER_MIME}")
+
+
+def _trigger_call(method: str, params: dict[str, Any], *, json_output: bool) -> Any:
+    """Call one ``trading.trigger.*`` method; an input or state the engine refuses exits 2."""
+
+    async def _run(client):
+        return await _trigger_rpc(client, method, params, json_output=json_output)
+
+    return run_gateway_sync(_run, json_output=json_output)
+
+
+async def _trigger_rpc(
+    client: Any,
+    method: str,
+    params: dict[str, Any],
+    *,
+    json_output: bool,
+    usage_codes: frozenset[str] = _TRIGGER_USAGE_CODES,
+) -> Any:
+    from agentos.cli.gateway_client import GatewayRPCError
+
+    try:
+        return await client.call(method, params)
+    except GatewayRPCError as exc:
+        if exc.code not in usage_codes:
+            raise
+        emit_error(exc.message, json_output=json_output, code=exc.code, details=exc.data)
+        raise typer.Exit(2) from exc
+
+
+def _trigger_emit(result: Any, *, json_output: bool, no_card: bool) -> None:
+    """``--json``: the payload, then the card and its marker. Otherwise a panel or a table."""
+    payload = _dict(result)
+    kind = payload.get("kind")
+    if json_output:
+        print_json(payload)
+        if not no_card and kind in _TRIGGER_CARD_KINDS:
+            _write_trigger_card(payload)
+        return
+    if kind == "triggers":
+        _render_trigger_list(payload)
+    elif kind == "bracket":
+        _render_bracket(payload)
+    elif kind == "brackets":
+        _render_bracket_list(payload)
+    else:
+        _render_trigger(payload)
+
+
+def _trigger_distance(market: dict[str, Any]) -> str:
+    """``−2.10 % to fall``, ``+4.00 % to rise``, ``met``, ``—``."""
+    value = market.get("distancePct")
+    if value is None or value == "":
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number == 0:
+        return "met"
+    return f"{percent(number)} to {'fall' if number < 0 else 'rise'}"
+
+
+def _trigger_hits(condition: dict[str, Any]) -> str:
+    return f"{condition.get('hits') or 0}/{condition.get('confirmTicks') or 2}"
+
+
+def _trigger_size(action: dict[str, Any], symbol: str) -> str:
+    """``50 % · ≈ $189.40``, ``0.05 ETH · ≈ $189.40``, ``$50.00``, ``—`` (alert)."""
+    estimated = action.get("estimatedUsd")
+    approx = f" · ≈ {_usd(estimated)}" if estimated is not None else ""
+    if action.get("amountPct") is not None:
+        return f"{float(action['amountPct']):g} %{approx}"
+    amount = _dict(action.get("amount"))
+    if amount.get("human") not in (None, ""):
+        return f"{amount['human']} {symbol}{approx}"
+    if action.get("amountUsd") is not None:
+        return money(action.get("amountUsd"))
+    return "—"
+
+
+def _trigger_fire_line(fire: dict[str, Any], now: datetime | None = None) -> str:
+    """``#2 · 09:01 · fire now · filled @ $3,788.00 · tx 0x1234…abcd``."""
+    status = str(fire.get("status") or "")
+    parts = [f"#{fire.get('n')}", _dca_when(_parse_iso(fire.get("at")), now)]
+    if fire.get("manual"):
+        parts.append("fire now")
+    price = fire.get("priceUsd")
+    if status in ("filled", "alerted", "pending") and price is not None:
+        parts.append(f"{status} @ {_usd(price)}")
+    elif status == "parked":
+        parts.append("parked, awaiting approval")
+    else:
+        parts.append(status or "unknown")
+    if status in ("skipped", "failed", "expired", "rejected") and fire.get("reason"):
+        parts.append(str(fire.get("reason")))
+    if fire.get("txHash"):
+        parts.append(f"tx {short_address(fire.get('txHash'))}")
+    elif status in _TRIGGER_OPEN_FIRES and fire.get("orderId"):
+        parts.append(str(fire.get("orderId")))
+    return " · ".join(parts)
+
+
+def _trigger_result_line(trigger: dict[str, Any]) -> str | None:
+    result = _dict(trigger.get("result"))
+    if not result:
+        return None
+    token, quote = token_symbol(trigger.get("token")), token_symbol(trigger.get("quote"))
+    spent, got = (quote, token) if trigger.get("kind") == "buy" else (token, quote)
+    parts = [
+        f"{_dca_amount(result.get('amountIn'), spent)} → "
+        f"{_dca_amount(result.get('amountOut'), got)} @ {_usd(result.get('priceUsd'))}"
+    ]
+    if result.get("gasUsd") is not None:
+        parts.append(f"gas {_usd(result.get('gasUsd'))}")
+    if result.get("txHash"):
+        parts.append(f"tx {short_address(result.get('txHash'))}")
+    elif result.get("orderId"):
+        parts.append(str(result.get("orderId")))
+    return " · ".join(parts)
+
+
+def _render_trigger(result: dict[str, Any]) -> None:
+    trigger = _dict(result.get("trigger"))
+    if not trigger:
+        console.print("No trigger in the response.")
+        return
+    condition, action = _dict(trigger.get("condition")), _dict(trigger.get("action"))
+    market, wallet = _dict(trigger.get("market")), _dict(trigger.get("wallet"))
+    chain = _dict(trigger.get("chain"))
+    kind = str(trigger.get("kind") or "")
+    symbol = token_symbol(trigger.get("token"))
+    status = str(trigger.get("status") or "")
+    where = (
+        f"{chain.get('name') or ''} · {wallet.get('label') or short_address(wallet.get('address'))}"
+    )
+    lines = [
+        f"[bold]{markup_escape(str(action.get('label') or kind))} when "
+        f"{markup_escape(str(condition.get('label') or ''))}[/]",
+        f"[{ACCENT}]{markup_escape(symbol)}[/] {_usd(market.get('priceUsd'))} now · "
+        f"{_trigger_distance(market)} · checks {_trigger_hits(condition)} · "
+        f"{markup_escape(where)}",
+    ]
+    if condition.get("direction") == "trail":
+        lines.append(
+            f"peak {_usd(condition.get('peakPriceUsd'))} · "
+            f"stop {_usd(condition.get('stopPriceUsd'))}"
+        )
+    if kind != "alert":
+        approval = (
+            f"waits for you · over {money(action.get('approvalThresholdUsd'))}"
+            if action.get("needsApproval")
+            else "automatic"
+        )
+        balance = _dict(market.get("balance"))
+        held = token_symbol(trigger.get("quote") if kind == "buy" else trigger.get("token"))
+        lines.append(
+            f"size {markup_escape(_trigger_size(action, symbol))} · "
+            f"balance {_dca_amount(balance, held)} · approval {approval}"
+        )
+    valid_until = _parse_iso(trigger.get("validUntil"))
+    lines.append(
+        "valid until " + (valid_until.strftime("%Y-%m-%d %H:%M UTC") if valid_until else "GTC")
+    )
+    outcome = _trigger_result_line(trigger)
+    if outcome:
+        lines.append(f"result {markup_escape(outcome)}")
+    fires = [f for f in trigger.get("fires") or [] if isinstance(f, dict)]
+    if fires:
+        lines.append("")
+        lines.append("[bold]recent fires[/]")
+        lines.extend(markup_escape(_trigger_fire_line(f)) for f in fires[:_TRIGGER_FIRES_SHOWN])
+    for warning in result.get("warnings") or []:
+        lines.append(f"[yellow]•[/] {markup_escape(str(warning))}")
+    glyph = _TRIGGER_GLYPHS.get(kind, "•")
+    title = f"{glyph} {markup_escape(str(trigger.get('name') or 'Trigger'))} · {status}"
+    reason = trigger.get("statusReason")
+    if reason:
+        title += f" ({markup_escape(str(reason))})"
+    subtitle = f"{trigger.get('id')} · as of {result.get('fetchedAt')}"
+    console.print(Panel("\n".join(lines), title=title, subtitle=subtitle, expand=False))
+    fire = _dict(result.get("fire"))
+    if fire:
+        console.print(f"Fire: {markup_escape(_trigger_fire_line(fire))}")
+    if status == "awaiting_approval":
+        console.print(
+            "Waiting for your approval in the app "
+            f"(or: agentos trade trigger approve {trigger.get('id')})."
+        )
+
+
+def _render_trigger_list(result: dict[str, Any]) -> None:
+    triggers = [t for t in result.get("triggers") or [] if isinstance(t, dict)]
+    if not triggers:
+        console.print("No triggers yet.")
+        return
+    table = Table(
+        title=f"Triggers · {len(triggers)}",
+        header_style=ACCENT_HEADER,
+    )
+    for column in ("Name", "Kind", "Status", "Condition", "Price now", "Distance", "Wallet"):
+        table.add_column(
+            column,
+            justify="right" if column in ("Price now", "Distance") else "left",
+            overflow="fold",
+        )
+    for trigger in triggers:
+        condition, market = _dict(trigger.get("condition")), _dict(trigger.get("market"))
+        wallet = _dict(trigger.get("wallet"))
+        kind = str(trigger.get("kind") or "")
+        # The id rides under the name: every other trigger command needs it.
+        name = markup_escape(str(trigger.get("name") or "Trigger"))
+        table.add_row(
+            f"{name}\n[dim]{markup_escape(str(trigger.get('id') or ''))}[/]",
+            f"{_TRIGGER_GLYPHS.get(kind, '•')} {kind}",
+            str(trigger.get("status") or ""),
+            markup_escape(
+                f"{token_symbol(trigger.get('token'))} {condition.get('label') or ''}".strip()
+            ),
+            _usd(market.get("priceUsd")),
+            _trigger_distance(market),
+            markup_escape(str(wallet.get("label") or short_address(wallet.get("address")))),
+        )
+    console.print(table)
+    totals = _dict(result.get("totals"))
+    console.print(
+        f"{totals.get('armed') or 0} armed · {totals.get('awaiting') or 0} awaiting · "
+        f"{totals.get('triggered') or 0} triggered · as of {result.get('fetchedAt')}"
+    )
+
+
+_TRIGGER_ID_HELP = "Trigger id (trg_…)"
+
+
+@trigger_app.command("create")
+def trigger_create(
+    token: str = typer.Argument(
+        ..., help="Token watched and traded: a ticker (ETH, WETH) or an address"
+    ),
+    below: str | None = typer.Option(
+        None,
+        "--below",
+        help="Fire at or under this USD price (3800) or this far under the price now (-10%)",
+    ),
+    above: str | None = typer.Option(
+        None,
+        "--above",
+        help="Fire at or over this USD price (5000) or this far over the price now (+15%)",
+    ),
+    trail: float | None = typer.Option(
+        None, "--trail", help="Fire when the price falls this % from its peak since arming"
+    ),
+    sell: bool = typer.Option(False, "--sell", help="Sell the token for the quote when it fires"),
+    buy: bool = typer.Option(False, "--buy", help="Buy the token with the quote when it fires"),
+    alert: bool = typer.Option(False, "--alert", help="Only notify you when it fires"),
+    pct: float | None = typer.Option(
+        None, "--pct", help="--sell: percent of the wallet's balance at fire time"
+    ),
+    amount: str | None = typer.Option(None, "--amount", help="--sell: a fixed token amount (0.05)"),
+    usd: float | None = typer.Option(
+        None, "--usd", help="--buy: US dollars to spend; --sell: US dollars' worth to sell"
+    ),
+    quote: str | None = typer.Option(
+        None,
+        "--quote",
+        help=(
+            "Counter token (default the chain's USDC, or the native coin when the token "
+            "is USDC; required on robinhood for --sell/--buy)"
+        ),
+    ),
+    chain: str = typer.Option("base", "--chain", help="base or robinhood"),
+    wallet: str | None = typer.Option(
+        None, "--wallet", help="Vault wallet address or label (default primary)"
+    ),
+    slippage: float | None = typer.Option(None, "--slippage", help="Slippage % for the order"),
+    name: str | None = typer.Option(
+        None, "--name", help='Trigger name (default e.g. "Stop-loss ETH")'
+    ),
+    valid_for: str | None = typer.Option(
+        None, "--for", help="Expire if not reached within 30m, 2h, 1d, 1w or seconds (default GTC)"
+    ),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Create a price trigger. From an agent it waits for your approval; yours arms at once.
+
+    Exactly one condition (--below, --above or --trail) and one action (--sell
+    with one of --pct/--amount/--usd, --buy with --usd, or --alert).
+    """
+
+    condition = _trigger_flags(
+        {"--below": below is not None, "--above": above is not None, "--trail": trail is not None},
+        "condition",
+        json_output=json_output,
+    )
+    action = _trigger_flags(
+        {"--sell": sell, "--buy": buy, "--alert": alert}, "action", json_output=json_output
+    )
+    sizes = [
+        flag
+        for flag, value in (("--pct", pct), ("--amount", amount), ("--usd", usd))
+        if value is not None
+    ]
+    if action == "--sell" and len(sizes) != 1:
+        got = f" (got {', '.join(sizes)})" if sizes else ""
+        _bad_argument(
+            f"--sell takes exactly one size: --pct, --amount or --usd{got}",
+            json_output=json_output,
+        )
+    if action == "--buy" and sizes != ["--usd"]:
+        _bad_argument(
+            "--buy takes --usd (the US dollars to spend) and no other size", json_output=json_output
+        )
+    if action == "--alert" and sizes:
+        _bad_argument(
+            f"--alert takes no size (it sends no order; got {', '.join(sizes)})",
+            json_output=json_output,
+        )
+    if action == "--buy" and condition == "--trail":
+        _bad_argument("--trail works with --sell or --alert, not --buy", json_output=json_output)
+    params: dict[str, Any] = {
+        "chainId": chain_id_from_arg(chain),
+        "kind": action.lstrip("-"),
+        "token": token,
+        "direction": condition.lstrip("-"),
+        "initiator": initiator_for(False),
+    }
+    try:
+        if below is not None:
+            params["price"] = parse_trigger_price(below, "--below")
+        elif above is not None:
+            params["price"] = parse_trigger_price(above, "--above")
+    except ValueError as exc:
+        _bad_argument(str(exc), json_output=json_output)
+    if trail is not None:
+        if not 0 < trail < 100:
+            _bad_argument(
+                "--trail must be above 0 and under 100 (a percent)", json_output=json_output
+            )
+        params["trailPct"] = trail
+    if pct is not None:
+        if not 0 < pct <= 100:
+            _bad_argument("--pct must be above 0 and at most 100", json_output=json_output)
+        params["amountPct"] = pct
+    if amount is not None:
+        text = amount.strip()
+        if not _TRIGGER_AMOUNT.match(text) or float(text) <= 0:
+            _bad_argument(
+                f"--amount {amount!r} must be a token amount above 0 (0.05)",
+                json_output=json_output,
+            )
+        params["amount"] = text
+    _dca_positive(usd, "--usd", json_output=json_output)
+    _dca_positive(slippage, "--slippage", json_output=json_output)
+    if usd is not None:
+        params["amountUsd"] = usd
+    if valid_for is not None:
+        params["validForSeconds"] = _trigger_valid_for(valid_for, json_output=json_output)
+    for key, value in (
+        ("quote", quote),
+        ("wallet", wallet),
+        ("slippagePct", slippage),
+        ("name", name),
+    ):
+        if value is not None:
+            params[key] = value
+    session_key = os.environ.get("AGENTOS_SESSION_KEY", "").strip()
+    if session_key:
+        params["sessionKey"] = session_key
+    result = _trigger_call("trading.trigger.create", params, json_output=json_output)
+    _trigger_emit(result, json_output=json_output, no_card=no_card)
+
+
+@trigger_app.command("list")
+def trigger_list(
+    all_: bool = typer.Option(False, "--all", help="Include done, stopped, rejected and expired"),
+    wallet: str | None = typer.Option(None, "--wallet", help="Only this wallet's triggers"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Live triggers (awaiting approval, armed, triggered, paused), or every one with --all."""
+
+    params: dict[str, Any] = {}
+    if all_:
+        params["all"] = True
+    if wallet:
+        params["wallet"] = wallet
+    result = _trigger_call("trading.trigger.list", params, json_output=json_output)
+    _trigger_emit(result, json_output=json_output, no_card=no_card)
+
+
+def _trigger_simple(
+    method: str,
+    trigger_id: str,
+    *,
+    json_output: bool,
+    no_card: bool,
+    reason: str | None = None,
+) -> None:
+    params: dict[str, Any] = {"triggerId": _trigger_id(trigger_id, json_output=json_output)}
+    if reason:
+        params["reason"] = reason
+    result = _trigger_call(method, params, json_output=json_output)
+    _trigger_emit(result, json_output=json_output, no_card=no_card)
+
+
+@trigger_app.command("show")
+def trigger_show(
+    trigger_id: str = typer.Argument(..., help=_TRIGGER_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """One trigger: condition, price now and distance, size, checks and recent fires."""
+    _trigger_simple("trading.trigger.get", trigger_id, json_output=json_output, no_card=no_card)
+
+
+@trigger_app.command("approve")
+def trigger_approve(
+    trigger_id: str = typer.Argument(..., help=_TRIGGER_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Approve a proposed trigger and arm it (yours only; an agent cannot)."""
+    _trigger_simple("trading.trigger.approve", trigger_id, json_output=json_output, no_card=no_card)
+
+
+@trigger_app.command("reject")
+def trigger_reject(
+    trigger_id: str = typer.Argument(..., help=_TRIGGER_ID_HELP),
+    reason: str | None = typer.Option(None, "--reason", help="Why (kept on the trigger)"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Reject a proposed trigger."""
+    _trigger_simple(
+        "trading.trigger.reject",
+        trigger_id,
+        json_output=json_output,
+        no_card=no_card,
+        reason=reason,
+    )
+
+
+@trigger_app.command("pause")
+def trigger_pause(
+    trigger_id: str = typer.Argument(..., help=_TRIGGER_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Pause an armed trigger; it is not checked until you resume it."""
+    _trigger_simple("trading.trigger.pause", trigger_id, json_output=json_output, no_card=no_card)
+
+
+@trigger_app.command("resume")
+def trigger_resume(
+    trigger_id: str = typer.Argument(..., help=_TRIGGER_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Re-arm a paused trigger; checks start over (a trailing stop's peak is the price now)."""
+    _trigger_simple("trading.trigger.resume", trigger_id, json_output=json_output, no_card=no_card)
+
+
+@trigger_app.command("stop")
+def trigger_stop(
+    trigger_id: str = typer.Argument(..., help=_TRIGGER_ID_HELP),
+    reason: str | None = typer.Option(None, "--reason", help="Why (kept on the trigger)"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Stop a trigger for good; its order still waiting for approval is rejected."""
+    _trigger_simple(
+        "trading.trigger.stop",
+        trigger_id,
+        json_output=json_output,
+        no_card=no_card,
+        reason=reason,
+    )
+
+
+@trigger_app.command("fire")
+def trigger_fire(
+    trigger_id: str = typer.Argument(..., help=_TRIGGER_ID_HELP),
+    wait: bool = typer.Option(False, "--wait", help="Block until the order is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Fire now: act at once on an armed or paused trigger, whatever the price."""
+
+    params = {"triggerId": _trigger_id(trigger_id, json_output=json_output)}
+
+    async def _run(client):
+        result = _dict(
+            await _trigger_rpc(client, "trading.trigger.fire", params, json_output=json_output)
+        )
+        fire = _dict(result.get("fire"))
+        order_id = fire.get("orderId")
+        if not (wait and order_id and fire.get("status") in _TRIGGER_OPEN_FIRES):
+            return result
+        await client.call(
+            "trading.orders.wait", {"orderId": order_id, "timeoutSeconds": wait_seconds}
+        )
+        fresh = _dict(
+            await _trigger_rpc(client, "trading.trigger.get", params, json_output=json_output)
+        )
+        if not fresh:
+            return result
+        fires = _dict(fresh.get("trigger")).get("fires") or []
+        settled = next(
+            (f for f in fires if isinstance(f, dict) and f.get("n") == fire.get("n")), fire
+        )
+        return {**fresh, "fire": settled}
+
+    result = run_gateway_sync(_run, json_output=json_output)
+    _trigger_emit(result, json_output=json_output, no_card=no_card)
+
+
+# ── trade protect / trade bracket: take-profit + stop-loss (docs/brackets.md) ─
+
+#: Gateway error codes that mean "change the input" (or the bracket's state): exit 2.
+_BRACKET_USAGE_CODES = frozenset(
+    {
+        "trading.bracket.invalid",
+        "trading.bracket.bad_state",
+        "trading.bracket.not_found",
+        "trading.invalid",
+        "trading.token_not_found",
+    }
+)
+_BRACKET_GLYPHS = {"sell": "▼▲", "alert": "◆"}
+_BRACKET_LEG_WORDS = {"tp": "take-profit", "sl": "stop-loss"}
+_BRACKET_ID_HELP = "Bracket id (brk_…)"
+
+bracket_app = typer.Typer(
+    cls=_TriggerGroup,
+    help=(
+        "Brackets: a take-profit and a stop-loss on one position, one cancelling the "
+        "other. Create one with `agentos trade protect`. From an agent, create only "
+        "proposes; you approve, pause, resume, stop and fire now."
+    ),
+)
+app.add_typer(bracket_app, name="bracket")
+
+
+def _bracket_line_arg(value: str, flag: str, *, json_output: bool) -> str:
+    """``--tp`` reads like ``--above``, ``--sl`` like ``--below`` (``parse_trigger_price``)."""
+    rule = "--above" if flag == "--tp" else "--below"
+    try:
+        return parse_trigger_price(value, rule)
+    except ValueError as exc:
+        message = str(exc).replace("--below", "--sl").replace("--above", "--tp")
+        _bad_argument(message, json_output=json_output)
+        raise  # unreachable: _bad_argument exits
+
+
+def _bracket_id(value: str, *, json_output: bool) -> str:
+    text = value.strip()
+    if not text:
+        _bad_argument("a bracket id is required (brk_…)", json_output=json_output)
+    return text
+
+
+def _bracket_call(method: str, params: dict[str, Any], *, json_output: bool) -> Any:
+    """Call one ``trading.bracket.*`` method; an input or state the engine refuses exits 2."""
+
+    async def _run(client):
+        return await _trigger_rpc(
+            client, method, params, json_output=json_output, usage_codes=_BRACKET_USAGE_CODES
+        )
+
+    return run_gateway_sync(_run, json_output=json_output)
+
+
+def _bracket_leg_word(leg: str, trigger: dict[str, Any]) -> str:
+    if leg == "sl" and _dict(trigger.get("condition")).get("direction") == "trail":
+        return "trailing stop"
+    return _BRACKET_LEG_WORDS.get(leg, leg)
+
+
+def _bracket_size(action: dict[str, Any], symbol: str) -> str:
+    """``100 % · ≈ $189.40``; ``50 % at take-profit, 100 % at stop · ≈ $189.40``."""
+    tp_pct = action.get("tpPct")
+    if tp_pct is not None and action.get("amountPct") is not None:
+        estimated = action.get("estimatedUsd")
+        approx = f" · ≈ {_usd(estimated)}" if estimated is not None else ""
+        return (
+            f"{float(tp_pct):g} % at take-profit, {float(action['amountPct']):g} % at stop{approx}"
+        )
+    return _trigger_size(action, symbol)
+
+
+def _bracket_up_down(market: dict[str, Any]) -> str:
+    """``+20.30% / -9.80%``: the move to the take-profit and to the stop."""
+    return f"{percent(market.get('upsidePct'))} / {percent(market.get('downsidePct'))}"
+
+
+def _bracket_reward_risk(market: dict[str, Any]) -> str:
+    value = market.get("rewardRisk")
+    if value is None or value == "":
+        return "—"
+    try:
+        return f"{float(value):g} : 1"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _bracket_fires(bracket: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Both legs' fires, newest first, each with its leg word."""
+    fires: list[tuple[str, dict[str, Any]]] = []
+    for leg, key in (("tp", "takeProfit"), ("sl", "stopLoss")):
+        trigger = _dict(bracket.get(key))
+        word = _bracket_leg_word(leg, trigger)
+        fires.extend((word, f) for f in trigger.get("fires") or [] if isinstance(f, dict))
+    fires.sort(key=lambda item: str(item[1].get("at") or ""), reverse=True)
+    return fires
+
+
+def _render_bracket(result: dict[str, Any]) -> None:
+    bracket = _dict(result.get("bracket"))
+    if not bracket:
+        console.print("No bracket in the response.")
+        return
+    lines_, action = _dict(bracket.get("lines")), _dict(bracket.get("action"))
+    market, wallet = _dict(bracket.get("market")), _dict(bracket.get("wallet"))
+    chain = _dict(bracket.get("chain"))
+    kind = str(bracket.get("kind") or "")
+    symbol = token_symbol(bracket.get("token"))
+    status = str(bracket.get("status") or "")
+    tp_label = str(lines_.get("takeProfitLabel") or "")
+    sl_label = str(lines_.get("stopLossLabel") or "")
+    if kind == "alert":
+        headline = f"notify when {symbol} is {tp_label} or {sl_label}"
+    else:
+        headline = f"{action.get('label') or 'sell'} · take-profit {tp_label} · stop {sl_label}"
+    where = (
+        f"{chain.get('name') or ''} · {wallet.get('label') or short_address(wallet.get('address'))}"
+    )
+    stop_text = f"stop {_usd(lines_.get('stopLossUsd'))}"
+    if lines_.get("trailPct") is not None:
+        stop_text += f" ({sl_label})"
+    lines = [
+        f"[bold]{markup_escape(headline)}[/]",
+        f"{markup_escape(stop_text)}  ◂  [{ACCENT}]{markup_escape(symbol)}[/] "
+        f"{_usd(market.get('priceUsd'))} now  ▸  take-profit "
+        f"{_usd(lines_.get('takeProfitUsd'))}",
+        f"upside {percent(market.get('upsidePct'))} · downside "
+        f"{percent(market.get('downsidePct'))} · reward:risk {_bracket_reward_risk(market)} · "
+        f"{markup_escape(where)}",
+    ]
+    if kind != "alert":
+        approval = (
+            f"waits for you · over {money(action.get('approvalThresholdUsd'))}"
+            if action.get("needsApproval")
+            else "automatic"
+        )
+        balance = _dict(market.get("balance"))
+        lines.append(
+            f"size {markup_escape(_bracket_size(action, symbol))} · "
+            f"balance {_dca_amount(balance, symbol)} · approval {approval}"
+        )
+    valid_until = _parse_iso(bracket.get("validUntil"))
+    lines.append(
+        "valid until " + (valid_until.strftime("%Y-%m-%d %H:%M UTC") if valid_until else "GTC")
+    )
+    lines.append("")
+    for leg, key in (("tp", "takeProfit"), ("sl", "stopLoss")):
+        trigger = _dict(bracket.get(key))
+        condition = _dict(trigger.get("condition"))
+        state = str(trigger.get("status") or "")
+        if trigger.get("statusReason"):
+            state += f" · {trigger.get('statusReason')}"
+        lines.append(
+            f"{markup_escape(_bracket_leg_word(leg, trigger)):<13} "
+            f"{markup_escape(str(condition.get('label') or ''))} · {markup_escape(state)} · "
+            f"checks {_trigger_hits(condition)}"
+        )
+    outcome = _trigger_result_line({**bracket, "kind": "sell"})
+    if outcome:
+        fired = _BRACKET_LEG_WORDS.get(str(bracket.get("fired") or ""), "")
+        lines.append(f"result{f' ({fired})' if fired else ''} {markup_escape(outcome)}")
+    fires = _bracket_fires(bracket)
+    if fires:
+        lines.append("")
+        lines.append("[bold]recent fires[/]")
+        lines.extend(
+            markup_escape(f"{word} {_trigger_fire_line(fire)}")
+            for word, fire in fires[:_TRIGGER_FIRES_SHOWN]
+        )
+    for warning in result.get("warnings") or []:
+        lines.append(f"[yellow]•[/] {markup_escape(str(warning))}")
+    glyph = _BRACKET_GLYPHS.get(kind, "•")
+    title = f"{glyph} {markup_escape(str(bracket.get('name') or 'Bracket'))} · {status}"
+    reason = bracket.get("statusReason")
+    if reason:
+        title += f" ({markup_escape(str(reason))})"
+    subtitle = f"{bracket.get('id')} · as of {result.get('fetchedAt')}"
+    console.print(Panel("\n".join(lines), title=title, subtitle=subtitle, expand=False))
+    fire = _dict(result.get("fire"))
+    if fire:
+        console.print(f"Fire: {markup_escape(_trigger_fire_line(fire))}")
+    if status == "awaiting_approval":
+        console.print(
+            "Waiting for your approval in the app; one approval arms both legs "
+            f"(or: agentos trade bracket approve {bracket.get('id')})."
+        )
+
+
+def _render_bracket_list(result: dict[str, Any]) -> None:
+    brackets = [b for b in result.get("brackets") or [] if isinstance(b, dict)]
+    if not brackets:
+        console.print("No brackets yet.")
+        return
+    table = Table(title=f"Brackets · {len(brackets)}", header_style=ACCENT_HEADER)
+    columns = ("Name", "Status", "Token", "Range", "Price now", "Up / down", "Size")
+    for column in columns:
+        table.add_column(
+            column,
+            justify="right" if column in ("Price now", "Up / down") else "left",
+            overflow="fold",
+        )
+    for bracket in brackets:
+        lines_, market = _dict(bracket.get("lines")), _dict(bracket.get("market"))
+        action = _dict(bracket.get("action"))
+        kind = str(bracket.get("kind") or "")
+        symbol = token_symbol(bracket.get("token"))
+        # The id rides under the name: every other bracket command needs it.
+        name = markup_escape(str(bracket.get("name") or "Bracket"))
+        size = "notify" if kind == "alert" else _bracket_size(action, symbol)
+        table.add_row(
+            f"{name}\n[dim]{markup_escape(str(bracket.get('id') or ''))}[/]",
+            f"{_BRACKET_GLYPHS.get(kind, '•')} {bracket.get('status') or ''}",
+            markup_escape(symbol),
+            f"{_usd(lines_.get('stopLossUsd'))} – {_usd(lines_.get('takeProfitUsd'))}",
+            _usd(market.get("priceUsd")),
+            _bracket_up_down(market),
+            markup_escape(size),
+        )
+    console.print(table)
+    totals = _dict(result.get("totals"))
+    console.print(
+        f"{totals.get('armed') or 0} armed · {totals.get('awaiting') or 0} awaiting · "
+        f"{totals.get('triggered') or 0} triggered · as of {result.get('fetchedAt')}"
+    )
+
+
+@app.command("protect")
+def trade_protect(
+    token: str = typer.Argument(
+        ..., help="Token held and protected: a ticker (ETH, WETH) or an address"
+    ),
+    tp: str | None = typer.Option(
+        None,
+        "--tp",
+        help="Take-profit: at or over this USD price (4560) or this far over the price now (+20%)",
+    ),
+    sl: str | None = typer.Option(
+        None,
+        "--sl",
+        help="Stop-loss: at or under this USD price (3420) or this far under the price now (-10%)",
+    ),
+    trail: float | None = typer.Option(
+        None,
+        "--trail",
+        help="Trailing stop instead of --sl: sell when the price falls this % from its peak",
+    ),
+    pct: float | None = typer.Option(
+        None, "--pct", help="Percent of the wallet's balance both legs sell (default 100)"
+    ),
+    amount: str | None = typer.Option(None, "--amount", help="A fixed token amount (0.05)"),
+    usd: float | None = typer.Option(None, "--usd", help="US dollars' worth to sell"),
+    tp_pct: float | None = typer.Option(
+        None,
+        "--tp-pct",
+        help="Partial take-profit: that leg sells only this % (at most --pct); the stop sells all",
+    ),
+    alert: bool = typer.Option(
+        False, "--alert", help="A range alert: only notify you when the price leaves the range"
+    ),
+    quote: str | None = typer.Option(
+        None,
+        "--quote",
+        help=(
+            "Counter token (default the chain's USDC, or the native coin when the token "
+            "is USDC; required on robinhood unless --alert)"
+        ),
+    ),
+    chain: str = typer.Option("base", "--chain", help="base or robinhood"),
+    wallet: str | None = typer.Option(
+        None, "--wallet", help="Vault wallet address or label (default primary)"
+    ),
+    slippage: float | None = typer.Option(None, "--slippage", help="Slippage % for the order"),
+    name: str | None = typer.Option(
+        None, "--name", help='Bracket name (default e.g. "Protect ETH")'
+    ),
+    valid_for: str | None = typer.Option(
+        None, "--for", help="Expire if not fired within 30m, 2h, 1d, 1w or seconds (default GTC)"
+    ),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Protect a position: a take-profit and a stop-loss, whichever comes first cancels the other.
+
+    --tp and exactly one of --sl / --trail; at most one of --pct / --amount /
+    --usd (default --pct 100). From an agent it waits for your approval (one
+    approval arms both legs); yours arms at once.
+    """
+
+    if tp is None:
+        _bad_argument(
+            "--tp is required: the take-profit line (4560, or +20% over the price now)",
+            json_output=json_output,
+        )
+    stop = _trigger_flags(
+        {"--sl": sl is not None, "--trail": trail is not None}, "stop line", json_output=json_output
+    )
+    sizes = [
+        flag
+        for flag, value in (("--pct", pct), ("--amount", amount), ("--usd", usd))
+        if value is not None
+    ]
+    if alert and (sizes or tp_pct is not None):
+        given = [*sizes, *(["--tp-pct"] if tp_pct is not None else [])]
+        _bad_argument(
+            f"--alert takes no size (it sends no order; got {', '.join(given)})",
+            json_output=json_output,
+        )
+    if len(sizes) > 1:
+        _bad_argument(
+            f"Pass at most one size: --pct, --amount or --usd (got {', '.join(sizes)})",
+            json_output=json_output,
+        )
+    if tp_pct is not None and sizes and sizes[0] != "--pct":
+        _bad_argument(
+            f"--tp-pct works with --pct (or the default 100 %), not {sizes[0]}",
+            json_output=json_output,
+        )
+    assert tp is not None
+    params: dict[str, Any] = {
+        "chainId": chain_id_from_arg(chain),
+        "kind": "alert" if alert else "sell",
+        "token": token,
+        "takeProfit": _bracket_line_arg(tp, "--tp", json_output=json_output),
+        "initiator": initiator_for(False),
+    }
+    if stop == "--sl":
+        assert sl is not None
+        params["stopLoss"] = _bracket_line_arg(sl, "--sl", json_output=json_output)
+        take, floor = params["takeProfit"], params["stopLoss"]
+        if "%" not in take and "%" not in floor and float(take) <= float(floor):
+            _bad_argument(
+                f"--tp {tp} must be above --sl {sl}: the take-profit is the upper line",
+                json_output=json_output,
+            )
+    else:
+        assert trail is not None
+        if not 0 < trail < 100:
+            _bad_argument(
+                "--trail must be above 0 and under 100 (a percent)", json_output=json_output
+            )
+        params["trailPct"] = trail
+    if pct is not None and not 0 < pct <= 100:
+        _bad_argument("--pct must be above 0 and at most 100", json_output=json_output)
+    if not alert and not sizes:
+        pct = 100.0
+    if pct is not None:
+        params["amountPct"] = pct
+    if tp_pct is not None:
+        assert pct is not None
+        if not 0 < tp_pct <= pct:
+            _bad_argument(
+                f"--tp-pct must be above 0 and at most --pct ({pct:g})", json_output=json_output
+            )
+        params["tpPct"] = tp_pct
+    if amount is not None:
+        text = amount.strip()
+        if not _TRIGGER_AMOUNT.match(text) or float(text) <= 0:
+            _bad_argument(
+                f"--amount {amount!r} must be a token amount above 0 (0.05)",
+                json_output=json_output,
+            )
+        params["amount"] = text
+    _dca_positive(usd, "--usd", json_output=json_output)
+    _dca_positive(slippage, "--slippage", json_output=json_output)
+    if usd is not None:
+        params["amountUsd"] = usd
+    if valid_for is not None:
+        params["validForSeconds"] = _trigger_valid_for(valid_for, json_output=json_output)
+    for key, value in (
+        ("quote", quote),
+        ("wallet", wallet),
+        ("slippagePct", slippage),
+        ("name", name),
+    ):
+        if value is not None:
+            params[key] = value
+    session_key = os.environ.get("AGENTOS_SESSION_KEY", "").strip()
+    if session_key:
+        params["sessionKey"] = session_key
+    result = _bracket_call("trading.bracket.create", params, json_output=json_output)
+    _trigger_emit(result, json_output=json_output, no_card=no_card)
+
+
+@bracket_app.command("list")
+def bracket_list(
+    all_: bool = typer.Option(False, "--all", help="Include done, stopped, rejected and expired"),
+    wallet: str | None = typer.Option(None, "--wallet", help="Only this wallet's brackets"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Live brackets (awaiting approval, armed, triggered, paused), or every one with --all."""
+
+    params: dict[str, Any] = {}
+    if all_:
+        params["all"] = True
+    if wallet:
+        params["wallet"] = wallet
+    result = _bracket_call("trading.bracket.list", params, json_output=json_output)
+    _trigger_emit(result, json_output=json_output, no_card=no_card)
+
+
+def _bracket_simple(
+    method: str,
+    bracket_id: str,
+    *,
+    json_output: bool,
+    no_card: bool,
+    reason: str | None = None,
+) -> None:
+    params: dict[str, Any] = {"bracketId": _bracket_id(bracket_id, json_output=json_output)}
+    if reason:
+        params["reason"] = reason
+    result = _bracket_call(method, params, json_output=json_output)
+    _trigger_emit(result, json_output=json_output, no_card=no_card)
+
+
+@bracket_app.command("show")
+def bracket_show(
+    bracket_id: str = typer.Argument(..., help=_BRACKET_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """One bracket: both lines with the price between them, size, each leg's checks, fires."""
+    _bracket_simple("trading.bracket.get", bracket_id, json_output=json_output, no_card=no_card)
+
+
+@bracket_app.command("approve")
+def bracket_approve(
+    bracket_id: str = typer.Argument(..., help=_BRACKET_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Approve a proposed bracket and arm both legs (yours only; an agent cannot)."""
+    _bracket_simple("trading.bracket.approve", bracket_id, json_output=json_output, no_card=no_card)
+
+
+@bracket_app.command("reject")
+def bracket_reject(
+    bracket_id: str = typer.Argument(..., help=_BRACKET_ID_HELP),
+    reason: str | None = typer.Option(None, "--reason", help="Why (kept on both legs)"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Reject a proposed bracket (both legs)."""
+    _bracket_simple(
+        "trading.bracket.reject",
+        bracket_id,
+        json_output=json_output,
+        no_card=no_card,
+        reason=reason,
+    )
+
+
+@bracket_app.command("pause")
+def bracket_pause(
+    bracket_id: str = typer.Argument(..., help=_BRACKET_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Pause both legs; neither is checked until you resume the bracket."""
+    _bracket_simple("trading.bracket.pause", bracket_id, json_output=json_output, no_card=no_card)
+
+
+@bracket_app.command("resume")
+def bracket_resume(
+    bracket_id: str = typer.Argument(..., help=_BRACKET_ID_HELP),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Re-arm both legs; checks start over (a trailing stop's peak is the price now)."""
+    _bracket_simple("trading.bracket.resume", bracket_id, json_output=json_output, no_card=no_card)
+
+
+@bracket_app.command("stop")
+def bracket_stop(
+    bracket_id: str = typer.Argument(..., help=_BRACKET_ID_HELP),
+    reason: str | None = typer.Option(None, "--reason", help="Why (kept on both legs)"),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Stop both legs for good; an order of either still waiting for approval is rejected."""
+    _bracket_simple(
+        "trading.bracket.stop",
+        bracket_id,
+        json_output=json_output,
+        no_card=no_card,
+        reason=reason,
+    )
+
+
+@bracket_app.command("fire")
+def bracket_fire(
+    bracket_id: str = typer.Argument(..., help=_BRACKET_ID_HELP),
+    leg: str | None = typer.Option(
+        None, "--leg", help="tp or sl (default the leg nearer to firing)"
+    ),
+    wait: bool = typer.Option(False, "--wait", help="Block until the order is decided and settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
+    json_output: bool = typer.Option(False, "--json", help=_JSON_HELP),
+    no_card: bool = typer.Option(False, "--no-card", help=_NO_CARD_HELP),
+) -> None:
+    """Fire one leg now, whatever the price (sell now / notify now); the other goes on hold."""
+
+    params: dict[str, Any] = {"bracketId": _bracket_id(bracket_id, json_output=json_output)}
+    if leg is not None:
+        choice = leg.strip().lower()
+        if choice not in _BRACKET_LEG_WORDS:
+            _bad_argument(f"--leg {leg!r} must be tp or sl", json_output=json_output)
+        params["leg"] = choice
+
+    async def _run(client):
+        result = _dict(
+            await _trigger_rpc(
+                client,
+                "trading.bracket.fire",
+                params,
+                json_output=json_output,
+                usage_codes=_BRACKET_USAGE_CODES,
+            )
+        )
+        fire = _dict(result.get("fire"))
+        order_id = fire.get("orderId")
+        if not (wait and order_id and fire.get("status") in _TRIGGER_OPEN_FIRES):
+            return result
+        await client.call(
+            "trading.orders.wait", {"orderId": order_id, "timeoutSeconds": wait_seconds}
+        )
+        fresh = _dict(
+            await _trigger_rpc(
+                client,
+                "trading.bracket.get",
+                {"bracketId": params["bracketId"]},
+                json_output=json_output,
+                usage_codes=_BRACKET_USAGE_CODES,
+            )
+        )
+        if not fresh:
+            return result
+        # The fire is the leg's; its order id says which leg it was.
+        settled = next(
+            (
+                f
+                for _, f in _bracket_fires(_dict(fresh.get("bracket")))
+                if f.get("orderId") == order_id
+            ),
+            fire,
+        )
+        return {**fresh, "fire": settled}
+
+    result = run_gateway_sync(_run, json_output=json_output)
+    _trigger_emit(result, json_output=json_output, no_card=no_card)

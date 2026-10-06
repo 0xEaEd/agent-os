@@ -45,6 +45,10 @@ KNOWN_SPENDERS: dict[str, str] = {
     "0x000000000022d473030f116ddee9f6b43ac78ba3": "Permit2",
     "0x0000000085e102724e78ecd2f45dc9ca239affad": "Uniswap Trading API proxy",
     "0x6ff5693b99212da76ad316178a184ab56d299b43": "Uniswap Universal Router",
+    # v2.1.2, what the Trading API sends swaps to since 2026-10 (docs/markets.md).
+    "0xd6145b2d3f379919e8cdeda7b97e37c4b2ca9c40": "Uniswap Universal Router v2.1.2",
+    "0x8876789976decbfcbbbe364623c63652db8c0904": "Uniswap Universal Router (Robinhood Chain)",
+    "0x204faca1764b154221e35c0d20abb3c525710498": "Uniswap Universal Router v2.1.2 (Robinhood)",
     "0x2626664c2603336e57b271c5c0b26f421741e481": "Uniswap V3 SwapRouter02",
     # What the AgentOS Aggregator's approvals name (0x AllowanceHolder), seen live 2026-09-20.
     "0x0000000000001ff3684f28c67538d4d072c22734": "AgentOS Aggregator (0x AllowanceHolder)",

@@ -1661,6 +1661,11 @@ tr:focus-within .trd-row__actions {
   color: var(--info);
   background: color-mix(in srgb, var(--info) 14%, transparent);
 }
+/* A swap a price trigger fired: the same chip, in amber. */
+.trd-order__trigger {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
 .trd-order__fact b {
   font-family: var(--font-mono);
   font-weight: 400;
@@ -3027,5 +3032,608 @@ button:disabled > .trd-hero__spin {
   .trd-chip[aria-busy='true'] {
     animation: none;
     background: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+}
+
+/* ── Markets (docs/markets.md) ─────────────────────────────────────────────── */
+
+/* Every pool one token trades in. The same instrument as the ledger: a
+   toolbar band, hairline-ruled rows, mono figures. In the BOOK a row folds
+   onto three lines; once the tab is 640 px wide it is one line per pool
+   under a column head, like the holdings table. */
+.trd-mk {
+  container-type: inline-size;
+  container-name: mk;
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+/* The full desk's panel body already scrolls; the BOOK's body clips, so
+   there the tab is its own scroller (and the section titles stick to it). */
+.trd-book__body > .trd-mk {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.trd-mk__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 6px 14px;
+}
+.trd-mk__search {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+}
+.trd-mk__chains .mac-segment {
+  padding: 0 8px;
+}
+.trd-mk__chains .trd-chainmark {
+  width: 12px;
+  height: 12px;
+}
+@container mk (max-width: 420px) {
+  .trd-mk__chainword {
+    display: none;
+  }
+}
+.trd-mk__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 0 10px 8px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+.trd-mk__label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-mk__tvl-steps .mac-segment {
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.trd-mk__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  cursor: default;
+}
+.trd-mk__refresh {
+  margin-left: auto;
+}
+.trd-mk__refresh svg[data-spinning] {
+  animation: trd-spin 0.9s linear infinite;
+}
+.trd-mk__wait {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 36px 16px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.trd-mk__skeleton {
+  display: grid;
+  padding: 8px 0;
+}
+/* A first read pages an uncached source and can take a minute: say so. */
+.trd-mk__slow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 14px 8px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+/* Which token the typed symbol was taken to mean, under the search. */
+.trd-mk__picked {
+  position: relative;
+  padding: 6px 12px 6px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+.trd-mk__showing {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 4px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-mk__showname {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.trd-mk__showaddr {
+  font-size: 11px;
+  color: var(--dim);
+}
+.trd-mk__matches {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: var(--radius-control);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--primary);
+}
+.trd-mk__matches:hover,
+.trd-mk__matches[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-mk__matches[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+.trd-mk__matches:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-mk__matchwrap {
+  position: relative;
+  margin-left: auto;
+}
+/* The tokens sharing a symbol: a portalled menu of its own width (the house
+   menu is 200 px, which left a name 2 px), each row the token's full name
+   (wrapping, never cut), its symbol and short address under it, and its
+   liquidity at the trailing edge. */
+.mac-menu.trd-mk__matchmenu {
+  width: min(24rem, calc(100vw - 16px));
+  min-width: 0;
+  max-width: none;
+}
+.trd-mk__matchdetail {
+  display: inline;
+}
+.trd-mk__matchliq {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  line-height: 1.2;
+}
+.trd-mk__matchliq small {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+.trd-mk__matchliq b {
+  font-size: 12px;
+  font-weight: 600;
+}
+.trd-mk__skelrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 44px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+.trd-mk__board {
+  transition: opacity 160ms ease-out;
+}
+/* Re-reading: the old figures stay, dimmed, until the new ones land. */
+.trd-mk__board[data-refreshing] {
+  opacity: 0.6;
+}
+
+/* The token: who it is, what it costs, and the oracle beside the pools. */
+.trd-mk__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--primary) 5%, transparent),
+    transparent
+  );
+}
+.trd-mk__id {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.trd-mk__sym {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.trd-mk__name {
+  overflow: hidden;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.trd-mk__quote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.trd-mk__quote > b {
+  font-size: 16px;
+  font-weight: 600;
+  font-stretch: 85%;
+}
+.trd-mk__oracle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-mk__oracle .mac-chip {
+  height: 16px;
+  padding: 0 6px;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* A section heads with the micro label the desk uses everywhere, sticky so
+   the long "priced in" list never loses its title. */
+.trd-mk__section + .trd-mk__section {
+  margin-top: 6px;
+}
+.trd-mk__title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 14px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  background: var(--trd-head-bg, var(--background));
+}
+.trd-mk__count {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  letter-spacing: 0;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.trd-mk__none {
+  margin: 0;
+  padding: 4px 14px 12px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-mk__cols {
+  display: none;
+}
+.trd-mk__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trd-mk__row,
+.trd-mk__cols {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-areas:
+    'pair  pair tvl act'
+    'venue venue vol act'
+    'px    age  chg act';
+  column-gap: 10px;
+}
+.trd-mk__row {
+  display: grid;
+  align-items: center;
+  row-gap: 2px;
+  padding: 7px 10px 7px 14px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 12px;
+  transition: background-color 120ms ease-out;
+  animation: trd-mk-in 180ms ease-out both;
+}
+@keyframes trd-mk-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.trd-mk__row:hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+/* A lookalike (only listed on request) keeps a warn rail in the gutter. */
+.trd-mk__row[data-lookalike] {
+  box-shadow: inset 2px 0 0 var(--warn);
+  background: color-mix(in srgb, var(--warn) 4%, transparent);
+}
+.trd-mk__pair {
+  display: flex;
+  min-width: 0;
+  grid-area: pair;
+  align-items: center;
+  gap: 7px;
+}
+.trd-mk__pairtext {
+  /* A block, not a flex box: `text-overflow` only ellipsizes inline content,
+     so a long pair ends "LONGDOG/T…" instead of being cut mid-glyph. */
+  display: block;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trd-mk__slash,
+.trd-mk__second {
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.trd-mk__slash {
+  padding: 0 1px;
+  color: var(--dim);
+}
+/* A lookalike, or a counterparty wearing the token's own symbol: its name
+   after the pair tells two "GME/GME" rows apart. */
+.trd-mk__cpname {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+}
+.trd-mk__venue {
+  display: flex;
+  min-width: 0;
+  grid-area: venue;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-mk__dex[data-launcher] {
+  color: var(--info);
+}
+.trd-mk__ver {
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 14px;
+  color: var(--muted-foreground);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.trd-mk__fee {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.trd-mk__venue .mac-chip,
+.trd-mk__pair .mac-chip {
+  height: 15px;
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+.trd-mk__launcher {
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+}
+.trd-mk__tvl,
+.trd-mk__vol,
+.trd-mk__chg,
+.trd-mk__age {
+  text-align: right;
+  white-space: nowrap;
+}
+.trd-mk__tvl {
+  grid-area: tvl;
+  font-weight: 600;
+}
+.trd-mk__vol {
+  grid-area: vol;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+/* USD, the price in the other token, and the premium. In the BOOK the
+   first two share a line when they fit and wrap when they do not; the
+   in-token figure breaks rather than truncating to "0.0…". The premium is
+   always a line of its own. */
+.trd-mk__px {
+  display: flex;
+  min-width: 0;
+  grid-area: px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  font-size: 11px;
+}
+.trd-mk__usd {
+  white-space: nowrap;
+}
+.trd-mk__in {
+  min-width: 0;
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+  color: var(--dim);
+}
+.trd-mk__chg {
+  grid-area: chg;
+  font-size: 11px;
+}
+.trd-mk__chg[data-tone='up'],
+.trd-mk__premium[data-tone='up'] {
+  color: var(--trd-up, var(--ok));
+}
+.trd-mk__chg[data-tone='down'],
+.trd-mk__premium[data-tone='down'] {
+  color: var(--trd-down, var(--danger));
+}
+.trd-mk__chg[data-tone='flat'] {
+  color: var(--muted-foreground);
+}
+.trd-mk__premium {
+  flex-basis: 100%;
+  font-size: 9.5px;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+.trd-mk__age {
+  grid-area: age;
+  font-size: 11px;
+  color: var(--dim);
+}
+.trd-mk__act {
+  display: inline-flex;
+  grid-area: act;
+  align-items: center;
+  gap: 2px;
+}
+.trd-mk__swap {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11.5px;
+}
+/* The GeckoTerminal link is a hover affordance; Swap is always there. */
+.trd-mk__open {
+  opacity: 0;
+  transition: opacity 80ms ease-out;
+}
+.trd-mk__row:hover .trd-mk__open,
+.trd-mk__row:focus-within .trd-mk__open {
+  opacity: 1;
+}
+.trd-mk__more {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  font-size: 11.5px;
+  font-weight: 500;
+  text-align: left;
+  color: var(--primary);
+}
+.trd-mk__more:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.trd-mk__more:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-mk__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 14px 6px;
+}
+.trd-mk__counts {
+  font-size: 11px;
+  color: var(--dim);
+}
+.trd-mk__deeper {
+  margin-left: auto;
+}
+.trd-mk__deeper + .trd-mk__deeper {
+  margin-left: 0;
+}
+/* A 429 cut the read short: said in the footer, not only in a tooltip. */
+.trd-mk__ratelimited {
+  display: flex;
+  flex-basis: 100%;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+.trd-mk__ratelimited > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.trd-mk__board > .trd-warnings {
+  margin: 0 14px 12px;
+}
+
+/* Wide (the full desk): one line per pool, under a column head. */
+@container mk (min-width: 640px) {
+  .trd-mk__row,
+  .trd-mk__cols {
+    grid-template-columns:
+      minmax(0, 1.3fr) minmax(0, 1.25fr) 68px 68px minmax(92px, 1fr)
+      64px 36px auto;
+    grid-template-areas: 'pair venue tvl vol px chg age act';
+  }
+  .trd-mk__cols {
+    display: grid;
+    padding: 0 10px 4px 14px;
+    border-bottom: 1px solid var(--hairline);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .trd-mk__cols > :nth-child(n + 3) {
+    text-align: right;
+  }
+  .trd-mk__row {
+    min-height: var(--trd-row, 34px);
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+  .trd-mk__px {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    gap: 0;
+    font-size: 12px;
+    text-align: right;
+  }
+  .trd-mk__premium {
+    flex-basis: auto;
+  }
+  .trd-mk__chg,
+  .trd-mk__vol,
+  .trd-mk__age {
+    font-size: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .trd-mk__row {
+    animation: none;
+  }
+  .trd-mk__refresh svg[data-spinning] {
+    animation: none;
   }
 }

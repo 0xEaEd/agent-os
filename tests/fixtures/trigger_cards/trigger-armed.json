@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "kind": "trigger",
+  "fetchedAt": "2026-09-20T09:03:00Z",
+  "warnings": [],
+  "request": {
+    "kind": "get",
+    "params": {
+      "triggerId": "trg_00000003"
+    }
+  },
+  "trigger": {
+    "id": "trg_00000003",
+    "name": "Stop-loss WETH",
+    "bracket": null,
+    "kind": "sell",
+    "status": "armed",
+    "statusReason": null,
+    "chain": {
+      "id": 8453,
+      "key": "base",
+      "name": "Base",
+      "explorer": "https://basescan.org"
+    },
+    "wallet": {
+      "address": "0xdB00079cad3e665853Bf766eFe26F4C38cdbdCDA",
+      "label": "Key main",
+      "inApp": true
+    },
+    "token": {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "priceUsd": 2045.0
+    },
+    "quote": {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "priceUsd": 1.0
+    },
+    "condition": {
+      "direction": "below",
+      "priceUsd": 2050.0,
+      "trailPct": null,
+      "fromPriceUsd": null,
+      "peakPriceUsd": null,
+      "stopPriceUsd": null,
+      "confirmTicks": 2,
+      "hits": 1,
+      "label": "under $2,050"
+    },
+    "action": {
+      "kind": "sell",
+      "amountUsd": null,
+      "amountPct": 50.0,
+      "amount": null,
+      "estimatedUsd": 81.8,
+      "slippagePct": 1.0,
+      "needsApproval": false,
+      "approvalThresholdUsd": 100.0,
+      "dailyCapUsd": 1000.0,
+      "label": "sell 50 % of WETH → USDC"
+    },
+    "market": {
+      "priceUsd": 2045.0,
+      "armedPriceUsd": 2120.0,
+      "distancePct": 0.0,
+      "checkedAt": "2026-09-20T09:02:30Z",
+      "balance": {
+        "raw": "80000000000000000",
+        "human": "0.08",
+        "usd": 163.6
+      }
+    },
+    "fires": [],
+    "result": null,
+    "validUntil": "2026-09-27T09:01:00Z",
+    "initiator": "manual",
+    "sessionKey": null,
+    "createdAt": "2026-09-20T09:01:00Z",
+    "updatedAt": "2026-09-20T09:02:30Z",
+    "approvedAt": "2026-09-20T09:01:00Z",
+    "armedAt": "2026-09-20T09:01:00Z",
+    "triggeredAt": null,
+    "expiresAt": null
+  }
+}

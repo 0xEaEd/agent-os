@@ -3,7 +3,16 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { RawJob } from '@/views/cron/logic'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
-import type { Mandate } from '../types'
+import type { Bracket, Mandate, Trigger } from '../types'
+import {
+  bracketFireKey,
+  bracketNear,
+  bracketPlanText,
+  bracketReason,
+  bracketRows,
+  bracketWord,
+  isSteerableBracket,
+} from './bracket-logic'
 import { missionStatus, type MissionState } from './desk-logic'
 import {
   mandateBuysText,
@@ -14,8 +23,20 @@ import {
   mandateRows,
   mandateState,
 } from './mandate-logic'
+import {
+  fireNowKey,
+  isNear,
+  isSteerableTrigger,
+  planText,
+  triggerReason,
+  triggerRows,
+  triggerWord,
+} from './trigger-logic'
 
 const NO_MANDATES: Mandate[] = []
+const NO_TRIGGERS: Trigger[] = []
+const NO_BRACKETS: Bracket[] = []
+const NO_IDS: ReadonlySet<string> = new Set()
 /** A second click on Stop within this long stops the mandate; after it, the button disarms. */
 const STOP_ARM_MS = 4000
 
@@ -125,6 +146,10 @@ function MandateProgress({ mandate }: { mandate: Mandate }) {
  * The one-line band above the composer that says what the missions are
  * doing. Renders nothing when there is nothing running: a band that says
  * IDLE over an idle composer is chrome, not information.
+ *
+ * Price triggers are not named here: their rows in the controls below
+ * already carry the state word, the price and the distance, and naming
+ * them twice cost the transcript a line per trigger.
  */
 export function MissionStrip({
   missions,
@@ -198,6 +223,20 @@ export function MissionControls({
   onMandateRun,
   onMandateEdit,
   onMandateStop,
+  triggers = NO_TRIGGERS,
+  askedTriggers = NO_IDS,
+  triggerBusy = null,
+  onTriggerPause,
+  onTriggerResume,
+  onTriggerFire,
+  onTriggerStop,
+  brackets = NO_BRACKETS,
+  askedBrackets = NO_IDS,
+  bracketBusy = null,
+  onBracketPause,
+  onBracketResume,
+  onBracketFire,
+  onBracketStop,
 }: {
   missions: RawJob[]
   running: ReadonlySet<string>
@@ -219,10 +258,43 @@ export function MissionControls({
   onMandateRun?: (m: Mandate) => void
   onMandateEdit?: (m: Mandate) => void
   onMandateStop?: (m: Mandate) => void
+  /** Price triggers, listed after the mandates with their own controls. */
+  triggers?: Trigger[]
+  /**
+   * Pending triggers whose proposal card is already on screen in the
+   * approvals region: decided there, so not listed again as a row.
+   */
+  askedTriggers?: ReadonlySet<string>
+  /** The trigger with a write in flight: its row is locked until it lands. */
+  triggerBusy?: string | null
+  onTriggerPause?: (tr: Trigger) => void
+  onTriggerResume?: (tr: Trigger) => void
+  onTriggerFire?: (tr: Trigger) => void
+  onTriggerStop?: (tr: Trigger) => void
+  /** Brackets (docs/brackets.md), one row each — never a row per leg — before the triggers. */
+  brackets?: Bracket[]
+  /** Pending brackets whose proposal card is already in the approvals region. */
+  askedBrackets?: ReadonlySet<string>
+  /** The bracket with a write in flight: its row is locked until it lands. */
+  bracketBusy?: string | null
+  onBracketPause?: (b: Bracket) => void
+  onBracketResume?: (b: Bracket) => void
+  onBracketFire?: (b: Bracket) => void
+  onBracketStop?: (b: Bracket) => void
 }) {
   const now = useMandateClock(mandates)
   const [showAll, setShowAll] = useState(false)
   const { rows, more } = mandateRows(mandates, showAll)
+  const [showAllTriggers, setShowAllTriggers] = useState(false)
+  const triggerList = triggerRows(
+    askedTriggers.size ? triggers.filter((tr) => !askedTriggers.has(tr.id)) : triggers,
+    showAllTriggers,
+  )
+  const [showAllBrackets, setShowAllBrackets] = useState(false)
+  const bracketList = bracketRows(
+    askedBrackets.size ? brackets.filter((b) => !askedBrackets.has(b.id)) : brackets,
+    showAllBrackets,
+  )
   return (
     <div className="trd-mctl" data-testid="mission-controls">
       {missions.map((job) => {
@@ -311,6 +383,44 @@ export function MissionControls({
       {more > 0 ? (
         <MoreToggle more={more} showAll={showAll} onToggle={() => setShowAll((v) => !v)} />
       ) : null}
+      {bracketList.rows.map((b) => (
+        <BracketRow
+          key={b.id}
+          bracket={b}
+          busy={bracketBusy === b.id}
+          onPause={onBracketPause}
+          onResume={onBracketResume}
+          onFire={onBracketFire}
+          onStop={onBracketStop}
+        />
+      ))}
+      {bracketList.more > 0 ? (
+        <MoreToggle
+          more={bracketList.more}
+          showAll={showAllBrackets}
+          onToggle={() => setShowAllBrackets((v) => !v)}
+          testId="bracket-more"
+        />
+      ) : null}
+      {triggerList.rows.map((tr) => (
+        <TriggerRow
+          key={tr.id}
+          trigger={tr}
+          busy={triggerBusy === tr.id}
+          onPause={onTriggerPause}
+          onResume={onTriggerResume}
+          onFire={onTriggerFire}
+          onStop={onTriggerStop}
+        />
+      ))}
+      {triggerList.more > 0 ? (
+        <MoreToggle
+          more={triggerList.more}
+          showAll={showAllTriggers}
+          onToggle={() => setShowAllTriggers((v) => !v)}
+          testId="trigger-more"
+        />
+      ) : null}
       {showStart ? (
         <button
           type="button"
@@ -334,10 +444,12 @@ function MoreToggle({
   more,
   showAll,
   onToggle,
+  testId = 'mandate-more',
 }: {
   more: number
   showAll: boolean
   onToggle: () => void
+  testId?: string
 }) {
   return (
     <button
@@ -345,7 +457,7 @@ function MoreToggle({
       className="trd-mctl__more app-no-drag"
       aria-expanded={showAll}
       onClick={onToggle}
-      data-testid="mandate-more"
+      data-testid={testId}
     >
       {showAll ? t('trading.dca.fewer') : t('trading.dca.more').replace('{count}', String(more))}
     </button>
@@ -415,7 +527,7 @@ function MandateRow({
         <span className="trd-mctl__hint">{t('trading.dca.review')}</span>
       ) : null}
       {steerable ? (
-        <>
+        <span className="trd-mctl__ctl">
           {m.status === 'active' ? (
             <Button
               variant="ghost"
@@ -490,7 +602,358 @@ function MandateRow({
               <OctagonX className="size-3.5" strokeWidth={1.75} aria-hidden />
             </Button>
           )}
-        </>
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * A two-click control: the first click arms it, the second (within
+ * STOP_ARM_MS) acts. `settle` is the row's state and its write in flight:
+ * when either moves (the write resolved, the engine's answer landed), the
+ * arm is dropped, so a row never offers "Stop — click again" for an act it
+ * has just done.
+ */
+function useArm(settle: string): [boolean, (v: boolean) => void] {
+  const [armed, setArmed] = useState(false)
+  const [seen, setSeen] = useState(settle)
+  if (seen !== settle) {
+    setSeen(settle)
+    setArmed(false)
+  }
+  useEffect(() => {
+    if (!armed) return
+    const id = window.setTimeout(() => setArmed(false), STOP_ARM_MS)
+    return () => window.clearTimeout(id)
+  }, [armed])
+  return [armed, setArmed]
+}
+
+/** "Paused by you" for the operator's own bare pause or stop; the engine's words otherwise. */
+function triggerTitle(tr: Trigger): string | null {
+  const reason = triggerReason(tr)
+  if (reason !== 'user') return reason
+  return tr.status === 'paused'
+    ? t('trading.trigger.reason.pausedByYou')
+    : t('trading.trigger.reason.byYou')
+}
+
+/**
+ * One price trigger among the missions: what it fires, its name, what it is
+ * doing ("Armed · ETH $3,790 · −0.3 %"), its plan, and the controls its state
+ * allows. A pending one is decided on its card; a triggered one can only be
+ * stopped; a finished one has nothing left to steer. Fire now and Stop act
+ * on a second click — inline, never a dialog: one trades at once, the other
+ * is final.
+ */
+function TriggerRow({
+  trigger: tr,
+  busy,
+  onPause,
+  onResume,
+  onFire,
+  onStop,
+}: {
+  trigger: Trigger
+  busy: boolean
+  onPause?: (tr: Trigger) => void
+  onResume?: (tr: Trigger) => void
+  onFire?: (tr: Trigger) => void
+  onStop?: (tr: Trigger) => void
+}) {
+  const settle = `${tr.status}:${busy}`
+  const [stopArmed, setStopArmed] = useArm(settle)
+  const [fireArmed, setFireArmed] = useArm(settle)
+  const steerable = isSteerableTrigger(tr)
+  const stoppable = steerable || tr.status === 'triggered'
+  // The engine's statusReason on hover: "paused: nothing to sell", "alerted at $3,790".
+  const reason = triggerTitle(tr)
+  const fireLabel = t(fireNowKey(tr))
+  const word = triggerWord(tr)
+  return (
+    <div
+      className="trd-mctl__row"
+      data-kind="trigger"
+      data-action={tr.kind}
+      data-state={tr.status}
+      data-near={isNear(tr) || undefined}
+      data-testid="trigger-row"
+      data-trigger={tr.id}
+      title={reason ?? undefined}
+    >
+      <span className="trd-mctl__kind" data-action={tr.kind} aria-hidden>
+        {t(`trading.trigger.tag.${tr.kind}`)}
+      </span>
+      <span className="trd-mctl__name" title={reason ? `${tr.name} · ${reason}` : tr.name}>
+        {tr.name}
+      </span>
+      {/* Ellipsized in a narrow column: the whole word on hover. */}
+      <span className="trd-mctl__word" data-testid="trigger-word" title={word}>
+        {word}
+      </span>
+      <span className="trd-mctl__runs trd-mono" data-testid="trigger-plan">
+        {planText(tr)}
+      </span>
+      {tr.status === 'awaiting_approval' ? (
+        <span className="trd-mctl__hint">{t('trading.trigger.review')}</span>
+      ) : null}
+      {stoppable ? (
+        <span className="trd-mctl__ctl">
+          {steerable ? (
+            <>
+              {tr.status === 'armed' ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={t('trading.trigger.pause')}
+                  title={t('trading.trigger.pause')}
+                  onClick={() => onPause?.(tr)}
+                  data-testid="trigger-pause"
+                >
+                  <Pause className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={t('trading.trigger.resume')}
+                  title={t('trading.trigger.resume')}
+                  onClick={() => onResume?.(tr)}
+                  data-testid="trigger-resume"
+                >
+                  <Play className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              )}
+              {fireArmed ? (
+                <button
+                  type="button"
+                  className="trd-mctl__confirm app-no-drag"
+                  data-tone="fire"
+                  disabled={busy}
+                  onClick={() => {
+                    setFireArmed(false)
+                    onFire?.(tr)
+                  }}
+                  data-testid="trigger-fire"
+                  data-armed
+                >
+                  {`${fireLabel} ${t('trading.trigger.fireAgain')}`}
+                </button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={fireLabel}
+                  title={fireLabel}
+                  onClick={() => {
+                    setStopArmed(false)
+                    setFireArmed(true)
+                  }}
+                  data-testid="trigger-fire"
+                >
+                  <Zap className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              )}
+            </>
+          ) : null}
+          {stopArmed ? (
+            <button
+              type="button"
+              className="trd-mctl__confirm app-no-drag"
+              disabled={busy}
+              onClick={() => {
+                setStopArmed(false)
+                onStop?.(tr)
+              }}
+              data-testid="trigger-stop"
+              data-armed
+            >
+              {t('trading.trigger.stopAgain')}
+            </button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              aria-label={t('trading.trigger.stop')}
+              title={t('trading.trigger.stop')}
+              onClick={() => {
+                setFireArmed(false)
+                setStopArmed(true)
+              }}
+              data-testid="trigger-stop"
+            >
+              <OctagonX className="size-3.5" strokeWidth={1.75} aria-hidden />
+            </Button>
+          )}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+/** "Paused by you" for the operator's own bare pause or stop; the engine's words otherwise. */
+function bracketTitle(b: Bracket): string | null {
+  const reason = bracketReason(b)
+  if (reason !== 'user') return reason
+  return b.status === 'paused'
+    ? t('trading.trigger.reason.pausedByYou')
+    : t('trading.trigger.reason.byYou')
+}
+
+/**
+ * One bracket among the missions (docs/brackets.md): a take-profit and a
+ * stop-loss on one position, steered as one thing. Its name, what it is doing
+ * ("Armed · ETH $3,790 · +20 % / −10 %"), its range, and the controls its
+ * state allows. Sell now (Notify now for a range alert) and Stop act on a
+ * second click, inline: one trades at once, the other is final.
+ */
+function BracketRow({
+  bracket: b,
+  busy,
+  onPause,
+  onResume,
+  onFire,
+  onStop,
+}: {
+  bracket: Bracket
+  busy: boolean
+  onPause?: (b: Bracket) => void
+  onResume?: (b: Bracket) => void
+  onFire?: (b: Bracket) => void
+  onStop?: (b: Bracket) => void
+}) {
+  const settle = `${b.status}:${busy}`
+  const [stopArmed, setStopArmed] = useArm(settle)
+  const [fireArmed, setFireArmed] = useArm(settle)
+  const steerable = isSteerableBracket(b)
+  const stoppable = steerable || b.status === 'triggered'
+  const reason = bracketTitle(b)
+  const fireLabel = t(bracketFireKey(b))
+  const word = bracketWord(b)
+  return (
+    <div
+      className="trd-mctl__row"
+      data-kind="bracket"
+      data-action={b.kind}
+      data-state={b.status}
+      data-near={bracketNear(b) || undefined}
+      data-testid="bracket-row"
+      data-bracket={b.id}
+      title={reason ?? undefined}
+    >
+      <span className="trd-mctl__kind" data-action="bracket" aria-hidden>
+        {t(`trading.bracket.tag.${b.kind}`)}
+      </span>
+      <span className="trd-mctl__name" title={reason ? `${b.name} · ${reason}` : b.name}>
+        {b.name}
+      </span>
+      <span className="trd-mctl__word" data-testid="bracket-word" title={word}>
+        {word}
+      </span>
+      <span className="trd-mctl__runs trd-mono" data-testid="bracket-plan">
+        {bracketPlanText(b)}
+      </span>
+      {b.status === 'awaiting_approval' ? (
+        <span className="trd-mctl__hint">{t('trading.trigger.review')}</span>
+      ) : null}
+      {stoppable ? (
+        <span className="trd-mctl__ctl">
+          {steerable ? (
+            <>
+              {b.status === 'armed' ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={t('trading.trigger.pause')}
+                  title={t('trading.trigger.pause')}
+                  onClick={() => onPause?.(b)}
+                  data-testid="bracket-pause"
+                >
+                  <Pause className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={t('trading.trigger.resume')}
+                  title={t('trading.trigger.resume')}
+                  onClick={() => onResume?.(b)}
+                  data-testid="bracket-resume"
+                >
+                  <Play className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              )}
+              {fireArmed ? (
+                <button
+                  type="button"
+                  className="trd-mctl__confirm app-no-drag"
+                  data-tone="fire"
+                  disabled={busy}
+                  onClick={() => {
+                    setFireArmed(false)
+                    onFire?.(b)
+                  }}
+                  data-testid="bracket-fire"
+                  data-armed
+                >
+                  {`${fireLabel} ${t('trading.trigger.fireAgain')}`}
+                </button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={busy}
+                  aria-label={fireLabel}
+                  title={fireLabel}
+                  onClick={() => {
+                    setStopArmed(false)
+                    setFireArmed(true)
+                  }}
+                  data-testid="bracket-fire"
+                >
+                  <Zap className="size-3.5" strokeWidth={1.75} aria-hidden />
+                </Button>
+              )}
+            </>
+          ) : null}
+          {stopArmed ? (
+            <button
+              type="button"
+              className="trd-mctl__confirm app-no-drag"
+              disabled={busy}
+              onClick={() => {
+                setStopArmed(false)
+                onStop?.(b)
+              }}
+              data-testid="bracket-stop"
+              data-armed
+            >
+              {t('trading.trigger.stopAgain')}
+            </button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              aria-label={t('trading.trigger.stop')}
+              title={t('trading.trigger.stop')}
+              onClick={() => {
+                setFireArmed(false)
+                setStopArmed(true)
+              }}
+              data-testid="bracket-stop"
+            >
+              <OctagonX className="size-3.5" strokeWidth={1.75} aria-hidden />
+            </Button>
+          )}
+        </span>
       ) : null}
     </div>
   )
