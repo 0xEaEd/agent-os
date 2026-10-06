@@ -1470,13 +1470,18 @@
 .chat-surface .msg-artifact-markets-group {
   display: grid;
   gap: 0.625rem;
-  max-width: min(46rem, 100%);
+  /* A definite width: each card is a size container (below), which adds
+     nothing to the shrink-to-fit message bubble's width on its own. */
+  width: 46rem;
+  max-width: 100%;
 }
 
+/* The narrow rules key off the card's own width, not the viewport's. */
 .chat-surface .msg-artifact-markets {
   display: grid;
   gap: 0.5rem;
   min-width: 0;
+  container: mk-card / inline-size;
 }
 
 .chat-surface .msg-artifact-markets__body:empty {
@@ -1497,8 +1502,14 @@
   display: none;
 }
 
+/* Columns: pair · TVL · Vol · Price · 24h · Age (· Swap). The pair never goes
+   under ~9 characters (5rem holds "NVDA/USDG" or "PancakeSwap" whole; rem, not
+   ch, so the header row and the rows resolve it alike); past that the Price
+   column is the one that gives way. */
 .chat-surface .mk-card {
-  --mk-cols: minmax(0, 1fr) 4.75rem 4.75rem 6.5rem 3.75rem 2.75rem;
+  --mk-pair: minmax(5rem, 1fr);
+  --mk-px: minmax(4.5rem, 6.5rem);
+  --mk-cols: var(--mk-pair) 4.75rem 4.75rem var(--mk-px) 3.75rem 2.75rem;
   display: grid;
   gap: 0.875rem;
   min-width: 0;
@@ -1509,11 +1520,14 @@
   color: var(--foreground);
   font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
+  /* The message body wraps anywhere; inside the card a word stays whole. */
+  overflow-wrap: normal;
+  white-space: normal;
 }
 
 /* A Swap button adds a column; the header row keeps an empty cell for it. */
 .chat-surface .mk-card:has(.mk-swap) {
-  --mk-cols: minmax(0, 1fr) 4.75rem 4.75rem 6.5rem 3.75rem 2.75rem 3.5rem;
+  --mk-cols: var(--mk-pair) 4.75rem 4.75rem var(--mk-px) 3.75rem 2.75rem 3.5rem;
 }
 
 .chat-surface .mk-head {
@@ -1655,6 +1669,38 @@
   list-style: none;
 }
 
+/* The card sits in an assistant body, whose prose rules (chat.css
+   `.msg.assistant .msg-body ul/li/h3/p`) out-rank the ones above: without
+   this the rows were indented 1.6em — width a narrow card cannot spare — and
+   the section titles took the prose heading face. */
+.chat-surface .msg-body .mk-card .mk-rows {
+  margin: 0;
+  padding: 0;
+}
+
+.chat-surface .msg-body .mk-card .mk-row {
+  margin: 0;
+}
+
+.chat-surface .msg-body .mk-card h3.mk-section-title {
+  margin: 0 0 0.125rem;
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: inherit;
+}
+
+.chat-surface .msg-body .mk-card .mk-empty {
+  margin: 0;
+}
+
+.chat-surface .msg-body .mk-card .mk-warnings {
+  margin: 0;
+  padding-left: 1rem;
+}
+
 .chat-surface .mk-row {
   padding: 0.375rem;
   border-radius: var(--radius-control);
@@ -1707,6 +1753,8 @@
   text-decoration: underline;
 }
 
+/* The venue pills sit together on their own line under the pair and wrap as
+   pills — never inside one. */
 .chat-surface .mk-venue {
   display: flex;
   flex-basis: 100%;
@@ -1718,7 +1766,15 @@
   font-size: 0.6875rem;
 }
 
+/* "Uniswap v3": the label and its version pill may part, the label never
+   breaks mid-word. */
 .chat-surface .mk-dex {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  overflow-wrap: normal;
+  word-break: keep-all;
   white-space: nowrap;
 }
 
@@ -1764,20 +1820,27 @@
   color: var(--muted-foreground);
 }
 
+/* The price column is the first to narrow: the USD price keeps one line, the
+   price in the other token and the premium wrap at their spaces. */
 .chat-surface .mk-pricing {
   display: grid;
   justify-items: end;
   min-width: 0;
+  text-align: right;
+}
+
+.chat-surface .mk-px {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .chat-surface .mk-px-in,
 .chat-surface .mk-premium {
   max-width: 100%;
-  overflow: hidden;
   color: var(--muted-foreground);
   font-size: 0.6875rem;
-  text-overflow: ellipsis;
 }
 
 .chat-surface :is(.mk-change, .mk-premium)[data-tone='up'] {
@@ -1788,7 +1851,7 @@
   color: var(--danger);
 }
 
-.chat-surface .mk-change[data-tone='flat'] {
+.chat-surface :is(.mk-change, .mk-premium)[data-tone='flat'] {
   color: var(--muted-foreground);
 }
 
@@ -1833,6 +1896,8 @@
   padding-left: 1rem;
   color: var(--warn);
   font-size: 0.75rem;
+  /* A warning can carry a URL; let it break rather than widen the card. */
+  overflow-wrap: anywhere;
 }
 
 .chat-surface .mk-foot {
@@ -1908,14 +1973,37 @@
   color: var(--danger);
 }
 
-/* Narrow: drop volume and age; pair, TVL, price and change carry the row. */
-@media (max-width: 36rem) {
+/* Narrow card (under ~480 px): tighter padding and columns, the pair still
+   keeps its 9 characters. */
+@container mk-card (max-width: 30rem) {
   .chat-surface .mk-card {
-    --mk-cols: minmax(0, 1fr) 4.5rem 5.5rem 3.5rem;
+    --mk-px: minmax(3.5rem, 5.5rem);
+    --mk-cols: var(--mk-pair) 4rem 4rem var(--mk-px) 3rem 2.125rem;
+    padding: 0.75rem 0.625rem;
   }
 
   .chat-surface .mk-card:has(.mk-swap) {
-    --mk-cols: minmax(0, 1fr) 4.5rem 5.5rem 3.5rem 3.25rem;
+    --mk-cols: var(--mk-pair) 4rem 4rem var(--mk-px) 3rem 2.125rem 3rem;
+  }
+
+  .chat-surface :is(.mk-cols, .mk-row) {
+    gap: 0.375rem;
+  }
+
+  .chat-surface :is(.mk-cols, .mk-row) {
+    padding-inline: 0.25rem;
+  }
+}
+
+/* 420 px and under: drop volume and age; pair, TVL, price and change carry
+   the row. */
+@container mk-card (max-width: 26.25rem) {
+  .chat-surface .mk-card {
+    --mk-cols: var(--mk-pair) 4rem var(--mk-px) 3rem;
+  }
+
+  .chat-surface .mk-card:has(.mk-swap) {
+    --mk-cols: var(--mk-pair) 4rem var(--mk-px) 3rem 3rem;
   }
 
   .chat-surface :is(.mk-vol, .mk-age, .mk-col--vol, .mk-col--age) {

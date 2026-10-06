@@ -11,12 +11,14 @@ import {
   dexLabel,
   dexVersion,
   formatAge,
+  formatMarketsPct,
   formatMarketsUsd,
   isMarketsArtifact,
   launcherLabel,
   normalizeMarketsPayload,
   normalizeMarketsRequest,
   pairLabel,
+  readAgainOffered,
   showsCounterpartyName,
   visibleLauncher,
   type MarketsPayload,
@@ -370,6 +372,7 @@ describe('labels and money', () => {
     })
     expect(old.counts.limited).toBe(0)
     expect(old.counts.pageCapHit).toBe(false)
+    expect(old.counts.rateLimited).toBe(false)
     expect(countsText(old)).toBe('3 of 100 pools shown · 61 under $10K · 5 lookalikes hidden')
   })
 
@@ -396,6 +399,43 @@ describe('labels and money', () => {
     expect(
       deeperOffered(payload({ request: { kind: 'markets', params: { ...PARAMS, deep: true } } })),
     ).toBe(false)
+  })
+
+  it('offers a retry after a 429: Deeper on a shallow read, Read again on a deep one', () => {
+    const COUNTS = {
+      scanned: 40,
+      shown: 3,
+      belowMinTvl: 0,
+      hiddenLookalikes: 0,
+      limited: 0,
+      pages: 2,
+      pageCap: 5,
+      pageCapHit: false,
+    }
+    const DEEP = { kind: 'markets', params: { ...PARAMS, deep: true } }
+    const shallow = payload({ counts: { ...COUNTS, rateLimited: true } })
+    expect(shallow.counts.rateLimited).toBe(true)
+    expect(deeperOffered(shallow)).toBe(true)
+    expect(readAgainOffered(shallow)).toBe(false)
+    const deep = payload({ counts: { ...COUNTS, rateLimited: true }, request: DEEP })
+    expect(deeperOffered(deep)).toBe(false)
+    expect(readAgainOffered(deep)).toBe(true)
+    // Not rate-limited: neither (a deep read that finished has nothing to retry).
+    expect(readAgainOffered(payload({ counts: COUNTS, request: DEEP }))).toBe(false)
+    expect(deeperOffered(payload({ counts: COUNTS }))).toBe(false)
+    // Anything but `true` is not rate-limited.
+    expect(payload({ counts: { ...COUNTS, rateLimited: 'yes' } }).counts.rateLimited).toBe(false)
+  })
+
+  it('never prints a signed zero percent', () => {
+    expect(formatMarketsPct(0.41)).toBe('+0.4%')
+    expect(formatMarketsPct(-3.2)).toBe('−3.2%')
+    expect(formatMarketsPct(-0.004)).toBe('0.0%')
+    expect(formatMarketsPct(0.04)).toBe('0.0%')
+    expect(formatMarketsPct(-0.049)).toBe('0.0%')
+    expect(formatMarketsPct(0)).toBe('0.0%')
+    expect(formatMarketsPct(-0.05)).toBe('−0.1%')
+    expect(formatMarketsPct(null)).toBe('—')
   })
 
   it('hides a launcher that only repeats the DEX label', () => {
@@ -589,6 +629,20 @@ describe('markets card', () => {
     expect(row.querySelector<HTMLElement>('.mk-change')!.dataset.tone).toBe('flat')
   })
 
+  it('shows a premium that rounds to zero as a flat 0.0%, never −0.0%', () => {
+    const p = payload()
+    p.sections.base[0]!.premiumPct = -0.004
+    p.sections.base[0]!.change24hPct = -0.004
+    const row = rowOf(render(p), 'NVDA/USDG')
+    const premium = row.querySelector<HTMLElement>('.mk-premium')!
+    expect(premium.textContent).toBe('0.0% vs oracle')
+    expect(premium.dataset.tone).toBe('flat')
+    expect(premium.title).toBe('This pool prices NVDA 0.0% against its Chainlink feed')
+    const change = row.querySelector<HTMLElement>('.mk-change')!
+    expect(change.textContent).toBe('0.0%')
+    expect(change.dataset.tone).toBe('flat')
+  })
+
   it('marks a lookalike row and flags a Stock Token counterparty', () => {
     const p = payload({
       sections: {
@@ -705,6 +759,17 @@ describe('markets card', () => {
     expect(byLimit.querySelector('.mk-link[data-action="deep"]')).toBeNull()
     expect(byLimit.querySelector('.mk-link[data-action="lookalikes"]')).not.toBeNull()
     expect(byLimit.querySelector('.mk-counts')).toHaveTextContent('50 more over the limit')
+    // A deep read a 429 cut short: Read again (no Deeper), beside ↻.
+    const limited = render(
+      payload({
+        counts: { ...payload().counts, pageCapHit: false, rateLimited: true },
+        request: { kind: 'markets', params: { ...PARAMS, lookalikes: true, deep: true } },
+      }),
+      ctx({ canRefresh: true }),
+    )
+    expect(limited.querySelector('.mk-link[data-action="deep"]')).toBeNull()
+    expect(limited.querySelector('.mk-link[data-action="again"]')).toHaveTextContent('Read again')
+    expect(limited.querySelectorAll('[data-action="refresh"]')).toHaveLength(1)
   })
 
   it('never interprets a symbol as markup', () => {
@@ -844,6 +909,28 @@ describe('createMarketsMounter', () => {
       deep: true,
     })
     expect(host.querySelector('.mk-link')).toBeNull()
+    mounter.destroyAll()
+  })
+
+  it('Read again re-runs a rate-limited deep read with the same params', async () => {
+    const host = placeholder()
+    const DEEP = { ...PARAMS, deep: true }
+    const limitedCounts = { ...payload().counts, pageCapHit: false, rateLimited: true }
+    const call = vi.fn((_method: string, params: Record<string, unknown>) =>
+      Promise.resolve(raw({ request: { kind: 'markets', params } })),
+    )
+    const mounter = createMarketsMounter({
+      fetchPayload: () =>
+        Promise.resolve(raw({ counts: limitedCounts, request: { kind: 'markets', params: DEEP } })),
+      call,
+    })
+    mounter.mountMarkets(document.body)
+    await flush()
+    host.querySelector<HTMLButtonElement>('.mk-link[data-action="again"]')!.click()
+    await flush()
+    expect(call).toHaveBeenCalledWith('trading.markets', DEEP)
+    // The new read finished: nothing to retry.
+    expect(host.querySelector('.mk-link[data-action="again"]')).toBeNull()
     mounter.destroyAll()
   })
 

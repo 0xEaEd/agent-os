@@ -306,7 +306,7 @@ Narrow cards (under ~480 px): the **pair column is never starved** — it
 keeps at least 9 characters before any other column shrinks; the Price
 column gives way first, then Vol and Age disappear (≤ 420 px), the venue
 pills wrap as a group under the pair, and "Uniswap" never breaks mid-word.
-A premium of ±0.0 % is shown as `0.0 %` with the flat tone.
+A premium of ±0.0 % is shown as `0.0%` with the flat tone.
 
 ### CSS hooks (verbatim; the desktop skins these, the web styles them)
 
@@ -319,7 +319,7 @@ A premium of ±0.0 % is shown as `0.0 %` with the flat tone.
 .mk-pair  .mk-cp-name (the counterparty's name on lookalike / same-symbol rows)  .mk-dex  .mk-version  .mk-launcher  .mk-tvl  .mk-vol  .mk-px  .mk-px-in  .mk-change[data-tone=up|down|flat]  .mk-age  .mk-flags  .mk-flag[data-kind=uni|stock|lookalike]  .mk-premium[data-tone=up|down|flat]
 .mk-swap                       the Swap button (absent when no onSwap)
 .mk-more                       the "+N more" control
-.mk-foot  .mk-counts  .mk-partial  .mk-refresh  .mk-link[data-action=lookalikes|deep]
+.mk-foot  .mk-counts  .mk-partial  .mk-refresh  .mk-link[data-action=lookalikes|deep|again]
 ```
 
 The exact nesting is documented verbatim in `MARKETS_DOM` (exported from

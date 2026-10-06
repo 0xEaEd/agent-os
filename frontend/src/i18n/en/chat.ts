@@ -708,6 +708,9 @@ export const chat = defineNamespace('chat', {
   marketsShowLookalikesTitle: 'Read again, keeping the lookalike tokens',
   marketsDeeper: 'Deeper',
   marketsDeeperTitle: 'Read again, scanning twice as many pools',
+  marketsReadAgain: 'Read again',
+  marketsReadAgainTitle:
+    'GeckoTerminal rate-limited this read; try the same read again in a minute',
   marketsAgeMinutes: '{count}m',
   marketsAgeHours: '{count}h',
   marketsAgeDays: '{count}d',

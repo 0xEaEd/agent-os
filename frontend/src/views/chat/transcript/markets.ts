@@ -5,7 +5,8 @@
 // mount placeholder for it and this module fetches the payload and draws one
 // card: the token's head, then two sections — pools where the token is the
 // quote asset ("Priced in NVDA") and pools where it is the base ("NVDA priced
-// in") — then a footer with the counts, ↻, *Show lookalikes* and *Deeper*.
+// in") — then a footer with the counts, ↻, *Show lookalikes*, *Deeper* and
+// *Read again*.
 // docs/markets.md is the contract.
 //
 // Same two surfaces as lp.ts:
@@ -108,6 +109,7 @@ div.msg-artifact-markets[data-markets-src][data-markets-host=rendered]   (the tr
         span.mk-actions?                                  (the mounter has a gateway call)
           button.mk-link[data-action=lookalikes]?         (lookalikesOffered)
           button.mk-link[data-action=deep]?               (deeperOffered)
+          button.mk-link[data-action=again]?              (readAgainOffered: a deep read cut short by a 429)
           button.mk-refresh[data-action=refresh]
         span.mk-error[role=alert]?                        (a failed re-run, for a few seconds)
   p.msg-artifact-markets__status                          (loading / error line; hidden once rendered)
@@ -208,6 +210,11 @@ export interface MarketsCounts {
    * case *Deeper* is offered (false on payloads that predate it).
    */
   pageCapHit: boolean
+  /**
+   * A 429 cut the read short — *Deeper* (or *Read again* on a deep read) is
+   * offered so the user can retry after a minute (false when absent).
+   */
+  rateLimited: boolean
 }
 
 export interface MarketsRequest {
@@ -511,6 +518,7 @@ export function normalizeMarketsPayload(raw: unknown): MarketsPayload | null {
       pages: count(counts.pages),
       pageCap: count(counts.pageCap),
       pageCapHit: counts.pageCapHit === true,
+      rateLimited: counts.rateLimited === true,
     },
     sections: { quote, base },
     request: normalizeMarketsRequest(row.request),
@@ -555,6 +563,16 @@ export function formatAge(iso: string | null | undefined, now: number): string {
 export function changeTone(pct: number | null): 'up' | 'down' | 'flat' {
   if (pct === null || !Number.isFinite(pct) || Math.abs(pct) < 0.05) return 'flat'
   return pct > 0 ? 'up' : 'down'
+}
+
+/**
+ * A signed percent at one decimal ("+0.4%", "−3.2%"), but never a signed
+ * zero: anything that rounds to 0.0 (-0.004, +0.04) is plain "0.0%", the
+ * text `changeTone` calls `flat`. Null is "—".
+ */
+export function formatMarketsPct(pct: number | null): string {
+  if (pct === null || !Number.isFinite(pct)) return NO_VALUE
+  return changeTone(pct) === 'flat' ? '0.0%' : formatSignedPct(pct)
 }
 
 /** The section titles: "Priced in NVDA" (quote) and "NVDA priced in" (base). */
@@ -627,11 +645,20 @@ export function lookalikesOffered(payload: MarketsPayload): boolean {
 }
 
 /**
- * *Deeper* is offered only when the page cap (not `limit`) ended a read that
- * had more pools, and the read was not already deep.
+ * *Deeper* is offered on a read that was not already deep when the page cap
+ * (not `limit`) ended it with more pools left, or a 429 cut it short.
  */
 export function deeperOffered(payload: MarketsPayload): boolean {
-  return payload.request?.params.deep !== true && payload.counts.pageCapHit
+  const { counts } = payload
+  return payload.request?.params.deep !== true && (counts.pageCapHit || counts.rateLimited)
+}
+
+/**
+ * *Read again* is offered on a deep read a 429 cut short — *Deeper* has
+ * nothing more to give there, but the same read a minute later may finish.
+ */
+export function readAgainOffered(payload: MarketsPayload): boolean {
+  return payload.request?.params.deep === true && payload.counts.rateLimited
 }
 
 /** Which sections a payload draws: both, unless it was read for one side. */
@@ -662,7 +689,7 @@ function button(className: string, label: string, title: string): HTMLButtonElem
 /** Everything the DOM builders need from the mounter. */
 export interface MarketsRenderContext {
   now: () => number
-  /** Offer ↻, *Show lookalikes* and *Deeper* (a call exists and the payload echoes its request). */
+  /** Offer ↻, *Show lookalikes*, *Deeper* and *Read again* (a call exists and the payload echoes its request). */
   readonly canRefresh?: boolean
   /** Draw a Swap button on each row (the mounter was given `onSwap`). */
   readonly canSwap?: boolean
@@ -817,7 +844,7 @@ function rowNode(
     )
   }
   if (pool.side === 'base' && pool.premiumPct !== null) {
-    const pct = formatSignedPct(pool.premiumPct)
+    const pct = formatMarketsPct(pool.premiumPct)
     const premium = el('span', 'mk-premium', t('chat.marketsPremium', { pct }))
     premium.dataset.tone = changeTone(pool.premiumPct)
     premium.title = t('chat.marketsPremiumTitle', { symbol: token.symbol, pct })
@@ -825,11 +852,7 @@ function rowNode(
   }
   row.append(price)
 
-  const change = el(
-    'span',
-    'mk-change',
-    pool.change24hPct === null ? NO_VALUE : formatSignedPct(pool.change24hPct),
-  )
+  const change = el('span', 'mk-change', formatMarketsPct(pool.change24hPct))
   change.dataset.tone = changeTone(pool.change24hPct)
   change.title = t('chat.marketsChangeTitle')
   const age = el('span', 'mk-age', formatAge(pool.createdAt, ctx.now()))
@@ -935,6 +958,11 @@ function foot(payload: MarketsPayload, ctx: MarketsRenderContext): HTMLElement {
     if (deeperOffered(payload)) {
       const link = button('mk-link', t('chat.marketsDeeper'), t('chat.marketsDeeperTitle'))
       link.dataset.action = 'deep'
+      actions.append(link)
+    }
+    if (readAgainOffered(payload)) {
+      const link = button('mk-link', t('chat.marketsReadAgain'), t('chat.marketsReadAgainTitle'))
+      link.dataset.action = 'again'
       actions.append(link)
     }
     const refresh = button(
@@ -1093,7 +1121,7 @@ export function createMarketsMounter(deps: MarketsMounterDeps) {
   }
 
   /**
-   * Re-run the card's read: ↻ with the same params, *Show lookalikes* and
+   * Re-run the card's read: ↻ and *Read again* with the same params, *Show lookalikes* and
    * *Deeper* with `lookalikes` / `deep` merged in. The new card replaces the
    * old one in place.
    */
@@ -1144,7 +1172,7 @@ export function createMarketsMounter(deps: MarketsMounterDeps) {
       )
       if (!target || !host.contains(target) || (target as HTMLButtonElement).disabled) return
       const action = target.dataset.action
-      if (action === 'refresh') {
+      if (action === 'refresh' || action === 'again') {
         void rerun(host)
       } else if (action === 'lookalikes') {
         void rerun(host, { lookalikes: true })
