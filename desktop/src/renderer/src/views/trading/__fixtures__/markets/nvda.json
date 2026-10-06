@@ -1,0 +1,256 @@
+{
+  "version": 1,
+  "kind": "markets",
+  "chain": {
+    "id": 4663,
+    "key": "robinhood",
+    "name": "Robinhood Chain",
+    "explorer": "https://robinhoodchain.blockscout.com"
+  },
+  "fetchedAt": "2026-10-06T04:12:00Z",
+  "partial": false,
+  "warnings": [],
+  "token": {
+    "address": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+    "symbol": "NVDA",
+    "name": "NVIDIA • Robinhood Token",
+    "decimals": 18,
+    "logoUrl": null,
+    "verified": true,
+    "stockToken": true,
+    "priceUsd": 240.3,
+    "oracle": {
+      "usd": 239.74,
+      "updatedAt": "2026-10-05T20:38:49Z",
+      "ageSeconds": 47269,
+      "stale": false,
+      "paused": false
+    }
+  },
+  "counts": {
+    "scanned": 100,
+    "shown": 5,
+    "belowMinTvl": 61,
+    "hiddenLookalikes": 5,
+    "pages": 5,
+    "pageCap": 5
+  },
+  "sections": {
+    "quote": [
+      {
+        "poolAddress": "0xcbdfea90b1c2d3e4f5a6b7c8d9e0f1a2b3c4ce27",
+        "pair": "AI/NVDA",
+        "side": "quote",
+        "dex": {
+          "id": "bankr-robinhood",
+          "label": "Bankr",
+          "version": "v4"
+        },
+        "launcher": "Bankr",
+        "viaUniswap": false,
+        "feePct": 1.0,
+        "counterparty": {
+          "address": "0x2e8c4b1f0a3d6e7c9b5a4f3e2d1c0b9a8f7e1e18",
+          "symbol": "AI",
+          "name": "Artificial Inu",
+          "decimals": 18,
+          "logoUrl": null,
+          "verified": false,
+          "stockToken": false,
+          "lookalike": false
+        },
+        "tvlUsd": 4732293.0,
+        "volume24hUsd": 806473.0,
+        "txns24h": {
+          "buys": 812,
+          "sells": 790
+        },
+        "priceUsd": 0.1131,
+        "priceInToken": 0.000471,
+        "change24hPct": -3.2,
+        "premiumPct": null,
+        "createdAt": "2026-07-25T00:52:36Z",
+        "url": "https://www.geckoterminal.com/robinhood/pools/0xcbdfea90b1c2d3e4f5a6b7c8d9e0f1a2b3c4ce27",
+        "swap": {
+          "chainId": 4663,
+          "tokenIn": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+          "tokenOut": "0x2e8c4b1f0a3d6e7c9b5a4f3e2d1c0b9a8f7e1e18"
+        }
+      },
+      {
+        "poolAddress": "0x5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f",
+        "pair": "ORBIO/NVDA",
+        "side": "quote",
+        "dex": {
+          "id": "pons-v2-dex",
+          "label": "Pons",
+          "version": "v2"
+        },
+        "launcher": "Pons",
+        "viaUniswap": false,
+        "feePct": null,
+        "counterparty": {
+          "address": "0x7a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e0f2a41",
+          "symbol": "ORBIO",
+          "name": "Orbio",
+          "decimals": 18,
+          "logoUrl": null,
+          "verified": false,
+          "stockToken": false,
+          "lookalike": false
+        },
+        "tvlUsd": 842113.0,
+        "volume24hUsd": 96120.0,
+        "txns24h": {
+          "buys": 201,
+          "sells": 188
+        },
+        "priceUsd": 0.0042,
+        "priceInToken": 1.748e-5,
+        "change24hPct": 12.4,
+        "premiumPct": null,
+        "createdAt": "2026-09-02T11:20:00Z",
+        "url": "https://www.geckoterminal.com/robinhood/pools/0x5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f",
+        "swap": {
+          "chainId": 4663,
+          "tokenIn": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+          "tokenOut": "0x7a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e0f2a41"
+        }
+      },
+      {
+        "poolAddress": "0x0b7ae1f4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6",
+        "pair": "SPY/NVDA",
+        "side": "quote",
+        "dex": {
+          "id": "uniswap-v4-robinhood",
+          "label": "Uniswap",
+          "version": "v4"
+        },
+        "launcher": null,
+        "viaUniswap": true,
+        "feePct": 0.025,
+        "counterparty": {
+          "address": "0x4f5e6d7c8b9a0f1e2d3c4b5a69788796a5b4c3d2",
+          "symbol": "SPY",
+          "name": "SPDR S&P 500 ETF • Robinhood Token",
+          "decimals": 18,
+          "logoUrl": null,
+          "verified": true,
+          "stockToken": true,
+          "lookalike": false
+        },
+        "tvlUsd": 777018.0,
+        "volume24hUsd": 41200.0,
+        "txns24h": {
+          "buys": 64,
+          "sells": 59
+        },
+        "priceUsd": 668.2,
+        "priceInToken": 2.7807,
+        "change24hPct": 0.0,
+        "premiumPct": null,
+        "createdAt": "2026-08-14T09:00:00Z",
+        "url": "https://www.geckoterminal.com/robinhood/pools/0x0b7ae1f4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6",
+        "swap": {
+          "chainId": 4663,
+          "tokenIn": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+          "tokenOut": "0x4f5e6d7c8b9a0f1e2d3c4b5a69788796a5b4c3d2"
+        }
+      }
+    ],
+    "base": [
+      {
+        "poolAddress": "0x1d2c3b4a5f6e7d8c9b0a1f2e3d4c5b6a7f8e9d01",
+        "pair": "NVDA/USDG",
+        "side": "base",
+        "dex": {
+          "id": "uniswap-v3-robinhood",
+          "label": "Uniswap",
+          "version": "v3"
+        },
+        "launcher": null,
+        "viaUniswap": true,
+        "feePct": 0.05,
+        "counterparty": {
+          "address": "0x9c0d1e2f3a4b5c6d7e8f90a1b2c3d4e5f6a7b8c9",
+          "symbol": "USDG",
+          "name": "Global Dollar",
+          "decimals": 6,
+          "logoUrl": null,
+          "verified": true,
+          "stockToken": false,
+          "lookalike": false
+        },
+        "tvlUsd": 2903117.0,
+        "volume24hUsd": 512334.0,
+        "txns24h": {
+          "buys": 430,
+          "sells": 402
+        },
+        "priceUsd": 240.85,
+        "priceInToken": 240.85,
+        "change24hPct": 1.1,
+        "premiumPct": 0.4629,
+        "createdAt": "2026-06-30T15:04:00Z",
+        "url": "https://www.geckoterminal.com/robinhood/pools/0x1d2c3b4a5f6e7d8c9b0a1f2e3d4c5b6a7f8e9d01",
+        "swap": {
+          "chainId": 4663,
+          "tokenIn": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+          "tokenOut": "0x9c0d1e2f3a4b5c6d7e8f90a1b2c3d4e5f6a7b8c9"
+        }
+      },
+      {
+        "poolAddress": "0x8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e72",
+        "pair": "NVDA/WETH",
+        "side": "base",
+        "dex": {
+          "id": "uniswap-v3-robinhood",
+          "label": "Uniswap",
+          "version": "v3"
+        },
+        "launcher": null,
+        "viaUniswap": true,
+        "feePct": 0.05,
+        "counterparty": {
+          "address": "0x3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e",
+          "symbol": "WETH",
+          "name": "Wrapped Ether",
+          "decimals": 18,
+          "logoUrl": null,
+          "verified": true,
+          "stockToken": false,
+          "lookalike": false
+        },
+        "tvlUsd": 1204551.0,
+        "volume24hUsd": 133870.0,
+        "txns24h": {
+          "buys": 150,
+          "sells": 171
+        },
+        "priceUsd": 240.1,
+        "priceInToken": 0.0573,
+        "change24hPct": -0.8,
+        "premiumPct": 0.1501,
+        "createdAt": "2026-07-01T08:30:00Z",
+        "url": "https://www.geckoterminal.com/robinhood/pools/0x8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e72",
+        "swap": {
+          "chainId": 4663,
+          "tokenIn": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+          "tokenOut": "0x3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e"
+        }
+      }
+    ]
+  },
+  "request": {
+    "kind": "markets",
+    "params": {
+      "target": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+      "chainId": 4663,
+      "side": "all",
+      "minTvlUsd": 10000,
+      "limit": 50,
+      "lookalikes": false,
+      "deep": false
+    }
+  }
+}

@@ -355,9 +355,9 @@ describe('tradingAgentFiles · brackets (v22; v23: no --note; v24: English-only 
   const section = agents.slice(agents.indexOf('## Brackets'), agents.indexOf('## Bridging'))
 
   it('bumped the version and names brackets in the description', () => {
-    expect(TRADING_AGENT_VERSION).toBe(24)
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(24)
     expect(tradingAgentSpec().description).toMatch(/brackets \(take-profit \+ stop-loss as one\)/)
-    expect(agents).toContain('trading agent v24')
+    expect(agents).toContain(`trading agent v${TRADING_AGENT_VERSION}`)
   })
 
   it('reads an exit above and an exit below on one position as ONE bracket, never two triggers', () => {
@@ -415,6 +415,69 @@ describe('tradingAgentFiles · brackets (v22; v23: no --note; v24: English-only 
       '`trading.bracket.not_found`',
     ]) {
       expect(tools, cmd).toContain(cmd)
+    }
+  })
+})
+
+describe('tradingAgentFiles · markets (v25)', () => {
+  const files = tradingAgentFiles()
+  const agents = files['AGENTS.md'] ?? ''
+  const tools = files['TOOLS.md'] ?? ''
+  const phrases = [
+    '"pairs of X"',
+    '"what trades against X"',
+    '"markets for X"',
+    '"tokens priced in X"',
+    '"pools of X on every DEX"',
+  ]
+
+  it('bumped the version and names markets in the description', () => {
+    expect(TRADING_AGENT_VERSION).toBe(25)
+    expect(agents).toContain('trading agent v25')
+    expect(tradingAgentSpec().description).toMatch(/markets \(every pool a token trades in/)
+  })
+
+  it('runs `agentos trade markets` through the shell tool the allowlist already admits', () => {
+    // The allowlist names tools, not command lines: `trade markets` is one
+    // more `agentos trade …` run through exec_command, like `trade lp`.
+    expect(tradingAgentSpec().tools.allow).toContain('exec_command')
+    expect(tools).toContain('agentos trade markets')
+  })
+
+  it('maps every market question to one markets command, and leaves one pool to lp pool', () => {
+    for (const file of [agents, tools]) {
+      for (const phrase of phrases) expect(file, phrase).toContain(phrase)
+      expect(file).toContain('`agentos trade markets X --chain robinhood --json`')
+      expect(file).toMatch(/A liquidity question about ONE pool[^.]*stays\s+`lp pool`/)
+    }
+    expect(agents).toMatch(/The card it\s+publishes is the answer/)
+  })
+
+  it('carries the command with the CLI’s own flags, its default chain and its errors', () => {
+    expect(tools).toContain(
+      'agentos trade markets <token> [--chain base|robinhood] [--side all|quote|base] [--min-tvl 10000] [--limit 50] [--lookalikes] [--deep] --json',
+    )
+    expect(tools).toMatch(/default chain is robinhood/)
+    expect(tools).toMatch(/do not call `publish_artifact` for\s+it/)
+    expect(tools).toMatch(/`partial: true` means the source rate-limited the read/)
+    for (const code of [
+      '`trading.markets.unavailable`',
+      '`trading.not_found`',
+      '`trading.invalid`',
+    ]) {
+      expect(tools, code).toContain(code)
+    }
+  })
+
+  it('no longer calls Stock Tokens untradeable: they route through Uniswap', () => {
+    expect(agents).toMatch(/Stock Tokens \(AAPL, TSLA, NVDA …\) route through\s+Uniswap/)
+    expect(agents).not.toMatch(/the venue refuses them for legal reasons/)
+    expect(tools).toMatch(/the message says to add a Uniswap key/)
+  })
+
+  it('stays English only', () => {
+    for (const file of [agents, tools]) {
+      expect(file).not.toMatch(/[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i)
     }
   })
 })

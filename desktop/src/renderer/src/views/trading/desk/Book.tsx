@@ -4,13 +4,14 @@ import {
   ChevronsLeft,
   ChevronsRight,
   History as HistoryIcon,
+  Layers,
   ListChecks,
   Maximize2,
   TrendingDown,
   TrendingUp,
   Wrench,
 } from 'lucide-react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -30,6 +31,7 @@ import {
 import { DecodeSheet } from '../DecodeSheet'
 import { History } from '../History'
 import { Holdings } from '../Holdings'
+import { Markets } from '../Markets'
 import { NetworkPips } from '../NetworkPips'
 import {
   allocationSegments,
@@ -53,6 +55,7 @@ import { ToolsPanel } from './ToolsPanel'
 const TABS: readonly { id: BookTab; icon: typeof BookOpen }[] = [
   { id: 'portfolio', icon: BookOpen },
   { id: 'swap', icon: ArrowLeftRight },
+  { id: 'markets', icon: Layers },
   { id: 'orders', icon: ListChecks },
   { id: 'history', icon: HistoryIcon },
   { id: 'tools', icon: Wrench },
@@ -109,9 +112,20 @@ export function Book({
   const tab = useTradingUi((s) => s.bookTab)
   const setTab = useTradingUi((s) => s.setBookTab)
   const openSheet = useTradingUi((s) => s.openSheet)
+  const requestSwap = useTradingUi((s) => s.requestSwap)
+  const openMarkets = useTradingUi((s) => s.openMarkets)
+  const swapRequest = useTradingUi((s) => s.swapRequest)
+  const clearSwapRequest = useTradingUi((s) => s.clearSwapRequest)
   const [walletSel, setWalletSel] = useState<string | 'all'>('all')
   const [picked, setPicked] = useState<Holding | null>(null)
+  // A swap asked for from anywhere (a Holdings row, a Markets row, a chat
+  // card) becomes this ticket's prefill; `requestSwap` has already put the
+  // BOOK on its Swap tab. The request is cleared once taken.
   const [prefill, setPrefill] = useState<SwapPrefill | null>(null)
+  if (swapRequest && swapRequest.seq !== prefill?.seq) setPrefill({ ...swapRequest })
+  useEffect(() => {
+    if (swapRequest) clearSwapRequest(swapRequest.seq)
+  }, [swapRequest, clearSwapRequest])
   const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
   const [inspect, setInspect] = useState<{ chainId: number; hash?: string } | null>(null)
   const now = useNow(30_000)
@@ -411,15 +425,20 @@ export function Book({
                 onSetHidden={(h, hidden) =>
                   tokenVisibility.mutate({ chainId: h.chainId, address: h.token.address, hidden })
                 }
-                onSwap={(h) => {
-                  setPrefill({
+                onSwap={(h) =>
+                  requestSwap({
                     chainId: h.chainId,
                     tokenIn: h.token,
                     wallet: h.wallet ?? walletAddress,
-                    seq: Date.now(),
                   })
-                  setTab('swap')
-                }}
+                }
+                onMarkets={(h) =>
+                  openMarkets({
+                    chainId: h.chainId,
+                    address: h.token.address,
+                    symbol: h.token.symbol,
+                  })
+                }
               />
             </div>
           ) : tab === 'swap' ? (
@@ -434,6 +453,8 @@ export function Book({
               prefill={prefill}
               onSent={() => setTab('orders')}
             />
+          ) : tab === 'markets' ? (
+            <Markets />
           ) : tab === 'orders' ? (
             <>
               <Orders

@@ -1,0 +1,338 @@
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useTradingUi } from '~/stores/trading-ui'
+import { Markets } from './Markets'
+import { renderDesk } from './test-utils'
+import type { MarketsPayload, MarketsPool, SearchToken } from './types'
+
+const rpcCall = vi.fn()
+vi.mock('@/app/providers', () => ({
+  useRpc: () => ({ call: rpcCall, waitForConnection: async () => {}, on: () => () => {} }),
+}))
+const openExternal = vi.fn(async () => {})
+vi.mock('~/lib/desktop-api', () => ({
+  desktopApi: () => ({ app: { openExternal } }),
+  isDesktop: () => true,
+}))
+
+const FIXTURE = 'src/renderer/src/views/trading/__fixtures__/markets/nvda.json'
+const NVDA_MARKETS = JSON.parse(readFileSync(FIXTURE, 'utf8')) as MarketsPayload
+const NVDA_ADDRESS = NVDA_MARKETS.token.address
+
+const NVDA: SearchToken = {
+  chainId: 4663,
+  address: NVDA_ADDRESS,
+  symbol: 'NVDA',
+  name: 'NVIDIA • Robinhood Token',
+  decimals: 18,
+  logoUrl: null,
+  native: false,
+  verified: true,
+  stockToken: true,
+  priceUsd: 240.3,
+  liquidityUsd: null,
+}
+const NVDA_LOOKALIKE: SearchToken = {
+  ...NVDA,
+  address: '0x1111111111111111111111111111111111111111',
+  name: ' NVIDIA Robinhood Token ',
+  verified: false,
+  stockToken: false,
+}
+
+function answer(markets: () => MarketsPayload | Promise<MarketsPayload>) {
+  rpcCall.mockImplementation(async (method: string, params: { chainId?: number }) => {
+    if (method === 'trading.tokens.search')
+      return { tokens: params.chainId === 4663 ? [NVDA_LOOKALIKE, NVDA] : [] }
+    if (method === 'trading.markets') return markets()
+    return {}
+  })
+}
+
+function marketsCalls(): Record<string, unknown>[] {
+  return rpcCall.mock.calls.filter((c) => c[0] === 'trading.markets').map((c) => c[1])
+}
+
+function search(query: string) {
+  const field = screen.getByTestId('markets-search')
+  fireEvent.change(field, { target: { value: query } })
+  fireEvent.submit(field.closest('form')!)
+}
+
+beforeEach(() => {
+  rpcCall.mockReset()
+  openExternal.mockClear()
+  useTradingUi.setState({
+    bookTab: 'markets',
+    deskMode: false,
+    swapRequest: null,
+    markets: {
+      query: '',
+      address: null,
+      chainId: null,
+      minTvlUsd: 10_000,
+      lookalikes: false,
+      deep: false,
+    },
+  })
+  answer(() => NVDA_MARKETS)
+})
+
+describe('Markets · finding the token', () => {
+  it('asks for a token before it reads anything', () => {
+    renderDesk(<Markets />)
+    expect(screen.getByTestId('markets-prompt')).toHaveTextContent('Every pool a token trades in')
+    expect(rpcCall).not.toHaveBeenCalled()
+  })
+
+  it('takes NVDA typed on a Base desk to Robinhood Chain’s verified Stock Token', async () => {
+    renderDesk(<Markets deskChain={8453} />)
+    search('NVDA')
+    await screen.findByTestId('markets-head')
+    // Looked up on both chains, then read by address on the Stock Token's chain.
+    const searched = rpcCall.mock.calls.filter((c) => c[0] === 'trading.tokens.search')
+    expect(searched.map((c) => (c[1] as { chainId: number }).chainId).sort()).toEqual([4663, 8453])
+    expect(marketsCalls()).toEqual([
+      { target: NVDA_ADDRESS, chainId: 4663, minTvlUsd: 10_000, lookalikes: false, deep: false },
+    ])
+    expect(screen.getByTestId('markets-chain-4663')).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('reads a pasted address as given, with no symbol lookup', async () => {
+    renderDesk(<Markets />)
+    search(NVDA_ADDRESS)
+    await screen.findByTestId('markets-head')
+    expect(rpcCall.mock.calls.some((c) => c[0] === 'trading.tokens.search')).toBe(false)
+    expect(marketsCalls()[0]).toMatchObject({ target: NVDA_ADDRESS, chainId: 4663 })
+  })
+
+  it('opens on the token a Holdings row named, without asking', async () => {
+    useTradingUi.getState().openMarkets({ chainId: 4663, address: NVDA_ADDRESS, symbol: 'NVDA' })
+    renderDesk(<Markets />)
+    await screen.findByTestId('markets-head')
+    expect(screen.getByTestId('markets-search')).toHaveValue('NVDA')
+    expect(marketsCalls()[0]).toMatchObject({ target: NVDA_ADDRESS, chainId: 4663 })
+  })
+})
+
+describe('Markets · the board', () => {
+  async function board() {
+    renderDesk(<Markets />)
+    search('NVDA')
+    return screen.findByTestId('markets-head')
+  }
+
+  it('heads with the token, its price and the oracle', async () => {
+    const head = await board()
+    expect(head).toHaveTextContent('NVDA')
+    expect(head).toHaveTextContent('Stock Token')
+    expect(head).toHaveTextContent('$240.30')
+    expect(screen.getByTestId('markets-oracle')).toHaveTextContent('Oracle$239.74')
+    expect(screen.queryByTestId('markets-oracle-badge')).toBeNull()
+  })
+
+  it('lists the tokens priced in NVDA first, then what NVDA is priced in', async () => {
+    await board()
+    const sections = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)
+    expect(sections).toEqual(['Priced in NVDA3', 'NVDA priced in2'])
+
+    const quote = within(screen.getByTestId('markets-section-quote')).getAllByTestId('markets-row')
+    expect(quote.map((r) => r.querySelector('.trd-mk__pairtext')?.textContent)).toEqual([
+      'AI/NVDA',
+      'ORBIO/NVDA',
+      'SPY/NVDA',
+    ])
+    const ai = quote[0]!
+    expect(ai).toHaveTextContent('Bankr')
+    expect(ai.querySelector('.trd-mk__ver')).toHaveTextContent('v4')
+    // Bankr launched it on Bankr's own DEX: one word, tinted, not two.
+    expect(ai.querySelector('.trd-mk__dex')).toHaveAttribute('data-launcher', 'true')
+    expect(ai.querySelector('.trd-mk__launcher')).toBeNull()
+    expect(ai.querySelector('.trd-mk__tvl')).toHaveTextContent('$4.7M')
+    expect(ai.querySelector('.trd-mk__vol')).toHaveTextContent('$806.5K')
+    expect(ai.querySelector('.trd-mk__px')).toHaveTextContent('$0.1131')
+    expect(ai.querySelector('.trd-mk__px small')).toHaveTextContent('0.0₃471 NVDA')
+    expect(ai.querySelector('.trd-mk__chg')).toHaveAttribute('data-tone', 'down')
+    expect(ai.querySelector('.trd-mk__chg')).toHaveTextContent('−3.20%')
+    // A memecoin has no oracle: no premium on a quote row.
+    expect(ai.querySelector('[data-testid="markets-premium"]')).toBeNull()
+
+    const spy = quote[2]!
+    expect(spy).toHaveTextContent('Uniswap')
+    expect(spy.querySelector('.trd-mk__fee')).toHaveTextContent('0.025%')
+    expect(spy.querySelector('[data-kind="uni"]')).not.toBeNull()
+    expect(spy.querySelector('[data-kind="stock"]')).not.toBeNull()
+  })
+
+  it('shows the premium against the oracle on the rows NVDA is priced in', async () => {
+    await board()
+    const base = within(screen.getByTestId('markets-section-base')).getAllByTestId('markets-row')
+    expect(base[0]!.querySelector('.trd-mk__pairtext')).toHaveTextContent('NVDA/USDG')
+    expect(base[0]!.querySelector('.trd-mk__px small')).toHaveTextContent('240.85 USDG')
+    expect(within(base[0]!).getByTestId('markets-premium')).toHaveTextContent('+0.46% vs oracle')
+    expect(base[1]!.querySelector('.trd-mk__px small')).toHaveTextContent('0.0573 WETH')
+  })
+
+  it('counts what it read, what it left out, and why', async () => {
+    await board()
+    expect(screen.getByTestId('markets-foot')).toHaveTextContent(
+      '5 of 100 pools shown · 61 under $10k · 5 lookalikes hidden',
+    )
+    expect(screen.queryByTestId('markets-partial')).toBeNull()
+  })
+
+  it('fills the ticket from a row: sell NVDA, buy the counterparty', async () => {
+    await board()
+    const ai = within(screen.getByTestId('markets-section-quote')).getAllByTestId('markets-row')[0]!
+    const swap = within(ai).getByTestId('markets-swap')
+    expect(swap).toHaveAccessibleName('Swap NVDA for AI')
+    fireEvent.click(swap)
+    const s = useTradingUi.getState()
+    expect(s.bookTab).toBe('swap')
+    expect(s.swapRequest).toMatchObject({
+      chainId: 4663,
+      tokenIn: { address: NVDA_ADDRESS, symbol: 'NVDA', decimals: 18, stockToken: true },
+      tokenOut: { symbol: 'AI', name: 'Artificial Inu', verified: false },
+    })
+  })
+
+  it('opens the pool on GeckoTerminal', async () => {
+    await board()
+    const ai = within(screen.getByTestId('markets-section-quote')).getAllByTestId('markets-row')[0]!
+    fireEvent.click(within(ai).getByRole('button', { name: 'Open on GeckoTerminal' }))
+    expect(openExternal).toHaveBeenCalledWith(NVDA_MARKETS.sections.quote[0]!.url)
+  })
+})
+
+describe('Markets · filters', () => {
+  it('re-reads with each filter, every param in the request', async () => {
+    renderDesk(<Markets />)
+    search('NVDA')
+    await screen.findByTestId('markets-head')
+
+    fireEvent.click(screen.getByTestId('markets-tvl-100000'))
+    await waitFor(() => expect(marketsCalls().at(-1)).toMatchObject({ minTvlUsd: 100_000 }))
+    fireEvent.click(screen.getByTestId('markets-lookalikes'))
+    await waitFor(() =>
+      expect(marketsCalls().at(-1)).toMatchObject({ minTvlUsd: 100_000, lookalikes: true }),
+    )
+    fireEvent.click(screen.getByTestId('markets-deep'))
+    await waitFor(() =>
+      expect(marketsCalls().at(-1)).toMatchObject({
+        minTvlUsd: 100_000,
+        lookalikes: true,
+        deep: true,
+      }),
+    )
+    expect(screen.getByTestId('markets-deep')).toHaveAttribute('aria-pressed', 'true')
+    expect(useTradingUi.getState().markets).toMatchObject({
+      minTvlUsd: 100_000,
+      lookalikes: true,
+      deep: true,
+    })
+  })
+
+  it('marks a lookalike row when they are asked for', async () => {
+    const lookalike: MarketsPool = {
+      ...NVDA_MARKETS.sections.quote[1]!,
+      poolAddress: '0x9999999999999999999999999999999999999999',
+      pair: 'NVDA/NVDA',
+      counterparty: { ...NVDA_MARKETS.sections.quote[1]!.counterparty, lookalike: true },
+    }
+    answer(() => ({
+      ...NVDA_MARKETS,
+      sections: { quote: [lookalike], base: [] },
+    }))
+    renderDesk(<Markets />)
+    search('NVDA')
+    const row = await screen.findByTestId('markets-row')
+    expect(row).toHaveAttribute('data-lookalike', 'true')
+    expect(row.querySelector('[data-kind="lookalike"]')).toHaveTextContent('Lookalike')
+    // The empty section still says what it looked for.
+    expect(screen.getByTestId('markets-section-base')).toHaveTextContent(
+      'No pools against NVDA above $10k',
+    )
+  })
+})
+
+describe('Markets · states', () => {
+  it('draws the rows’ shape while the read is on its way', async () => {
+    answer(() => new Promise(() => {}))
+    renderDesk(<Markets />)
+    search('NVDA')
+    expect(await screen.findByTestId('markets-loading')).toBeInTheDocument()
+  })
+
+  it('says nothing is deep enough instead of drawing two empty lists', async () => {
+    answer(() => ({
+      ...NVDA_MARKETS,
+      counts: { ...NVDA_MARKETS.counts, shown: 0, belowMinTvl: 95 },
+      sections: { quote: [], base: [] },
+    }))
+    renderDesk(<Markets />)
+    search('NVDA')
+    expect(await screen.findByTestId('markets-empty')).toHaveTextContent('No pools above $10k')
+    expect(screen.queryByTestId('markets-section-quote')).toBeNull()
+    expect(screen.getByTestId('markets-foot')).toHaveTextContent('95 under $10k')
+  })
+
+  it('flags a rate-limited read as partial, with the source’s warning', async () => {
+    answer(() => ({
+      ...NVDA_MARKETS,
+      partial: true,
+      warnings: ['GeckoTerminal rate limit: showing the first 40 pools'],
+    }))
+    renderDesk(<Markets />)
+    search('NVDA')
+    expect(await screen.findByTestId('markets-partial')).toHaveTextContent('Partial')
+    expect(screen.getByTestId('quote-warnings')).toHaveTextContent(
+      'GeckoTerminal rate limit: showing the first 40 pools',
+    )
+  })
+
+  it('reports a failed read in the gateway’s words, and reads again on retry', async () => {
+    let fail = true
+    answer(() => {
+      if (fail) throw new Error('trading.markets.unavailable: GeckoTerminal did not answer')
+      return NVDA_MARKETS
+    })
+    renderDesk(<Markets />)
+    search('NVDA')
+    const error = await screen.findByTestId('markets-error')
+    expect(error).toHaveTextContent('GeckoTerminal did not answer')
+    fail = false
+    fireEvent.click(within(error).getByTestId('trading-error-retry'))
+    expect(await screen.findByTestId('markets-head')).toBeInTheDocument()
+  })
+
+  it('badges a stale or paused oracle', async () => {
+    answer(() => ({
+      ...NVDA_MARKETS,
+      token: {
+        ...NVDA_MARKETS.token,
+        oracle: { ...NVDA_MARKETS.token.oracle!, stale: true, paused: true },
+      },
+    }))
+    renderDesk(<Markets />)
+    search('NVDA')
+    const badge = await screen.findByTestId('markets-oracle-badge')
+    expect(badge).toHaveTextContent('Paused')
+    expect(badge).toHaveAttribute('data-tone', 'danger')
+  })
+
+  it('caps a section at 40 rows and expands the rest in place', async () => {
+    const many = Array.from({ length: 45 }, (_, i) => ({
+      ...NVDA_MARKETS.sections.quote[0]!,
+      poolAddress: `0x${String(i).padStart(40, '0')}`,
+    }))
+    answer(() => ({ ...NVDA_MARKETS, sections: { quote: many, base: [] } }))
+    renderDesk(<Markets />)
+    search('NVDA')
+    const more = await screen.findByTestId('markets-more-quote')
+    expect(more).toHaveTextContent('+5 more')
+    expect(screen.getAllByTestId('markets-row')).toHaveLength(40)
+    fireEvent.click(more)
+    expect(screen.getAllByTestId('markets-row')).toHaveLength(45)
+  })
+})
