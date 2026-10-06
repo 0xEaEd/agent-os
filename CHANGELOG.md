@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [2026.10.6] - 2026-10-06
+
 ### Added
 - Trading: **markets** — `agentos trade markets NVDA` lists every pool a
   token trades in, on every DEX the chain has, in two sections: tokens
@@ -17,7 +19,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   it. Lookalikes that borrow a Stock Token's name are hidden and counted
   (`--lookalikes` shows them), `--min-tvl` sets the floor, `--deep` reads
   200 pools instead of 100. Defaults to Robinhood Chain; read-only and open
-  to agents. Gateway method `trading.markets`. Contract: `docs/markets.md`.
+  to agents. Gateway method `trading.markets`; chat card
+  `application/vnd.agentos.markets+json`; desktop Markets tab in the BOOK
+  and the full desk with a Swap button that fills the ticket. Contract:
+  `docs/markets.md` (#3619).
+- Trading: **Stock Tokens can be swapped.** The aggregator (0x) refuses the
+  29 Robinhood Stock Tokens for legal reasons; a pair with a Stock Token now
+  routes through the Uniswap Trading API when a Uniswap key is configured,
+  and a `token_not_tradeable` answer is retried once through Uniswap or
+  re-raised with that hint. `UNIVERSAL_ROUTERS` is a per-chain set that
+  includes Universal Router v2.1.2 on Base and Robinhood Chain — the chain
+  had no router pinned, and Base pinned only v2.0, so every Uniswap swap was
+  refused on both (#3619).
 - Trading: **brackets** — `agentos trade protect ETH --tp +20% --sl -10%`
   is a take-profit and a stop-loss on one position as one object: two price
   triggers that know each other, so when one fills the engine stops the
@@ -47,6 +60,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   filters, and sets, replaces, imports, reveals (confirmed, auto-hidden after
   30 seconds) and removes them through the same `env.*` RPCs. **Add
   variable** stores a custom one in `~/.agentos/.env`.
+
+### Fixed
+- CLI: every `agentos trade` error dropped its `details` (the ambiguous-symbol
+  candidates, for one) because the gateway client read `error.data` while the
+  gateway sends `error.details` (#3619).
+- Trading: Stock Token detection tolerates CoinGecko's 60-character name
+  truncation (`… • Robinhood Toke`), so IBM and SPYD are flagged too (#3619).
 
 ## [2026.10.4] - 2026-10-04
 
