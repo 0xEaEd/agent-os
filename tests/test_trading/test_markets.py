@@ -210,6 +210,8 @@ class FakeMarkets:
     status: dict[int, int] = field(default_factory=dict)
     #: page -> how many more requests for it time out before it answers.
     timeouts: dict[int, int] = field(default_factory=dict)
+    #: page -> how many more requests for it draw a 429 before it answers.
+    limited: dict[int, int] = field(default_factory=dict)
     dexscreener: list[dict[str, Any]] | None = field(default_factory=list)
     oracle_answer: int | None = None
     oracle_updated_at: int = 0
@@ -224,6 +226,9 @@ class FakeMarkets:
             if self.timeouts.get(page, 0) > 0:
                 self.timeouts[page] -= 1
                 raise httpx.ReadTimeout("timed out", request=request)
+            if self.limited.get(page, 0) > 0:
+                self.limited[page] -= 1
+                return httpx.Response(429, json={"status": 429})
             if page in self.status:
                 return httpx.Response(self.status[page], json={"status": self.status[page]})
             return httpx.Response(200, json=self.pages.get(page, {"data": [], "included": []}))
@@ -260,6 +265,12 @@ class FakeMarkets:
 
 def _rpc(body: dict[str, Any], result: str) -> httpx.Response:
     return httpx.Response(200, json={"jsonrpc": "2.0", "id": body.get("id"), "result": result})
+
+
+@pytest.fixture(autouse=True)
+def _no_rate_limit_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 15 s wait before a 429 retry is not slept in tests."""
+    monkeypatch.setattr(mk, "RATE_LIMIT_RETRY_S", 0.0)
 
 
 @pytest.fixture
@@ -382,6 +393,7 @@ async def test_sections_split_by_side(service: TradingService, fake_markets: Fak
         "pages": 2,
         "pageCap": 5,
         "pageCapHit": False,
+        "rateLimited": False,
     }
     assert result["request"] == {
         "kind": "markets",
@@ -514,7 +526,36 @@ async def test_rate_limit_on_page_three_is_partial(
     assert result["partial"] is True
     assert result["warnings"][0] == "GeckoTerminal rate limit: showing the first 40 pools"
     assert result["counts"]["pages"] == 2 and result["counts"]["scanned"] == 40
-    assert [r.url.params["page"] for r in fake_markets.gecko] == ["1", "2", "3", "4", "5"]
+    assert result["counts"]["rateLimited"] is True
+    # The first 429 is asked once more after the wait; the second ends the read.
+    assert [r.url.params["page"] for r in fake_markets.gecko] == ["1", "2", "3", "4", "5", "3"]
+
+
+async def test_a_429_once_is_retried_after_the_wait(
+    service: TradingService, fake_markets: FakeMarkets
+) -> None:
+    fake_markets.pages[2] = _filler_page(16, 20)
+    fake_markets.pages[3] = _filler_page(36, 3)
+    fake_markets.limited[3] = 1
+    result = await _read(service, limit=200)
+    assert result["partial"] is False and result["warnings"] == []
+    assert result["counts"]["rateLimited"] is False
+    assert result["counts"]["pages"] == 3 and result["counts"]["scanned"] == 43
+    assert [r.url.params["page"] for r in fake_markets.gecko] == ["1", "2", "3", "4", "5", "3"]
+
+
+async def test_a_429_twice_ends_the_read(
+    service: TradingService, fake_markets: FakeMarkets
+) -> None:
+    fake_markets.pages[2] = _filler_page(16, 20)
+    fake_markets.pages[3] = _filler_page(36, 3)
+    fake_markets.limited[3] = 2
+    result = await _read(service, limit=200)
+    assert result["partial"] is True and result["counts"]["rateLimited"] is True
+    assert result["counts"]["pageCapHit"] is False
+    assert result["warnings"][0] == "GeckoTerminal rate limit: showing the first 40 pools"
+    assert result["counts"]["pages"] == 2
+    assert [r.url.params["page"] for r in fake_markets.gecko] == ["1", "2", "3", "4", "5", "3"]
 
 
 async def test_no_page_at_all_is_unavailable(
@@ -590,7 +631,7 @@ async def test_oracle_and_premium_on_base_rows(
     assert oracle["stale"] is False and oracle["paused"] is False
     assert 100 <= oracle["ageSeconds"] < 200
     usdg = _row(result, "base", "NVDA/USDG")
-    assert usdg["premiumPct"] == pytest.approx((240.3017762048 / 239.74 - 1) * 100)
+    assert usdg["premiumPct"] == round((240.3017762048 / 239.74 - 1) * 100, 2) == 0.23
     assert _row(result, "quote", "AI/NVDA")["premiumPct"] is None
 
 
@@ -627,6 +668,14 @@ async def test_ambiguous_symbol_keeps_candidates(service: TradingService) -> Non
         await _read(service, target="DUP")
     assert err.value.code == "trading.invalid"
     assert len(err.value.details["candidates"]) == 2
+
+
+def test_premium_is_rounded_and_never_negative_zero() -> None:
+    assert mk._premium_pct(240.3017762048, 239.74) == 0.23
+    assert mk._premium_pct(239.73, 239.74) == 0.0  # -0.0042 %
+    assert str(mk._premium_pct(239.73, 239.74)) == "0.0"
+    assert mk._premium_pct(239.74, 239.74) == 0.0
+    assert mk._premium_pct(230.0, 239.74) == -4.06
 
 
 def test_parsers() -> None:

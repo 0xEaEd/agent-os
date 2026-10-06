@@ -22,7 +22,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, tzinfo
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,7 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
-from agentos.cli.gateway_rpc import run_gateway_sync
+from agentos.cli.gateway_rpc import rpc_error_exit_code, run_gateway_sync
 from agentos.cli.output import emit_error, print_json, print_text
 from agentos.cli.ui import ACCENT, ACCENT_HEADER, console, markup_escape
 from agentos.cli.wallet_cmd import (
@@ -2373,15 +2373,30 @@ def _compact_usd(value: Any) -> str:
     return _usd(number)
 
 
-def _sig(value: Any) -> str:
-    """A ratio with four significant digits; "—" when unknown."""
+def _price_digits(value: Any) -> str:
+    """A price with at most 6 significant digits (3 below 1), never in
+    scientific notation: ``0.000471788`` -> ``0.000472``, ``240.47`` stays,
+    ``1.415e-05`` -> ``0.0000142``; "—" when unknown."""
     if value is None or value == "":
         return "—"
     try:
-        number = float(value)
-    except (TypeError, ValueError):
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError):
         return str(value)
-    return f"{number:.4g}"
+    if not number.is_finite():
+        return str(value)
+    if number.is_zero():
+        return "0"
+    digits = 6 if abs(number) >= 1 else 3
+    places = max(0, digits - 1 - number.adjusted())
+    text = f"{number.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP):f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _price_usd(value: Any) -> str:
+    """:func:`_price_digits` with a dollar sign; "—" when unknown."""
+    text = _price_digits(value)
+    return text if text == "—" else f"${text}"
 
 
 def _age(created_at: Any, now: float | None = None) -> str:
@@ -2405,6 +2420,10 @@ def _age(created_at: Any, now: float | None = None) -> str:
     return f"{int(days // 365)}y"
 
 
+#: Characters a price keeps before it folds in a table wider than the terminal.
+_MARKETS_PRICE_WIDTH = 10
+
+
 def _markets_flags(row: dict[str, Any]) -> str:
     counterparty = _dict(row.get("counterparty"))
     flags = []
@@ -2421,15 +2440,7 @@ def _markets_table(title: str, rows: list[dict[str, Any]], price_in: str) -> Tab
     """One section. ``price_in`` heads the ratio column: ``IN NVDA`` on the quote
     section (the counterparty priced in the token), ``IN QUOTE`` on the base
     section (the token priced in each row's counterparty)."""
-    table = Table(title=title, show_header=True, header_style=ACCENT_HEADER)
-    table.add_column("PAIR")
-    table.add_column("DEX")
-    table.add_column("TVL", justify="right")
-    table.add_column("VOL 24H", justify="right")
-    table.add_column("PRICE", justify="right")
-    table.add_column(price_in, justify="right")
-    table.add_column("AGE", justify="right")
-    table.add_column("FLAGS")
+    cells: list[tuple[str, ...]] = []
     for row in rows:
         dex = _dict(row.get("dex"))
         venue = " ".join(
@@ -2438,16 +2449,39 @@ def _markets_table(title: str, rows: list[dict[str, Any]], price_in: str) -> Tab
         fee = row.get("feePct")
         if fee is not None:
             venue = f"{venue} {fee:g}%"
-        table.add_row(
-            markup_escape(str(row.get("pair") or "—")),
-            markup_escape(venue or "—"),
-            _compact_usd(row.get("tvlUsd")),
-            _compact_usd(row.get("volume24hUsd")),
-            _usd(row.get("priceUsd")),
-            _sig(row.get("priceInToken")),
-            _age(row.get("createdAt")),
-            _markets_flags(row),
+        cells.append(
+            (
+                markup_escape(str(row.get("pair") or "—")),
+                markup_escape(venue or "—"),
+                _compact_usd(row.get("tvlUsd")),
+                _compact_usd(row.get("volume24hUsd")),
+                _price_usd(row.get("priceUsd")),
+                _price_digits(row.get("priceInToken")),
+                _age(row.get("createdAt")),
+                _markets_flags(row),
+            )
         )
+    headers = ("PAIR", "DEX", "TVL", "VOL 24H", "PRICE", price_in, "AGE", "FLAGS")
+    natural = [max([len(h), *(len(c[i]) for c in cells)]) for i, h in enumerate(headers)]
+    # Fold, never truncate: a cell that does not fit breaks onto the next line
+    # instead of ending in "…". TVL, volume and age never wrap. When the table
+    # is wider than the terminal (80 columns, a sub-cent price written out in
+    # full), the two prices keep up to ten characters and the pair, venue and
+    # flags fold first (the outer border goes, to give them two more
+    # characters); only a longer price folds.
+    narrow = sum(natural) + 3 * len(headers) + 1 > console.width
+    table = Table(title=title, show_header=True, header_style=ACCENT_HEADER, show_edge=not narrow)
+    table.add_column("PAIR", overflow="fold")
+    table.add_column("DEX", overflow="fold")
+    table.add_column("TVL", justify="right", no_wrap=True)
+    table.add_column("VOL 24H", justify="right", no_wrap=True)
+    for index in (4, 5):
+        width = min(natural[index], _MARKETS_PRICE_WIDTH) if narrow else None
+        table.add_column(headers[index], justify="right", overflow="fold", width=width)
+    table.add_column("AGE", justify="right", no_wrap=True)
+    table.add_column("FLAGS", overflow="fold")
+    for cell in cells:
+        table.add_row(*cell)
     return table
 
 
@@ -2545,7 +2579,24 @@ def trade_markets(
     }
 
     async def _run(client):
-        return await client.call("trading.markets", params)
+        from agentos.cli.gateway_client import GatewayRPCError
+
+        try:
+            return await client.call("trading.markets", params)
+        except GatewayRPCError as exc:
+            candidates = _dict(exc.data).get("candidates")
+            if json_output or not isinstance(candidates, list) or not candidates:
+                raise
+            # An ambiguous symbol: the JSON envelope carries the candidates in
+            # ``details``; a person gets them under the message.
+            emit_error(exc.message, code=exc.code)
+            for item in candidates:
+                c = _dict(item)
+                line = "  ".join(
+                    str(x) for x in (c.get("symbol"), c.get("name"), c.get("address")) if x
+                )
+                typer.echo(f"  {line}", err=True)
+            raise typer.Exit(rpc_error_exit_code(exc.code)) from exc
 
     result = _dict(run_gateway_sync(_run, json_output=json_output))
     if not json_output:

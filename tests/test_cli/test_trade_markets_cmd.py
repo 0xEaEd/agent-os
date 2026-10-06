@@ -196,13 +196,16 @@ def test_bad_side_is_a_usage_error(client: _Client) -> None:
     assert client.calls == []
 
 
-def test_error_envelope_keeps_the_engine_details(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """An ambiguous symbol: the gateway's ``error.details`` reaches the JSON envelope."""
-    from agentos.cli import gateway_client, gateway_rpc
+CANDIDATES = [
+    {"address": "0x" + "d1" * 20, "symbol": "DUP", "name": "Dup One"},
+    {"address": "0x" + "d2" * 20, "symbol": "DUP", "name": "Dup Two"},
+]
 
-    candidates = [{"address": "0x" + "d1" * 20}, {"address": "0x" + "d2" * 20}]
+
+@pytest.fixture
+def ambiguous_gateway(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A gateway that answers ``trading.markets`` with an ambiguous-symbol error."""
+    from agentos.cli import gateway_client, gateway_rpc
 
     class _Ws:
         def __init__(self, owner: gateway_client.GatewayClient) -> None:
@@ -219,7 +222,7 @@ def test_error_envelope_keeps_the_engine_details(
                     "error": {
                         "code": "trading.invalid",
                         "message": "Ambiguous token symbol DUP",
-                        "details": {"candidates": candidates},
+                        "details": {"candidates": CANDIDATES},
                         "retryable": False,
                     },
                 }
@@ -237,9 +240,82 @@ def test_error_envelope_keeps_the_engine_details(
     monkeypatch.setattr(gateway_rpc, "default_gateway_token", lambda *a: None)
     monkeypatch.setattr(gateway_rpc, "_apply_version_skew_policy", lambda *a, **kw: None)
     monkeypatch.chdir(tmp_path)
+
+
+def test_error_envelope_keeps_the_engine_details(ambiguous_gateway: None, tmp_path: Path) -> None:
+    """An ambiguous symbol: the gateway's ``error.details`` reaches the JSON envelope."""
     result = runner.invoke(trade_cmd.app, ["markets", "DUP", "--json"])
     assert result.exit_code != 0
     envelope = json.loads(result.stderr.strip().splitlines()[-1])
     assert envelope["error"]["code"] == "trading.invalid"
-    assert envelope["error"]["details"] == {"candidates": candidates}
+    assert envelope["error"]["details"] == {"candidates": CANDIDATES}
     assert not (tmp_path / trade_cmd.MARKETS_CARD_DIR).exists()
+
+
+def test_human_ambiguous_symbol_lists_the_candidates(
+    ambiguous_gateway: None, tmp_path: Path
+) -> None:
+    result = runner.invoke(trade_cmd.app, ["markets", "DUP"])
+    assert result.exit_code == 1
+    lines = result.stderr.strip().splitlines()
+    assert lines[0] == "Error: Ambiguous token symbol DUP"
+    assert lines[1:] == [
+        f"  DUP  Dup One  {'0x' + 'd1' * 20}",
+        f"  DUP  Dup Two  {'0x' + 'd2' * 20}",
+    ]
+    assert result.stdout == ""
+    assert not (tmp_path / trade_cmd.MARKETS_CARD_DIR).exists()
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (0.000471788, "0.000472"),
+        (240.47, "240.47"),
+        (1.415e-05, "0.0000142"),
+        (240.3017762048, "240.302"),
+        (4_732_293.9, "4732294"),
+        (0, "0"),
+        (None, "—"),
+    ],
+)
+def test_prices_keep_at_most_six_significant_digits(value: Any, text: str) -> None:
+    assert trade_cmd._price_digits(value) == text
+    assert trade_cmd._price_usd(value) == (text if text == "—" else f"${text}")
+
+
+def test_tables_fold_instead_of_truncating_at_80_columns(
+    client: _Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(trade_cmd.console, "_width", 80)
+    payload = _payload()
+    quote = payload["sections"]["quote"][0]
+    quote["pair"] = "SUPERLONGLAUNCHPADTOKEN/NVDA"
+    quote["priceUsd"] = 1.415e-05
+    quote["priceInToken"] = 0.000471788
+    monkeypatch.setattr(client, "call", _returning(payload))
+    result = runner.invoke(trade_cmd.app, ["markets", "NVDA"])
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert "…" not in out
+    assert max(len(line) for line in out.splitlines()) <= 80
+    assert "SUPERLONGLAU" in out  # folded onto the next lines, not cut
+    assert "$0.0000142" in out and "0.000472" in out and "e-0" not in out
+
+
+def test_a_wide_terminal_keeps_long_prices_on_one_line(
+    client: _Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = _payload()
+    payload["sections"]["quote"][0]["priceInToken"] = 1.01e-09
+    monkeypatch.setattr(client, "call", _returning(payload))
+    result = runner.invoke(trade_cmd.app, ["markets", "NVDA"])
+    assert result.exit_code == 0, result.output
+    assert "0.00000000101" in result.stdout
+
+
+def _returning(payload: dict[str, Any]) -> Any:
+    async def call(method: str, params: dict | None = None) -> Any:
+        return payload
+
+    return call

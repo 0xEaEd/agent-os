@@ -65,6 +65,10 @@ PAGE_CACHE_TTL_S = 120.0
 #: Per-page timeout: a page GeckoTerminal's edge has not cached was measured
 #: at up to 18.5 s, and five of them in one burst take longer still.
 PAGE_TIMEOUT_S = 60.0
+#: Wait before the one retry of pages that drew a 429 inside a burst.
+#: GeckoTerminal's limit bites before its stated 30 / minute (a 429 after ~11
+#: requests in 90 s was seen); a second 429 ends the read.
+RATE_LIMIT_RETRY_S = 15.0
 GECKOTERMINAL_ACCEPT = "application/json;version=20230302"
 GECKOTERMINAL_WEB = "https://www.geckoterminal.com"
 
@@ -184,6 +188,12 @@ def dex_label(dex_id: str, name: str | None) -> str:
         return text
     head = dex_id.split("-", 1)[0]
     return head[:1].upper() + head[1:] if head else dex_id
+
+
+def _premium_pct(price_usd: float, oracle_usd: float) -> float:
+    """``(price / oracle - 1) * 100`` to 2 decimals, never ``-0.0``."""
+    premium = (price_usd / oracle_usd - 1) * 100
+    return 0.0 if abs(premium) < 0.005 else round(premium, 2)
 
 
 def _iso(ts: float | int) -> str:
@@ -318,8 +328,10 @@ async def _fill_pages(
     wait and stays well inside the 30 requests / minute limit. An uncached page
     can still take 18.5 s, so a page that timed out inside the burst is asked
     once more after it (only when an earlier page did not already end the
-    prefix). Pages are kept in order and only as a contiguous prefix: the
-    first 429 or outage drops that page and every later one. Returns
+    prefix). Pages that drew a 429 are asked once more after
+    :data:`RATE_LIMIT_RETRY_S` (concurrently with the timeout retry). Pages
+    are kept in order and only as a contiguous prefix: a second 429 or an
+    outage drops that page and every later one. Returns
     ``(rate_limited, failure)``.
     """
     first = len(entry.pages) + 1
@@ -332,19 +344,35 @@ async def _fill_pages(
             return_exceptions=True,
         )
     )
-    retry: list[int] = []
+    timed_out: list[int] = []
+    limited: list[int] = []
     for index, body in enumerate(results):
         if isinstance(body, _TimedOutError):
-            retry.append(index)
+            timed_out.append(index)
+            continue
+        if isinstance(body, _RateLimitedError):
+            limited.append(index)
             continue
         if isinstance(body, BaseException) or len(_rows_of(body)) < PAGE_SIZE:
             break  # the prefix ends here: a later page is never kept
-    if retry:
-        again = await asyncio.gather(
-            *(_fetch_page(service, chain, address, wanted[i]) for i in retry),
-            return_exceptions=True,
+
+    async def again(indices: list[int], wait: float) -> list[Any]:
+        if not indices:
+            return []
+        if wait > 0:
+            await asyncio.sleep(wait)
+        return list(
+            await asyncio.gather(
+                *(_fetch_page(service, chain, address, wanted[i]) for i in indices),
+                return_exceptions=True,
+            )
         )
-        for index, body in zip(retry, again, strict=True):
+
+    if timed_out or limited:
+        retried, waited = await asyncio.gather(
+            again(timed_out, 0.0), again(limited, RATE_LIMIT_RETRY_S)
+        )
+        for index, body in zip(timed_out + limited, retried + waited, strict=True):
             results[index] = body
     for body in results:
         if isinstance(body, _RateLimitedError):
@@ -696,7 +724,7 @@ async def markets(
         premium = None
         oracle_usd = (oracle or {}).get("usd")
         if row_side == "base" and price_usd is not None and oracle_usd:
-            premium = (price_usd / float(oracle_usd) - 1) * 100
+            premium = _premium_pct(price_usd, float(oracle_usd))
         token_symbol = token.symbol or "?"
         other_symbol = counterparty["symbol"] or "?"
         pair = (
@@ -846,6 +874,7 @@ async def markets(
             "pages": len(pages),
             "pageCap": cap,
             "pageCapHit": page_cap_hit,
+            "rateLimited": rate_limited,
         },
         "sections": {"quote": quote_rows, "base": base_rows},
         "request": {
