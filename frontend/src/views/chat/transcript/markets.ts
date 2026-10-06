@@ -53,6 +53,66 @@ export const MARKETS_ROW_CAP = 40
 /** USD figures from here up print compact ($4.7M); below, whole dollars. */
 export const MARKETS_COMPACT_FROM = 100_000
 
+/**
+ * The card's DOM, as `buildMarketsCard` writes it — the nesting the desktop
+ * skin matches. `?` marks a node drawn only sometimes (the note says when);
+ * `|` separates alternatives. Every class and data attribute here is a stable
+ * hook (docs/markets.md "CSS hooks").
+ */
+export const MARKETS_DOM = `
+div.msg-artifact-markets[data-markets-src][data-markets-host=rendered]   (the transcript placeholder)
+  div.msg-artifact-markets__body
+    article.mk-card[data-chain]  [data-partial=true]?  [data-refreshing=true][aria-busy=true]? (re-run in flight)
+      header.mk-head
+        img.mk-logo | span.mk-logo[aria-hidden]           (letter fallback)
+        span.mk-symbol
+        span.mk-name?                                     (token has a name)
+        span.mk-chain[data-chain-id]?                     (chain known)
+        span.mk-price
+        span.mk-oracle?                                   (Stock Token with an oracle price)
+          span.mk-oracle-badge[data-tone=warn|danger]?    (stale | paused)
+      section.mk-section[data-side=quote|base]            (quote first; one only on a one-sided read)
+        h3.mk-section-title
+          span.mk-section-count
+        p.mk-empty?                                       (no rows: nothing else follows in the section)
+        div.mk-cols[aria-hidden]
+          span.mk-col.mk-col--pair  .mk-col--tvl  .mk-col--vol  .mk-col--px  .mk-col--change  .mk-col--age
+        ul.mk-rows
+          li.mk-row[data-side=quote|base]  [data-lookalike=true]?  [data-pool]?
+            div.mk-market
+              a.mk-pair[href][target=_blank] | span.mk-pair  (no pool URL)
+              span.mk-cp-name?                            (lookalike, or counterparty symbol == token symbol)
+              div.mk-venue
+                span.mk-dex[data-dex]
+                  span.mk-version?
+                span.mk-launcher?                         (launcher set and not the DEX label)
+                span.mk-flags?                            (at least one flag)
+                  span.mk-flag[data-kind=uni|stock|lookalike]
+            span.mk-tvl
+            span.mk-vol
+            div.mk-pricing
+              span.mk-px
+              span.mk-px-in?                              (priceInToken known)
+              span.mk-premium[data-tone=up|down|flat]?    (base rows of a Stock Token)
+            span.mk-change[data-tone=up|down|flat]
+            span.mk-age
+            button.mk-swap[data-action=swap][data-chain-id][data-token-in][data-token-out]?  (onSwap given)
+        button.mk-more[data-action=more]?                 (more than MARKETS_ROW_CAP rows)
+      ul.mk-warnings?
+        li.mk-warning
+      footer.mk-foot
+        span.mk-meta
+          span.mk-counts
+          span.mk-partial?
+          time.mk-ago[datetime][data-mk-fetched-at]?
+        span.mk-actions?                                  (the mounter has a gateway call)
+          button.mk-link[data-action=lookalikes]?         (lookalikesOffered)
+          button.mk-link[data-action=deep]?               (deeperOffered)
+          button.mk-refresh[data-action=refresh]
+        span.mk-error[role=alert]?                        (a failed re-run, for a few seconds)
+  p.msg-artifact-markets__status                          (loading / error line; hidden once rendered)
+`
+
 /* ── Payload shape (docs/markets.md "Payload") ──────────────────────────── */
 
 export type MarketsSide = 'quote' | 'base'
@@ -95,6 +155,8 @@ export interface MarketsToken extends MarketsTokenBase {
 /** The other token in a pool (`AI` in `AI/NVDA`). */
 export interface MarketsCounterparty extends MarketsTokenBase {
   lookalike: boolean
+  /** The chain's native coin (ETH at the zero address), never "WETH". */
+  native: boolean
 }
 
 export interface MarketsDex {
@@ -137,8 +199,15 @@ export interface MarketsCounts {
   shown: number
   belowMinTvl: number
   hiddenLookalikes: number
+  /** Rows above the floor that `limit` cut (0 on payloads that predate it). */
+  limited: number
   pages: number
   pageCap: number
+  /**
+   * The page cap, not `limit`, ended a read that had more pools — the only
+   * case *Deeper* is offered (false on payloads that predate it).
+   */
+  pageCapHit: boolean
 }
 
 export interface MarketsRequest {
@@ -199,6 +268,9 @@ function count(value: unknown): number {
 }
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/
+
+/** The zero address: a counterparty there is the chain's native coin. */
+const ZERO_ADDRESS = /^0x0{40}$/i
 
 /** An http(s) URL as given, or ''. */
 function safeUrl(value: unknown): string {
@@ -350,9 +422,15 @@ function normPool(value: unknown, side: MarketsSide, tokenSymbol: string): Marke
   if (!row) return null
   const cpRow = obj(row.counterparty)
   if (!cpRow) return null
+  const native = cpRow.native === true || ZERO_ADDRESS.test(text(cpRow.address))
+  const cpBase = normTokenBase(cpRow)
   const counterparty: MarketsCounterparty = {
-    ...normTokenBase(cpRow),
+    ...cpBase,
+    // The native coin is named by its symbol, never by a "0x0000…0000" fallback.
+    symbol: native && !text(cpRow.symbol) ? 'ETH' : cpBase.symbol,
+    name: native && !cpBase.name ? 'Ether' : cpBase.name,
     lookalike: cpRow.lookalike === true,
+    native,
   }
   const dexRow = obj(row.dex) ?? {}
   const dexId = text(dexRow.id)
@@ -384,7 +462,9 @@ function normPool(value: unknown, side: MarketsSide, tokenSymbol: string): Marke
     swap: normSwap(row.swap),
   }
   pool.launcher = launcherLabel({ launcher: textOrNull(row.launcher), dex })
-  pool.pair = pairLabel({ pair: text(row.pair), side, counterparty }, tokenSymbol)
+  // A native counterparty's pair is always rebuilt from symbols, so an engine
+  // pair spelt with the zero address never reaches the card.
+  pool.pair = pairLabel({ pair: native ? '' : text(row.pair), side, counterparty }, tokenSymbol)
   return pool
 }
 
@@ -427,8 +507,10 @@ export function normalizeMarketsPayload(raw: unknown): MarketsPayload | null {
       shown: num(counts.shown) === null ? quote.length + base.length : count(counts.shown),
       belowMinTvl: count(counts.belowMinTvl),
       hiddenLookalikes: count(counts.hiddenLookalikes),
+      limited: count(counts.limited),
       pages: count(counts.pages),
       pageCap: count(counts.pageCap),
+      pageCapHit: counts.pageCapHit === true,
     },
     sections: { quote, base },
     request: normalizeMarketsRequest(row.request),
@@ -489,8 +571,8 @@ export function minTvlOf(payload: MarketsPayload): number {
 }
 
 /**
- * The counts line: "34 of 100 pools shown · 61 under $10K · 5 lookalikes
- * hidden". Zero parts are left out.
+ * The counts line: "34 of 100 pools shown · 61 under $10K · 12 more over the
+ * limit · 5 lookalikes hidden". Zero parts are left out.
  */
 export function countsText(payload: MarketsPayload): string {
   const { counts } = payload
@@ -503,10 +585,53 @@ export function countsText(payload: MarketsPayload): string {
       }),
     )
   }
+  if (counts.limited > 0) {
+    parts.push(t('chat.marketsCountsLimited', { count: counts.limited }))
+  }
   if (counts.hiddenLookalikes > 0) {
     parts.push(tPlural('chat.marketsCountsLookalikes', counts.hiddenLookalikes))
   }
   return parts.join(' · ')
+}
+
+/**
+ * The launcher pill a row wears: its launcher, unless that only repeats the
+ * DEX label ("Bankr" on Bankr, "Pons" on Pons v2) — then null.
+ */
+export function visibleLauncher(pool: {
+  launcher: string | null
+  dex: { label: string }
+}): string | null {
+  const launcher = text(pool.launcher)
+  if (!launcher) return null
+  return launcher.toLowerCase() === text(pool.dex.label).toLowerCase() ? null : launcher
+}
+
+/**
+ * True when a row should name its counterparty after the pair: a lookalike,
+ * or a counterparty spelling the token's own symbol (case-insensitive), so
+ * two "GME/GME" rows can be told apart.
+ */
+export function showsCounterpartyName(
+  pool: { counterparty: { symbol: string; name: string; lookalike: boolean } },
+  tokenSymbol: string,
+): boolean {
+  const cp = pool.counterparty
+  if (!cp.name) return false
+  return cp.lookalike || cp.symbol.trim().toLowerCase() === tokenSymbol.trim().toLowerCase()
+}
+
+/** *Show lookalikes* is offered: some were hidden and the read did not ask for them. */
+export function lookalikesOffered(payload: MarketsPayload): boolean {
+  return payload.request?.params.lookalikes !== true && payload.counts.hiddenLookalikes > 0
+}
+
+/**
+ * *Deeper* is offered only when the page cap (not `limit`) ended a read that
+ * had more pools, and the read was not already deep.
+ */
+export function deeperOffered(payload: MarketsPayload): boolean {
+  return payload.request?.params.deep !== true && payload.counts.pageCapHit
 }
 
 /** Which sections a payload draws: both, unless it was read for one side. */
@@ -637,15 +762,21 @@ function rowNode(
   }
   pair.title = [cp.name, pool.poolAddress].filter(Boolean).join(' · ')
   market.append(pair)
+  if (showsCounterpartyName(pool, token.symbol)) {
+    const name = el('span', 'mk-cp-name', cp.name)
+    if (!cp.native) name.title = cp.address
+    market.append(name)
+  }
   const venue = el('div', 'mk-venue')
   const dex = el('span', 'mk-dex', pool.dex.label)
   if (pool.dex.id) dex.dataset.dex = pool.dex.id
   if (pool.dex.version) dex.append(' ', el('span', 'mk-version', pool.dex.version))
   if (pool.feePct !== null) dex.title = t('chat.marketsFeeTitle', { fee: String(pool.feePct) })
   venue.append(dex)
-  if (pool.launcher) {
-    const launcher = el('span', 'mk-launcher', pool.launcher)
-    launcher.title = t('chat.marketsLauncherTitle', { launcher: pool.launcher })
+  const launcherText = visibleLauncher(pool)
+  if (launcherText) {
+    const launcher = el('span', 'mk-launcher', launcherText)
+    launcher.title = t('chat.marketsLauncherTitle', { launcher: launcherText })
     venue.append(launcher)
   }
   const flags = el('span', 'mk-flags')
@@ -790,10 +921,9 @@ function foot(payload: MarketsPayload, ctx: MarketsRenderContext): HTMLElement {
   }
   node.append(meta)
 
-  const params = payload.request?.params ?? {}
   const actions = el('span', 'mk-actions')
   if (ctx.canRefresh && payload.request) {
-    if (params.lookalikes !== true && payload.counts.hiddenLookalikes > 0) {
+    if (lookalikesOffered(payload)) {
       const link = button(
         'mk-link',
         t('chat.marketsShowLookalikes'),
@@ -802,8 +932,7 @@ function foot(payload: MarketsPayload, ctx: MarketsRenderContext): HTMLElement {
       link.dataset.action = 'lookalikes'
       actions.append(link)
     }
-    const capped = payload.counts.pageCap > 0 && payload.counts.pages >= payload.counts.pageCap
-    if (params.deep !== true && capped) {
+    if (deeperOffered(payload)) {
       const link = button('mk-link', t('chat.marketsDeeper'), t('chat.marketsDeeperTitle'))
       link.dataset.action = 'deep'
       actions.append(link)

@@ -7,6 +7,7 @@ import {
   buildMarketsCard,
   countsText,
   createMarketsMounter,
+  deeperOffered,
   dexLabel,
   dexVersion,
   formatAge,
@@ -16,6 +17,8 @@ import {
   normalizeMarketsPayload,
   normalizeMarketsRequest,
   pairLabel,
+  showsCounterpartyName,
+  visibleLauncher,
   type MarketsPayload,
   type MarketsRenderContext,
 } from './markets'
@@ -101,7 +104,16 @@ function raw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
         paused: false,
       },
     },
-    counts: { scanned: 100, shown: 3, belowMinTvl: 61, hiddenLookalikes: 5, pages: 5, pageCap: 5 },
+    counts: {
+      scanned: 100,
+      shown: 3,
+      belowMinTvl: 61,
+      hiddenLookalikes: 5,
+      limited: 0,
+      pages: 5,
+      pageCap: 5,
+      pageCapHit: true,
+    },
     sections: {
       quote: [
         quotePool(token(ORBIO, 'ORBIO', 'Orbio'), {
@@ -339,6 +351,95 @@ describe('labels and money', () => {
       ),
     ).toBe('20 of 20 pools shown · 1 lookalike hidden')
   })
+
+  it('adds the rows the limit cut, and reads an older payload without the new counts', () => {
+    const limited = payload({
+      counts: { scanned: 100, shown: 50, belowMinTvl: 0, hiddenLookalikes: 0, limited: 12 },
+    })
+    expect(limited.counts.limited).toBe(12)
+    expect(countsText(limited)).toBe('50 of 100 pools shown · 12 more over the limit')
+    const old = payload({
+      counts: {
+        scanned: 100,
+        shown: 3,
+        belowMinTvl: 61,
+        hiddenLookalikes: 5,
+        pages: 5,
+        pageCap: 5,
+      },
+    })
+    expect(old.counts.limited).toBe(0)
+    expect(old.counts.pageCapHit).toBe(false)
+    expect(countsText(old)).toBe('3 of 100 pools shown · 61 under $10K · 5 lookalikes hidden')
+  })
+
+  it('offers Deeper only when the page cap ended the read and it was not deep', () => {
+    expect(deeperOffered(payload())).toBe(true)
+    // `limit`, not the page cap, ended a "50 of 100 shown" read: Deeper would do nothing.
+    const byLimit = payload({
+      counts: {
+        scanned: 100,
+        shown: 50,
+        belowMinTvl: 0,
+        hiddenLookalikes: 0,
+        limited: 50,
+        pages: 5,
+        pageCap: 5,
+        pageCapHit: false,
+      },
+    })
+    expect(deeperOffered(byLimit)).toBe(false)
+    // An older payload without pageCapHit never offers it, even at the cap.
+    expect(
+      deeperOffered(payload({ counts: { scanned: 100, shown: 3, pages: 5, pageCap: 5 } })),
+    ).toBe(false)
+    expect(
+      deeperOffered(payload({ request: { kind: 'markets', params: { ...PARAMS, deep: true } } })),
+    ).toBe(false)
+  })
+
+  it('hides a launcher that only repeats the DEX label', () => {
+    expect(visibleLauncher({ launcher: 'Bankr', dex: { label: 'Bankr' } })).toBeNull()
+    expect(visibleLauncher({ launcher: 'Pons', dex: { label: 'pons' } })).toBeNull()
+    expect(visibleLauncher({ launcher: 'Bankr', dex: { label: 'Uniswap' } })).toBe('Bankr')
+    expect(visibleLauncher({ launcher: null, dex: { label: 'Uniswap' } })).toBeNull()
+  })
+
+  it('names the counterparty of a lookalike or a same-symbol row', () => {
+    const cp = (symbol: string, lookalike = false, name = 'Some Name') => ({
+      counterparty: { symbol, name, lookalike },
+    })
+    expect(showsCounterpartyName(cp('GME'), 'GME')).toBe(true)
+    expect(showsCounterpartyName(cp('gme'), 'GME')).toBe(true)
+    expect(showsCounterpartyName(cp('TSLA', true), 'GME')).toBe(true)
+    expect(showsCounterpartyName(cp('AI'), 'GME')).toBe(false)
+    expect(showsCounterpartyName(cp('GME', false, ''), 'GME')).toBe(false)
+  })
+
+  it('names a native counterparty by its symbol, never the zero address', () => {
+    const ZERO = '0x0000000000000000000000000000000000000000'
+    const p = payload({
+      sections: {
+        quote: [],
+        base: [
+          {
+            ...quotePool(token(ZERO, '', '', { native: true }), {
+              pair: '0x0000…0000/NVDA',
+              swap: { chainId: 4663, tokenIn: NVDA, tokenOut: ZERO },
+            }),
+            side: 'base',
+          },
+        ],
+      },
+    })
+    const row = p.sections.base[0]!
+    expect(row.counterparty.native).toBe(true)
+    expect(row.counterparty.symbol).toBe('ETH')
+    expect(row.pair).toBe('NVDA/ETH')
+    const card = render(p, ctx({ canSwap: true }))
+    expect(card.textContent).not.toContain('0x0000')
+    expect(card.querySelector('.mk-swap')!.getAttribute('title')).toBe('Swap NVDA for ETH')
+  })
 })
 
 /* ── the card ──────────────────────────────────────────────────────────── */
@@ -391,7 +492,7 @@ describe('markets card', () => {
     expect(pausedBadge.dataset.tone).toBe('danger')
   })
 
-  it('lists AI/NVDA first in the quote section, with Bankr as DEX and launcher pill', () => {
+  it('lists AI/NVDA first in the quote section, on Bankr with no repeated launcher pill', () => {
     const card = render(payload())
     const pairs = [...section(card, 'quote').querySelectorAll('.mk-pair')].map((n) => n.textContent)
     expect(pairs).toEqual(['AI/NVDA', 'ORBIO/NVDA'])
@@ -399,7 +500,10 @@ describe('markets card', () => {
     expect(row.dataset.side).toBe('quote')
     expect(row.querySelector('.mk-dex')).toHaveTextContent('Bankr v4')
     expect(row.querySelector('.mk-version')).toHaveTextContent('v4')
-    expect(row.querySelector('.mk-launcher')).toHaveTextContent('Bankr')
+    // "Bankr Bankr" and "Pons v2 Pons" repeat themselves: no launcher pill.
+    expect(row.querySelector('.mk-launcher')).toBeNull()
+    expect(rowOf(card, 'ORBIO/NVDA').querySelector('.mk-launcher')).toBeNull()
+    expect(row.querySelector('.mk-cp-name')).toBeNull()
     expect(row.querySelector('.mk-tvl')).toHaveTextContent('$4.73M')
     expect(row.querySelector('.mk-vol')).toHaveTextContent('$806K')
     expect(row.querySelector('.mk-px')).toHaveTextContent('$0.1131')
@@ -416,6 +520,62 @@ describe('markets card', () => {
     const link = row.querySelector<HTMLAnchorElement>('a.mk-pair')!
     expect(link.href).toBe('https://www.geckoterminal.com/robinhood/pools/0xpoolAI')
     expect(link.rel).toBe('noopener noreferrer')
+  })
+
+  it('wears a launcher pill when the launcher differs from the DEX', () => {
+    const p = payload({
+      sections: {
+        quote: [
+          quotePool(token(AI, 'AI', 'Artificial Inu'), {
+            dex: { id: 'uniswap-v4-robinhood', label: 'Uniswap', version: 'v4' },
+            launcher: 'Bankr',
+          }),
+        ],
+        base: [],
+      },
+    })
+    const row = rowOf(render(p), 'AI/NVDA')
+    expect(row.querySelector('.mk-dex')).toHaveTextContent('Uniswap v4')
+    expect(row.querySelector('.mk-launcher')).toHaveTextContent('Bankr')
+  })
+
+  it('names the counterparty after the pair so two GME/GME rows can be told apart', () => {
+    const GME = '0x6e00000000000000000000000000000000000004'
+    const p = payload({
+      token: { ...token(GME, 'GME', 'GameStop • Robinhood Token', { stockToken: true }) },
+      sections: {
+        quote: [],
+        base: [
+          {
+            ...quotePool(token(FAKE_NVDA, 'GME', 'memestock GME'), { pair: 'GME/GME' }),
+            side: 'base',
+            tvlUsd: 50_000,
+          },
+          {
+            ...quotePool(token(AI, 'gme', 'Gamer Meme'), { pair: 'GME/gme' }),
+            side: 'base',
+            tvlUsd: 40_000,
+          },
+          {
+            ...quotePool(token(USDG, 'USDG', 'Global Dollar'), { pair: 'GME/USDG' }),
+            side: 'base',
+            tvlUsd: 30_000,
+          },
+        ],
+      },
+    })
+    const card = render(p)
+    const names = [...card.querySelectorAll('.mk-row')].map(
+      (r) => r.querySelector('.mk-cp-name')?.textContent ?? null,
+    )
+    expect(names).toEqual(['memestock GME', 'Gamer Meme', null])
+    // The name sits after the pair, outside it, and before the venue line.
+    const market = rowOf(card, 'GME/GME').querySelector('.mk-market')!
+    expect([...market.children].map((c) => c.className)).toEqual([
+      'mk-pair',
+      'mk-cp-name',
+      'mk-venue',
+    ])
   })
 
   it('shows the base row with its uni flag, price in the counterparty and premium', () => {
@@ -444,9 +604,11 @@ describe('markets card', () => {
     const card = render(p)
     const fake = rowOf(card, 'NVDA/NVDA')
     expect(fake.dataset.lookalike).toBe('true')
+    expect(fake.querySelector('.mk-cp-name')).toHaveTextContent('NVIDIA Robinhood Token')
     expect(fake.querySelector('.mk-flag[data-kind="lookalike"]')).toHaveTextContent('lookalike')
     const stock = rowOf(card, 'AAPL/NVDA')
     expect(stock.dataset.lookalike).toBeUndefined()
+    expect(stock.querySelector('.mk-cp-name')).toBeNull()
     expect(stock.querySelector('.mk-flag[data-kind="stock"]')).not.toBeNull()
   })
 
@@ -524,6 +686,25 @@ describe('markets card', () => {
       ctx({ canRefresh: true }),
     )
     expect(done.querySelector('.mk-link')).toBeNull()
+    // `limit` ended the read, not the page cap: no Deeper, lookalikes still offered.
+    const byLimit = render(
+      payload({
+        counts: {
+          scanned: 100,
+          shown: 50,
+          belowMinTvl: 0,
+          hiddenLookalikes: 2,
+          limited: 50,
+          pages: 5,
+          pageCap: 5,
+          pageCapHit: false,
+        },
+      }),
+      ctx({ canRefresh: true }),
+    )
+    expect(byLimit.querySelector('.mk-link[data-action="deep"]')).toBeNull()
+    expect(byLimit.querySelector('.mk-link[data-action="lookalikes"]')).not.toBeNull()
+    expect(byLimit.querySelector('.mk-counts')).toHaveTextContent('50 more over the limit')
   })
 
   it('never interprets a symbol as markup', () => {

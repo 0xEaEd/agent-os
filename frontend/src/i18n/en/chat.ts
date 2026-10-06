@@ -696,6 +696,7 @@ export const chat = defineNamespace('chat', {
   marketsMore: '+{count} more',
   marketsCountsShown: '{shown} of {scanned} pools shown',
   marketsCountsBelow: '{count} under {min}',
+  marketsCountsLimited: '{count} more over the limit',
   marketsCountsLookalikes_one: '{count} lookalike hidden',
   marketsCountsLookalikes_other: '{count} lookalikes hidden',
   marketsPartial: 'partial',

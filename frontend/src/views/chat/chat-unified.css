@@ -1669,14 +1669,29 @@
 }
 
 .chat-surface .mk-market {
-  display: grid;
-  gap: 0.125rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.125rem 0.375rem;
   min-width: 0;
 }
 
 .chat-surface .mk-pair {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The counterparty's name after the pair: tells two "GME/GME" rows apart. */
+.chat-surface .mk-cp-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1694,6 +1709,7 @@
 
 .chat-surface .mk-venue {
   display: flex;
+  flex-basis: 100%;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
